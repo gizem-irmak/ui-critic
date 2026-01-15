@@ -68,5 +68,8 @@ export interface Violation {
   status?: 'confirmed' | 'potential';
   contrastRatio?: number;
   thresholdUsed?: 4.5 | 3.0;
+  foregroundHex?: string;
+  backgroundHex?: string;
+  elementDescription?: string;
   evidence?: string;
 }

@@ -116,7 +116,9 @@ function extractTextColors(code: string): Array<{ colorClass: string; context: s
   return results;
 }
 
-// Analyze contrast issues in code
+// Analyze contrast issues in code - HEURISTIC ONLY (no computed DOM styles)
+// Per requirements: Only mark as "confirmed" if using axe-core with element reference 
+// OR actual computed DOM styles. Static Tailwind class mapping is NOT sufficient.
 interface ContrastViolation {
   ruleId: string;
   ruleName: string;
@@ -124,6 +126,9 @@ interface ContrastViolation {
   status: 'confirmed' | 'potential';
   contrastRatio?: number;
   thresholdUsed?: 4.5 | 3.0;
+  foregroundHex?: string;
+  backgroundHex?: string;
+  elementDescription?: string;
   evidence: string;
   diagnosis: string;
   contextualHint: string;
@@ -133,10 +138,10 @@ interface ContrastViolation {
 
 function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] {
   const violations: ContrastViolation[] = [];
-  const lowContrastColors = new Set<string>();
+  const reportedPatterns = new Set<string>();
   
-  // Colors that are known to have low contrast on white backgrounds
-  const lowContrastOnWhite = ['gray-300', 'gray-400', 'slate-300', 'slate-400', 'zinc-300', 'zinc-400'];
+  // Colors that typically have low contrast on light backgrounds
+  const lowContrastOnLight = ['gray-300', 'gray-400', 'gray-500', 'slate-300', 'slate-400', 'slate-500', 'zinc-300', 'zinc-400', 'zinc-500'];
   
   for (const [filepath, content] of files) {
     const textColors = extractTextColors(content);
@@ -149,53 +154,70 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       const colorName = colorMatch[1];
       const hexColor = TAILWIND_COLORS[colorName];
       
+      // Determine if this is a potentially low-contrast color
+      const isLowContrastPattern = lowContrastOnLight.some(c => colorName === c);
+      
+      if (!isLowContrastPattern) continue;
+      
+      // Create a unique key for this pattern to avoid duplicates
+      const patternKey = `${colorName}`;
+      if (reportedPatterns.has(patternKey)) continue;
+      reportedPatterns.add(patternKey);
+      
+      // Try to infer element context from surrounding code
+      const elementContext = inferElementContext(context);
+      
+      // Calculate estimated ratio for informational purposes only
+      let estimatedRatio: number | undefined;
       if (hexColor) {
-        // Assume white background for now (most common)
-        const bgColor = '#ffffff';
-        const ratio = getContrastRatio(hexColor, bgColor);
-        
-        if (ratio !== null && ratio < 4.5) {
-          // Check if we already reported this color
-          if (!lowContrastColors.has(colorName)) {
-            lowContrastColors.add(colorName);
-            
-            violations.push({
-              ruleId: 'A1',
-              ruleName: 'Insufficient text contrast',
-              category: 'accessibility',
-              status: 'confirmed',
-              contrastRatio: Math.round(ratio * 100) / 100,
-              thresholdUsed: 4.5,
-              evidence: `${colorClass} (${hexColor}) on white background in ${filepath}`,
-              diagnosis: `Confirmed WCAG AA violation: The text color class "${colorClass}" resolves to ${hexColor}, which has a contrast ratio of ${ratio.toFixed(2)}:1 against a white background. This is below the WCAG AA minimum of 4.5:1 for normal text. Found in ${filepath}.`,
-              contextualHint: 'Increase text color darkness to meet the WCAG AA contrast threshold.',
-              correctivePrompt: rules.accessibility[0].correctivePrompt,
-              confidence: 0.95,
-            });
-          }
-        }
-      } else if (lowContrastOnWhite.some(c => colorName.includes(c))) {
-        // Fallback: flag known low-contrast colors even without exact computation
-        if (!lowContrastColors.has(colorName)) {
-          lowContrastColors.add(colorName);
-          
-          violations.push({
-            ruleId: 'A1',
-            ruleName: 'Insufficient text contrast',
-            category: 'accessibility',
-            status: 'confirmed',
-            evidence: `${colorClass} typically has insufficient contrast on light backgrounds (${filepath})`,
-            diagnosis: `Likely WCAG AA violation: The text color class "${colorClass}" is known to provide insufficient contrast on light backgrounds. Found in ${filepath}.`,
-            contextualHint: 'Review and increase text color contrast for better readability.',
-            correctivePrompt: rules.accessibility[0].correctivePrompt,
-            confidence: 0.85,
-          });
+        const ratio = getContrastRatio(hexColor, '#ffffff');
+        if (ratio !== null) {
+          estimatedRatio = Math.round(ratio * 100) / 100;
         }
       }
+      
+      // ALWAYS report as "potential" since we cannot:
+      // 1. Confirm the actual background color for this element
+      // 2. Get computed styles from rendered DOM
+      // 3. Run axe-core against the live application
+      violations.push({
+        ruleId: 'A1',
+        ruleName: 'Insufficient text contrast',
+        category: 'accessibility',
+        status: 'potential', // NEVER 'confirmed' without computed DOM styles or axe-core
+        evidence: `Text color class "${colorClass}" detected${hexColor ? ` (maps to ${hexColor})` : ''}. Background color cannot be confidently determined from static analysis.`,
+        diagnosis: `Potential WCAG AA contrast risk: The text color class "${colorClass}" may have insufficient contrast depending on the actual rendered background color. Static code analysis cannot confirm the exact background color for this element, so this should be verified using browser developer tools or an accessibility audit tool like axe-core. Found in ${filepath}.`,
+        contextualHint: elementContext 
+          ? `Review contrast for ${elementContext} to ensure it meets WCAG AA standards.`
+          : 'Review text contrast in this component to ensure it meets WCAG AA standards.',
+        correctivePrompt: rules.accessibility[0].correctivePrompt,
+        confidence: 0.6, // Lower confidence since we can't confirm
+      });
     }
   }
   
   return violations;
+}
+
+// Try to infer what kind of UI element the text is in based on context
+function inferElementContext(context: string): string | null {
+  const lowerContext = context.toLowerCase();
+  
+  if (lowerContext.includes('button')) return 'button text';
+  if (lowerContext.includes('label')) return 'form label';
+  if (lowerContext.includes('error') || lowerContext.includes('alert')) return 'error or alert message';
+  if (lowerContext.includes('success')) return 'success message';
+  if (lowerContext.includes('warning')) return 'warning message';
+  if (lowerContext.includes('badge')) return 'badge or tag';
+  if (lowerContext.includes('nav')) return 'navigation item';
+  if (lowerContext.includes('header')) return 'header text';
+  if (lowerContext.includes('footer')) return 'footer text';
+  if (lowerContext.includes('card')) return 'card content';
+  if (lowerContext.includes('input') || lowerContext.includes('placeholder')) return 'input placeholder or helper text';
+  if (lowerContext.includes('link') || lowerContext.includes('<a')) return 'link text';
+  if (lowerContext.includes('caption') || lowerContext.includes('description')) return 'caption or description text';
+  
+  return null;
 }
 
 function isAnalyzableFile(filename: string): boolean {
