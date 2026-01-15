@@ -8,8 +8,9 @@ import { InputSelector } from '@/components/analysis/InputSelector';
 import { RuleSelector } from '@/components/analysis/RuleSelector';
 import { AnalysisResults } from '@/components/analysis/AnalysisResults';
 import { useProjectStore } from '@/stores/projectStore';
-import { rules, getRuleById } from '@/data/rules';
-import type { InputType, ScreenshotInput, ZipInput, GithubInput, Analysis, Violation } from '@/types/project';
+import { rules } from '@/data/rules';
+import { runUIAnalysis, fileToBase64 } from '@/lib/api/analysis';
+import type { InputType, ScreenshotInput, ZipInput, GithubInput, Analysis } from '@/types/project';
 import { useToast } from '@/hooks/use-toast';
 
 export default function ProjectDetail() {
@@ -81,64 +82,90 @@ export default function ProjectDetail() {
       selectedRules,
     });
 
-    // Simulate analysis (in real implementation, this would call the backend)
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
-    // Generate mock violations based on selected rules
-    const mockViolations: Violation[] = [];
-    const rulesToCheck = selectedRules.slice(0, Math.floor(Math.random() * 8) + 2);
-    
-    for (const ruleId of rulesToCheck) {
-      const rule = getRuleById(ruleId);
-      if (rule && Math.random() > 0.5) {
-        mockViolations.push({
-          ruleId: rule.id,
-          ruleName: rule.name,
-          category: rule.category,
-          diagnosis: rule.diagnosis,
-          correctivePrompt: rule.correctivePrompt,
-          confidence: 0.7 + Math.random() * 0.3,
+    try {
+      // Convert images to base64 for analysis
+      let images: string[] = [];
+      
+      if (inputType === 'screenshots') {
+        const screenshotInput = inputData as ScreenshotInput;
+        images = await Promise.all(
+          screenshotInput.files.map(file => fileToBase64(file))
+        );
+      } else {
+        // For ZIP and GitHub, we'll need a different approach (future enhancement)
+        toast({
+          title: 'Input Type Not Supported',
+          description: 'Currently only screenshot analysis is supported. ZIP and GitHub analysis coming soon.',
+          variant: 'destructive',
         });
+        setIsAnalyzing(false);
+        return;
       }
+
+      // Call the AI analysis backend
+      const result = await runUIAnalysis({
+        images,
+        categories: selectedCategories,
+        selectedRules,
+        inputType,
+        toolUsed: project.toolUsed,
+      });
+
+      if (!result.success) {
+        throw new Error(result.error || 'Analysis failed');
+      }
+
+      const violations = result.violations || [];
+
+      // Calculate violations by category
+      const violationsByCategory: Record<string, number> = {
+        accessibility: 0,
+        usability: 0,
+        ethics: 0,
+      };
+      violations.forEach(v => {
+        if (violationsByCategory[v.category] !== undefined) {
+          violationsByCategory[v.category]++;
+        }
+      });
+
+      // Generate corrective prompt from violations
+      const correctivePrompt = violations.length > 0
+        ? violations
+            .map(v => `• ${v.correctivePrompt}`)
+            .filter((v, i, a) => a.indexOf(v) === i)
+            .join('\n\n')
+        : '';
+
+      const analysis: Analysis = {
+        id: Math.random().toString(36).substring(2),
+        iterationId: iteration.id,
+        violations,
+        totalViolations: violations.length,
+        violationsByCategory,
+        correctivePrompt,
+        isAcceptable: violations.length <= project.threshold,
+        analyzedAt: new Date(),
+        passNotes: result.passNotes,
+      };
+
+      setAnalysis(project.id, iteration.id, analysis);
+      setCurrentView('results');
+
+      toast({
+        title: 'Analysis Complete',
+        description: `Found ${violations.length} violation${violations.length !== 1 ? 's' : ''}`,
+      });
+    } catch (error) {
+      console.error('Analysis error:', error);
+      toast({
+        title: 'Analysis Failed',
+        description: error instanceof Error ? error.message : 'Failed to analyze UI',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsAnalyzing(false);
     }
-
-    // Calculate violations by category
-    const violationsByCategory: Record<string, number> = {
-      accessibility: 0,
-      usability: 0,
-      ethics: 0,
-    };
-    mockViolations.forEach(v => {
-      violationsByCategory[v.category]++;
-    });
-
-    // Generate corrective prompt
-    const correctivePrompt = mockViolations.length > 0
-      ? mockViolations
-          .map(v => `• ${v.correctivePrompt}`)
-          .filter((v, i, a) => a.indexOf(v) === i)
-          .join('\n\n')
-      : '';
-
-    const analysis: Analysis = {
-      id: Math.random().toString(36).substring(2),
-      iterationId: iteration.id,
-      violations: mockViolations,
-      totalViolations: mockViolations.length,
-      violationsByCategory,
-      correctivePrompt,
-      isAcceptable: mockViolations.length <= project.threshold,
-      analyzedAt: new Date(),
-    };
-
-    setAnalysis(project.id, iteration.id, analysis);
-    setIsAnalyzing(false);
-    setCurrentView('results');
-
-    toast({
-      title: 'Analysis Complete',
-      description: `Found ${mockViolations.length} violation${mockViolations.length !== 1 ? 's' : ''}`,
-    });
   };
 
   const startNextIteration = () => {
