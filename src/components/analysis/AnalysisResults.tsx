@@ -158,11 +158,11 @@ export function AnalysisResults({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
+          <div className="space-y-3">
             {analysis.violations.map((violation, idx) => (
               <div
                 key={idx}
-                className="p-4 rounded-lg bg-muted/50 border border-border space-y-3"
+                className="p-4 rounded-lg bg-muted/50 border border-border space-y-2"
               >
                 {/* Header: Rule ID, Name, Confidence */}
                 <div className="flex items-start justify-between gap-3">
@@ -176,41 +176,14 @@ export function AnalysisResults({
                     <span className="font-medium">{violation.ruleName}</span>
                   </div>
                   <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
-                    {Math.round(violation.confidence * 100)}% confidence
+                    {Math.round(violation.confidence * 100)}%
                   </span>
                 </div>
 
-                {/* Diagnosis */}
-                <div className="space-y-1">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Diagnosis
-                  </div>
-                  <p className="text-sm text-foreground leading-relaxed">
-                    {violation.diagnosis}
-                  </p>
-                </div>
-
-                {/* Corrective Prompt */}
-                <div className="space-y-1">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Corrective Prompt
-                  </div>
-                  <p className="text-sm text-foreground leading-relaxed bg-primary/5 p-2 rounded border-l-2 border-primary">
-                    {violation.correctivePrompt}
-                  </p>
-                </div>
-
-                {/* Contextual Hint */}
-                {violation.contextualHint && (
-                  <div className="space-y-1">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Contextual Hint
-                    </div>
-                    <p className="text-sm text-muted-foreground italic">
-                      {violation.contextualHint}
-                    </p>
-                  </div>
-                )}
+                {/* Diagnosis only */}
+                <p className="text-sm text-foreground leading-relaxed pl-1">
+                  {violation.diagnosis}
+                </p>
               </div>
             ))}
             {analysis.violations.length === 0 && (
@@ -222,11 +195,11 @@ export function AnalysisResults({
         </CardContent>
       </Card>
 
-      {/* Corrective Prompt */}
-      {analysis.correctivePrompt && (
+      {/* Corrective Prompt Section - includes all corrective prompts and hints */}
+      {analysis.violations.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Corrective Prompt</CardTitle>
+            <CardTitle>Corrective Prompts</CardTitle>
             <Button
               variant="outline"
               size="sm"
@@ -241,15 +214,33 @@ export function AnalysisResults({
               ) : (
                 <>
                   <Copy className="h-4 w-4" />
-                  Copy
+                  Copy All
                 </>
               )}
             </Button>
           </CardHeader>
-          <CardContent>
-            <div className="p-4 bg-muted rounded-lg font-mono text-sm whitespace-pre-wrap">
-              {analysis.correctivePrompt}
-            </div>
+          <CardContent className="space-y-4">
+            {analysis.violations.map((violation, idx) => (
+              <div key={idx} className="space-y-2 pb-4 border-b border-border last:border-0 last:pb-0">
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    'category-badge flex-shrink-0 text-xs',
+                    categoryColors[violation.category]
+                  )}>
+                    {violation.ruleId}
+                  </span>
+                  <span className="text-sm font-medium">{violation.ruleName}</span>
+                </div>
+                <p className="text-sm bg-primary/5 p-3 rounded border-l-2 border-primary">
+                  {violation.correctivePrompt}
+                </p>
+                {violation.contextualHint && (
+                  <p className="text-xs text-muted-foreground italic pl-1">
+                    💡 {violation.contextualHint}
+                  </p>
+                )}
+              </div>
+            ))}
           </CardContent>
         </Card>
       )}
