@@ -49,6 +49,11 @@ export interface Analysis {
   correctivePrompt: string;
   isAcceptable: boolean;
   analyzedAt: Date;
+  passNotes?: {
+    accessibility?: string;
+    usability?: string;
+    ethics?: string;
+  };
 }
 
 export interface Violation {
