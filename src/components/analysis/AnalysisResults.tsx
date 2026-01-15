@@ -158,32 +158,59 @@ export function AnalysisResults({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
+          <div className="space-y-4">
             {analysis.violations.map((violation, idx) => (
               <div
                 key={idx}
-                className="flex items-start gap-3 p-3 rounded-lg bg-muted/50 border border-border"
+                className="p-4 rounded-lg bg-muted/50 border border-border space-y-3"
               >
-                <span className={cn(
-                  'category-badge flex-shrink-0',
-                  categoryColors[violation.category]
-                )}>
-                  {violation.ruleId}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm">{violation.ruleName}</div>
-                  <p className="text-xs text-muted-foreground mt-0.5">
+                {/* Header: Rule ID, Name, Confidence */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className={cn(
+                      'category-badge flex-shrink-0',
+                      categoryColors[violation.category]
+                    )}>
+                      {violation.ruleId}
+                    </span>
+                    <span className="font-medium">{violation.ruleName}</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
+                    {Math.round(violation.confidence * 100)}% confidence
+                  </span>
+                </div>
+
+                {/* Diagnosis */}
+                <div className="space-y-1">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Diagnosis
+                  </div>
+                  <p className="text-sm text-foreground leading-relaxed">
                     {violation.diagnosis}
                   </p>
-                  {violation.details && (
-                    <p className="text-xs text-muted-foreground mt-1 italic">
-                      {violation.details}
+                </div>
+
+                {/* Corrective Prompt */}
+                <div className="space-y-1">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Corrective Prompt
+                  </div>
+                  <p className="text-sm text-foreground leading-relaxed bg-primary/5 p-2 rounded border-l-2 border-primary">
+                    {violation.correctivePrompt}
+                  </p>
+                </div>
+
+                {/* Contextual Hint */}
+                {violation.contextualHint && (
+                  <div className="space-y-1">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Contextual Hint
+                    </div>
+                    <p className="text-sm text-muted-foreground italic">
+                      {violation.contextualHint}
                     </p>
-                  )}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {Math.round(violation.confidence * 100)}%
-                </div>
+                  </div>
+                )}
               </div>
             ))}
             {analysis.violations.length === 0 && (

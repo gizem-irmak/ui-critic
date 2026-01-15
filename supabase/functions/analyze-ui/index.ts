@@ -87,6 +87,15 @@ ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.
 - Be thorough but avoid false positives - only report violations with clear evidence
 
 ## OUTPUT FORMAT (JSON)
+For EACH violation, you MUST provide:
+1. **diagnosis**: Detailed, evidence-based explanation of WHY the rule is violated. Reference UI elements conceptually (e.g., "success message", "filter chips", "primary button").
+2. **contextualHint**: A short (1 sentence) high-level hint summarizing WHERE the issue appears and WHAT kind of adjustment is needed. Keep it descriptive, not implementation-level.
+
+IMPORTANT CONSTRAINTS:
+- Do NOT include file paths, class names, or code snippets in diagnosis or contextualHint
+- Do NOT provide implementation-level fixes
+- Keep contextualHint tool-agnostic and reusable across Bolt, Replit, and Lovable
+
 Respond with a JSON object in this exact structure:
 {
   "violations": [
@@ -94,8 +103,8 @@ Respond with a JSON object in this exact structure:
       "ruleId": "A1",
       "ruleName": "Insufficient text contrast",
       "category": "accessibility",
-      "diagnosis": "Observed low contrast between text and background",
-      "details": "Specific location or element description",
+      "diagnosis": "The body text uses a light gray color against a white background, making it difficult to read for users with visual impairments. The contrast ratio appears to be below the WCAG AA minimum of 4.5:1.",
+      "contextualHint": "Review the main content area text colors and increase contrast against the background.",
       "confidence": 0.85
     }
   ],
