@@ -9,7 +9,7 @@ import { RuleSelector } from '@/components/analysis/RuleSelector';
 import { AnalysisResults } from '@/components/analysis/AnalysisResults';
 import { useProjectStore } from '@/stores/projectStore';
 import { rules } from '@/data/rules';
-import { runUIAnalysis, fileToBase64 } from '@/lib/api/analysis';
+import { runUIAnalysis, fileToBase64, fileToRawBase64 } from '@/lib/api/analysis';
 import type { InputType, ScreenshotInput, ZipInput, GithubInput, Analysis } from '@/types/project';
 import { useToast } from '@/hooks/use-toast';
 
@@ -83,19 +83,35 @@ export default function ProjectDetail() {
     });
 
     try {
-      // Convert images to base64 for analysis
-      let images: string[] = [];
+      let analysisRequest: Parameters<typeof runUIAnalysis>[0];
       
       if (inputType === 'screenshots') {
         const screenshotInput = inputData as ScreenshotInput;
-        images = await Promise.all(
+        const images = await Promise.all(
           screenshotInput.files.map(file => fileToBase64(file))
         );
+        analysisRequest = {
+          images,
+          categories: selectedCategories,
+          selectedRules,
+          inputType,
+          toolUsed: project.toolUsed,
+        };
+      } else if (inputType === 'zip') {
+        const zipInput = inputData as ZipInput;
+        const zipBase64 = await fileToRawBase64(zipInput.file);
+        analysisRequest = {
+          zipBase64,
+          categories: selectedCategories,
+          selectedRules,
+          inputType,
+          toolUsed: project.toolUsed,
+        };
       } else {
-        // For ZIP and GitHub, we'll need a different approach (future enhancement)
+        // GitHub analysis not yet supported
         toast({
           title: 'Input Type Not Supported',
-          description: 'Currently only screenshot analysis is supported. ZIP and GitHub analysis coming soon.',
+          description: 'GitHub repository analysis coming soon.',
           variant: 'destructive',
         });
         setIsAnalyzing(false);
@@ -103,13 +119,7 @@ export default function ProjectDetail() {
       }
 
       // Call the AI analysis backend
-      const result = await runUIAnalysis({
-        images,
-        categories: selectedCategories,
-        selectedRules,
-        inputType,
-        toolUsed: project.toolUsed,
-      });
+      const result = await runUIAnalysis(analysisRequest);
 
       if (!result.success) {
         throw new Error(result.error || 'Analysis failed');
