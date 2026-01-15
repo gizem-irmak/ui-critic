@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { CheckCircle, XCircle, Copy, Check, TrendingDown, AlertTriangle } from 'lucide-react';
+import { CheckCircle, XCircle, Copy, Check, TrendingDown, AlertTriangle, ShieldCheck, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import type { Analysis, Project } from '@/types/project';
 
@@ -37,7 +38,7 @@ export function AnalysisResults({
       grouped[v.category].push(v);
     }
     
-    // Build formatted text
+    // Build formatted text (without numeric ratios or code paths)
     let text = 'Please revise the UI design to address the following issues:\n';
     const categoryOrder = ['accessibility', 'usability', 'ethics'];
     
@@ -74,6 +75,10 @@ export function AnalysisResults({
     ethics: 'category-ethics',
   };
 
+  // Check if there are any confirmed or potential A1 violations
+  const hasConfirmedA1 = analysis.violations.some(v => v.ruleId === 'A1' && v.status === 'confirmed');
+  const hasPotentialA1 = analysis.violations.some(v => v.ruleId === 'A1' && v.status === 'potential');
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Status Banner */}
@@ -108,6 +113,16 @@ export function AnalysisResults({
           </div>
         )}
       </div>
+
+      {/* Confidence Note for A1 */}
+      {(hasConfirmedA1 || hasPotentialA1) && (
+        <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/50 border border-border">
+          <AlertCircle className="h-5 w-5 text-muted-foreground mt-0.5 flex-shrink-0" />
+          <p className="text-sm text-muted-foreground">
+            <strong>About contrast analysis:</strong> Confirmed issues are measured from code-based audits with computed contrast ratios. Potential issues are heuristic observations from screenshots and should be verified with accessibility tools.
+          </p>
+        </div>
+      )}
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-3 gap-4">
@@ -196,11 +211,11 @@ export function AnalysisResults({
             {analysis.violations.map((violation, idx) => (
               <div
                 key={idx}
-                className="p-4 rounded-lg bg-muted/50 border border-border space-y-2"
+                className="p-4 rounded-lg bg-muted/50 border border-border space-y-3"
               >
-                {/* Header: Rule ID, Name, Confidence */}
+                {/* Header: Rule ID, Name, Status Badge, Confidence */}
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 flex-wrap">
                     <span className={cn(
                       'category-badge flex-shrink-0',
                       categoryColors[violation.category]
@@ -208,13 +223,61 @@ export function AnalysisResults({
                       {violation.ruleId}
                     </span>
                     <span className="font-medium">{violation.ruleName}</span>
+                    
+                    {/* Status Badge for A1 */}
+                    {violation.ruleId === 'A1' && violation.status && (
+                      <Badge 
+                        variant={violation.status === 'confirmed' ? 'default' : 'secondary'}
+                        className={cn(
+                          'gap-1 text-xs',
+                          violation.status === 'confirmed' 
+                            ? 'bg-destructive/10 text-destructive border-destructive/30' 
+                            : 'bg-warning/10 text-warning border-warning/30'
+                        )}
+                      >
+                        {violation.status === 'confirmed' ? (
+                          <>
+                            <ShieldCheck className="h-3 w-3" />
+                            Confirmed (Measured)
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="h-3 w-3" />
+                            Potential Risk (Heuristic)
+                          </>
+                        )}
+                      </Badge>
+                    )}
                   </div>
-                  <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
+                  <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
                     {Math.round(violation.confidence * 100)}%
                   </span>
                 </div>
 
-                {/* Diagnosis only */}
+                {/* Contrast Ratio Details (for confirmed A1) */}
+                {violation.ruleId === 'A1' && violation.status === 'confirmed' && violation.contrastRatio && (
+                  <div className="flex items-center gap-4 p-2 rounded bg-destructive/5 border border-destructive/20 text-sm">
+                    <div className="flex items-center gap-2">
+                      <span className="text-muted-foreground">Measured:</span>
+                      <span className="font-mono font-medium text-destructive">{violation.contrastRatio}:1</span>
+                    </div>
+                    {violation.thresholdUsed && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground">Required:</span>
+                        <span className="font-mono font-medium">{violation.thresholdUsed}:1</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Evidence (for A1) */}
+                {violation.ruleId === 'A1' && violation.evidence && (
+                  <p className="text-sm text-muted-foreground italic pl-1">
+                    📍 {violation.evidence}
+                  </p>
+                )}
+
+                {/* Diagnosis */}
                 <p className="text-sm text-foreground leading-relaxed pl-1">
                   {violation.diagnosis}
                 </p>

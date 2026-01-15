@@ -45,6 +45,159 @@ const ANALYZABLE_EXTENSIONS = [
   '.vue', '.svelte', '.astro'
 ];
 
+// Tailwind color mappings to approximate hex values
+const TAILWIND_COLORS: Record<string, string> = {
+  // Grays
+  'gray-50': '#f9fafb', 'gray-100': '#f3f4f6', 'gray-200': '#e5e7eb',
+  'gray-300': '#d1d5db', 'gray-400': '#9ca3af', 'gray-500': '#6b7280',
+  'gray-600': '#4b5563', 'gray-700': '#374151', 'gray-800': '#1f2937', 'gray-900': '#111827',
+  // Slate
+  'slate-50': '#f8fafc', 'slate-100': '#f1f5f9', 'slate-200': '#e2e8f0',
+  'slate-300': '#cbd5e1', 'slate-400': '#94a3b8', 'slate-500': '#64748b',
+  'slate-600': '#475569', 'slate-700': '#334155', 'slate-800': '#1e293b', 'slate-900': '#0f172a',
+  // Zinc
+  'zinc-50': '#fafafa', 'zinc-100': '#f4f4f5', 'zinc-200': '#e4e4e7',
+  'zinc-300': '#d4d4d8', 'zinc-400': '#a1a1aa', 'zinc-500': '#71717a',
+  'zinc-600': '#52525b', 'zinc-700': '#3f3f46', 'zinc-800': '#27272a', 'zinc-900': '#18181b',
+  // White/Black
+  'white': '#ffffff', 'black': '#000000',
+};
+
+// Parse hex color to RGB
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16),
+  } : null;
+}
+
+// Calculate relative luminance for WCAG
+function getLuminance(r: number, g: number, b: number): number {
+  const [rs, gs, bs] = [r, g, b].map(c => {
+    c = c / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs;
+}
+
+// Calculate contrast ratio between two colors
+function getContrastRatio(hex1: string, hex2: string): number | null {
+  const rgb1 = hexToRgb(hex1);
+  const rgb2 = hexToRgb(hex2);
+  if (!rgb1 || !rgb2) return null;
+  
+  const l1 = getLuminance(rgb1.r, rgb1.g, rgb1.b);
+  const l2 = getLuminance(rgb2.r, rgb2.g, rgb2.b);
+  
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+// Extract text color classes from code
+function extractTextColors(code: string): Array<{ colorClass: string; context: string }> {
+  const results: Array<{ colorClass: string; context: string }> = [];
+  
+  // Match Tailwind text color classes
+  const textColorRegex = /text-(gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|white|black)-?(\d{2,3})?/g;
+  
+  let match;
+  while ((match = textColorRegex.exec(code)) !== null) {
+    const colorClass = match[0];
+    const start = Math.max(0, match.index - 50);
+    const end = Math.min(code.length, match.index + colorClass.length + 50);
+    const context = code.slice(start, end).replace(/\n/g, ' ').trim();
+    results.push({ colorClass, context });
+  }
+  
+  return results;
+}
+
+// Analyze contrast issues in code
+interface ContrastViolation {
+  ruleId: string;
+  ruleName: string;
+  category: string;
+  status: 'confirmed' | 'potential';
+  contrastRatio?: number;
+  thresholdUsed?: 4.5 | 3.0;
+  evidence: string;
+  diagnosis: string;
+  contextualHint: string;
+  correctivePrompt: string;
+  confidence: number;
+}
+
+function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] {
+  const violations: ContrastViolation[] = [];
+  const lowContrastColors = new Set<string>();
+  
+  // Colors that are known to have low contrast on white backgrounds
+  const lowContrastOnWhite = ['gray-300', 'gray-400', 'slate-300', 'slate-400', 'zinc-300', 'zinc-400'];
+  
+  for (const [filepath, content] of files) {
+    const textColors = extractTextColors(content);
+    
+    for (const { colorClass, context } of textColors) {
+      // Extract the color name
+      const colorMatch = colorClass.match(/text-(\w+-?\d*)/);
+      if (!colorMatch) continue;
+      
+      const colorName = colorMatch[1];
+      const hexColor = TAILWIND_COLORS[colorName];
+      
+      if (hexColor) {
+        // Assume white background for now (most common)
+        const bgColor = '#ffffff';
+        const ratio = getContrastRatio(hexColor, bgColor);
+        
+        if (ratio !== null && ratio < 4.5) {
+          // Check if we already reported this color
+          if (!lowContrastColors.has(colorName)) {
+            lowContrastColors.add(colorName);
+            
+            violations.push({
+              ruleId: 'A1',
+              ruleName: 'Insufficient text contrast',
+              category: 'accessibility',
+              status: 'confirmed',
+              contrastRatio: Math.round(ratio * 100) / 100,
+              thresholdUsed: 4.5,
+              evidence: `${colorClass} (${hexColor}) on white background in ${filepath}`,
+              diagnosis: `Confirmed WCAG AA violation: The text color class "${colorClass}" resolves to ${hexColor}, which has a contrast ratio of ${ratio.toFixed(2)}:1 against a white background. This is below the WCAG AA minimum of 4.5:1 for normal text. Found in ${filepath}.`,
+              contextualHint: 'Increase text color darkness to meet the WCAG AA contrast threshold.',
+              correctivePrompt: rules.accessibility[0].correctivePrompt,
+              confidence: 0.95,
+            });
+          }
+        }
+      } else if (lowContrastOnWhite.some(c => colorName.includes(c))) {
+        // Fallback: flag known low-contrast colors even without exact computation
+        if (!lowContrastColors.has(colorName)) {
+          lowContrastColors.add(colorName);
+          
+          violations.push({
+            ruleId: 'A1',
+            ruleName: 'Insufficient text contrast',
+            category: 'accessibility',
+            status: 'confirmed',
+            evidence: `${colorClass} typically has insufficient contrast on light backgrounds (${filepath})`,
+            diagnosis: `Likely WCAG AA violation: The text color class "${colorClass}" is known to provide insufficient contrast on light backgrounds. Found in ${filepath}.`,
+            contextualHint: 'Review and increase text color contrast for better readability.',
+            correctivePrompt: rules.accessibility[0].correctivePrompt,
+            confidence: 0.85,
+          });
+        }
+      }
+    }
+  }
+  
+  return violations;
+}
+
 function isAnalyzableFile(filename: string): boolean {
   const lower = filename.toLowerCase();
   return ANALYZABLE_EXTENSIONS.some(ext => lower.endsWith(ext));
@@ -65,12 +218,15 @@ function detectStack(files: Map<string, string>): string {
 
 function buildCodeAnalysisPrompt(selectedRules: string[]) {
   const selectedRulesSet = new Set(selectedRules);
+  // Filter out A1 since we handle it separately with computed contrast
+  const accessibilityRulesWithoutA1 = rules.accessibility.filter(r => r.id !== 'A1' && selectedRulesSet.has(r.id));
   
   return `You are an expert UI/UX code auditor performing a comprehensive 3-pass static analysis of source code. Analyze the provided code files following this structured methodology:
 
 ## PASS 1 — Accessibility (WCAG AA) - Static Code Analysis
-Examine the code for accessibility issues:
-- CSS color values and contrast potential (look for light grays, low contrast combinations)
+NOTE: A1 (text contrast) is analyzed separately with computed ratios. Do NOT report A1 violations.
+
+Examine the code for other accessibility issues:
 - Font-size declarations (check for values below 16px or 1rem)
 - Line-height and spacing values
 - Button/link sizing (padding, min-width, min-height)
@@ -79,7 +235,7 @@ Examine the code for accessibility issues:
 - Alt text for images
 
 Accessibility rules to check:
-${rules.accessibility.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name}`).join('\n')}
+${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name}`).join('\n')}
 
 ## PASS 2 — Usability (HCI) - Code Pattern Analysis
 Analyze code structure for usability patterns:
@@ -109,6 +265,7 @@ ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.
 ## IMPORTANT CONSTRAINTS
 - Analyze the actual code structure, not assumptions
 - Report violations ONLY when there is evidence in the code
+- Do NOT report A1 (contrast) violations - they are computed separately
 - For each category, output triggered rules OR explicitly state "No violations detected"
 - Include file paths and line references where possible
 
@@ -124,11 +281,11 @@ IMPORTANT CONSTRAINTS:
 {
   "violations": [
     {
-      "ruleId": "A1",
-      "ruleName": "Insufficient text contrast",
+      "ruleId": "A2",
+      "ruleName": "Small body font size",
       "category": "accessibility",
-      "diagnosis": "In Button.tsx, the secondary button variant uses 'text-gray-400' which provides insufficient contrast against the light background. Similar low-contrast text patterns found in Card.tsx for subtitle elements.",
-      "contextualHint": "Increase text color contrast for secondary buttons and card subtitles to meet accessibility standards.",
+      "diagnosis": "In Button.tsx, font-size is set to 12px which is below the recommended 16px minimum.",
+      "contextualHint": "Increase body text size to meet accessibility standards.",
       "confidence": 0.85
     }
   ],
@@ -203,6 +360,14 @@ serve(async (req) => {
     const stack = detectStack(files);
     console.log(`Detected stack: ${stack}`);
 
+    // Compute A1 contrast violations directly
+    const contrastViolations: ContrastViolation[] = [];
+    if (selectedRules.includes('A1')) {
+      const computed = analyzeContrastInCode(files);
+      contrastViolations.push(...computed);
+      console.log(`Computed ${contrastViolations.length} contrast violations`);
+    }
+
     // Build code summary for AI
     const codeContent = Array.from(files.entries())
       .map(([path, content]) => `### File: ${path}\n\`\`\`\n${content.slice(0, 5000)}\n\`\`\``)
@@ -275,7 +440,7 @@ ${codeContent}`,
 
     // Enhance violations with corrective prompts
     const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
-    const enhancedViolations = (analysisResult.violations || []).map((v: any) => {
+    const aiViolations = (analysisResult.violations || []).map((v: any) => {
       const rule = allRules.find(r => r.id === v.ruleId);
       return {
         ...v,
@@ -283,12 +448,15 @@ ${codeContent}`,
       };
     });
 
-    console.log(`Code analysis complete: ${enhancedViolations.length} violations found`);
+    // Merge contrast violations with AI violations
+    const allViolations = [...contrastViolations, ...aiViolations];
+
+    console.log(`Code analysis complete: ${allViolations.length} violations found (${contrastViolations.length} contrast + ${aiViolations.length} AI-detected)`);
 
     return new Response(
       JSON.stringify({
         success: true,
-        violations: enhancedViolations,
+        violations: allViolations,
         passNotes: analysisResult.passNotes || {},
         filesAnalyzed: files.size,
         stackDetected: stack,

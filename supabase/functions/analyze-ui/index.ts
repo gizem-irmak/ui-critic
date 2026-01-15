@@ -38,6 +38,7 @@ const rules = {
 
 const buildAnalysisPrompt = (categories: string[], selectedRules: string[]) => {
   const selectedRulesSet = new Set(selectedRules);
+  const includesA1 = selectedRulesSet.has('A1');
   
   return `You are an expert UI/UX auditor performing a comprehensive 3-pass analysis of a user interface. Analyze the provided screenshot(s) following this structured methodology:
 
@@ -48,6 +49,17 @@ Run visual inspection for accessibility issues:
 - Line spacing and readability
 - Touch/click target sizes (minimum 44x44px)
 - Focus indicator visibility
+
+${includesA1 ? `
+### SPECIAL HANDLING FOR A1 (Text Contrast)
+Since this is screenshot-based analysis, you CANNOT compute exact contrast ratios.
+For A1 violations:
+- ONLY report if you observe visually apparent low-contrast text (light gray on white, faint text, etc.)
+- Set status to "potential" (NOT "confirmed")
+- Use cautious language: "may have", "potential risk", "appears to be", "should be verified"
+- Do NOT provide numeric contrast ratios
+- Evidence should describe the visual observation (e.g., "Light gray text on white background in the header area")
+` : ''}
 
 Report violations ONLY if there is strong visual evidence.
 
@@ -85,11 +97,13 @@ ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.
 - Absence of evidence does NOT imply absence of usability or ethical issues
 - For each category, output triggered rules OR explicitly state "No violations detected after reasoning"
 - Be thorough but avoid false positives - only report violations with clear evidence
+${includesA1 ? '- For A1 (contrast): NEVER claim "confirmed" status - always use "potential" for screenshot analysis' : ''}
 
 ## OUTPUT FORMAT (JSON)
 For EACH violation, you MUST provide:
 1. **diagnosis**: Detailed, evidence-based explanation of WHY the rule is violated. Reference UI elements conceptually (e.g., "success message", "filter chips", "primary button").
 2. **contextualHint**: A short (1 sentence) high-level hint summarizing WHERE the issue appears and WHAT kind of adjustment is needed. Keep it descriptive, not implementation-level.
+${includesA1 ? `3. For A1 only: Include "status": "potential" and "evidence": describing what you observed visually.` : ''}
 
 IMPORTANT CONSTRAINTS:
 - Do NOT include file paths, class names, or code snippets in diagnosis or contextualHint
@@ -103,8 +117,18 @@ Respond with a JSON object in this exact structure:
       "ruleId": "A1",
       "ruleName": "Insufficient text contrast",
       "category": "accessibility",
-      "diagnosis": "The body text uses a light gray color against a white background, making it difficult to read for users with visual impairments. The contrast ratio appears to be below the WCAG AA minimum of 4.5:1.",
-      "contextualHint": "Review the main content area text colors and increase contrast against the background.",
+      "status": "potential",
+      "evidence": "Light gray descriptive text appears against a white background in the card components",
+      "diagnosis": "The secondary text in card components may have insufficient contrast. The light gray color against the white background appears to fall below WCAG AA standards, though exact measurement requires code inspection.",
+      "contextualHint": "Verify and increase contrast for secondary text in card components.",
+      "confidence": 0.7
+    },
+    {
+      "ruleId": "U1",
+      "ruleName": "Unclear primary action",
+      "category": "usability",
+      "diagnosis": "Multiple buttons with similar visual weight compete for attention...",
+      "contextualHint": "Establish clearer visual hierarchy between primary and secondary actions.",
       "confidence": 0.85
     }
   ],
@@ -219,12 +243,19 @@ serve(async (req) => {
     }
 
     // Enhance violations with corrective prompts from our rule registry
+    // Also ensure A1 violations from screenshots are marked as "potential"
     const enhancedViolations = (analysisResult.violations || []).map((v: any) => {
       const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
       const rule = allRules.find(r => r.id === v.ruleId);
+      
+      // For A1 from screenshots, always set status to "potential"
+      const isA1 = v.ruleId === 'A1';
+      
       return {
         ...v,
         correctivePrompt: rule?.correctivePrompt || v.correctivePrompt || '',
+        // Ensure A1 is always "potential" for screenshot analysis
+        ...(isA1 ? { status: 'potential' } : {}),
       };
     });
 
