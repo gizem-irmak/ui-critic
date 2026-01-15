@@ -22,9 +22,43 @@ export function AnalysisResults({
   const [copied, setCopied] = useState(false);
 
   const copyPrompt = async () => {
-    await navigator.clipboard.writeText(analysis.correctivePrompt);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (!analysis?.violations.length) return;
+    
+    // Group violations by category
+    const grouped: Record<string, typeof analysis.violations> = {};
+    const categoryLabels: Record<string, string> = {
+      accessibility: 'Accessibility',
+      usability: 'Usability',
+      ethics: 'Ethical Design'
+    };
+    
+    for (const v of analysis.violations) {
+      if (!grouped[v.category]) grouped[v.category] = [];
+      grouped[v.category].push(v);
+    }
+    
+    // Build formatted text
+    let text = 'Please revise the UI design to address the following issues:\n';
+    const categoryOrder = ['accessibility', 'usability', 'ethics'];
+    
+    for (const cat of categoryOrder) {
+      if (!grouped[cat]?.length) continue;
+      text += `\n${categoryLabels[cat]}:\n`;
+      for (const v of grouped[cat]) {
+        text += `- ${v.correctivePrompt}\n`;
+        if (v.contextualHint) {
+          text += `  Context: ${v.contextualHint}\n`;
+        }
+      }
+    }
+    
+    try {
+      await navigator.clipboard.writeText(text.trim());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
   };
 
   // Calculate improvement from previous iteration
