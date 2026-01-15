@@ -64,4 +64,9 @@ export interface Violation {
   correctivePrompt: string;
   contextualHint?: string;
   confidence: number;
+  // A1 contrast-specific fields
+  status?: 'confirmed' | 'potential';
+  contrastRatio?: number;
+  thresholdUsed?: 4.5 | 3.0;
+  evidence?: string;
 }
