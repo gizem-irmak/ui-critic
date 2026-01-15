@@ -113,14 +113,22 @@ ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.
 - Include file paths and line references where possible
 
 ## OUTPUT FORMAT (JSON)
+For EACH violation, you MUST provide:
+1. **diagnosis**: Detailed, evidence-based explanation of WHY the rule is violated. You MAY reference file paths or code patterns in the diagnosis since this is code analysis.
+2. **contextualHint**: A short (1 sentence) high-level hint summarizing WHERE the issue appears and WHAT kind of adjustment is needed. Keep it descriptive, not implementation-level.
+
+IMPORTANT CONSTRAINTS:
+- Do NOT include code snippets or exact CSS values in contextualHint
+- Keep contextualHint tool-agnostic and reusable across Bolt, Replit, and Lovable
+
 {
   "violations": [
     {
       "ruleId": "A1",
       "ruleName": "Insufficient text contrast",
       "category": "accessibility",
-      "diagnosis": "Found low contrast color combination",
-      "details": "In styles.css line 45: color: #999 on white background",
+      "diagnosis": "In Button.tsx, the secondary button variant uses 'text-gray-400' which provides insufficient contrast against the light background. Similar low-contrast text patterns found in Card.tsx for subtitle elements.",
+      "contextualHint": "Increase text color contrast for secondary buttons and card subtitles to meet accessibility standards.",
       "confidence": 0.85
     }
   ],

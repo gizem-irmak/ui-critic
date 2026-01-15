@@ -62,6 +62,6 @@ export interface Violation {
   category: string;
   diagnosis: string;
   correctivePrompt: string;
+  contextualHint?: string;
   confidence: number;
-  details?: string;
 }
