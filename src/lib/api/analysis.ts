@@ -2,7 +2,8 @@ import { supabase } from '@/integrations/supabase/client';
 import type { Violation } from '@/types/project';
 
 export interface AnalysisRequest {
-  images: string[]; // base64 encoded images
+  images?: string[]; // base64 encoded images (for screenshots)
+  zipBase64?: string; // base64 encoded zip file
   categories: string[];
   selectedRules: string[];
   inputType: 'screenshots' | 'zip' | 'github';
@@ -18,11 +19,31 @@ export interface AnalysisResponse {
     ethics?: string;
   };
   error?: string;
+  filesAnalyzed?: number;
+  stackDetected?: string;
 }
 
 export async function runUIAnalysis(request: AnalysisRequest): Promise<AnalysisResponse> {
-  const { data, error } = await supabase.functions.invoke('analyze-ui', {
-    body: request,
+  // Route to appropriate edge function based on input type
+  const functionName = request.inputType === 'zip' ? 'analyze-zip' : 'analyze-ui';
+  
+  const body = request.inputType === 'zip' 
+    ? {
+        zipBase64: request.zipBase64,
+        categories: request.categories,
+        selectedRules: request.selectedRules,
+        toolUsed: request.toolUsed,
+      }
+    : {
+        images: request.images,
+        categories: request.categories,
+        selectedRules: request.selectedRules,
+        inputType: request.inputType,
+        toolUsed: request.toolUsed,
+      };
+
+  const { data, error } = await supabase.functions.invoke(functionName, {
+    body,
   });
 
   if (error) {
@@ -43,6 +64,23 @@ export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * Convert a File to raw base64 string (without data URL prefix)
+ */
+export function fileToRawBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      // Remove the data URL prefix to get raw base64
+      const base64 = result.split(',')[1] || result;
+      resolve(base64);
+    };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
