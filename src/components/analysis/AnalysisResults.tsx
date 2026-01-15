@@ -119,7 +119,7 @@ export function AnalysisResults({
         <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/50 border border-border">
           <AlertCircle className="h-5 w-5 text-muted-foreground mt-0.5 flex-shrink-0" />
           <p className="text-sm text-muted-foreground">
-            <strong>About contrast analysis:</strong> Confirmed issues are measured from code-based audits with computed contrast ratios. Potential issues are heuristic observations from screenshots and should be verified with accessibility tools.
+            <strong>About contrast analysis:</strong> Confirmed issues require computed DOM styles from a running application (via axe-core or browser DevTools). Potential issues are heuristic observations that should be verified with accessibility audit tools.
           </p>
         </div>
       )}
@@ -254,11 +254,37 @@ export function AnalysisResults({
                   </span>
                 </div>
 
-                {/* Contrast Ratio Details (for confirmed A1) */}
+                {/* Contrast Ratio Details (for confirmed A1 with computed colors) */}
                 {violation.ruleId === 'A1' && violation.status === 'confirmed' && violation.contrastRatio && (
-                  <div className="flex items-center gap-4 p-2 rounded bg-destructive/5 border border-destructive/20 text-sm">
+                  <div className="flex flex-wrap items-center gap-4 p-2 rounded bg-destructive/5 border border-destructive/20 text-sm">
+                    {violation.elementDescription && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground">Element:</span>
+                        <span className="font-medium">{violation.elementDescription}</span>
+                      </div>
+                    )}
+                    {violation.foregroundHex && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground">Foreground:</span>
+                        <span className="font-mono font-medium">{violation.foregroundHex}</span>
+                        <span 
+                          className="w-4 h-4 rounded border border-border" 
+                          style={{ backgroundColor: violation.foregroundHex }}
+                        />
+                      </div>
+                    )}
+                    {violation.backgroundHex && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground">Background:</span>
+                        <span className="font-mono font-medium">{violation.backgroundHex}</span>
+                        <span 
+                          className="w-4 h-4 rounded border border-border" 
+                          style={{ backgroundColor: violation.backgroundHex }}
+                        />
+                      </div>
+                    )}
                     <div className="flex items-center gap-2">
-                      <span className="text-muted-foreground">Measured:</span>
+                      <span className="text-muted-foreground">Ratio:</span>
                       <span className="font-mono font-medium text-destructive">{violation.contrastRatio}:1</span>
                     </div>
                     {violation.thresholdUsed && (
