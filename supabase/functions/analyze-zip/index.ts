@@ -251,10 +251,25 @@ NOTE: A1 (text contrast) is analyzed separately with computed ratios. Do NOT rep
 Examine the code for other accessibility issues:
 - Font-size declarations (check for values below 16px or 1rem)
 - Line-height and spacing values
-- Button/link/interactive element sizing: Check for explicit min-width/min-height declarations that ensure 44×44px minimum. If no explicit size constraints are found, report that the element "does not explicitly ensure" or "cannot guarantee compliance with" minimum tap target size. Do NOT claim the element is definitively smaller than 44×44px—focus on the absence of explicit enforcement.
 - Focus styles (:focus, :focus-visible, outline declarations)
 - ARIA attributes and semantic HTML usage
 - Alt text for images
+
+### A4 (Small tap / click targets) — STRICT RULES:
+1. **Only report elements that LACK explicit minimum size enforcement**
+2. **DO NOT report elements that have explicit size constraints**, such as:
+   - min-h-[44px], min-h-11, min-h-12, or equivalent (≥44px)
+   - min-w-[44px], min-w-11, min-w-12, or equivalent (≥44px)
+   - h-11/h-12 combined with w-11/w-12 or larger fixed dimensions
+   - size-11, size-12, or larger
+3. **DO NOT speculate based on**:
+   - Text length or content
+   - Icon size alone (icons can have clickable padding)
+   - Padding classes (padding affects spacing, not guaranteed dimensions)
+4. **Diagnosis must focus on**:
+   - The ABSENCE of explicit size guarantees
+   - Use language: "does not explicitly ensure", "lacks explicit size constraints", "cannot guarantee compliance"
+5. **Report each non-compliant component SEPARATELY** — do not merge compliant and non-compliant elements into one violation
 
 Accessibility rules to check:
 ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name}`).join('\n')}
