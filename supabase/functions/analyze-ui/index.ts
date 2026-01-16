@@ -47,8 +47,20 @@ Run visual inspection for accessibility issues:
 - Text contrast ratios (minimum 4.5:1 for normal text)
 - Font sizes (minimum 16px for body text)
 - Line spacing and readability
-- Touch/click target sizing: Check if interactive elements appear to lack explicit minimum size enforcement. Do NOT claim elements are definitively smaller than 44×44px unless measured. Instead, note when elements "do not explicitly ensure" or "cannot guarantee compliance with" minimum tap target guidelines.
 - Focus indicator visibility
+
+### A4 (Small tap / click targets) — STRICT RULES:
+1. **Only report elements that visually appear to lack adequate tap target size**
+2. **DO NOT report elements that appear to have sufficient size** (buttons with visible padding, large touch areas)
+3. **DO NOT speculate based on**:
+   - Text length or label content alone
+   - Icon visual size (icons often have invisible clickable padding)
+   - Assumed padding or margins
+4. **Diagnosis must focus on**:
+   - Visual observation that the element appears to lack explicit size enforcement
+   - Use language: "does not explicitly ensure", "appears to lack", "cannot guarantee compliance"
+   - NEVER claim elements are definitively smaller than 44×44px
+5. **Report each potentially non-compliant element SEPARATELY** — do not group multiple elements into one violation
 
 ${includesA1 ? `
 ### SPECIAL HANDLING FOR A1 (Text Contrast)
