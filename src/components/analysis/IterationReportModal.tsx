@@ -1,0 +1,402 @@
+import { useState } from 'react';
+import { 
+  CheckCircle, XCircle, Copy, Check, TrendingDown, TrendingUp, 
+  AlertTriangle, ShieldCheck, AlertCircle, FileText, X 
+} from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
+import { cn } from '@/lib/utils';
+import type { Iteration, Project } from '@/types/project';
+
+interface IterationReportModalProps {
+  iteration: Iteration | null;
+  project: Project;
+  previousIteration: Iteration | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export function IterationReportModal({
+  iteration,
+  project,
+  previousIteration,
+  open,
+  onOpenChange,
+}: IterationReportModalProps) {
+  const [copied, setCopied] = useState(false);
+
+  if (!iteration?.analysis) return null;
+
+  const analysis = iteration.analysis;
+  const prevAnalysis = previousIteration?.analysis;
+
+  // Calculate comparison metrics
+  const violationDiff = prevAnalysis 
+    ? prevAnalysis.totalViolations - analysis.totalViolations 
+    : null;
+  const violationsFixed = violationDiff !== null && violationDiff > 0 ? violationDiff : 0;
+  const violationsAdded = violationDiff !== null && violationDiff < 0 ? Math.abs(violationDiff) : 0;
+
+  const categoryColors: Record<string, string> = {
+    accessibility: 'category-accessibility',
+    usability: 'category-usability',
+    ethics: 'category-ethics',
+  };
+
+  const categoryLabels: Record<string, string> = {
+    accessibility: 'Accessibility',
+    usability: 'Usability',
+    ethics: 'Ethical Design',
+  };
+
+  const inputTypeLabels: Record<string, string> = {
+    screenshots: 'Screenshots',
+    zip: 'ZIP Archive',
+    github: 'GitHub Repository',
+  };
+
+  const copyPrompt = async () => {
+    if (!analysis?.violations.length) return;
+    
+    const grouped: Record<string, typeof analysis.violations> = {};
+    
+    for (const v of analysis.violations) {
+      if (!grouped[v.category]) grouped[v.category] = [];
+      grouped[v.category].push(v);
+    }
+    
+    let text = 'Please revise the UI design to address the following issues:\n';
+    const categoryOrder = ['accessibility', 'usability', 'ethics'];
+    
+    for (const cat of categoryOrder) {
+      if (!grouped[cat]?.length) continue;
+      text += `\n${categoryLabels[cat]}:\n`;
+      for (const v of grouped[cat]) {
+        text += `- ${v.correctivePrompt}\n`;
+        if (v.contextualHint) {
+          text += `  Context: ${v.contextualHint}\n`;
+        }
+      }
+    }
+    
+    try {
+      await navigator.clipboard.writeText(text.trim());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  const hasConfirmedA1 = analysis.violations.some(v => v.ruleId === 'A1' && v.status === 'confirmed');
+  const hasPotentialA1 = analysis.violations.some(v => v.ruleId === 'A1' && v.status === 'potential');
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[90vh] p-0 gap-0 overflow-hidden">
+        <DialogHeader className="px-6 py-4 border-b border-border bg-muted/30">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <FileText className="h-5 w-5 text-muted-foreground" />
+              <DialogTitle className="text-lg">
+                Iteration #{iteration.iterationNumber} Report
+              </DialogTitle>
+              <Badge variant="outline" className="font-normal">
+                {inputTypeLabels[iteration.inputType]}
+              </Badge>
+              <Badge 
+                variant={analysis.isAcceptable ? 'default' : 'destructive'}
+                className={cn(
+                  analysis.isAcceptable 
+                    ? 'bg-success/10 text-success border-success/30 hover:bg-success/20' 
+                    : 'bg-destructive/10 text-destructive border-destructive/30 hover:bg-destructive/20'
+                )}
+              >
+                {analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
+              </Badge>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            Read-only report • Analyzed on {new Date(analysis.analyzedAt).toLocaleDateString()}
+          </p>
+        </DialogHeader>
+
+        <ScrollArea className="max-h-[calc(90vh-120px)]">
+          <div className="p-6 space-y-6">
+            {/* Status Banner */}
+            <div className={cn(
+              'flex items-center gap-4 p-4 rounded-lg border',
+              analysis.isAcceptable
+                ? 'bg-success/5 border-success/30'
+                : 'bg-destructive/5 border-destructive/30'
+            )}>
+              {analysis.isAcceptable ? (
+                <CheckCircle className="h-8 w-8 text-success flex-shrink-0" />
+              ) : (
+                <XCircle className="h-8 w-8 text-destructive flex-shrink-0" />
+              )}
+              <div className="flex-1">
+                <h3 className={cn(
+                  'font-semibold',
+                  analysis.isAcceptable ? 'text-success' : 'text-destructive'
+                )}>
+                  {analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  {analysis.totalViolations} violation{analysis.totalViolations !== 1 ? 's' : ''} detected (threshold: {project.threshold})
+                </p>
+              </div>
+            </div>
+
+            {/* Comparison with Previous Iteration */}
+            {prevAnalysis && (
+              <Card className="border-dashed">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <TrendingDown className="h-4 w-4" />
+                    Comparison with Iteration #{iteration.iterationNumber - 1}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="text-center p-3 rounded-lg bg-muted/50">
+                      <div className="text-2xl font-bold text-muted-foreground">
+                        {prevAnalysis.totalViolations}
+                      </div>
+                      <div className="text-xs text-muted-foreground">Previous Violations</div>
+                    </div>
+                    <div className="text-center p-3 rounded-lg bg-muted/50">
+                      <div className={cn(
+                        'text-2xl font-bold',
+                        violationsFixed > 0 ? 'text-success' : violationsAdded > 0 ? 'text-destructive' : 'text-muted-foreground'
+                      )}>
+                        {violationsFixed > 0 ? `-${violationsFixed}` : violationsAdded > 0 ? `+${violationsAdded}` : '0'}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {violationsFixed > 0 ? 'Fixed' : violationsAdded > 0 ? 'New Issues' : 'No Change'}
+                      </div>
+                    </div>
+                    <div className="text-center p-3 rounded-lg bg-muted/50">
+                      <div className="text-2xl font-bold">{analysis.totalViolations}</div>
+                      <div className="text-xs text-muted-foreground">Remaining</div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Metrics Grid */}
+            <div className="grid grid-cols-3 gap-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Total Violations
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{analysis.totalViolations}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Threshold
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{project.threshold}</div>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Selected Rules
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{iteration.selectedRules.length}</div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Confidence Note for A1 */}
+            {(hasConfirmedA1 || hasPotentialA1) && (
+              <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/50 border border-border">
+                <AlertCircle className="h-5 w-5 text-muted-foreground mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-muted-foreground">
+                  <strong>About contrast analysis:</strong> Confirmed issues require computed DOM styles. Potential issues are heuristic observations that should be verified with accessibility audit tools.
+                </p>
+              </div>
+            )}
+
+            {/* Violations by Category */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Violations by Category</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {Object.entries(analysis.violationsByCategory).map(([category, count]) => (
+                    <div key={category} className="flex items-center gap-3">
+                      <span className={cn('category-badge w-24 justify-center text-xs', categoryColors[category])}>
+                        {category}
+                      </span>
+                      <div className="flex-1">
+                        <Progress
+                          value={(count / Math.max(analysis.totalViolations, 1)) * 100}
+                          className="h-2"
+                        />
+                      </div>
+                      <span className="w-8 text-right font-mono text-sm">{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Violation Details */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <AlertTriangle className="h-4 w-4 text-warning" />
+                  Detected Violations ({analysis.violations.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {analysis.violations.map((violation, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-lg bg-muted/50 border border-border space-y-2"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
+                            {violation.ruleId}
+                          </span>
+                          <span className="font-medium text-sm">{violation.ruleName}</span>
+                          
+                          {violation.ruleId === 'A1' && violation.status && (
+                            <Badge 
+                              variant={violation.status === 'confirmed' ? 'default' : 'secondary'}
+                              className={cn(
+                                'gap-1 text-xs',
+                                violation.status === 'confirmed' 
+                                  ? 'bg-destructive/10 text-destructive border-destructive/30' 
+                                  : 'bg-warning/10 text-warning border-warning/30'
+                              )}
+                            >
+                              {violation.status === 'confirmed' ? (
+                                <>
+                                  <ShieldCheck className="h-3 w-3" />
+                                  Confirmed
+                                </>
+                              ) : (
+                                <>
+                                  <AlertCircle className="h-3 w-3" />
+                                  ⚠️ Potential Risk (Heuristic)
+                                </>
+                              )}
+                            </Badge>
+                          )}
+                        </div>
+                        <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                          {Math.round(violation.confidence * 100)}%
+                        </span>
+                      </div>
+
+                      {/* Contrast Ratio Details */}
+                      {violation.ruleId === 'A1' && violation.status === 'confirmed' && violation.contrastRatio && (
+                        <div className="flex flex-wrap items-center gap-3 p-2 rounded bg-destructive/5 border border-destructive/20 text-xs">
+                          {violation.foregroundHex && (
+                            <div className="flex items-center gap-1">
+                              <span className="text-muted-foreground">FG:</span>
+                              <span className="font-mono">{violation.foregroundHex}</span>
+                              <span className="w-3 h-3 rounded border border-border" style={{ backgroundColor: violation.foregroundHex }} />
+                            </div>
+                          )}
+                          {violation.backgroundHex && (
+                            <div className="flex items-center gap-1">
+                              <span className="text-muted-foreground">BG:</span>
+                              <span className="font-mono">{violation.backgroundHex}</span>
+                              <span className="w-3 h-3 rounded border border-border" style={{ backgroundColor: violation.backgroundHex }} />
+                            </div>
+                          )}
+                          <div className="flex items-center gap-1">
+                            <span className="text-muted-foreground">Ratio:</span>
+                            <span className="font-mono text-destructive">{violation.contrastRatio}:1</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {violation.evidence && (
+                        <p className="text-xs text-muted-foreground italic">📍 {violation.evidence}</p>
+                      )}
+
+                      <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
+                    </div>
+                  ))}
+                  {analysis.violations.length === 0 && (
+                    <div className="text-center py-6 text-muted-foreground">
+                      No violations detected in this iteration
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Corrective Prompt */}
+            {analysis.violations.length > 0 && (
+              <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <CardTitle className="text-sm">Corrective Prompts</CardTitle>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={copyPrompt}
+                    className="gap-2 h-8"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="h-3 w-3" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="h-3 w-3" />
+                        Copy All
+                      </>
+                    )}
+                  </Button>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {analysis.violations.map((violation, idx) => (
+                    <div key={idx} className="space-y-1 pb-3 border-b border-border last:border-0 last:pb-0">
+                      <div className="flex items-center gap-2">
+                        <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
+                          {violation.ruleId}
+                        </span>
+                        <span className="text-xs font-medium text-muted-foreground">{violation.ruleName}</span>
+                      </div>
+                      <p className="text-sm bg-primary/5 p-2 rounded border-l-2 border-primary">
+                        {violation.correctivePrompt}
+                      </p>
+                      {violation.contextualHint && (
+                        <p className="text-xs text-muted-foreground italic">💡 {violation.contextualHint}</p>
+                      )}
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
+  );
+}

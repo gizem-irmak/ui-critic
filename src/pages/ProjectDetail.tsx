@@ -1,17 +1,19 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Play, Loader2 } from 'lucide-react';
+import { ArrowLeft, Play, Loader2, ChevronRight, CheckCircle, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ToolBadge } from '@/components/ui/tool-badge';
 import { InputSelector } from '@/components/analysis/InputSelector';
 import { RuleSelector } from '@/components/analysis/RuleSelector';
 import { AnalysisResults } from '@/components/analysis/AnalysisResults';
+import { IterationReportModal } from '@/components/analysis/IterationReportModal';
 import { useProjectStore } from '@/stores/projectStore';
 import { rules } from '@/data/rules';
 import { runUIAnalysis, fileToBase64, fileToRawBase64 } from '@/lib/api/analysis';
-import type { InputType, ScreenshotInput, ZipInput, GithubInput, Analysis } from '@/types/project';
+import type { InputType, ScreenshotInput, ZipInput, GithubInput, Analysis, Iteration } from '@/types/project';
 import { useToast } from '@/hooks/use-toast';
+import { cn } from '@/lib/utils';
 
 export default function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -23,6 +25,10 @@ export default function ProjectDetail() {
   
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentView, setCurrentView] = useState<'setup' | 'results'>('setup');
+  
+  // Modal state for viewing past iterations
+  const [selectedIteration, setSelectedIteration] = useState<Iteration | null>(null);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   
   // Current iteration state
   const [inputType, setInputType] = useState<InputType>('screenshots');
@@ -184,6 +190,22 @@ export default function ProjectDetail() {
     setInputData({ type: 'screenshots', files: [], previews: [] });
   };
 
+  const openIterationReport = (iter: Iteration) => {
+    setSelectedIteration(iter);
+    setIsReportModalOpen(true);
+  };
+
+  const getPreviousIteration = (iter: Iteration): Iteration | null => {
+    const idx = project.iterations.findIndex(i => i.id === iter.id);
+    return idx > 0 ? project.iterations[idx - 1] : null;
+  };
+
+  const inputTypeLabels: Record<string, string> = {
+    screenshots: 'Screenshots',
+    zip: 'ZIP',
+    github: 'GitHub',
+  };
+
   const updatedProject = getProject(project.id);
   const currentIteration = updatedProject?.iterations[updatedProject.iterations.length - 1];
 
@@ -285,36 +307,64 @@ export default function ProjectDetail() {
           <CardContent>
             <div className="space-y-2">
               {[...project.iterations].reverse().map((iter) => (
-                <div
+                <button
                   key={iter.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50 border border-border"
+                  onClick={() => openIterationReport(iter)}
+                  className={cn(
+                    'w-full flex items-center justify-between p-3 rounded-lg border transition-all',
+                    'hover:bg-muted/80 hover:border-primary/30 hover:shadow-sm',
+                    'focus:outline-none focus:ring-2 focus:ring-primary/20',
+                    iter.analysis?.isAcceptable
+                      ? 'bg-success/5 border-success/20'
+                      : 'bg-muted/50 border-border'
+                  )}
                 >
                   <div className="flex items-center gap-3">
+                    {iter.analysis && (
+                      iter.analysis.isAcceptable ? (
+                        <CheckCircle className="h-4 w-4 text-success" />
+                      ) : (
+                        <XCircle className="h-4 w-4 text-destructive" />
+                      )
+                    )}
                     <span className="font-mono text-sm font-medium">
                       #{iter.iterationNumber}
                     </span>
-                    <span className="text-sm text-muted-foreground capitalize">
-                      {iter.inputType}
+                    <span className="text-sm text-muted-foreground">
+                      {inputTypeLabels[iter.inputType]}
                     </span>
                   </div>
-                  {iter.analysis && (
-                    <div className="flex items-center gap-3">
-                      <span className="text-sm">
-                        {iter.analysis.totalViolations} violation{iter.analysis.totalViolations !== 1 ? 's' : ''}
-                      </span>
-                      <span className={`status-badge ${
-                        iter.analysis.isAcceptable ? 'status-acceptable' : 'status-not-acceptable'
-                      }`}>
-                        {iter.analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
-                      </span>
-                    </div>
-                  )}
-                </div>
+                  <div className="flex items-center gap-3">
+                    {iter.analysis && (
+                      <>
+                        <span className="text-sm text-muted-foreground">
+                          {iter.analysis.totalViolations} violation{iter.analysis.totalViolations !== 1 ? 's' : ''}
+                        </span>
+                        <span className={cn(
+                          'status-badge',
+                          iter.analysis.isAcceptable ? 'status-acceptable' : 'status-not-acceptable'
+                        )}>
+                          {iter.analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
+                        </span>
+                      </>
+                    )}
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  </div>
+                </button>
               ))}
             </div>
           </CardContent>
         </Card>
       )}
+
+      {/* Iteration Report Modal */}
+      <IterationReportModal
+        iteration={selectedIteration}
+        project={updatedProject!}
+        previousIteration={selectedIteration ? getPreviousIteration(selectedIteration) : null}
+        open={isReportModalOpen}
+        onOpenChange={setIsReportModalOpen}
+      />
     </div>
   );
 }
