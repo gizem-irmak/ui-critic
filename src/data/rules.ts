@@ -18,9 +18,9 @@ export const rules: Rule[] = [
   {
     id: 'A2',
     category: 'accessibility',
-    name: 'Small body font size',
-    diagnosis: 'Small text size can negatively affect readability and accessibility.',
-    correctivePrompt: 'Increase body text size to a minimum of 16px and adjust line spacing for readability.'
+    name: 'Small informational text size',
+    diagnosis: 'While WCAG does not specify a minimum font size, usability and accessibility guidelines commonly recommend using at least ~16px for important informational content to support readability, particularly for users with visual impairments.',
+    correctivePrompt: 'Consider increasing informational text size to at least ~16px and adjusting line spacing for improved readability. This is a recommended best practice, not a WCAG requirement.'
   },
   {
     id: 'A3',
