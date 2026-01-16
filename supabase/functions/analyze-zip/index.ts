@@ -13,7 +13,7 @@ const rules = {
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
     { id: 'A2', name: 'Small body font size', diagnosis: 'Small text size can negatively affect readability and accessibility.', correctivePrompt: 'Increase body text size to a minimum of 16px and adjust line spacing for readability.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
-    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Small interactive elements may reduce usability, particularly on touch devices.', correctivePrompt: 'Increase the size and spacing of interactive elements to meet recommended tap target guidelines.' },
+    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly ensure minimum tap target size (44×44px), and rendered dimensions may vary across devices.', correctivePrompt: 'Explicitly enforce minimum interactive element dimensions (44×44px) with adequate spacing to ensure tap target compliance across devices.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
   ],
   usability: [
@@ -251,7 +251,7 @@ NOTE: A1 (text contrast) is analyzed separately with computed ratios. Do NOT rep
 Examine the code for other accessibility issues:
 - Font-size declarations (check for values below 16px or 1rem)
 - Line-height and spacing values
-- Button/link sizing (padding, min-width, min-height)
+- Button/link/interactive element sizing: Check for explicit min-width/min-height declarations that ensure 44×44px minimum. If no explicit size constraints are found, report that the element "does not explicitly ensure" or "cannot guarantee compliance with" minimum tap target size. Do NOT claim the element is definitively smaller than 44×44px—focus on the absence of explicit enforcement.
 - Focus styles (:focus, :focus-visible, outline declarations)
 - ARIA attributes and semantic HTML usage
 - Alt text for images
