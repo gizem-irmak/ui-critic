@@ -11,7 +11,7 @@ const corsHeaders = {
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small body font size', diagnosis: 'Small text size can negatively affect readability and accessibility.', correctivePrompt: 'Increase body text size to a minimum of 16px and adjust line spacing for readability.' },
+    { id: 'A2', name: 'Small informational text size', diagnosis: 'While WCAG does not specify a minimum font size, usability and accessibility guidelines commonly recommend using at least ~16px for important informational content to support readability, particularly for users with visual impairments.', correctivePrompt: 'Consider increasing informational text size to at least ~16px and adjusting line spacing for improved readability. This is a recommended best practice, not a WCAG requirement.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly ensure minimum tap target size (44×44px), and rendered dimensions may vary across devices.', correctivePrompt: 'Explicitly enforce minimum interactive element dimensions (44×44px) with adequate spacing to ensure tap target compliance across devices.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
@@ -254,6 +254,32 @@ Examine the code for other accessibility issues:
 - Focus styles (:focus, :focus-visible, outline declarations)
 - ARIA attributes and semantic HTML usage
 - Alt text for images
+
+### A2 (Small informational text size) — STRICT CLASSIFICATION & WORDING RULES:
+
+**CLASSIFICATION:**
+- ALWAYS classify A2 as "⚠️ Heuristic Readability Risk" — NEVER "Confirmed"
+- Use medium confidence level (55–65%), NOT high confidence
+- WCAG does NOT define a minimum font-size requirement — explicitly state this
+
+**WHAT TO REPORT:**
+1. Report text elements using small font sizes (≈14px, text-sm, 0.875rem, or smaller)
+2. Focus on informational/metadata text (labels, descriptors, captions, helper text)
+3. Do NOT treat this as a strict WCAG violation
+
+**REQUIRED WORDING:**
+- Do NOT call this "Small body font size" unless the text is primary body content
+- Prefer: "Small informational text size" or "Reduced readability due to small text"
+- Frame as usability and accessibility best-practice concern, NOT standards violation
+- Explicitly state: "WCAG does not specify a minimum font size"
+
+**DO NOT:**
+- Use "fails", "does not comply", "violates WCAG", or similar absolute language
+- Imply the issue is objectively measurable or a standards violation
+- Treat this as equivalent to contrast violations
+
+**OUTPUT TEMPLATE:**
+"Several informational text elements in [file/component] use small font sizes (≈14px). While WCAG does not specify a minimum font size, usability and accessibility guidelines commonly recommend using at least ~16px for important informational content to support readability, particularly for users with visual impairments. This represents a heuristic readability risk identified through static code analysis."
 
 ### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
 
