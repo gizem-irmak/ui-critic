@@ -75,9 +75,10 @@ export function AnalysisResults({
     ethics: 'category-ethics',
   };
 
-  // Check if there are any confirmed or potential A1 violations
+  // Check if there are any confirmed or potential A1/A4 violations
   const hasConfirmedA1 = analysis.violations.some(v => v.ruleId === 'A1' && v.status === 'confirmed');
   const hasPotentialA1 = analysis.violations.some(v => v.ruleId === 'A1' && v.status === 'potential');
+  const hasPotentialA4 = analysis.violations.some(v => v.ruleId === 'A4' && v.status === 'potential');
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -114,13 +115,19 @@ export function AnalysisResults({
         )}
       </div>
 
-      {/* Confidence Note for A1 */}
-      {(hasConfirmedA1 || hasPotentialA1) && (
+      {/* Confidence Note for A1/A4 */}
+      {(hasConfirmedA1 || hasPotentialA1 || hasPotentialA4) && (
         <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/50 border border-border">
           <AlertCircle className="h-5 w-5 text-muted-foreground mt-0.5 flex-shrink-0" />
-          <p className="text-sm text-muted-foreground">
-            <strong>About contrast analysis:</strong> Confirmed issues require computed DOM styles from a running application (via axe-core or browser DevTools). Potential issues are heuristic observations that should be verified with accessibility audit tools.
-          </p>
+          <div className="text-sm text-muted-foreground space-y-1">
+            <p><strong>About measurement-dependent checks:</strong></p>
+            {(hasConfirmedA1 || hasPotentialA1) && (
+              <p>• <strong>Contrast (A1):</strong> Confirmed issues require computed DOM styles from a running application (via axe-core or browser DevTools). Potential issues are heuristic observations.</p>
+            )}
+            {hasPotentialA4 && (
+              <p>• <strong>Tap targets (A4):</strong> Tap target size depends on rendered layout and device context. Without DOM-level measurement, issues are marked as potential and should be verified.</p>
+            )}
+          </div>
         </div>
       )}
 
@@ -224,8 +231,8 @@ export function AnalysisResults({
                     </span>
                     <span className="font-medium">{violation.ruleName}</span>
                     
-                    {/* Status Badge for A1 */}
-                    {violation.ruleId === 'A1' && violation.status && (
+                    {/* Status Badge for A1 and A4 */}
+                    {(violation.ruleId === 'A1' || violation.ruleId === 'A4') && violation.status && (
                       <Badge 
                         variant={violation.status === 'confirmed' ? 'default' : 'secondary'}
                         className={cn(
@@ -296,8 +303,8 @@ export function AnalysisResults({
                   </div>
                 )}
 
-                {/* Evidence (for A1) */}
-                {violation.ruleId === 'A1' && violation.evidence && (
+                {/* Evidence (for A1 and A4) */}
+                {(violation.ruleId === 'A1' || violation.ruleId === 'A4') && violation.evidence && (
                   <p className="text-sm text-muted-foreground italic pl-1">
                     📍 {violation.evidence}
                   </p>

@@ -39,6 +39,7 @@ const rules = {
 const buildAnalysisPrompt = (categories: string[], selectedRules: string[]) => {
   const selectedRulesSet = new Set(selectedRules);
   const includesA1 = selectedRulesSet.has('A1');
+  const includesA4 = selectedRulesSet.has('A4');
   
   return `You are an expert UI/UX auditor performing a comprehensive 3-pass analysis of a user interface. Analyze the provided screenshot(s) following this structured methodology:
 
@@ -59,6 +60,18 @@ For A1 violations:
 - Use cautious language: "may have", "potential risk", "appears to be", "should be verified"
 - Do NOT provide numeric contrast ratios
 - Evidence should describe the visual observation (e.g., "Light gray text on white background in the header area")
+` : ''}
+
+${includesA4 ? `
+### SPECIAL HANDLING FOR A4 (Small Tap/Click Targets)
+Since this is screenshot-based analysis, you CANNOT measure exact rendered dimensions.
+For A4 violations:
+- ONLY report if you observe visually small interactive elements (tiny buttons, cramped icons, etc.)
+- Set status to "potential" (NOT "confirmed")
+- Use cautious language: "may not meet", "might be too small", "appears small", "should be verified"
+- Do NOT claim exact pixel measurements
+- Evidence should describe the visual observation (e.g., "Close button in modal appears visually small")
+- Diagnosis MUST state: "The interactive element does not explicitly enforce a minimum tap target size of 44×44px. While padding or font size may increase the clickable area, this is not guaranteed across devices or interaction contexts."
 ` : ''}
 
 Report violations ONLY if there is strong visual evidence.
@@ -98,12 +111,14 @@ ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.
 - For each category, output triggered rules OR explicitly state "No violations detected after reasoning"
 - Be thorough but avoid false positives - only report violations with clear evidence
 ${includesA1 ? '- For A1 (contrast): NEVER claim "confirmed" status - always use "potential" for screenshot analysis' : ''}
+${includesA4 ? '- For A4 (tap targets): NEVER claim "confirmed" status - always use "potential" for screenshot analysis. Cannot measure rendered dimensions from screenshots.' : ''}
 
 ## OUTPUT FORMAT (JSON)
 For EACH violation, you MUST provide:
 1. **diagnosis**: Detailed, evidence-based explanation of WHY the rule is violated. Reference UI elements conceptually (e.g., "success message", "filter chips", "primary button").
 2. **contextualHint**: A short (1 sentence) high-level hint summarizing WHERE the issue appears and WHAT kind of adjustment is needed. Keep it descriptive, not implementation-level.
 ${includesA1 ? `3. For A1 only: Include "status": "potential" and "evidence": describing what you observed visually.` : ''}
+${includesA4 ? `${includesA1 ? '4' : '3'}. For A4 only: Include "status": "potential" and "evidence": describing what you observed visually. Include the specific diagnosis wording about not enforcing minimum size.` : ''}
 
 IMPORTANT CONSTRAINTS:
 - Do NOT include file paths, class names, or code snippets in diagnosis or contextualHint
@@ -243,19 +258,20 @@ serve(async (req) => {
     }
 
     // Enhance violations with corrective prompts from our rule registry
-    // Also ensure A1 violations from screenshots are marked as "potential"
+    // Also ensure A1 and A4 violations from screenshots are marked as "potential"
     const enhancedViolations = (analysisResult.violations || []).map((v: any) => {
       const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
       const rule = allRules.find(r => r.id === v.ruleId);
       
-      // For A1 from screenshots, always set status to "potential"
+      // For A1 and A4 from screenshots, always set status to "potential"
       const isA1 = v.ruleId === 'A1';
+      const isA4 = v.ruleId === 'A4';
       
       return {
         ...v,
         correctivePrompt: rule?.correctivePrompt || v.correctivePrompt || '',
-        // Ensure A1 is always "potential" for screenshot analysis
-        ...(isA1 ? { status: 'potential' } : {}),
+        // Ensure A1 and A4 are always "potential" for screenshot analysis
+        ...((isA1 || isA4) ? { status: 'potential' } : {}),
       };
     });
 
