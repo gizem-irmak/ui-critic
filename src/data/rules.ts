@@ -33,8 +33,8 @@ export const rules: Rule[] = [
     id: 'A4',
     category: 'accessibility',
     name: 'Small tap / click targets',
-    diagnosis: 'Small interactive elements may reduce usability, particularly on touch devices.',
-    correctivePrompt: 'Increase the size and spacing of interactive elements to meet recommended tap target guidelines.'
+    diagnosis: 'Interactive elements do not explicitly ensure minimum tap target size (44×44px), and rendered dimensions may vary across devices.',
+    correctivePrompt: 'Explicitly enforce minimum interactive element dimensions (44×44px) with adequate spacing to ensure tap target compliance across devices.'
   },
   {
     id: 'A5',
