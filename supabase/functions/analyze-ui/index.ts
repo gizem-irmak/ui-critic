@@ -49,18 +49,31 @@ Run visual inspection for accessibility issues:
 - Line spacing and readability
 - Focus indicator visibility
 
-### A4 (Small tap / click targets) — STRICT RULES:
-1. **Only report elements that visually appear to lack adequate tap target size**
-2. **DO NOT report elements that appear to have sufficient size** (buttons with visible padding, large touch areas)
-3. **DO NOT speculate based on**:
-   - Text length or label content alone
-   - Icon visual size (icons often have invisible clickable padding)
-   - Assumed padding or margins
-4. **Diagnosis must focus on**:
-   - Visual observation that the element appears to lack explicit size enforcement
-   - Use language: "does not explicitly ensure", "appears to lack", "cannot guarantee compliance"
-   - NEVER claim elements are definitively smaller than 44×44px
-5. **Report each potentially non-compliant element SEPARATELY** — do not group multiple elements into one violation
+### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
+
+**CLASSIFICATION:**
+- ALWAYS classify A4 as "⚠️ Potential Risk (Heuristic)" — NEVER "Confirmed" unless rendered DOM dimensions are explicitly measured
+- Visual inspection CANNOT confirm tap target violations without actual measurement
+
+**WHAT TO REPORT:**
+1. Only report interactive elements (buttons, links, clickable elements) that visually appear to lack adequate size
+2. DO NOT report elements that appear to have sufficient size (buttons with visible padding, large touch areas)
+
+**DO NOT:**
+- Infer or assume final tap target size from padding, font size, or icon size
+- Mention internal glyphs, spans, icons, or characters (e.g., "×", "X", icons)
+- Describe user difficulty as a confirmed outcome
+- Use language implying measurement or certainty
+
+**REQUIRED WORDING:**
+- Refer to elements as "button" or "interactive element" — not internal content
+- Use neutral, academic phrasing: "does not explicitly enforce", "cannot be guaranteed", "potential risk"
+- Include the component/location where the issue occurs
+
+**OUTPUT TEMPLATE:**
+"The [button/interactive element] in [component/location] does not explicitly enforce a minimum tap target size of 44×44px. Although padding may be applied, the element's dimensions are not explicitly constrained to guarantee compliance with recommended touch target guidelines."
+
+**Report each potentially non-compliant element SEPARATELY** — do not group into one violation
 
 ${includesA1 ? `
 ### SPECIAL HANDLING FOR A1 (Text Contrast)
