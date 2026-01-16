@@ -255,21 +255,35 @@ Examine the code for other accessibility issues:
 - ARIA attributes and semantic HTML usage
 - Alt text for images
 
-### A4 (Small tap / click targets) — STRICT RULES:
-1. **Only report elements that LACK explicit minimum size enforcement**
-2. **DO NOT report elements that have explicit size constraints**, such as:
-   - min-h-[44px], min-h-11, min-h-12, or equivalent (≥44px)
-   - min-w-[44px], min-w-11, min-w-12, or equivalent (≥44px)
-   - h-11/h-12 combined with w-11/w-12 or larger fixed dimensions
+### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
+
+**CLASSIFICATION:**
+- ALWAYS classify A4 as "⚠️ Potential Risk (Heuristic)" — NEVER "Confirmed" unless rendered DOM dimensions are explicitly measured
+- Static code analysis CANNOT confirm tap target violations
+
+**WHAT TO REPORT:**
+1. Only report interactive elements (buttons, links, clickable elements) that LACK explicit minimum size enforcement
+2. DO NOT report elements that have explicit size constraints ≥44px:
+   - min-h-[44px], min-h-11, min-h-12, or larger
+   - min-w-[44px], min-w-11, min-w-12, or larger
+   - Both h-11/w-11 or h-12/w-12 together, or larger fixed dimensions
    - size-11, size-12, or larger
-3. **DO NOT speculate based on**:
-   - Text length or content
-   - Icon size alone (icons can have clickable padding)
-   - Padding classes (padding affects spacing, not guaranteed dimensions)
-4. **Diagnosis must focus on**:
-   - The ABSENCE of explicit size guarantees
-   - Use language: "does not explicitly ensure", "lacks explicit size constraints", "cannot guarantee compliance"
-5. **Report each non-compliant component SEPARATELY** — do not merge compliant and non-compliant elements into one violation
+
+**DO NOT:**
+- Infer or assume final tap target size from padding, font size, or icon size
+- Mention internal glyphs, spans, icons, or characters (e.g., "×", "X", icons)
+- Describe user difficulty as a confirmed outcome
+- Use language implying measurement or certainty
+
+**REQUIRED WORDING:**
+- Refer to elements as "button" or "interactive element" — not internal content
+- Use neutral, academic phrasing: "does not explicitly enforce", "cannot be guaranteed", "potential risk"
+- Include the file/component name where the issue occurs
+
+**OUTPUT TEMPLATE:**
+"The [button/interactive element] in [File.tsx] does not explicitly enforce a minimum tap target size of 44×44px (e.g., via min-width or min-height). Although padding may be applied, the element's dimensions are not explicitly constrained to guarantee compliance with recommended touch target guidelines."
+
+5. **Report each non-compliant element SEPARATELY** — do not merge into one violation
 
 Accessibility rules to check:
 ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name}`).join('\n')}
