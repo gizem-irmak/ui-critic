@@ -116,19 +116,24 @@ function extractTextColors(code: string): Array<{ colorClass: string; context: s
   return results;
 }
 
-// Analyze contrast issues in code - HEURISTIC ONLY (no computed DOM styles)
+// Analyze issues in code - HEURISTIC ONLY (no computed DOM styles/measurements)
 // Per requirements: Only mark as "confirmed" if using axe-core with element reference 
-// OR actual computed DOM styles. Static Tailwind class mapping is NOT sufficient.
-interface ContrastViolation {
+// OR actual computed DOM styles/rendered measurements. Static code analysis is NOT sufficient.
+interface HeuristicViolation {
   ruleId: string;
   ruleName: string;
   category: string;
   status: 'confirmed' | 'potential';
+  // A1 contrast-specific fields
   contrastRatio?: number;
   thresholdUsed?: 4.5 | 3.0;
   foregroundHex?: string;
   backgroundHex?: string;
   elementDescription?: string;
+  // A4 tap target-specific fields
+  measuredWidth?: number;
+  measuredHeight?: number;
+  // Common fields
   evidence: string;
   diagnosis: string;
   contextualHint: string;
@@ -136,8 +141,8 @@ interface ContrastViolation {
   confidence: number;
 }
 
-function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] {
-  const violations: ContrastViolation[] = [];
+function analyzeContrastInCode(files: Map<string, string>): HeuristicViolation[] {
+  const violations: HeuristicViolation[] = [];
   const reportedPatterns = new Set<string>();
   
   // Colors that typically have low contrast on light backgrounds
@@ -220,6 +225,97 @@ function inferElementContext(context: string): string | null {
   return null;
 }
 
+// Analyze tap target size issues in code - HEURISTIC ONLY
+// Per requirements: Only mark as "confirmed" if rendered width/height are explicitly measured
+// Static code analysis cannot determine final rendered size, so always report as "potential"
+function analyzeTapTargetsInCode(files: Map<string, string>): HeuristicViolation[] {
+  const violations: HeuristicViolation[] = [];
+  const reportedPatterns = new Set<string>();
+  
+  // Patterns that suggest potentially small tap targets
+  const smallSizePatterns = [
+    // Small padding classes
+    /p-[0-2](?!\d)/g,
+    /px-[0-2](?!\d)/g,
+    /py-[0-2](?!\d)/g,
+    // Small explicit sizes
+    /w-[3-8](?!\d)/g,
+    /h-[3-8](?!\d)/g,
+    // Very small text that might indicate small clickable elements
+    /text-xs/g,
+    /text-\[1[0-1]px\]/g,
+  ];
+  
+  // Elements that should meet tap target requirements
+  const interactivePatterns = [
+    /<button[^>]*>/gi,
+    /<a [^>]*>/gi,
+    /onClick\s*=/gi,
+    /onPress\s*=/gi,
+    /<input[^>]*type\s*=\s*["']?(checkbox|radio|submit|button)/gi,
+    /<IconButton/gi,
+    /role\s*=\s*["']button["']/gi,
+  ];
+  
+  for (const [filepath, content] of files) {
+    // Check if file has interactive elements
+    const hasInteractive = interactivePatterns.some(pattern => pattern.test(content));
+    if (!hasInteractive) continue;
+    
+    // Look for patterns suggesting small sizes without explicit min-width/min-height
+    const hasSmallSizePattern = smallSizePatterns.some(pattern => pattern.test(content));
+    
+    // Check for explicit min-w-* or min-h-* (44px = 11 in Tailwind's default scale)
+    const hasExplicitMinSize = /min-w-\d+|min-h-\d+|min-width:|min-height:/i.test(content);
+    
+    // Check if interactive elements have sufficient padding (p-3 = 12px, need ~11px for 44px with content)
+    const hasSufficientPadding = /p-[3-9]|p-1[0-9]|px-[3-9]|py-[3-9]|padding:\s*(\d{2,}px|[1-9]\.[0-9]+rem)/i.test(content);
+    
+    // If we see small size patterns OR lack of explicit min-size guarantees, report potential issue
+    if (hasSmallSizePattern || (!hasExplicitMinSize && !hasSufficientPadding)) {
+      const patternKey = filepath;
+      if (reportedPatterns.has(patternKey)) continue;
+      reportedPatterns.add(patternKey);
+      
+      // Try to identify the type of interactive element
+      const elementType = inferInteractiveElementType(content);
+      
+      violations.push({
+        ruleId: 'A4',
+        ruleName: 'Small tap / click targets',
+        category: 'accessibility',
+        status: 'potential', // NEVER 'confirmed' without rendered DOM measurements
+        evidence: `Interactive elements in ${filepath} do not explicitly enforce minimum tap target size. No min-width/min-height constraints or sufficient padding detected.`,
+        diagnosis: `The interactive element does not explicitly enforce a minimum tap target size of 44×44px. While padding or font size may increase the clickable area, this is not guaranteed across devices or interaction contexts. Static code analysis cannot determine the final rendered size.`,
+        contextualHint: elementType 
+          ? `Verify ${elementType} meets 44×44px minimum tap target size.`
+          : 'Verify interactive elements meet 44×44px minimum tap target size.',
+        correctivePrompt: rules.accessibility[3].correctivePrompt, // A4 prompt
+        confidence: 0.6, // Lower confidence since we can't measure
+      });
+    }
+  }
+  
+  return violations;
+}
+
+// Infer the type of interactive element from code context
+function inferInteractiveElementType(content: string): string | null {
+  const lowerContent = content.toLowerCase();
+  
+  if (lowerContent.includes('iconbutton') || /button[^>]*>\s*<.*icon/i.test(content)) return 'icon buttons';
+  if (lowerContent.includes('checkbox') || lowerContent.includes('type="checkbox"')) return 'checkboxes';
+  if (lowerContent.includes('radio') || lowerContent.includes('type="radio"')) return 'radio buttons';
+  if (lowerContent.includes('close') || lowerContent.includes('dismiss')) return 'close/dismiss buttons';
+  if (lowerContent.includes('toggle') || lowerContent.includes('switch')) return 'toggle switches';
+  if (lowerContent.includes('dropdown') || lowerContent.includes('select')) return 'dropdown triggers';
+  if (lowerContent.includes('tab')) return 'tab buttons';
+  if (lowerContent.includes('pagination') || lowerContent.includes('page')) return 'pagination controls';
+  if (lowerContent.includes('nav') || lowerContent.includes('menu')) return 'navigation links';
+  
+  return null;
+}
+
 function isAnalyzableFile(filename: string): boolean {
   const lower = filename.toLowerCase();
   return ANALYZABLE_EXTENSIONS.some(ext => lower.endsWith(ext));
@@ -240,13 +336,13 @@ function detectStack(files: Map<string, string>): string {
 
 function buildCodeAnalysisPrompt(selectedRules: string[]) {
   const selectedRulesSet = new Set(selectedRules);
-  // Filter out A1 since we handle it separately with computed contrast
-  const accessibilityRulesWithoutA1 = rules.accessibility.filter(r => r.id !== 'A1' && selectedRulesSet.has(r.id));
+  // Filter out A1 and A4 since we handle them separately with heuristic analysis
+  const accessibilityRulesFiltered = rules.accessibility.filter(r => r.id !== 'A1' && r.id !== 'A4' && selectedRulesSet.has(r.id));
   
   return `You are an expert UI/UX code auditor performing a comprehensive 3-pass static analysis of source code. Analyze the provided code files following this structured methodology:
 
 ## PASS 1 — Accessibility (WCAG AA) - Static Code Analysis
-NOTE: A1 (text contrast) is analyzed separately with computed ratios. Do NOT report A1 violations.
+NOTE: A1 (text contrast) and A4 (tap targets) are analyzed separately with heuristic detection. Do NOT report A1 or A4 violations.
 
 Examine the code for other accessibility issues:
 - Font-size declarations (check for values below 16px or 1rem)
@@ -257,7 +353,7 @@ Examine the code for other accessibility issues:
 - Alt text for images
 
 Accessibility rules to check:
-${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name}`).join('\n')}
+${accessibilityRulesFiltered.map(r => `- ${r.id}: ${r.name}`).join('\n')}
 
 ## PASS 2 — Usability (HCI) - Code Pattern Analysis
 Analyze code structure for usability patterns:
@@ -287,7 +383,7 @@ ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.
 ## IMPORTANT CONSTRAINTS
 - Analyze the actual code structure, not assumptions
 - Report violations ONLY when there is evidence in the code
-- Do NOT report A1 (contrast) violations - they are computed separately
+- Do NOT report A1 (contrast) or A4 (tap targets) violations - they are analyzed separately with heuristic detection
 - For each category, output triggered rules OR explicitly state "No violations detected"
 - Include file paths and line references where possible
 
@@ -382,12 +478,19 @@ serve(async (req) => {
     const stack = detectStack(files);
     console.log(`Detected stack: ${stack}`);
 
-    // Compute A1 contrast violations directly
-    const contrastViolations: ContrastViolation[] = [];
+    // Compute A1 contrast violations and A4 tap target violations directly (heuristic analysis)
+    const heuristicViolations: HeuristicViolation[] = [];
+    
     if (selectedRules.includes('A1')) {
-      const computed = analyzeContrastInCode(files);
-      contrastViolations.push(...computed);
-      console.log(`Computed ${contrastViolations.length} contrast violations`);
+      const contrastViolations = analyzeContrastInCode(files);
+      heuristicViolations.push(...contrastViolations);
+      console.log(`Detected ${contrastViolations.length} potential contrast violations`);
+    }
+    
+    if (selectedRules.includes('A4')) {
+      const tapTargetViolations = analyzeTapTargetsInCode(files);
+      heuristicViolations.push(...tapTargetViolations);
+      console.log(`Detected ${tapTargetViolations.length} potential tap target violations`);
     }
 
     // Build code summary for AI
@@ -470,10 +573,10 @@ ${codeContent}`,
       };
     });
 
-    // Merge contrast violations with AI violations
-    const allViolations = [...contrastViolations, ...aiViolations];
+    // Merge heuristic violations (A1, A4) with AI violations
+    const allViolations = [...heuristicViolations, ...aiViolations];
 
-    console.log(`Code analysis complete: ${allViolations.length} violations found (${contrastViolations.length} contrast + ${aiViolations.length} AI-detected)`);
+    console.log(`Code analysis complete: ${allViolations.length} violations found (${heuristicViolations.length} heuristic + ${aiViolations.length} AI-detected)`);
 
     return new Response(
       JSON.stringify({
