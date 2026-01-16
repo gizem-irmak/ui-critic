@@ -262,6 +262,22 @@ Examine the code for other accessibility issues:
 - Use medium confidence level (55–65%), NOT high confidence
 - WCAG does NOT define a minimum font-size requirement — explicitly state this
 
+**EXCLUSION RULE — DO NOT EVALUATE THESE UNDER A2:**
+1. Icon-only elements or control affordances (close buttons, dismiss icons, action icons)
+2. Elements whose primary purpose is interaction (dismiss, close, confirm) rather than conveying readable information
+3. Single-character controls (e.g., "×", "X", "−", "+")
+4. Buttons whose label is not meant to be read as informational content
+5. Elements with font size ≥16px or equivalent (text-base, text-lg, text-xl, 1rem or larger)
+
+**FONT SIZE CONDITION:**
+- Only trigger this rule when text size is approximately ≤14px (text-sm, 0.875rem, or smaller)
+- Do NOT trigger if the text size is ≥16px or equivalent
+
+**SEMANTIC FILTER — ONLY APPLY A2 TO:**
+- Informational or descriptive text that users need to read or compare
+- Labels, metadata, descriptions, captions, helper text
+- NOT interactive controls, icons, or single-character elements
+
 **WHAT TO REPORT:**
 1. Report text elements using small font sizes (≈14px, text-sm, 0.875rem, or smaller)
 2. Focus on informational/metadata text (labels, descriptors, captions, helper text)
@@ -277,6 +293,8 @@ Examine the code for other accessibility issues:
 - Use "fails", "does not comply", "violates WCAG", or similar absolute language
 - Imply the issue is objectively measurable or a standards violation
 - Treat this as equivalent to contrast violations
+- Reference aria-labels when evaluating visual text size (aria-labels affect screen readers, not visual readability)
+- Generate an A2 finding for excluded elements — simply skip reporting
 
 **OUTPUT TEMPLATE:**
 "Several informational text elements in [file/component] use small font sizes (≈14px). While WCAG does not specify a minimum font size, usability and accessibility guidelines commonly recommend using at least ~16px for important informational content to support readability, particularly for users with visual impairments. This represents a heuristic readability risk identified through static code analysis."
