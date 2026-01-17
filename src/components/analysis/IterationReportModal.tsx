@@ -60,14 +60,45 @@ export function IterationReportModal({
     github: 'GitHub Repository',
   };
 
+  // Deduplicate prompts: group by prompt text, collect unique hints
+  const deduplicatedPrompts = (() => {
+    const promptMap = new Map<string, { 
+      prompt: string; 
+      hints: Set<string>; 
+      ruleIds: Set<string>;
+      ruleNames: Set<string>;
+      category: string;
+    }>();
+    
+    for (const v of analysis.violations) {
+      const key = v.correctivePrompt;
+      if (!promptMap.has(key)) {
+        promptMap.set(key, {
+          prompt: v.correctivePrompt,
+          hints: new Set(),
+          ruleIds: new Set([v.ruleId]),
+          ruleNames: new Set([v.ruleName]),
+          category: v.category,
+        });
+      }
+      const entry = promptMap.get(key)!;
+      if (v.contextualHint) {
+        entry.hints.add(v.contextualHint);
+      }
+      entry.ruleIds.add(v.ruleId);
+      entry.ruleNames.add(v.ruleName);
+    }
+    
+    return Array.from(promptMap.values());
+  })();
+
   const copyPrompt = async () => {
     if (!analysis?.violations.length) return;
     
-    const grouped: Record<string, typeof analysis.violations> = {};
-    
-    for (const v of analysis.violations) {
-      if (!grouped[v.category]) grouped[v.category] = [];
-      grouped[v.category].push(v);
+    const grouped: Record<string, typeof deduplicatedPrompts> = {};
+    for (const item of deduplicatedPrompts) {
+      if (!grouped[item.category]) grouped[item.category] = [];
+      grouped[item.category].push(item);
     }
     
     let text = 'Please revise the UI design to address the following issues:\n';
@@ -76,10 +107,15 @@ export function IterationReportModal({
     for (const cat of categoryOrder) {
       if (!grouped[cat]?.length) continue;
       text += `\n${categoryLabels[cat]}:\n`;
-      for (const v of grouped[cat]) {
-        text += `- ${v.correctivePrompt}\n`;
-        if (v.contextualHint) {
-          text += `  Context: ${v.contextualHint}\n`;
+      for (const item of grouped[cat]) {
+        text += `- ${item.prompt}\n`;
+        const hintsArray = Array.from(item.hints);
+        if (hintsArray.length === 1) {
+          text += `  Context: ${hintsArray[0]}\n`;
+        } else if (hintsArray.length > 1) {
+          for (const hint of hintsArray) {
+            text += `  • ${hint}\n`;
+          }
         }
       }
     }
@@ -375,22 +411,41 @@ export function IterationReportModal({
                   </Button>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {analysis.violations.map((violation, idx) => (
-                    <div key={idx} className="space-y-1 pb-3 border-b border-border last:border-0 last:pb-0">
-                      <div className="flex items-center gap-2">
-                        <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
-                          {violation.ruleId}
-                        </span>
-                        <span className="text-xs font-medium text-muted-foreground">{violation.ruleName}</span>
+                  {deduplicatedPrompts.map((item, idx) => {
+                    const hintsArray = Array.from(item.hints);
+                    const ruleIdsArray = Array.from(item.ruleIds);
+                    const ruleNamesArray = Array.from(item.ruleNames);
+                    
+                    return (
+                      <div key={idx} className="space-y-1 pb-3 border-b border-border last:border-0 last:pb-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {ruleIdsArray.map((ruleId) => (
+                            <span key={ruleId} className={cn('category-badge text-xs', categoryColors[item.category])}>
+                              {ruleId}
+                            </span>
+                          ))}
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {ruleNamesArray.length === 1 
+                              ? ruleNamesArray[0] 
+                              : `${ruleNamesArray[0]} (+${ruleNamesArray.length - 1} more)`}
+                          </span>
+                        </div>
+                        <p className="text-sm bg-primary/5 p-2 rounded border-l-2 border-primary">
+                          {item.prompt}
+                        </p>
+                        {hintsArray.length === 1 && (
+                          <p className="text-xs text-muted-foreground italic">💡 {hintsArray[0]}</p>
+                        )}
+                        {hintsArray.length > 1 && (
+                          <ul className="text-xs text-muted-foreground italic space-y-0.5">
+                            {hintsArray.map((hint, hIdx) => (
+                              <li key={hIdx}>💡 {hint}</li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
-                      <p className="text-sm bg-primary/5 p-2 rounded border-l-2 border-primary">
-                        {violation.correctivePrompt}
-                      </p>
-                      {violation.contextualHint && (
-                        <p className="text-xs text-muted-foreground italic">💡 {violation.contextualHint}</p>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </CardContent>
               </Card>
             )}
