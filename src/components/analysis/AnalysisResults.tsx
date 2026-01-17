@@ -22,33 +22,69 @@ export function AnalysisResults({
 }: AnalysisResultsProps) {
   const [copied, setCopied] = useState(false);
 
+  // Deduplicate prompts: group by prompt text, collect unique hints
+  const deduplicatedPrompts = (() => {
+    const promptMap = new Map<string, { 
+      prompt: string; 
+      hints: Set<string>; 
+      ruleIds: Set<string>;
+      ruleNames: Set<string>;
+      category: string;
+    }>();
+    
+    for (const v of analysis.violations) {
+      const key = v.correctivePrompt;
+      if (!promptMap.has(key)) {
+        promptMap.set(key, {
+          prompt: v.correctivePrompt,
+          hints: new Set(),
+          ruleIds: new Set([v.ruleId]),
+          ruleNames: new Set([v.ruleName]),
+          category: v.category,
+        });
+      }
+      const entry = promptMap.get(key)!;
+      if (v.contextualHint) {
+        entry.hints.add(v.contextualHint);
+      }
+      entry.ruleIds.add(v.ruleId);
+      entry.ruleNames.add(v.ruleName);
+    }
+    
+    return Array.from(promptMap.values());
+  })();
+
   const copyPrompt = async () => {
     if (!analysis?.violations.length) return;
     
-    // Group violations by category
-    const grouped: Record<string, typeof analysis.violations> = {};
+    // Group by category for clipboard
     const categoryLabels: Record<string, string> = {
       accessibility: 'Accessibility',
       usability: 'Usability',
       ethics: 'Ethical Design'
     };
     
-    for (const v of analysis.violations) {
-      if (!grouped[v.category]) grouped[v.category] = [];
-      grouped[v.category].push(v);
+    const grouped: Record<string, typeof deduplicatedPrompts> = {};
+    for (const item of deduplicatedPrompts) {
+      if (!grouped[item.category]) grouped[item.category] = [];
+      grouped[item.category].push(item);
     }
     
-    // Build formatted text (without numeric ratios or code paths)
     let text = 'Please revise the UI design to address the following issues:\n';
     const categoryOrder = ['accessibility', 'usability', 'ethics'];
     
     for (const cat of categoryOrder) {
       if (!grouped[cat]?.length) continue;
       text += `\n${categoryLabels[cat]}:\n`;
-      for (const v of grouped[cat]) {
-        text += `- ${v.correctivePrompt}\n`;
-        if (v.contextualHint) {
-          text += `  Context: ${v.contextualHint}\n`;
+      for (const item of grouped[cat]) {
+        text += `- ${item.prompt}\n`;
+        const hintsArray = Array.from(item.hints);
+        if (hintsArray.length === 1) {
+          text += `  Context: ${hintsArray[0]}\n`;
+        } else if (hintsArray.length > 1) {
+          for (const hint of hintsArray) {
+            text += `  • ${hint}\n`;
+          }
         }
       }
     }
@@ -343,27 +379,46 @@ export function AnalysisResults({
             </Button>
           </CardHeader>
           <CardContent className="space-y-4">
-            {analysis.violations.map((violation, idx) => (
-              <div key={idx} className="space-y-2 pb-4 border-b border-border last:border-0 last:pb-0">
-                <div className="flex items-center gap-2">
-                  <span className={cn(
-                    'category-badge flex-shrink-0 text-xs',
-                    categoryColors[violation.category]
-                  )}>
-                    {violation.ruleId}
-                  </span>
-                  <span className="text-sm font-medium">{violation.ruleName}</span>
-                </div>
-                <p className="text-sm bg-primary/5 p-3 rounded border-l-2 border-primary">
-                  {violation.correctivePrompt}
-                </p>
-                {violation.contextualHint && (
-                  <p className="text-xs text-muted-foreground italic pl-1">
-                    💡 {violation.contextualHint}
+            {deduplicatedPrompts.map((item, idx) => {
+              const hintsArray = Array.from(item.hints);
+              const ruleIdsArray = Array.from(item.ruleIds);
+              const ruleNamesArray = Array.from(item.ruleNames);
+              
+              return (
+                <div key={idx} className="space-y-2 pb-4 border-b border-border last:border-0 last:pb-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {ruleIdsArray.map((ruleId, rIdx) => (
+                      <span key={ruleId} className={cn(
+                        'category-badge flex-shrink-0 text-xs',
+                        categoryColors[item.category]
+                      )}>
+                        {ruleId}
+                      </span>
+                    ))}
+                    <span className="text-sm font-medium">
+                      {ruleNamesArray.length === 1 
+                        ? ruleNamesArray[0] 
+                        : `${ruleNamesArray[0]} (+${ruleNamesArray.length - 1} more)`}
+                    </span>
+                  </div>
+                  <p className="text-sm bg-primary/5 p-3 rounded border-l-2 border-primary">
+                    {item.prompt}
                   </p>
-                )}
-              </div>
-            ))}
+                  {hintsArray.length === 1 && (
+                    <p className="text-xs text-muted-foreground italic pl-1">
+                      💡 {hintsArray[0]}
+                    </p>
+                  )}
+                  {hintsArray.length > 1 && (
+                    <ul className="text-xs text-muted-foreground italic pl-1 space-y-1">
+                      {hintsArray.map((hint, hIdx) => (
+                        <li key={hIdx}>💡 {hint}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
       )}
