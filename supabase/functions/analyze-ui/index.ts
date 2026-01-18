@@ -126,42 +126,49 @@ Only evaluate focus visibility for elements that are clearly interactive:
 - Buttons, links, form inputs, select dropdowns, textareas
 - Any element that appears to be keyboard-focusable
 
-**NOT APPLICABLE — DO NOT REPORT:**
-If the element is NOT interactive (e.g., decorative elements, static text, images without click handlers), this rule does NOT apply. Do NOT include in violations list.
+**CLASSIFICATION CATEGORIES:**
+
+1. **NOT APPLICABLE — DO NOT REPORT:**
+   - If the element is NOT interactive (e.g., decorative elements, static text, images without click handlers)
+   - Do NOT include in violations list — skip entirely
+
+2. **PASS — DO NOT REPORT:**
+   - If screenshot shows a visible focus indicator (ring, border, outline, glow)
+   - Do NOT report — this is acceptable implementation
+   - Do NOT include ANY text about this in output
+
+3. **HEURISTIC RISK — REPORT WITH LOWER CONFIDENCE:**
+   - If element is interactive AND appears to rely ONLY on background color change for focus indication
+   - Background color alone may not provide sufficient visibility for all users
+   - Report as "Potential focus visibility risk (heuristic)"
+   - Set confidence to 40-50% (lower) since screenshots cannot confirm focus states
+
+4. **POTENTIAL VIOLATION — REPORT:**
+   - If element is interactive AND visually appears to LACK any visible focus indicator
+   - Report as A5 potential violation
+   - Set confidence to 50-60% (medium-low) since screenshots cannot definitively confirm
 
 **FOCUS STYLE CHECK — CRITICAL:**
 For screenshot analysis, look for VISIBLE focus indicators:
 - Visible outline, ring, or border around focused elements
 - Clear visual distinction when element is focused
-- Color change or glow effect on focus
-
-**REPORTING RULES — CRITICAL:**
-1. ONLY report as A5 violation IF: element is interactive AND visually appears to LACK any visible focus indicator
-   → Confidence: 50-60% (medium-low) since screenshots cannot definitively confirm focus states
-   → Include component/location reference
-2. IF focus ring/visible indicator is visible:
-   → Do NOT report as violation
-   → Do NOT list under "violations" array
-   → Treat as PASS — this is acceptable implementation
-   → Do NOT include ANY text about this in output
-3. IF element is not interactive:
-   → Do NOT report — Not Applicable
-   → Do NOT include in violations array
+- Shadow or glow effect on focus
+- Note: Background color change alone is a HEURISTIC RISK, not a PASS
 
 **OUTPUT CONSTRAINT — MANDATORY:**
-- The "violations" array must contain ONLY actual accessibility risks
-- Compliant implementations (those with visible focus indicators) must NEVER appear in violations
-- Do NOT include explanatory text stating "this is acceptable" or "this passes"
-- Simply OMIT compliant cases entirely from the output
+- The "violations" array must contain ONLY categories 3 and 4 (actual risks)
+- Categories 1 and 2 (Not Applicable and PASS) must NEVER appear in violations
+- Do NOT include speculative or acceptable cases
+- Do NOT report "might be subtle" unless no alternative indicator exists
 - Screenshots cannot definitively confirm focus states, so always use "potential" classification
 
-**REQUIRED WORDING (for actual violations only):**
-- Use "Potential focus visibility risk" NOT "Poor focus visibility"
-- Frame as: "The element may lack a clearly visible focus indicator for keyboard users"
-- Set confidence to 50-60% (medium-low)
+**REQUIRED WORDING:**
+- For HEURISTIC RISK: "Potential focus visibility risk (heuristic) — focus indication may rely only on background color change"
+- For POTENTIAL VIOLATION: "Potential focus visibility risk — element may lack a visible focus indicator"
 
-**OUTPUT TEMPLATE (for actual violations only):**
-"The [button/link/input] in [component/location] may lack a clearly visible focus indicator. Keyboard users need visible focus states to navigate the interface. Verify that focus indicators are properly styled and visible."
+**OUTPUT TEMPLATE (for reportable cases only):**
+HEURISTIC RISK: "The [button/link/input] in [component/location] may rely only on background color change for focus indication. While this provides some visual feedback, it may not be sufficiently visible for all users."
+POTENTIAL VIOLATION: "The [button/link/input] in [component/location] may lack a clearly visible focus indicator. Keyboard users need visible focus states to navigate the interface."
 
 ${includesA1 ? `
 ### SPECIAL HANDLING FOR A1 (Text Contrast)

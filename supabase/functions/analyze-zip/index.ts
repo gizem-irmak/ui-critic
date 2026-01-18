@@ -337,54 +337,66 @@ Only evaluate focus visibility for elements that are likely focusable:
 - Any element with \`tabIndex >= 0\` or \`tabindex >= 0\`
 - Elements with \`role="button"\` or \`role="link"\` with tabIndex >= 0
 
-**NOT APPLICABLE — DO NOT REPORT:**
-If the element is NOT focusable (e.g., plain \`<div>\` without tabIndex, decorative elements), this rule does NOT apply. Do NOT include in violations list.
+**CLASSIFICATION CATEGORIES:**
+
+1. **NOT APPLICABLE — DO NOT REPORT:**
+   - If the element is NOT focusable (e.g., plain \`<div>\` without tabIndex, decorative elements)
+   - Do NOT include in violations list — skip entirely
+
+2. **PASS — DO NOT REPORT:**
+   - If outline is removed BUT a visible replacement focus indicator exists
+   - Valid replacements: \`focus:ring-*\`, \`focus-visible:ring-*\`, \`focus:border-*\`, \`focus-visible:border-*\`, \`focus-visible:outline-*\` (not \`outline-none\`), \`focus:shadow-*\`, \`focus-visible:shadow-*\`, \`ring-offset-*\`
+   - Do NOT report — this is acceptable implementation
+   - Do NOT include ANY text about this in output
+
+3. **HEURISTIC RISK — REPORT WITH LOWER CONFIDENCE:**
+   - If element is focusable AND outline is removed AND focus indication relies ONLY on background color change (e.g., \`focus:bg-*\`, \`focus-visible:bg-*\`)
+   - Background color alone may not provide sufficient visibility for all users
+   - Report as "Potential focus visibility risk (heuristic)"
+   - Set confidence to 45-55% (lower)
+
+4. **CONFIRMED VIOLATION — REPORT:**
+   - If element is focusable AND outline is removed AND NO visible replacement exists at all
+   - Report as A5 violation
+   - Set confidence to 60-70% (medium-high)
 
 **FOCUS STYLE CHECK — CRITICAL:**
 - Do NOT flag a violation just because \`focus:outline-none\` or \`outline-none\` exists
-- If \`focus:outline-none\` is present, check whether a VISIBLE REPLACEMENT exists:
-  - \`focus:ring-*\`, \`focus-visible:ring-*\`
-  - \`focus:border-*\`, \`focus-visible:border-*\`
-  - \`focus-visible:outline-*\` (not \`outline-none\`)
-  - \`focus:shadow-*\`, \`focus-visible:shadow-*\`
-  - \`ring-*\` combined with \`focus-visible:*\` modifiers
-
-**DETECTION LOGIC:**
-1. IF element has \`focus:outline-none\` AND also has \`focus:ring-*\` or \`focus-visible:ring-*\` → PASS (do NOT report)
-2. IF element has \`focus:ring-2 focus:ring-ring\` or similar → PASS (do NOT report)
-3. IF element removes focus outline with NO visible replacement → VIOLATION (report as A5)
+- If \`focus:outline-none\` is present, check for these VISIBLE REPLACEMENTS (in order of preference):
+  1. Ring styles: \`focus:ring-*\`, \`focus-visible:ring-*\`, \`focus:ring-offset-*\`
+  2. Border styles: \`focus:border-*\`, \`focus-visible:border-*\`
+  3. Outline replacement: \`focus-visible:outline-*\` (not \`outline-none\`)
+  4. Shadow styles: \`focus:shadow-*\`, \`focus-visible:shadow-*\`
+- If ONLY \`focus:bg-*\` exists → classify as HEURISTIC RISK (category 3)
+- If NONE of the above exists → classify as CONFIRMED VIOLATION (category 4)
 
 **COMPLIANT EXAMPLES — MUST NOT APPEAR IN VIOLATIONS:**
-- \`focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2\` → PASS (has visible ring)
-- \`focus-visible:ring-2 focus-visible:ring-offset-2\` → PASS (has visible focus indicator)
-- \`focus:border-primary\` → PASS (has visible border replacement)
+- \`focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2\` → PASS
+- \`focus-visible:ring-2 focus-visible:ring-offset-2\` → PASS
+- \`focus:border-primary\` → PASS
+- \`focus:outline-none focus:ring-2\` → PASS (ring is valid replacement)
 
-**REPORTING RULES — CRITICAL:**
-1. ONLY report as A5 violation IF: element is focusable AND outline is removed AND NO replacement exists
-   → Confidence: 55-65% (medium-high)
-   → Include file and component reference
-2. IF element is focusable AND outline is removed BUT visible replacement EXISTS:
-   → Do NOT report as violation
-   → Do NOT list under "violations" array
-   → Treat as PASS — this is acceptable implementation
-   → Do NOT include ANY text about this in output
-3. IF element is not focusable:
-   → Do NOT report — Not Applicable
-   → Do NOT include in violations array
+**HEURISTIC RISK EXAMPLES — REPORT WITH LOWER CONFIDENCE:**
+- \`focus:outline-none focus:bg-accent\` → HEURISTIC RISK (bg-only focus)
+- \`focus:outline-none focus-visible:bg-muted\` → HEURISTIC RISK (bg-only focus)
+
+**CONFIRMED VIOLATION EXAMPLES — REPORT:**
+- \`focus:outline-none\` with no other focus styles → VIOLATION
+- \`outline-none\` on focusable element with no replacements → VIOLATION
 
 **OUTPUT CONSTRAINT — MANDATORY:**
-- The "violations" array must contain ONLY actual accessibility risks
-- Compliant implementations (those with replacement focus styles) must NEVER appear in violations
-- Do NOT include explanatory text stating "this is acceptable" or "this passes"
-- Simply OMIT compliant cases entirely from the output
+- The "violations" array must contain ONLY categories 3 and 4 (actual risks)
+- Categories 1 and 2 (Not Applicable and PASS) must NEVER appear in violations
+- Do NOT include speculative or acceptable cases
+- Do NOT report "might be subtle" unless no alternative indicator exists
 
-**REQUIRED WORDING (for actual violations only):**
-- Use "Potential focus visibility risk" for heuristic findings
-- Frame as: "The element removes default focus outline without an apparent visible replacement"
-- Set confidence to 55-65% (medium) since this is heuristic analysis
+**REQUIRED WORDING:**
+- For HEURISTIC RISK: "Potential focus visibility risk (heuristic) — focus indication relies only on background color change, which may not provide sufficient visibility for all users"
+- For CONFIRMED VIOLATION: "Focus visibility risk — element removes default focus outline without a visible replacement"
 
-**OUTPUT TEMPLATE (for actual violations only):**
-"The [button/link/input] in [File.tsx] uses \`focus:outline-none\` without a clearly visible replacement focus style. Verify that keyboard users can identify focus state."
+**OUTPUT TEMPLATE (for reportable cases only):**
+HEURISTIC RISK: "The [button/link/input] in [File.tsx] uses \`focus:outline-none\` with only background color change for focus indication. While \`focus:bg-*\` provides some visual feedback, it may not be sufficiently visible for all users. Consider adding a ring or border focus style."
+CONFIRMED VIOLATION: "The [button/link/input] in [File.tsx] uses \`focus:outline-none\` without any visible replacement focus style. Keyboard users cannot identify the focused element."
 
 Accessibility rules to check:
 ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name}`).join('\n')}
