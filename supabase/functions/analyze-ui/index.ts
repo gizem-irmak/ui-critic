@@ -126,8 +126,8 @@ Only evaluate focus visibility for elements that are clearly interactive:
 - Buttons, links, form inputs, select dropdowns, textareas
 - Any element that appears to be keyboard-focusable
 
-**NOT APPLICABLE:**
-If the element is NOT interactive (e.g., decorative elements, static text, images without click handlers), mark as Not Applicable and do NOT report a violation.
+**NOT APPLICABLE — DO NOT REPORT:**
+If the element is NOT interactive (e.g., decorative elements, static text, images without click handlers), this rule does NOT apply. Do NOT include in violations list.
 
 **FOCUS STYLE CHECK — CRITICAL:**
 For screenshot analysis, look for VISIBLE focus indicators:
@@ -135,22 +135,32 @@ For screenshot analysis, look for VISIBLE focus indicators:
 - Clear visual distinction when element is focused
 - Color change or glow effect on focus
 
-**WHAT TO REPORT:**
-- ONLY report if you observe an interactive element that appears to LACK any visible focus indicator
-- Do NOT assume lack of focus indicator just because you can't see focus state in a static screenshot
+**REPORTING RULES — CRITICAL:**
+1. ONLY report as A5 violation IF: element is interactive AND visually appears to LACK any visible focus indicator
+   → Confidence: 50-60% (medium-low) since screenshots cannot definitively confirm focus states
+   → Include component/location reference
+2. IF focus ring/visible indicator is visible:
+   → Do NOT report as violation
+   → Do NOT list under "violations" array
+   → Treat as PASS — this is acceptable implementation
+   → Do NOT include ANY text about this in output
+3. IF element is not interactive:
+   → Do NOT report — Not Applicable
+   → Do NOT include in violations array
 
-**OUTPUT CONDITIONS:**
-- IF interactive element visually appears to lack focus indication → Report as "Potential focus visibility risk"
-- IF focus ring/visible indicator is visible → Do NOT report
-- IF element is not interactive → Not Applicable, do NOT report
+**OUTPUT CONSTRAINT — MANDATORY:**
+- The "violations" array must contain ONLY actual accessibility risks
+- Compliant implementations (those with visible focus indicators) must NEVER appear in violations
+- Do NOT include explanatory text stating "this is acceptable" or "this passes"
+- Simply OMIT compliant cases entirely from the output
 - Screenshots cannot definitively confirm focus states, so always use "potential" classification
 
-**REQUIRED WORDING:**
-- Use "Potential focus visibility risk" NOT "Poor focus visibility" for screenshot findings
+**REQUIRED WORDING (for actual violations only):**
+- Use "Potential focus visibility risk" NOT "Poor focus visibility"
 - Frame as: "The element may lack a clearly visible focus indicator for keyboard users"
-- Set confidence to 50-60% (medium-low) since screenshots cannot show focus states
+- Set confidence to 50-60% (medium-low)
 
-**OUTPUT TEMPLATE:**
+**OUTPUT TEMPLATE (for actual violations only):**
 "The [button/link/input] in [component/location] may lack a clearly visible focus indicator. Keyboard users need visible focus states to navigate the interface. Verify that focus indicators are properly styled and visible."
 
 ${includesA1 ? `
