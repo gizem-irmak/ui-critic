@@ -121,54 +121,57 @@ Run visual inspection for accessibility issues:
 
 ### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
-**RULE TRIGGER CONDITIONS:**
-Only evaluate focus visibility for elements that are clearly interactive:
-- Buttons, links, form inputs, select dropdowns, textareas
-- Any element that appears to be keyboard-focusable
+**FOCUSABILITY DETERMINATION — STRICT CRITERIA:**
+An element is ONLY considered focusable if:
+1. It is a button, link (\`<a>\`), form input, select, or textarea
+2. It appears to be an interactive control that would receive keyboard focus
+
+**DO NOT CLASSIFY AS FOCUSABLE:**
+- Decorative elements, static text, images
+- Cards, containers, or wrappers that are not interactive
+- Elements that only respond to hover (not click/focus)
 
 **CLASSIFICATION CATEGORIES:**
 
-1. **NOT APPLICABLE — DO NOT REPORT:**
-   - If the element is NOT interactive (e.g., decorative elements, static text, images without click handlers)
-   - Do NOT include in violations list — skip entirely
+1. **NOT APPLICABLE — SKIP ENTIRELY:**
+   - Element is NOT interactive/focusable
+   - DO NOT REPORT — do not include in violations array
 
-2. **PASS — DO NOT REPORT:**
-   - If screenshot shows a visible focus indicator (ring, border, outline, glow)
-   - Do NOT report — this is acceptable implementation
-   - Do NOT include ANY text about this in output
+2. **PASS — SKIP ENTIRELY:**
+   - Screenshot shows visible focus indicator (ring, border, outline, glow)
+   - DO NOT REPORT — do not include in violations array
+   - DO NOT include any text about acceptable implementations
 
-3. **HEURISTIC RISK — REPORT WITH LOWER CONFIDENCE:**
-   - If element is interactive AND appears to rely ONLY on background color change for focus indication
-   - Background color alone may not provide sufficient visibility for all users
-   - Report as "Potential focus visibility risk (heuristic)"
-   - Set confidence to 40-50% (lower) since screenshots cannot confirm focus states
+3. **HEURISTIC RISK — REPORT:**
+   - Element IS interactive AND appears to rely ONLY on background color change for focus
+   - Set \`typeBadge: "HEURISTIC"\`
+   - Set confidence to 40-50% (screenshots cannot confirm focus states)
 
-4. **POTENTIAL VIOLATION — REPORT:**
-   - If element is interactive AND visually appears to LACK any visible focus indicator
-   - Report as A5 potential violation
-   - Set confidence to 50-60% (medium-low) since screenshots cannot definitively confirm
+4. **CONFIRMED VIOLATION — REPORT:**
+   - Element IS interactive AND visually appears to LACK any visible focus indicator
+   - Set \`typeBadge: "CONFIRMED"\`
+   - Set confidence to 50-60% (medium-low for screenshot analysis)
 
-**FOCUS STYLE CHECK — CRITICAL:**
-For screenshot analysis, look for VISIBLE focus indicators:
-- Visible outline, ring, or border around focused elements
-- Clear visual distinction when element is focused
-- Shadow or glow effect on focus
-- Note: Background color change alone is a HEURISTIC RISK, not a PASS
+**OUTPUT FORMAT FOR A5 VIOLATIONS ONLY:**
+\`\`\`json
+{
+  "ruleId": "A5",
+  "ruleName": "Poor focus visibility",
+  "category": "accessibility",
+  "typeBadge": "CONFIRMED" or "HEURISTIC",
+  "evidence": "Button appears to lack visible focus indicator",
+  "diagnosis": "The primary action button may lack a visible focus indicator for keyboard users.",
+  "contextualHint": "Add visible focus ring or border for keyboard accessibility.",
+  "confidence": 0.55
+}
+\`\`\`
 
 **OUTPUT CONSTRAINT — MANDATORY:**
-- The "violations" array must contain ONLY categories 3 and 4 (actual risks)
-- Categories 1 and 2 (Not Applicable and PASS) must NEVER appear in violations
-- Do NOT include speculative or acceptable cases
-- Do NOT report "might be subtle" unless no alternative indicator exists
-- Screenshots cannot definitively confirm focus states, so always use "potential" classification
-
-**REQUIRED WORDING:**
-- For HEURISTIC RISK: "Potential focus visibility risk (heuristic) — focus indication may rely only on background color change"
-- For POTENTIAL VIOLATION: "Potential focus visibility risk — element may lack a visible focus indicator"
-
-**OUTPUT TEMPLATE (for reportable cases only):**
-HEURISTIC RISK: "The [button/link/input] in [component/location] may rely only on background color change for focus indication. While this provides some visual feedback, it may not be sufficiently visible for all users."
-POTENTIAL VIOLATION: "The [button/link/input] in [component/location] may lack a clearly visible focus indicator. Keyboard users need visible focus states to navigate the interface."
+- The "violations" array must contain ONLY categories 3 and 4 (HEURISTIC RISK and CONFIRMED)
+- NEVER include PASS or NOT APPLICABLE cases in violations
+- NEVER include text like "acceptable", "compliant", or "could be improved" for PASS cases
+- NEVER include speculative cases based on "might be" or "could be" without visual evidence
+- Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
 ### SPECIAL HANDLING FOR A1 (Text Contrast)
@@ -364,20 +367,41 @@ serve(async (req) => {
 
     // Enhance violations with corrective prompts from our rule registry
     // Also ensure A1 violations from screenshots are marked as "potential"
-    const enhancedViolations = (analysisResult.violations || []).map((v: any) => {
-      const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
-      const rule = allRules.find(r => r.id === v.ruleId);
-      
-      // For A1 from screenshots, always set status to "potential"
-      const isA1 = v.ruleId === 'A1';
-      
-      return {
-        ...v,
-        correctivePrompt: rule?.correctivePrompt || v.correctivePrompt || '',
-        // Ensure A1 is always "potential" for screenshot analysis
-        ...(isA1 ? { status: 'potential' } : {}),
-      };
-    });
+    // Filter out invalid A5 PASS cases
+    const enhancedViolations = (analysisResult.violations || [])
+      .filter((v: any) => {
+        // Filter out A5 violations that should be PASS (have valid focus replacement)
+        if (v.ruleId === 'A5') {
+          const evidence = (v.evidence || '').toLowerCase();
+          const diagnosis = (v.diagnosis || '').toLowerCase();
+          const combined = evidence + ' ' + diagnosis;
+          
+          // Check if this was incorrectly flagged as a violation despite having valid focus styles
+          const mentionsAcceptable = /acceptable|compliant|pass|valid|proper focus|visible focus|clear focus/.test(combined);
+          const mentionsRingOrBorder = /has.*ring|has.*border|visible ring|visible border|shows.*ring|shows.*border/.test(combined);
+          
+          // If evidence mentions acceptable implementation or visible focus styles, filter it out
+          if (mentionsAcceptable || mentionsRingOrBorder) {
+            console.log(`Filtering out A5 PASS case: ${v.evidence}`);
+            return false;
+          }
+        }
+        return true;
+      })
+      .map((v: any) => {
+        const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
+        const rule = allRules.find(r => r.id === v.ruleId);
+        
+        // For A1 from screenshots, always set status to "potential"
+        const isA1 = v.ruleId === 'A1';
+        
+        return {
+          ...v,
+          correctivePrompt: rule?.correctivePrompt || v.correctivePrompt || '',
+          // Ensure A1 is always "potential" for screenshot analysis
+          ...(isA1 ? { status: 'potential' } : {}),
+        };
+      });
 
     console.log(`Analysis complete: ${enhancedViolations.length} violations found`);
 
