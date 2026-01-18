@@ -331,6 +331,15 @@ Examine the code for other accessibility issues:
 
 ### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
+**ABSOLUTE RULE:**
+If an element does NOT remove the default browser focus outline, it MUST NOT be reported under A5.
+Lack of a custom focus-visible style alone is NOT an accessibility issue — browser defaults are acceptable.
+
+**PREREQUISITE — OUTLINE REMOVAL CHECK:**
+ONLY evaluate an element for A5 if it explicitly removes the default focus outline:
+- \`outline-none\`, \`focus:outline-none\`, or \`focus-visible:outline-none\` is present in the class list
+If the element does NOT remove the outline → SKIP (do not report)
+
 **FOCUSABILITY DETERMINATION — STRICT CRITERIA:**
 An element is ONLY considered focusable if it matches ONE of these criteria:
 1. Native focusable elements: \`<button>\`, \`<a href="...">\`, \`<input>\`, \`<select>\`, \`<textarea>\`
@@ -341,31 +350,36 @@ An element is ONLY considered focusable if it matches ONE of these criteria:
 **DO NOT CLASSIFY AS FOCUSABLE:**
 - Plain \`<div>\`, \`<span>\`, \`<p>\` without tabIndex or keyboard handlers
 - Elements with ONLY \`onClick\` (no keyboard handler) — this is a different a11y issue
-- Elements with hover classes like \`hover:bg-*\` — hover does NOT imply focusable
 - Speculative cases like "if used as clickable" — analyze the ACTUAL code
+
+**IGNORE COMPLETELY:**
+- All hover styles (\`hover:bg-*\`, \`hover:text-*\`, etc.) — hover is NOT focus
+- Hover feedback must NEVER be used as evidence for or against focus visibility
 
 **CLASSIFICATION CATEGORIES:**
 
 1. **NOT APPLICABLE — SKIP ENTIRELY:**
-   - Element does NOT meet focusability criteria above
+   - Element does NOT remove the default outline (no \`outline-none\`, \`focus:outline-none\`, \`focus-visible:outline-none\`)
+   - OR element does NOT meet focusability criteria above
    - DO NOT REPORT — do not include in violations array
 
 2. **PASS — SKIP ENTIRELY:**
-   - Element IS focusable AND has visible replacement focus indicator
+   - Element IS focusable AND removes outline BUT has visible replacement focus indicator
    - Valid replacements: \`focus:ring-*\`, \`focus-visible:ring-*\`, \`focus:border-*\`, \`focus-visible:border-*\`, \`focus-visible:outline-*\` (not none), \`focus:shadow-*\`, \`focus-visible:shadow-*\`, \`ring-offset-*\`
    - DO NOT REPORT — do not include in violations array
-   - DO NOT include any text like "This is acceptable" or "This is a PASS case"
 
 3. **HEURISTIC RISK — REPORT:**
-   - Element IS focusable AND outline is removed AND focus indication relies ONLY on \`focus:bg-*\` or \`focus-visible:bg-*\`
+   - Element IS focusable AND outline is removed AND focus indication relies ONLY on \`focus:bg-*\` or \`focus-visible:bg-*\` or \`focus:text-*\`
    - Set \`typeBadge: "HEURISTIC"\`
    - Set confidence to 45-55%
-   - Background color alone may not provide sufficient visibility
+   - Evidence: list the exact focus:bg-* or focus:text-* classes found
+   - Rationale: "Focus indication relies only on background/text color change, which may be insufficient for users with low vision."
 
 4. **CONFIRMED VIOLATION — REPORT:**
-   - Element IS focusable AND outline is removed AND NO visible replacement exists
+   - Element IS focusable AND outline is removed AND NO visible replacement exists (no ring, border, shadow, bg, text change)
    - Set \`typeBadge: "CONFIRMED"\`
    - Set confidence to 60-70%
+   - Evidence: list the outline-removal class and note absence of replacement
 
 **FOCUS STYLE CHECK — PRIORITY ORDER:**
 When \`focus:outline-none\` or \`outline-none\` is present, check for VISIBLE REPLACEMENTS:
@@ -373,14 +387,12 @@ When \`focus:outline-none\` or \`outline-none\` is present, check for VISIBLE RE
 2. Border styles: \`focus:border-*\`, \`focus-visible:border-*\` → PASS
 3. Outline replacement: \`focus-visible:outline-*\` (not \`outline-none\`) → PASS
 4. Shadow styles: \`focus:shadow-*\`, \`focus-visible:shadow-*\` → PASS
-5. Background ONLY: \`focus:bg-*\`, \`focus-visible:bg-*\` with no other → HEURISTIC RISK
+5. Background/text ONLY: \`focus:bg-*\`, \`focus-visible:bg-*\`, \`focus:text-*\` with no other → HEURISTIC RISK
 6. NONE of the above → CONFIRMED VIOLATION
 
-**COMPLIANT EXAMPLES — MUST NOT APPEAR IN VIOLATIONS:**
-- \`focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2\` → PASS (do not report)
-- \`focus-visible:ring-2 focus-visible:ring-offset-2\` → PASS (do not report)
-- \`focus:border-primary\` → PASS (do not report)
-- Any element with valid ring/border/shadow focus style → PASS (do not report)
+**GROUPING RULE:**
+Group identical background-only focus patterns into a SINGLE A5 finding with multiple occurrences listed.
+Example: If 5 buttons all use \`focus:bg-primary\` without ring/border, report ONE violation listing all 5 locations.
 
 **OUTPUT FORMAT FOR A5 VIOLATIONS ONLY:**
 \`\`\`json
@@ -389,18 +401,19 @@ When \`focus:outline-none\` or \`outline-none\` is present, check for VISIBLE RE
   "ruleName": "Poor focus visibility",
   "category": "accessibility",
   "typeBadge": "CONFIRMED" or "HEURISTIC",
-  "evidence": "focus:outline-none without replacement in Button.tsx",
-  "diagnosis": "The submit button removes default focus outline without visible replacement.",
-  "contextualHint": "Add focus ring or border style for keyboard accessibility.",
-  "confidence": 0.65
+  "evidence": "focus:outline-none with only focus:bg-accent in Button.tsx, Card.tsx, Link.tsx",
+  "diagnosis": "Multiple components rely only on background color change for focus indication.",
+  "contextualHint": "Add visible focus ring or border for keyboard accessibility.",
+  "confidence": 0.50,
+  "occurrences": ["Button.tsx", "Card.tsx", "Link.tsx"]
 }
 \`\`\`
 
 **OUTPUT CONSTRAINT — MANDATORY:**
 - The "violations" array must contain ONLY categories 3 and 4 (HEURISTIC RISK and CONFIRMED)
 - NEVER include PASS or NOT APPLICABLE cases in violations
-- NEVER include text like "acceptable", "compliant", or "could be improved" for PASS cases
-- Report ONLY actual accessibility risks
+- NEVER speculate about "might be subtle" or "could be overridden" — analyze actual code only
+- Report ONLY actual accessibility risks with code evidence
 
 Accessibility rules to check:
 ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name}`).join('\n')}
@@ -610,15 +623,22 @@ ${codeContent}`,
     const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
     const aiViolations = (analysisResult.violations || [])
       .filter((v: any) => {
-        // Filter out A5 violations that should be PASS (have valid focus replacement)
+        // Filter out A5 violations that should be PASS or NOT APPLICABLE
         if (v.ruleId === 'A5') {
           const evidence = (v.evidence || '').toLowerCase();
           const diagnosis = (v.diagnosis || '').toLowerCase();
           const combined = evidence + ' ' + diagnosis;
           
-          // Check if this was incorrectly flagged as a violation despite having valid focus styles
-          const hasValidReplacement = /focus:ring-|focus-visible:ring-|focus:border-|focus-visible:border-|focus:shadow-|focus-visible:shadow-|ring-offset-/.test(combined);
-          const mentionsAcceptable = /acceptable|compliant|pass|valid replacement|proper focus/.test(combined);
+          // ABSOLUTE RULE: If no outline removal is mentioned, skip
+          const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none/.test(combined);
+          if (!mentionsOutlineRemoval) {
+            console.log(`Filtering out A5 (no outline removal): ${v.evidence}`);
+            return false;
+          }
+          
+          // Check if this was incorrectly flagged despite having valid focus replacement
+          const hasValidReplacement = /focus:ring-|focus-visible:ring-|focus:border-|focus-visible:border-|focus:shadow-|focus-visible:shadow-|ring-offset-|focus-visible:outline-(?!none)/.test(combined);
+          const mentionsAcceptable = /acceptable|compliant|pass\b|valid replacement|proper focus|browser default/.test(combined);
           
           // If evidence mentions valid replacement patterns or acceptable, filter it out
           if (hasValidReplacement || mentionsAcceptable) {
