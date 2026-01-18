@@ -121,6 +121,14 @@ Run visual inspection for accessibility issues:
 
 ### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
+**ABSOLUTE RULE:**
+If an element appears to have the default browser focus outline, it MUST NOT be reported under A5.
+Lack of a custom focus-visible style alone is NOT an accessibility issue — browser defaults are acceptable.
+
+**PREREQUISITE — VISIBLE FOCUS STATE:**
+ONLY flag A5 issues if the screenshot shows evidence that focus indicators are missing or inadequate.
+If you cannot determine focus state from the screenshot → DO NOT REPORT
+
 **FOCUSABILITY DETERMINATION — STRICT CRITERIA:**
 An element is ONLY considered focusable if:
 1. It is a button, link (\`<a>\`), form input, select, or textarea
@@ -129,23 +137,27 @@ An element is ONLY considered focusable if:
 **DO NOT CLASSIFY AS FOCUSABLE:**
 - Decorative elements, static text, images
 - Cards, containers, or wrappers that are not interactive
-- Elements that only respond to hover (not click/focus)
+
+**IGNORE COMPLETELY:**
+- All hover states — hover is NOT focus
+- Hover feedback must NEVER be used as evidence for or against focus visibility
 
 **CLASSIFICATION CATEGORIES:**
 
 1. **NOT APPLICABLE — SKIP ENTIRELY:**
    - Element is NOT interactive/focusable
+   - OR screenshot does not show focus state
    - DO NOT REPORT — do not include in violations array
 
 2. **PASS — SKIP ENTIRELY:**
    - Screenshot shows visible focus indicator (ring, border, outline, glow)
    - DO NOT REPORT — do not include in violations array
-   - DO NOT include any text about acceptable implementations
 
 3. **HEURISTIC RISK — REPORT:**
    - Element IS interactive AND appears to rely ONLY on background color change for focus
    - Set \`typeBadge: "HEURISTIC"\`
    - Set confidence to 40-50% (screenshots cannot confirm focus states)
+   - Rationale: "Focus indication may rely only on background/text color change."
 
 4. **CONFIRMED VIOLATION — REPORT:**
    - Element IS interactive AND visually appears to LACK any visible focus indicator
@@ -169,8 +181,7 @@ An element is ONLY considered focusable if:
 **OUTPUT CONSTRAINT — MANDATORY:**
 - The "violations" array must contain ONLY categories 3 and 4 (HEURISTIC RISK and CONFIRMED)
 - NEVER include PASS or NOT APPLICABLE cases in violations
-- NEVER include text like "acceptable", "compliant", or "could be improved" for PASS cases
-- NEVER include speculative cases based on "might be" or "could be" without visual evidence
+- NEVER speculate based on "might be subtle" or assumptions
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
