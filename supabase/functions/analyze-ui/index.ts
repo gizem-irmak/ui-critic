@@ -119,7 +119,7 @@ Run visual inspection for accessibility issues:
 
 **Report each potentially non-compliant element SEPARATELY** — do not group into one violation
 
-### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
+### A5 (Poor focus visibility) — PATTERN-BASED GROUPED REPORTING:
 
 **FOCUSABILITY DETERMINATION — STRICT CRITERIA:**
 An element is ONLY considered focusable if:
@@ -135,43 +135,56 @@ An element is ONLY considered focusable if:
 
 1. **NOT APPLICABLE — SKIP ENTIRELY:**
    - Element is NOT interactive/focusable
-   - DO NOT REPORT — do not include in violations array
+   - DO NOT REPORT
 
 2. **PASS — SKIP ENTIRELY:**
    - Screenshot shows visible focus indicator (ring, border, outline, glow)
-   - DO NOT REPORT — do not include in violations array
-   - DO NOT include any text about acceptable implementations
+   - DO NOT REPORT
 
-3. **HEURISTIC RISK — REPORT:**
-   - Element IS interactive AND appears to rely ONLY on background color change for focus
-   - Set \`typeBadge: "HEURISTIC"\`
+3. **HEURISTIC RISK — REPORT (GROUPED):**
+   - Element IS interactive AND appears to rely ONLY on background or text color change for focus indication
+   - This is NOT a confirmed WCAG violation — it's a heuristic accessibility risk
+   - Background-only focus indication may be insufficient in low-contrast themes or forced-colors mode
    - Set confidence to 40-50% (screenshots cannot confirm focus states)
 
-4. **CONFIRMED VIOLATION — REPORT:**
+4. **CONFIRMED VIOLATION — REPORT (GROUPED):**
    - Element IS interactive AND visually appears to LACK any visible focus indicator
-   - Set \`typeBadge: "CONFIRMED"\`
    - Set confidence to 50-60% (medium-low for screenshot analysis)
 
-**OUTPUT FORMAT FOR A5 VIOLATIONS ONLY:**
+**GROUPING RULE — CRITICAL:**
+When multiple interactive elements share the SAME focus indication pattern (e.g., background-color-only focus):
+- Report them as ONE SINGLE A5 finding, NOT multiple repeated entries
+- List all affected elements as occurrences within that single finding
+- Do NOT repeat the same explanation for each element
+
+**OUTPUT FORMAT FOR A5 (SINGLE GROUPED FINDING):**
 \`\`\`json
 {
   "ruleId": "A5",
   "ruleName": "Poor focus visibility",
   "category": "accessibility",
-  "typeBadge": "CONFIRMED" or "HEURISTIC",
-  "evidence": "Button appears to lack visible focus indicator",
-  "diagnosis": "The primary action button may lack a visible focus indicator for keyboard users.",
-  "contextualHint": "Add visible focus ring or border for keyboard accessibility.",
-  "confidence": 0.55
+  "typeBadge": "HEURISTIC",
+  "patternDescription": "Several interactive elements appear to rely on background or text color changes for focus indication. While this provides some visual feedback, background-only focus indicators may not be sufficient for clear focus visibility in low-contrast themes or high-contrast / forced-colors modes.",
+  "occurrences": [
+    { "location": "Navigation menu", "element": "Menu items", "observation": "Focus appears to use background color only" },
+    { "location": "Dropdown", "element": "Dropdown options", "observation": "Selection indicated by background change" }
+  ],
+  "suggestedImprovement": "Add a distinct focus indicator (e.g., visible ring or outline) that is clearly distinguishable from hover and selection states.",
+  "confidence": 0.45
 }
 \`\`\`
 
+**WORDING CONSTRAINTS:**
+- Use cautious language: "may not be sufficient", "can be insufficient", "potential risk", "appears to"
+- Do NOT state or imply definite WCAG non-compliance
+- Do NOT use words like "fails", "violates", "non-compliant"
+- Do NOT repeat identical explanations per element — the patternDescription covers all occurrences
+
 **OUTPUT CONSTRAINT — MANDATORY:**
-- The "violations" array must contain ONLY categories 3 and 4 (HEURISTIC RISK and CONFIRMED)
-- NEVER include PASS or NOT APPLICABLE cases in violations
-- NEVER include text like "acceptable", "compliant", or "could be improved" for PASS cases
+- Report at most ONE A5 finding per shared pattern
+- The "violations" array must contain ONLY actual risks (HEURISTIC RISK or CONFIRMED)
+- NEVER include PASS or NOT APPLICABLE cases
 - NEVER include speculative cases based on "might be" or "could be" without visual evidence
-- Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
 ### SPECIAL HANDLING FOR A1 (Text Contrast)
