@@ -119,6 +119,40 @@ Run visual inspection for accessibility issues:
 
 **Report each potentially non-compliant element SEPARATELY** — do not group into one violation
 
+### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
+
+**RULE TRIGGER CONDITIONS:**
+Only evaluate focus visibility for elements that are clearly interactive:
+- Buttons, links, form inputs, select dropdowns, textareas
+- Any element that appears to be keyboard-focusable
+
+**NOT APPLICABLE:**
+If the element is NOT interactive (e.g., decorative elements, static text, images without click handlers), mark as Not Applicable and do NOT report a violation.
+
+**FOCUS STYLE CHECK — CRITICAL:**
+For screenshot analysis, look for VISIBLE focus indicators:
+- Visible outline, ring, or border around focused elements
+- Clear visual distinction when element is focused
+- Color change or glow effect on focus
+
+**WHAT TO REPORT:**
+- ONLY report if you observe an interactive element that appears to LACK any visible focus indicator
+- Do NOT assume lack of focus indicator just because you can't see focus state in a static screenshot
+
+**OUTPUT CONDITIONS:**
+- IF interactive element visually appears to lack focus indication → Report as "Potential focus visibility risk"
+- IF focus ring/visible indicator is visible → Do NOT report
+- IF element is not interactive → Not Applicable, do NOT report
+- Screenshots cannot definitively confirm focus states, so always use "potential" classification
+
+**REQUIRED WORDING:**
+- Use "Potential focus visibility risk" NOT "Poor focus visibility" for screenshot findings
+- Frame as: "The element may lack a clearly visible focus indicator for keyboard users"
+- Set confidence to 50-60% (medium-low) since screenshots cannot show focus states
+
+**OUTPUT TEMPLATE:**
+"The [button/link/input] in [component/location] may lack a clearly visible focus indicator. Keyboard users need visible focus states to navigate the interface. Verify that focus indicators are properly styled and visible."
+
 ${includesA1 ? `
 ### SPECIAL HANDLING FOR A1 (Text Contrast)
 Since this is screenshot-based analysis, you CANNOT compute exact contrast ratios.

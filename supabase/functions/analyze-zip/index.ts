@@ -329,6 +329,49 @@ Examine the code for other accessibility issues:
 
 5. **Report each non-compliant element SEPARATELY** — do not merge into one violation
 
+### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
+
+**RULE TRIGGER CONDITIONS:**
+Only evaluate focus visibility for elements that are likely focusable:
+- \`<button>\`, \`<a href>\`, \`<input>\`, \`<select>\`, \`<textarea>\`
+- Any element with \`tabIndex >= 0\` or \`tabindex >= 0\`
+- Elements with \`role="button"\` or \`role="link"\` with tabIndex >= 0
+
+**NOT APPLICABLE:**
+If the element is NOT focusable (e.g., plain \`<div>\` without tabIndex, decorative elements), mark as Not Applicable and do NOT report a violation.
+
+**FOCUS STYLE CHECK — CRITICAL:**
+- Do NOT flag a violation just because \`focus:outline-none\` or \`outline-none\` exists
+- If \`focus:outline-none\` is present, check whether a VISIBLE REPLACEMENT exists:
+  - \`focus:ring-*\`, \`focus-visible:ring-*\`
+  - \`focus:border-*\`, \`focus-visible:border-*\`
+  - \`focus-visible:outline-*\` (not \`outline-none\`)
+  - \`focus:shadow-*\`, \`focus-visible:shadow-*\`
+  - \`ring-*\` combined with \`focus-visible:*\` modifiers
+
+**DETECTION LOGIC:**
+1. IF element has \`focus:outline-none\` AND also has \`focus:ring-*\` or \`focus-visible:ring-*\` → NOT a violation (replacement exists)
+2. IF element has \`focus:ring-2 focus:ring-ring\` or similar → NOT a violation
+3. IF element removes focus outline with NO visible replacement → REPORT as "Potential focus visibility risk (heuristic)"
+
+**EXCLUSION EXAMPLES (do NOT report):**
+- \`focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2\` → Has visible ring replacement
+- \`focus-visible:ring-2 focus-visible:ring-offset-2\` → Has visible focus indicator
+- \`focus:border-primary\` → Has visible border replacement
+
+**OUTPUT CONDITIONS:**
+- IF focus outline is removed AND no visible replacement found → Report "Potential focus visibility risk (heuristic)"
+- IF focus ring/visible replacement exists → Do NOT report the issue
+- IF element is not focusable → Not Applicable, do NOT report
+
+**REQUIRED WORDING:**
+- Use "Potential focus visibility risk" NOT "Poor focus visibility" for heuristic findings
+- Frame as: "The element removes default focus outline without an apparent visible replacement"
+- Set confidence to 55-65% (medium) since this is heuristic analysis
+
+**OUTPUT TEMPLATE:**
+"The [button/link/input] in [File.tsx] uses \`focus:outline-none\` without a clearly visible replacement focus style. While a focus ring or border replacement may exist via inherited styles, static analysis cannot confirm visible focus indication. Verify that keyboard users can identify focus state."
+
 Accessibility rules to check:
 ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name}`).join('\n')}
 
