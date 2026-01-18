@@ -329,7 +329,7 @@ Examine the code for other accessibility issues:
 
 5. **Report each non-compliant element SEPARATELY** — do not merge into one violation
 
-### A5 (Poor focus visibility) — PATTERN-BASED GROUPED REPORTING:
+### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
 **FOCUSABILITY DETERMINATION — STRICT CRITERIA:**
 An element is ONLY considered focusable if it matches ONE of these criteria:
@@ -340,64 +340,67 @@ An element is ONLY considered focusable if it matches ONE of these criteria:
 
 **DO NOT CLASSIFY AS FOCUSABLE:**
 - Plain \`<div>\`, \`<span>\`, \`<p>\` without tabIndex or keyboard handlers
-- Elements with ONLY \`onClick\` (no keyboard handler)
+- Elements with ONLY \`onClick\` (no keyboard handler) — this is a different a11y issue
 - Elements with hover classes like \`hover:bg-*\` — hover does NOT imply focusable
+- Speculative cases like "if used as clickable" — analyze the ACTUAL code
 
 **CLASSIFICATION CATEGORIES:**
 
 1. **NOT APPLICABLE — SKIP ENTIRELY:**
    - Element does NOT meet focusability criteria above
-   - DO NOT REPORT
+   - DO NOT REPORT — do not include in violations array
 
 2. **PASS — SKIP ENTIRELY:**
    - Element IS focusable AND has visible replacement focus indicator
    - Valid replacements: \`focus:ring-*\`, \`focus-visible:ring-*\`, \`focus:border-*\`, \`focus-visible:border-*\`, \`focus-visible:outline-*\` (not none), \`focus:shadow-*\`, \`focus-visible:shadow-*\`, \`ring-offset-*\`
-   - DO NOT REPORT
+   - DO NOT REPORT — do not include in violations array
+   - DO NOT include any text like "This is acceptable" or "This is a PASS case"
 
-3. **HEURISTIC RISK — REPORT (GROUPED):**
-   - Element IS focusable AND outline is removed AND focus indication relies ONLY on background/text color changes (\`focus:bg-*\`, \`focus-visible:bg-*\`, \`focus:text-*\`, \`data-[selected=true]:bg-*\`, \`data-[state=active]:bg-*\`)
-   - This is NOT a confirmed WCAG violation — it's a heuristic accessibility risk
-   - Background-only focus indication may be insufficient in low-contrast themes or forced-colors mode
+3. **HEURISTIC RISK — REPORT:**
+   - Element IS focusable AND outline is removed AND focus indication relies ONLY on \`focus:bg-*\` or \`focus-visible:bg-*\`
+   - Set \`typeBadge: "HEURISTIC"\`
+   - Set confidence to 45-55%
+   - Background color alone may not provide sufficient visibility
 
-4. **CONFIRMED VIOLATION — REPORT (GROUPED):**
+4. **CONFIRMED VIOLATION — REPORT:**
    - Element IS focusable AND outline is removed AND NO visible replacement exists
-   - Still group with similar patterns if multiple instances exist
+   - Set \`typeBadge: "CONFIRMED"\`
+   - Set confidence to 60-70%
 
-**GROUPING RULE — CRITICAL:**
-When multiple components share the SAME focus-style pattern (e.g., outline removed + background-only indication):
-- Report them as ONE SINGLE A5 finding, NOT multiple repeated entries
-- List all affected components as occurrences within that single finding
-- Do NOT repeat the same explanation for each component
+**FOCUS STYLE CHECK — PRIORITY ORDER:**
+When \`focus:outline-none\` or \`outline-none\` is present, check for VISIBLE REPLACEMENTS:
+1. Ring styles: \`focus:ring-*\`, \`focus-visible:ring-*\`, \`focus:ring-offset-*\` → PASS
+2. Border styles: \`focus:border-*\`, \`focus-visible:border-*\` → PASS
+3. Outline replacement: \`focus-visible:outline-*\` (not \`outline-none\`) → PASS
+4. Shadow styles: \`focus:shadow-*\`, \`focus-visible:shadow-*\` → PASS
+5. Background ONLY: \`focus:bg-*\`, \`focus-visible:bg-*\` with no other → HEURISTIC RISK
+6. NONE of the above → CONFIRMED VIOLATION
 
-**OUTPUT FORMAT FOR A5 (SINGLE GROUPED FINDING):**
+**COMPLIANT EXAMPLES — MUST NOT APPEAR IN VIOLATIONS:**
+- \`focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2\` → PASS (do not report)
+- \`focus-visible:ring-2 focus-visible:ring-offset-2\` → PASS (do not report)
+- \`focus:border-primary\` → PASS (do not report)
+- Any element with valid ring/border/shadow focus style → PASS (do not report)
+
+**OUTPUT FORMAT FOR A5 VIOLATIONS ONLY:**
 \`\`\`json
 {
   "ruleId": "A5",
   "ruleName": "Poor focus visibility",
   "category": "accessibility",
-  "typeBadge": "HEURISTIC",
-  "patternDescription": "Several interactive components remove the default focus outline and rely primarily on background or text color changes to indicate focus. While this provides some visual feedback, background-only focus indicators may not be sufficient for clear focus visibility in low-contrast themes or high-contrast / forced-colors modes.",
-  "occurrences": [
-    { "file": "components/ui/command.tsx", "component": "CommandItem", "focusStyle": "data-[selected=true]:bg-accent" },
-    { "file": "components/ui/context-menu.tsx", "component": "ContextMenuSubTrigger", "focusStyle": "focus:bg-accent" },
-    { "file": "components/ui/dropdown-menu.tsx", "component": "DropdownMenuItem", "focusStyle": "focus:bg-accent" }
-  ],
-  "suggestedImprovement": "Add a distinct focus indicator (e.g., focus-visible:ring or focus-visible:outline) that is clearly distinguishable from hover and selection states.",
+  "typeBadge": "CONFIRMED" or "HEURISTIC",
+  "evidence": "focus:outline-none without replacement in Button.tsx",
+  "diagnosis": "The submit button removes default focus outline without visible replacement.",
+  "contextualHint": "Add focus ring or border style for keyboard accessibility.",
   "confidence": 0.65
 }
 \`\`\`
 
-**WORDING CONSTRAINTS:**
-- Use cautious language: "may not be sufficient", "can be insufficient", "potential risk"
-- Do NOT state or imply definite WCAG non-compliance
-- Do NOT use words like "fails", "violates", "non-compliant"
-- Do NOT repeat identical explanations per component — the patternDescription covers all occurrences
-
 **OUTPUT CONSTRAINT — MANDATORY:**
-- Report at most ONE A5 finding per shared pattern
-- The "violations" array must contain ONLY actual risks (HEURISTIC RISK or CONFIRMED)
-- NEVER include PASS or NOT APPLICABLE cases
+- The "violations" array must contain ONLY categories 3 and 4 (HEURISTIC RISK and CONFIRMED)
+- NEVER include PASS or NOT APPLICABLE cases in violations
 - NEVER include text like "acceptable", "compliant", or "could be improved" for PASS cases
+- Report ONLY actual accessibility risks
 
 Accessibility rules to check:
 ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name}`).join('\n')}
