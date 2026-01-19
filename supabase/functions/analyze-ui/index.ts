@@ -623,16 +623,16 @@ serve(async (req) => {
         `Actual contrast may vary based on font size and weight (large/bold text requires only 3:1 ratio). ` +
         `This finding is reported as a heuristic risk with reduced confidence.`;
       
-      const contextualHint = overallRiskLevel === 'high'
-        ? 'Very light text colors may be insufficient for informational text on light backgrounds.'
-        : overallRiskLevel === 'medium'
-        ? 'Text colors appear to have potentially insufficient contrast depending on background.'
+      // For screenshot analysis, we don't have specific Tailwind class names
+      // Use consistent wording that matches code analysis (gray-300/400 as common problematic colors)
+      const contextualHint = overallRiskLevel === 'high' || overallRiskLevel === 'medium'
+        ? 'Light text colors (gray-300, gray-400 or similar) may be insufficient for informational text on light backgrounds.'
         : 'Text color is near-threshold; contrast may be insufficient depending on background and font characteristics.';
       
       const a1Rule = allRulesForViolations.find(r => r.id === 'A1');
       
-      // Single deterministic corrective prompt
-      const correctivePrompt = 'Replace low-contrast text colors with higher-contrast alternatives for informational text, while preserving design intent.';
+      // Single deterministic corrective prompt - aligned with code analysis output
+      const correctivePrompt = 'Replace low-contrast text colors (gray-300/400) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.';
       
       aggregatedA1UI = {
         ruleId: 'A1',
