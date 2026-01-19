@@ -19,8 +19,8 @@ export const rules: Rule[] = [
     id: 'A2',
     category: 'accessibility',
     name: 'Small informational text size',
-    diagnosis: 'While WCAG does not specify a minimum font size, usability and accessibility guidelines commonly recommend using at least ~16px for important informational content to support readability, particularly for users with visual impairments.',
-    correctivePrompt: 'Consider increasing informational text size to at least ~16px and adjusting line spacing for improved readability. This is a recommended best practice, not a WCAG requirement.'
+    diagnosis: 'WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.',
+    correctivePrompt: 'Increase text below 13px to at least 14px (text-sm) for informational or state-indicating content. Use 16px (text-base) for primary informational content in dialogs, alerts, tooltips, and chart labels. Retain very small text only for decorative or non-essential elements. Do not alter layout structure, spacing, or component hierarchy.'
   },
   {
     id: 'A3',
