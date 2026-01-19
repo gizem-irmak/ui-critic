@@ -134,69 +134,180 @@ interface ContrastViolation {
   contextualHint: string;
   correctivePrompt: string;
   confidence: number;
+  // A1-specific tiered fields
+  riskLevel?: 'high' | 'medium' | 'low';
+  affectedComponents?: Array<{
+    colorClass: string;
+    hexColor?: string;
+    filePath: string;
+    elementContext?: string;
+    riskLevel: 'high' | 'medium' | 'low';
+    occurrence_count: number;
+  }>;
 }
 
+// A1 Color risk tiers for Tailwind gray scale classes
+// Higher risk = lighter colors that are more likely to fail on light backgrounds
+const A1_COLOR_RISK_TIERS: Record<string, { riskLevel: 'high' | 'medium' | 'low'; baseConfidence: number }> = {
+  // High risk: very light grays - almost certainly fail on white/light backgrounds
+  'gray-200': { riskLevel: 'high', baseConfidence: 0.75 },
+  'gray-300': { riskLevel: 'high', baseConfidence: 0.75 },
+  'slate-200': { riskLevel: 'high', baseConfidence: 0.75 },
+  'slate-300': { riskLevel: 'high', baseConfidence: 0.75 },
+  'zinc-200': { riskLevel: 'high', baseConfidence: 0.75 },
+  'zinc-300': { riskLevel: 'high', baseConfidence: 0.75 },
+  // Medium risk: mid-light grays - likely to fail on white, borderline on light grays
+  'gray-400': { riskLevel: 'medium', baseConfidence: 0.65 },
+  'slate-400': { riskLevel: 'medium', baseConfidence: 0.65 },
+  'zinc-400': { riskLevel: 'medium', baseConfidence: 0.65 },
+  // Low risk: darker grays - may fail depending on background and font size
+  'gray-500': { riskLevel: 'low', baseConfidence: 0.45 },
+  'slate-500': { riskLevel: 'low', baseConfidence: 0.45 },
+  'zinc-500': { riskLevel: 'low', baseConfidence: 0.45 },
+};
+
 function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] {
-  const violations: ContrastViolation[] = [];
-  const reportedPatterns = new Set<string>();
-  
-  // Colors that typically have low contrast on light backgrounds
-  const lowContrastOnLight = ['gray-300', 'gray-400', 'gray-500', 'slate-300', 'slate-400', 'slate-500', 'zinc-300', 'zinc-400', 'zinc-500'];
+  // Collect all potential A1 findings first for aggregation
+  const a1Findings: Array<{
+    colorClass: string;
+    colorName: string;
+    hexColor?: string;
+    filePath: string;
+    elementContext?: string;
+    riskLevel: 'high' | 'medium' | 'low';
+    confidence: number;
+  }> = [];
   
   for (const [filepath, content] of files) {
     const textColors = extractTextColors(content);
     
     for (const { colorClass, context } of textColors) {
-      // Extract the color name
       const colorMatch = colorClass.match(/text-(\w+-?\d*)/);
       if (!colorMatch) continue;
       
       const colorName = colorMatch[1];
+      const riskTier = A1_COLOR_RISK_TIERS[colorName];
+      
+      if (!riskTier) continue; // Not a tracked low-contrast color
+      
       const hexColor = TAILWIND_COLORS[colorName];
-      
-      // Determine if this is a potentially low-contrast color
-      const isLowContrastPattern = lowContrastOnLight.some(c => colorName === c);
-      
-      if (!isLowContrastPattern) continue;
-      
-      // Create a unique key for this pattern to avoid duplicates
-      const patternKey = `${colorName}`;
-      if (reportedPatterns.has(patternKey)) continue;
-      reportedPatterns.add(patternKey);
-      
-      // Try to infer element context from surrounding code
       const elementContext = inferElementContext(context);
       
-      // Calculate estimated ratio for informational purposes only
-      let estimatedRatio: number | undefined;
-      if (hexColor) {
-        const ratio = getContrastRatio(hexColor, '#ffffff');
-        if (ratio !== null) {
-          estimatedRatio = Math.round(ratio * 100) / 100;
-        }
-      }
-      
-      // ALWAYS report as "potential" since we cannot:
-      // 1. Confirm the actual background color for this element
-      // 2. Get computed styles from rendered DOM
-      // 3. Run axe-core against the live application
-      violations.push({
-        ruleId: 'A1',
-        ruleName: 'Insufficient text contrast',
-        category: 'accessibility',
-        status: 'potential', // NEVER 'confirmed' without computed DOM styles or axe-core
-        evidence: `Text color class "${colorClass}" detected${hexColor ? ` (maps to ${hexColor})` : ''}. Background color cannot be confidently determined from static analysis.`,
-        diagnosis: `Potential WCAG AA contrast risk: The text color class "${colorClass}" may have insufficient contrast depending on the actual rendered background color. Static code analysis cannot confirm the exact background color for this element, so this should be verified using browser developer tools or an accessibility audit tool like axe-core. Found in ${filepath}.`,
-        contextualHint: elementContext 
-          ? `Review contrast for ${elementContext} to ensure it meets WCAG AA standards.`
-          : 'Review text contrast in this component to ensure it meets WCAG AA standards.',
-        correctivePrompt: rules.accessibility[0].correctivePrompt,
-        confidence: 0.6, // Lower confidence since we can't confirm
+      a1Findings.push({
+        colorClass,
+        colorName,
+        hexColor,
+        filePath: filepath,
+        elementContext: elementContext || undefined,
+        riskLevel: riskTier.riskLevel,
+        confidence: riskTier.baseConfidence,
       });
     }
   }
   
-  return violations;
+  if (a1Findings.length === 0) {
+    return [];
+  }
+  
+  // Aggregate and deduplicate by color class + file
+  const dedupeMap = new Map<string, {
+    colorClass: string;
+    colorName: string;
+    hexColor?: string;
+    filePath: string;
+    elementContext?: string;
+    riskLevel: 'high' | 'medium' | 'low';
+    confidence: number;
+    occurrence_count: number;
+  }>();
+  
+  for (const finding of a1Findings) {
+    const key = `${finding.colorName}:${finding.filePath}`;
+    if (dedupeMap.has(key)) {
+      const existing = dedupeMap.get(key)!;
+      existing.occurrence_count += 1;
+    } else {
+      dedupeMap.set(key, { ...finding, occurrence_count: 1 });
+    }
+  }
+  
+  const affectedComponents = Array.from(dedupeMap.values());
+  
+  // Count by risk level
+  const highRiskCount = affectedComponents.filter(c => c.riskLevel === 'high').length;
+  const mediumRiskCount = affectedComponents.filter(c => c.riskLevel === 'medium').length;
+  const lowRiskCount = affectedComponents.filter(c => c.riskLevel === 'low').length;
+  
+  // Determine overall risk level (highest tier present)
+  let overallRiskLevel: 'high' | 'medium' | 'low' = 'low';
+  if (highRiskCount > 0) overallRiskLevel = 'high';
+  else if (mediumRiskCount > 0) overallRiskLevel = 'medium';
+  
+  // Calculate overall confidence based on highest-risk findings
+  const maxConfidence = Math.max(...affectedComponents.map(c => c.confidence));
+  const overallConfidence = Math.round(maxConfidence * 100) / 100;
+  
+  // Build unique color classes list
+  const uniqueColorClasses = [...new Set(affectedComponents.map(c => c.colorClass))];
+  const displayLimit = 4;
+  const displayedColors = uniqueColorClasses.slice(0, displayLimit);
+  const moreCount = uniqueColorClasses.length - displayLimit;
+  const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
+  
+  // Build file list
+  const uniqueFiles = [...new Set(affectedComponents.map(c => c.filePath.split('/').pop() || c.filePath))];
+  const fileDisplayLimit = 3;
+  const displayedFiles = uniqueFiles.slice(0, fileDisplayLimit);
+  const fileMoreCount = uniqueFiles.length - fileDisplayLimit;
+  const fileMoreText = fileMoreCount > 0 ? ` and ${fileMoreCount} more` : '';
+  
+  // Build risk breakdown text
+  const riskBreakdown = [
+    highRiskCount > 0 ? `${highRiskCount} high-risk` : '',
+    mediumRiskCount > 0 ? `${mediumRiskCount} medium-risk` : '',
+    lowRiskCount > 0 ? `${lowRiskCount} low-risk` : '',
+  ].filter(Boolean).join(', ');
+  
+  // Build diagnosis with uncertainty factors explained
+  const diagnosis = `Potential WCAG AA contrast risk: ${affectedComponents.length} text color occurrence(s) detected ` +
+    `using ${displayedColors.join(', ')}${moreText} in ${displayedFiles.join(', ')}${fileMoreText}. ` +
+    `Risk breakdown: ${riskBreakdown}. ` +
+    `Static analysis cannot determine the actual rendered background color, so contrast sufficiency cannot be confirmed. ` +
+    `Additionally, actual contrast may vary based on font size and weight (large/bold text requires only 3:1 ratio). ` +
+    `This finding is reported as a heuristic risk with reduced confidence.`;
+  
+  const contextualHint = overallRiskLevel === 'high'
+    ? 'Very light text colors (gray-200/300) may be insufficient for informational text on light backgrounds.'
+    : overallRiskLevel === 'medium'
+    ? 'Mid-light text colors (gray-400) may be insufficient depending on background and font size.'
+    : 'Text color (gray-500) is near-threshold; contrast may be insufficient depending on background and font characteristics.';
+  
+  // Single deterministic corrective prompt
+  const correctivePrompt = 'Replace low-contrast text colors (gray-300/400) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.';
+  
+  console.log(`Computed ${affectedComponents.length} contrast findings → 1 aggregated A1 result (${riskBreakdown})`);
+  
+  // Return ONE aggregated A1 result
+  return [{
+    ruleId: 'A1',
+    ruleName: 'Insufficient text contrast',
+    category: 'accessibility',
+    status: 'potential', // Always potential for static analysis
+    evidence: `Text color classes detected: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
+    diagnosis,
+    contextualHint,
+    correctivePrompt,
+    confidence: overallConfidence,
+    riskLevel: overallRiskLevel,
+    affectedComponents: affectedComponents.map(c => ({
+      colorClass: c.colorClass,
+      hexColor: c.hexColor,
+      filePath: c.filePath,
+      elementContext: c.elementContext,
+      riskLevel: c.riskLevel,
+      occurrence_count: c.occurrence_count,
+    })),
+  }];
 }
 
 // Try to infer what kind of UI element the text is in based on context
