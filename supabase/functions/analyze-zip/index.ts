@@ -276,14 +276,29 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     `Additionally, actual contrast may vary based on font size and weight (large/bold text requires only 3:1 ratio). ` +
     `This finding is reported as a heuristic risk with reduced confidence.`;
   
-  const contextualHint = overallRiskLevel === 'high'
-    ? 'Very light text colors (gray-200/300) may be insufficient for informational text on light backgrounds.'
-    : overallRiskLevel === 'medium'
-    ? 'Mid-light text colors (gray-400) may be insufficient depending on background and font size.'
-    : 'Text color (gray-500) is near-threshold; contrast may be insufficient depending on background and font characteristics.';
+  // Build contextual hint based on DETECTED colors, not generic tiers
+  const detectedColorNames = [...new Set(affectedComponents.map(c => c.colorName))];
+  const hasGray200 = detectedColorNames.some(c => c.includes('200'));
+  const hasGray300 = detectedColorNames.some(c => c.includes('300'));
+  const hasGray400 = detectedColorNames.some(c => c.includes('400'));
+  const hasGray500 = detectedColorNames.some(c => c.includes('500'));
   
-  // Single deterministic corrective prompt
-  const correctivePrompt = 'Replace low-contrast text colors (gray-300/400) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.';
+  // Build hint based on what was actually detected
+  const detectedLightGrays: string[] = [];
+  if (hasGray300) detectedLightGrays.push('gray-300');
+  if (hasGray400) detectedLightGrays.push('gray-400');
+  if (hasGray200) detectedLightGrays.push('gray-200'); // Only include if actually detected
+  
+  const contextualHint = overallRiskLevel === 'high' || overallRiskLevel === 'medium'
+    ? `Light text colors (${detectedLightGrays.length > 0 ? detectedLightGrays.join(', ') : 'gray-300, gray-400'}) may be insufficient for informational text on light backgrounds.`
+    : hasGray500
+    ? 'Text color (gray-500) is near-threshold; contrast may be insufficient depending on background and font characteristics.'
+    : 'Detected text colors may be insufficient depending on background and font characteristics.';
+  
+  // Single deterministic corrective prompt - targets commonly problematic colors
+  // Only mention colors that are commonly problematic (gray-300/400), not gray-200 unless detected
+  const correctivePromptColors = hasGray200 ? 'gray-200/300/400' : 'gray-300/400';
+  const correctivePrompt = `Replace low-contrast text colors (${correctivePromptColors}) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.`;
   
   console.log(`Computed ${affectedComponents.length} contrast findings → 1 aggregated A1 result (${riskBreakdown})`);
   
