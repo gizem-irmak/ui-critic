@@ -13,7 +13,7 @@ const rules = {
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
     { id: 'A2', name: 'Small informational text size', diagnosis: 'WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.', correctivePrompt: 'Increase text below 13px to at least 14px (text-sm) for informational or state-indicating content. Use 16px (text-base) for primary informational content in dialogs, alerts, tooltips, and chart labels. Retain very small text only for decorative or non-essential elements. Do not alter layout structure, spacing, or component hierarchy.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
-    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly ensure minimum tap target size (44×44px), and rendered dimensions may vary across devices.', correctivePrompt: 'Explicitly enforce minimum interactive element dimensions (44×44px) with adequate spacing to ensure tap target compliance across devices.' },
+    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Explicitly enforce minimum interactive element dimensions (44×44 CSS px) using min-width and min-height constraints with adequate spacing. This ensures tap target compliance across devices regardless of content or padding variations.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
   ],
   usability: [
@@ -345,33 +345,53 @@ Base confidence on three factors:
 
 ### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
 
+**STATIC ANALYSIS LIMITATION:**
+Static code analysis cannot measure rendered DOM dimensions. Padding, box-sizing, flex/grid layout, and parent constraints at runtime may increase the clickable area beyond what size tokens indicate. Compliance CANNOT be confirmed from static analysis alone.
+
+**GUIDELINE FRAMING:**
+- 44×44 CSS px is commonly recommended in usability and accessibility guidelines
+- WCAG 2.1 Target Size (Level AAA) suggests 44×44px, but this is NOT an AA requirement
+- Do NOT state that WCAG mandates 44×44 at AA level
+- Frame as: "commonly recommended touch target size" or "usability guideline"
+
 **CLASSIFICATION:**
-- ALWAYS classify A4 as "⚠️ Potential Risk (Heuristic)" — NEVER "Confirmed" unless rendered DOM dimensions are explicitly measured
+- ALWAYS classify A4 as "⚠️ Potential Risk (Heuristic)" — NEVER "Confirmed"
 - Static code analysis CANNOT confirm tap target violations
+
+**CONFIDENCE REASONING:**
+Confidence is based on:
+1. **Presence of size tokens** (±15%): Elements with h-8, h-9, w-8, w-9, size-8, size-9 tokens → lower confidence they meet 44px
+2. **Lack of explicit min-width/min-height enforcement** (±10%): No min-h-11, min-w-11, min-h-[44px], min-w-[44px] → higher risk
+3. **Static analysis limitation** (-15%): Always reduce confidence since runtime layout cannot be evaluated
+
+**SIZE TOKEN TO APPROXIMATE PX MAPPING:**
+- h-8/w-8/size-8 → ~32px (may be below 44px)
+- h-9/w-9/size-9 → ~36px (may be below 44px)
+- h-10/w-10/size-10 → ~40px (may be below 44px)
+- h-11/w-11/size-11 → ~44px (meets guideline)
+- h-12/w-12/size-12 → ~48px (exceeds guideline)
 
 **WHAT TO REPORT:**
 1. Only report interactive elements (buttons, links, clickable elements) that LACK explicit minimum size enforcement
-2. DO NOT report elements that have explicit size constraints ≥44px:
-   - min-h-[44px], min-h-11, min-h-12, or larger
-   - min-w-[44px], min-w-11, min-w-12, or larger
-   - Both h-11/w-11 or h-12/w-12 together, or larger fixed dimensions
-   - size-11, size-12, or larger
+2. List detected size classes and their approximate px values
+3. DO NOT report elements that have explicit size constraints ≥44px
 
 **DO NOT:**
 - Infer or assume final tap target size from padding, font size, or icon size
 - Mention internal glyphs, spans, icons, or characters (e.g., "×", "X", icons)
 - Describe user difficulty as a confirmed outcome
 - Use language implying measurement or certainty
+- Use "non-compliant" or "fails" — prefer "may be below recommended touch target size"
 
 **REQUIRED WORDING:**
 - Refer to elements as "button" or "interactive element" — not internal content
-- Use neutral, academic phrasing: "does not explicitly enforce", "cannot be guaranteed", "potential risk"
+- Use neutral, academic phrasing: "does not explicitly enforce", "cannot be guaranteed", "may be below"
 - Include the file/component name where the issue occurs
 
 **OUTPUT TEMPLATE:**
-"The [button/interactive element] in [File.tsx] does not explicitly enforce a minimum tap target size of 44×44px (e.g., via min-width or min-height). Although padding may be applied, the element's dimensions are not explicitly constrained to guarantee compliance with recommended touch target guidelines."
+"The [button/interactive element] in [File.tsx] does not explicitly enforce a minimum tap target size of 44×44 CSS px. Detected size class(es): [h-9, w-9] (~36px). Although padding or layout constraints at runtime may increase the clickable area, the element's dimensions are not explicitly constrained to guarantee compliance with commonly recommended touch target guidelines (WCAG 2.1 Target Size is AAA, not AA)."
 
-5. **Report each non-compliant element SEPARATELY** — do not merge into one violation
+**Report each potentially undersized element SEPARATELY** — do not merge into one violation
 
 ### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
