@@ -686,9 +686,10 @@ ${codeContent}`,
     // Enhance violations with corrective prompts and filter out invalid reports
     const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
     
-    // Separate A2 and A4 violations for aggregation
+    // Separate A2, A4, and A5 violations for aggregation
     const a2Violations: any[] = [];
     const a4Violations: any[] = [];
+    const a5Violations: any[] = [];
     const otherViolations: any[] = [];
     
     (analysisResult.violations || []).forEach((v: any) => {
@@ -696,39 +697,15 @@ ${codeContent}`,
         a2Violations.push(v);
       } else if (v.ruleId === 'A4') {
         a4Violations.push(v);
+      } else if (v.ruleId === 'A5') {
+        a5Violations.push(v);
       } else {
         otherViolations.push(v);
       }
     });
     
-    // Process non-A2 violations with existing filters
+    // Process non-A2/A4/A5 violations (no special filtering needed)
     const filteredOtherViolations = otherViolations
-      .filter((v: any) => {
-        // Filter out A5 violations that should be PASS or NOT APPLICABLE
-        if (v.ruleId === 'A5') {
-          const evidence = (v.evidence || '').toLowerCase();
-          const diagnosis = (v.diagnosis || '').toLowerCase();
-          const combined = evidence + ' ' + diagnosis;
-          
-          // ABSOLUTE RULE: If no outline removal is mentioned, skip
-          const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none/.test(combined);
-          if (!mentionsOutlineRemoval) {
-            console.log(`Filtering out A5 (no outline removal): ${v.evidence}`);
-            return false;
-          }
-          
-          // Check if this was incorrectly flagged despite having valid focus replacement
-          const hasValidReplacement = /focus:ring-|focus-visible:ring-|focus:border-|focus-visible:border-|focus:shadow-|focus-visible:shadow-|ring-offset-|focus-visible:outline-(?!none)/.test(combined);
-          const mentionsAcceptable = /acceptable|compliant|pass\b|valid replacement|proper focus|browser default/.test(combined);
-          
-          // If evidence mentions valid replacement patterns or acceptable, filter it out
-          if (hasValidReplacement || mentionsAcceptable) {
-            console.log(`Filtering out A5 PASS case: ${v.evidence}`);
-            return false;
-          }
-        }
-        return true;
-      })
       .map((v: any) => {
         const rule = allRules.find(r => r.id === v.ruleId);
         return {
@@ -1133,11 +1110,233 @@ ${codeContent}`,
       console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${uniqueNamesArray.length} unique components, sizes: ${Array.from(detectedSizeRanges).join(', ')})`);
     }
     
+    // ========== A5 AGGREGATION LOGIC ==========
+    // Process and aggregate A5 violations into a single result object
+    // Only report A5 when: outline is removed AND no visible focus replacement exists
+    interface A5AffectedItem {
+      component_name: string;
+      file_path: string;
+      typeBadge: 'Confirmed Violation' | 'Heuristic Risk';
+      focus_classes: string[];
+      confidence: number;
+      rationale: string;
+      occurrence_count?: number;
+    }
+    
+    const a5DedupeMap = new Map<string, A5AffectedItem>();
+    const a5ValidViolations: any[] = [];
+    
+    // First pass: filter A5 violations to only include actual violations
+    for (const v of a5Violations) {
+      const evidence = (v.evidence || '').toLowerCase();
+      const diagnosis = (v.diagnosis || '').toLowerCase();
+      const combined = evidence + ' ' + diagnosis;
+      
+      // ABSOLUTE RULE: Only evaluate elements that explicitly remove the browser outline
+      const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none/.test(combined);
+      if (!mentionsOutlineRemoval) {
+        console.log(`A5 SKIP (no outline removal): ${v.evidence}`);
+        continue;
+      }
+      
+      // Check for visible focus replacement indicators
+      // These indicate a PASS (outline removed but replaced with visible alternative)
+      const hasRingReplacement = /focus:ring-|focus-visible:ring-|ring-offset-|focus:ring\b|focus-visible:ring\b/.test(combined);
+      const hasBorderReplacement = /focus:border-|focus-visible:border-/.test(combined);
+      const hasShadowReplacement = /focus:shadow-|focus-visible:shadow-/.test(combined);
+      const hasOutlineReplacement = /focus-visible:outline-(?!none)|focus:outline-(?!none)/.test(combined);
+      
+      const hasVisibleReplacement = hasRingReplacement || hasBorderReplacement || hasShadowReplacement || hasOutlineReplacement;
+      
+      // Check if explicitly marked as pass/acceptable
+      const mentionsAcceptable = /acceptable|compliant|pass\b|valid replacement|proper focus|browser default|visible replacement|adequate focus/.test(combined);
+      
+      // If evidence shows valid replacement or acceptable, this is a PASS - skip entirely
+      if (hasVisibleReplacement || mentionsAcceptable) {
+        console.log(`A5 PASS (has replacement): ${v.evidence}`);
+        continue;
+      }
+      
+      // Check for weak indicators (background-only focus)
+      const hasBackgroundOnlyFocus = /focus:bg-|focus-visible:bg-|bg-.*focus/.test(combined) && !hasRingReplacement && !hasBorderReplacement;
+      
+      // This is a valid violation - add it
+      a5ValidViolations.push({
+        ...v,
+        isHeuristicRisk: hasBackgroundOnlyFocus,
+      });
+    }
+    
+    // Second pass: aggregate valid A5 violations
+    for (const v of a5ValidViolations) {
+      const evidence = (v.evidence || '');
+      const combined = (evidence + ' ' + (v.diagnosis || '')).toLowerCase();
+      
+      // Extract component info
+      const componentMatch = evidence.match(/(?:in\s+)?([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link)?)/);
+      const fileMatch = (evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js|vue|svelte))/i);
+      
+      // Resolve component name
+      let componentName = '';
+      if (componentMatch?.[1] && componentMatch[1].length > 2) {
+        componentName = componentMatch[1];
+      } else if (fileMatch?.[1]) {
+        componentName = fileMatch[1].replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
+      } else if (v.componentName) {
+        componentName = v.componentName;
+      }
+      
+      const filePath = fileMatch?.[1] || v.filePath || v.contextualHint || '';
+      
+      // Extract focus-related classes mentioned
+      const focusClasses: string[] = [];
+      const classMatches = combined.match(/(?:focus:|focus-visible:)?(?:outline-none|bg-\w+|ring-\w+|border-\w+)/g);
+      if (classMatches) {
+        focusClasses.push(...new Set(classMatches));
+      }
+      
+      // Determine type badge
+      const typeBadge: 'Confirmed Violation' | 'Heuristic Risk' = v.isHeuristicRisk ? 'Heuristic Risk' : 'Confirmed Violation';
+      
+      // Calculate confidence
+      let confidence = v.confidence || 0.65;
+      if (v.isHeuristicRisk) {
+        confidence = Math.min(confidence, 0.55); // Lower confidence for heuristic
+      }
+      
+      const rationale = v.isHeuristicRisk 
+        ? 'Focus indication relies only on background color change, which may be insufficient for users with color vision deficiencies.'
+        : 'Element removes the default browser outline without providing a visible focus replacement.';
+      
+      // Deduplication key
+      const dedupeKey = componentName || filePath || 'unknown';
+      
+      if (a5DedupeMap.has(dedupeKey)) {
+        const existing = a5DedupeMap.get(dedupeKey)!;
+        existing.occurrence_count = (existing.occurrence_count || 1) + 1;
+        if (confidence > existing.confidence) {
+          existing.confidence = confidence;
+        }
+        // Merge focus classes
+        focusClasses.forEach(c => {
+          if (!existing.focus_classes.includes(c)) {
+            existing.focus_classes.push(c);
+          }
+        });
+      } else {
+        const item: A5AffectedItem = {
+          component_name: componentName,
+          file_path: filePath,
+          typeBadge,
+          focus_classes: focusClasses,
+          confidence: Math.round(confidence * 100) / 100,
+          rationale,
+          occurrence_count: 1,
+        };
+        a5DedupeMap.set(dedupeKey, item);
+      }
+    }
+    
+    const a5AffectedItems = Array.from(a5DedupeMap.values());
+    
+    // Create aggregated A5 result ONLY if there are actual violations
+    let aggregatedA5: any = null;
+    if (a5AffectedItems.length > 0) {
+      // Calculate overall confidence (max of all findings)
+      const overallConfidence = Math.max(...a5AffectedItems.map(i => i.confidence));
+      
+      const confirmedCount = a5AffectedItems.filter(i => i.typeBadge === 'Confirmed Violation').length;
+      const heuristicCount = a5AffectedItems.filter(i => i.typeBadge === 'Heuristic Risk').length;
+      
+      const confidenceReason = `Confidence is based on static analysis of focus-related CSS classes. Elements that remove outline-none without visible ring/border/shadow replacements are flagged. Confidence may be lower for background-only focus patterns.`;
+      
+      // Build unique component names list
+      const invalidIdentifiers = new Set([
+        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
+        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
+        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
+        'component', 'components', 'element', 'elements', 'item', 'items', 'button',
+        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array'
+      ]);
+      
+      const uniqueComponentNames = new Set<string>();
+      for (const item of a5AffectedItems) {
+        const name = item.component_name || '';
+        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
+          if (!/^(use|get|set|is|has|can|should|will|on|handle)[A-Z]/.test(name)) {
+            uniqueComponentNames.add(name);
+          }
+        }
+      }
+      
+      // Fall back to file paths if no valid component names
+      if (uniqueComponentNames.size === 0) {
+        for (const item of a5AffectedItems) {
+          const filePath = item.file_path || '';
+          if (filePath) {
+            const fileName = filePath.replace(/.*[\/\\]/, '').replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
+            if (fileName && fileName.length > 2 && !invalidIdentifiers.has(fileName.toLowerCase())) {
+              uniqueComponentNames.add(fileName);
+            }
+          }
+        }
+      }
+      
+      // Build deduplicated component list (max 4, with "and N more")
+      const uniqueNamesArray = Array.from(uniqueComponentNames);
+      const displayLimit = 4;
+      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
+      const moreCount = uniqueNamesArray.length - displayLimit;
+      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
+      
+      const componentCountText = uniqueNamesArray.length > 0 
+        ? `${uniqueNamesArray.length} unique component(s): ${displayedNames.join(', ')}${moreText}`
+        : `${a5AffectedItems.length} element(s)`;
+      
+      const typeBreakdown = [
+        confirmedCount > 0 ? `${confirmedCount} confirmed violation(s)` : '',
+        heuristicCount > 0 ? `${heuristicCount} heuristic risk(s)` : '',
+      ].filter(Boolean).join(' and ');
+      
+      const summary = `Focus visibility issues detected in ${componentCountText}. ${typeBreakdown}. ` +
+        `Elements that remove the default browser outline (outline-none) without providing a visible focus replacement ` +
+        `(ring, border, or shadow) may reduce keyboard accessibility.`;
+      
+      const a5Rule = allRules.find(r => r.id === 'A5');
+      
+      aggregatedA5 = {
+        ruleId: 'A5',
+        ruleName: 'Poor focus visibility',
+        category: 'accessibility',
+        overall_confidence: Math.round(overallConfidence * 100) / 100,
+        confidence_reason: confidenceReason,
+        summary,
+        affected_items: a5AffectedItems.map(item => ({
+          component_name: item.component_name,
+          file_path: item.file_path,
+          typeBadge: item.typeBadge,
+          focus_classes: item.focus_classes,
+          confidence: item.confidence,
+          rationale: item.rationale,
+          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
+        })),
+        diagnosis: summary,
+        contextualHint: 'Add visible focus indicators (ring, border, or shadow) for elements that remove the default outline.',
+        correctivePrompt: a5Rule?.correctivePrompt || '',
+        confidence: Math.round(overallConfidence * 100) / 100,
+      };
+      
+      console.log(`A5 aggregated: ${a5Violations.length} findings → ${a5AffectedItems.length} valid violations → 1 result (${confirmedCount} confirmed, ${heuristicCount} heuristic)`);
+    } else {
+      console.log(`A5: No valid violations found (${a5Violations.length} filtered out as PASS or NOT APPLICABLE)`);
+    }
+    
     // Combine all violations
     const aiViolations = [
       ...filteredOtherViolations,
       ...(aggregatedA2 ? [aggregatedA2] : []),
       ...(aggregatedA4 ? [aggregatedA4] : []),
+      ...(aggregatedA5 ? [aggregatedA5] : []),
     ];
 
     // Merge contrast violations with AI violations
