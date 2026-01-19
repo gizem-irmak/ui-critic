@@ -411,44 +411,25 @@ serve(async (req) => {
 
     // Enhance violations with corrective prompts from our rule registry
     // Also ensure A1 violations from screenshots are marked as "potential"
-    // Filter out invalid A2/A5 cases
-    const enhancedViolations = (analysisResult.violations || [])
+    // Separate A2 violations for aggregation, filter out invalid A5 cases
+    
+    const allRulesForViolations = [...rules.accessibility, ...rules.usability, ...rules.ethics];
+    
+    // Separate A2 violations for aggregation
+    const a2Violations: any[] = [];
+    const otherViolations: any[] = [];
+    
+    (analysisResult.violations || []).forEach((v: any) => {
+      if (v.ruleId === 'A2') {
+        a2Violations.push(v);
+      } else {
+        otherViolations.push(v);
+      }
+    });
+    
+    // Process non-A2 violations with existing filters
+    const filteredOtherViolations = otherViolations
       .filter((v: any) => {
-        // Filter out A2 violations that don't meet criteria
-        if (v.ruleId === 'A2') {
-          const evidence = (v.evidence || '').toLowerCase();
-          const diagnosis = (v.diagnosis || '').toLowerCase();
-          const combined = evidence + ' ' + diagnosis;
-          
-          // FILTER: Normal-sized text (~14px or larger) should NOT be reported
-          const mentionsNormalSize = /normal size|normal-sized|adequate|14px|~14px|approximately 14|appears normal/.test(combined);
-          const mentionsSmall = /noticeably small|very small|tiny|<13|smaller than 13|clearly small/.test(combined);
-          
-          // If text appears normal sized and not explicitly small, filter out
-          if (mentionsNormalSize && !mentionsSmall) {
-            console.log(`Filtering out A2 (normal text size): ${v.evidence}`);
-            return false;
-          }
-          
-          // Filter out excluded elements
-          const isExcludedElement = /\bbutton\b|icon|navigation|menu item|action button/.test(combined);
-          if (isExcludedElement && !/description|label|helper|caption/.test(combined)) {
-            console.log(`Filtering out A2 (excluded element): ${v.evidence}`);
-            return false;
-          }
-          
-          // Ensure typeBadge is set
-          if (!v.typeBadge) {
-            if (mentionsSmall) {
-              v.typeBadge = 'VIOLATION';
-              v.sizeCategory = '<13px';
-            } else {
-              v.typeBadge = 'WARNING';
-              v.sizeCategory = '13-14px';
-            }
-          }
-        }
-        
         // Filter out A5 violations that should be PASS (have valid focus replacement)
         if (v.ruleId === 'A5') {
           const evidence = (v.evidence || '').toLowerCase();
@@ -468,8 +449,7 @@ serve(async (req) => {
         return true;
       })
       .map((v: any) => {
-        const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
-        const rule = allRules.find(r => r.id === v.ruleId);
+        const rule = allRulesForViolations.find(r => r.id === v.ruleId);
         
         // For A1 from screenshots, always set status to "potential"
         const isA1 = v.ruleId === 'A1';
@@ -481,6 +461,159 @@ serve(async (req) => {
           ...(isA1 ? { status: 'potential' } : {}),
         };
       });
+
+    // ========== A2 AGGREGATION LOGIC (Screenshot Analysis) ==========
+    interface A2AffectedItemUI {
+      component_name: string;
+      location: string;
+      size_estimate: string;
+      semantic_role: string;
+      severity: 'violation' | 'warning';
+      confidence: number;
+      rationale: string;
+      occurrence_count?: number;
+    }
+    
+    const dedupeMapUI = new Map<string, A2AffectedItemUI>();
+    
+    for (const v of a2Violations) {
+      const evidence = (v.evidence || '').toLowerCase();
+      const diagnosis = (v.diagnosis || '').toLowerCase();
+      const combined = evidence + ' ' + diagnosis;
+      
+      // FILTER: Normal-sized text (~14px or larger) should NOT be reported
+      const mentionsNormalSize = /normal size|normal-sized|adequate|14px|~14px|approximately 14|appears normal/.test(combined);
+      const mentionsSmall = /noticeably small|very small|tiny|<13|smaller than 13|clearly small/.test(combined);
+      
+      // If text appears normal sized and not explicitly small, filter out
+      if (mentionsNormalSize && !mentionsSmall) {
+        console.log(`Filtering out A2 (normal text size): ${v.evidence}`);
+        continue;
+      }
+      
+      // Filter out excluded elements
+      const isExcludedElement = /\bbutton\b|icon|navigation|menu item|action button/.test(combined);
+      if (isExcludedElement && !/description|label|helper|caption/.test(combined)) {
+        console.log(`Filtering out A2 (excluded element): ${v.evidence}`);
+        continue;
+      }
+      
+      // Extract info from evidence/diagnosis for screenshots
+      const locationMatch = (v.evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel)?)/i);
+      const componentMatch = (v.evidence || '').match(/([A-Z][a-zA-Z0-9]*(?:Description|Label|Text|Badge|Caption)?)/i);
+      
+      const componentName = componentMatch?.[1] || 'Text element';
+      const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
+      
+      // Determine size estimate
+      const sizeEstimate = mentionsSmall ? '<13px (visually estimated)' : '13-14px (visually estimated)';
+      
+      // Determine semantic role
+      const semanticRole = /description|label|helper|caption|alert|dialog|form|body text/i.test(combined)
+        ? 'informational' 
+        : 'secondary';
+      
+      // Determine severity
+      const severity: 'violation' | 'warning' = mentionsSmall ? 'violation' : 'warning';
+      
+      // Calculate confidence (lower for screenshot analysis)
+      let confidence = v.confidence || 0.55;
+      if (semanticRole === 'informational') confidence = Math.min(confidence + 0.1, 0.75);
+      if (mentionsSmall) confidence = Math.min(confidence + 0.05, 0.75);
+      else confidence = Math.max(confidence - 0.1, 0.35);
+      
+      const rationale = v.diagnosis || `Text appears ${severity === 'violation' ? 'noticeably small' : 'borderline small'} for ${semanticRole} content.`;
+      
+      // Deduplication key
+      const dedupeKey = `${location}|${componentName}|${severity}`;
+      
+      if (dedupeMapUI.has(dedupeKey)) {
+        const existing = dedupeMapUI.get(dedupeKey)!;
+        existing.occurrence_count = (existing.occurrence_count || 1) + 1;
+        if (confidence > existing.confidence) {
+          existing.confidence = confidence;
+        }
+      } else {
+        const item: A2AffectedItemUI = {
+          component_name: componentName,
+          location,
+          size_estimate: sizeEstimate,
+          semantic_role: semanticRole,
+          severity,
+          confidence: Math.round(confidence * 100) / 100,
+          rationale,
+          occurrence_count: 1,
+        };
+        dedupeMapUI.set(dedupeKey, item);
+      }
+    }
+    
+    const affectedItemsUI = Array.from(dedupeMapUI.values());
+    
+    // Create aggregated A2 result if there are any items
+    let aggregatedA2UI: any = null;
+    if (affectedItemsUI.length > 0) {
+      // Calculate overall confidence
+      const highImpactItems = affectedItemsUI.filter(i => i.semantic_role === 'informational');
+      let overallConfidence: number;
+      let confidenceReason: string;
+      
+      if (highImpactItems.length > 0) {
+        overallConfidence = Math.max(...highImpactItems.map(i => i.confidence));
+        confidenceReason = `Based on maximum confidence (${overallConfidence.toFixed(2)}) from ${highImpactItems.length} informational element(s).`;
+      } else {
+        const sortedConfidences = affectedItemsUI.map(i => i.confidence).sort((a, b) => a - b);
+        const midIdx = Math.floor(sortedConfidences.length / 2);
+        overallConfidence = sortedConfidences.length % 2 === 0
+          ? (sortedConfidences[midIdx - 1] + sortedConfidences[midIdx]) / 2
+          : sortedConfidences[midIdx];
+        confidenceReason = `Based on median confidence (${overallConfidence.toFixed(2)}) across ${affectedItemsUI.length} secondary element(s).`;
+      }
+      
+      const violationCount = affectedItemsUI.filter(i => i.severity === 'violation').length;
+      const warningCount = affectedItemsUI.filter(i => i.severity === 'warning').length;
+      
+      const locationList = affectedItemsUI.slice(0, 3).map(i => i.location).join(', ');
+      const moreText = affectedItemsUI.length > 3 ? ` and ${affectedItemsUI.length - 3} more` : '';
+      
+      const summary = `Small text size visually detected in ${affectedItemsUI.length} area(s): ${locationList}${moreText}. ` +
+        `${violationCount > 0 ? `${violationCount} appear noticeably small` : ''}` +
+        `${violationCount > 0 && warningCount > 0 ? ' and ' : ''}` +
+        `${warningCount > 0 ? `${warningCount} appear borderline` : ''}. ` +
+        `While WCAG does not mandate a minimum font size, ~16px is recommended for informational content.`;
+      
+      const a2Rule = allRulesForViolations.find(r => r.id === 'A2');
+      
+      aggregatedA2UI = {
+        ruleId: 'A2',
+        ruleName: 'Small informational text size',
+        category: 'accessibility',
+        overall_confidence: Math.round(overallConfidence * 100) / 100,
+        confidence_reason: confidenceReason,
+        summary,
+        affected_items: affectedItemsUI.map(item => ({
+          component_name: item.component_name,
+          location: item.location,
+          size_estimate: item.size_estimate,
+          semantic_role: item.semantic_role,
+          severity: item.severity,
+          confidence: item.confidence,
+          rationale: item.rationale,
+          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
+        })),
+        diagnosis: summary,
+        contextualHint: 'Review text sizing in the identified areas and consider increasing to ~16px for improved readability.',
+        correctivePrompt: a2Rule?.correctivePrompt || '',
+        confidence: Math.round(overallConfidence * 100) / 100,
+      };
+      
+      console.log(`A2 aggregated: ${affectedItemsUI.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
+    }
+    
+    // Combine all violations
+    const enhancedViolations = aggregatedA2UI 
+      ? [...filteredOtherViolations, aggregatedA2UI]
+      : filteredOtherViolations;
 
     console.log(`Analysis complete: ${enhancedViolations.length} violations found`);
 
