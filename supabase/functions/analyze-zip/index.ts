@@ -255,49 +255,93 @@ Examine the code for other accessibility issues:
 - ARIA attributes and semantic HTML usage
 - Alt text for images
 
-### A2 (Small informational text size) — STRICT CLASSIFICATION & WORDING RULES:
+### A2 (Small informational text size) — PRECISE DETECTION & CLASSIFICATION RULES:
 
-**CLASSIFICATION:**
-- ALWAYS classify A2 as "⚠️ Heuristic Readability Risk" — NEVER "Confirmed"
-- Use medium confidence level (55–65%), NOT high confidence
-- WCAG does NOT define a minimum font-size requirement — explicitly state this
+**TEXT SIZE THRESHOLDS:**
+1. **VIOLATION** (typeBadge: "VIOLATION"): Text size < 13px (text-xs, text-[0.75rem], font-size: 12px, or smaller)
+   - Only when used for INFORMATIONAL or INSTRUCTIONAL content
+   - Confidence: 65-75%
+   
+2. **WARNING** (typeBadge: "WARNING"): Text size 13-14px (text-[0.8rem], text-[0.85rem], borderline values)
+   - Flag as readability concern, NOT a violation
+   - Confidence: 50-60%
+   
+3. **CONTEXTUAL INFO ONLY** (DO NOT REPORT): text-sm (~14px, 0.875rem)
+   - Include ONLY as contextual information in passNotes if relevant
+   - Do NOT include in violations array
+   
+4. **NO ACTION** (DO NOT EVALUATE): text-base (16px) or larger
+   - Skip entirely — no reporting needed
 
-**EXCLUSION RULE — DO NOT EVALUATE THESE UNDER A2:**
-1. Icon-only elements or control affordances (close buttons, dismiss icons, action icons)
-2. Elements whose primary purpose is interaction (dismiss, close, confirm) rather than conveying readable information
-3. Single-character controls (e.g., "×", "X", "−", "+")
-4. Buttons whose label is not meant to be read as informational content
-5. Elements with font size ≥16px or equivalent (text-base, text-lg, text-xl, 1rem or larger)
+**SEMANTIC ROLE CLASSIFICATION:**
+Classify components based on semantic role inferred from component name and file path:
 
-**FONT SIZE CONDITION:**
-- Only trigger this rule when text size is approximately ≤14px (text-sm, 0.875rem, or smaller)
-- Do NOT trigger if the text size is ≥16px or equivalent
+**INFORMATIONAL COMPONENTS (Primary A2 targets):**
+- DialogDescription, AlertDescription, FormDescription, CardDescription
+- FormLabel, InputLabel, FieldLabel
+- Caption, Subtitle, HelpText, HelperText, Hint
+- MetaData, Timestamp, DateDisplay
+- Paragraph, Description, Content blocks
 
-**SEMANTIC FILTER — ONLY APPLY A2 TO:**
-- Informational or descriptive text that users need to read or compare
-- Labels, metadata, descriptions, captions, helper text
-- NOT interactive controls, icons, or single-character elements
+**SECONDARY/DECORATIVE COMPONENTS (Lower confidence, only flag < 13px):**
+- Badge, Tag, Chip, Status, StatusBadge
+- Shortcut, KeyboardShortcut, Kbd
+- IconLabel, IconText, IconButton content
+- Tooltip content, Popover content
+- Breadcrumb items
 
-**WHAT TO REPORT:**
-1. Report text elements using small font sizes (≈14px, text-sm, 0.875rem, or smaller)
-2. Focus on informational/metadata text (labels, descriptors, captions, helper text)
-3. Do NOT treat this as a strict WCAG violation
+**EXCLUDED COMPONENTS (DO NOT EVALUATE):**
+- Icon-only elements, action icons, dismiss buttons
+- Single-character controls ("×", "X", "−", "+")
+- Button labels (interactive, not informational)
+- Navigation items (typically styled intentionally)
+- Code/pre elements (monospace styling expected)
 
-**REQUIRED WORDING:**
-- Do NOT call this "Small body font size" unless the text is primary body content
-- Prefer: "Small informational text size" or "Reduced readability due to small text"
-- Frame as usability and accessibility best-practice concern, NOT standards violation
-- Explicitly state: "WCAG does not specify a minimum font size"
+**CONFIDENCE SCORE CALCULATION:**
+Base confidence on three factors:
+1. **Semantic certainty** (±15%): 
+   - High: Component name clearly indicates informational role → +10%
+   - Medium: Ambiguous naming → +0%
+   - Low: Component name suggests secondary role → -10%
+   
+2. **Threshold proximity** (±10%):
+   - Far below 13px (10-11px) → +10% confidence
+   - Borderline (13-14px) → -10% confidence
+   
+3. **Context ambiguity** (±10%):
+   - Clear static text → +5%
+   - Dynamic/conditional rendering → -5%
+   - Unclear usage context → -10%
+
+**OUTPUT FORMAT FOR A2 FINDINGS:**
+\`\`\`json
+{
+  "ruleId": "A2",
+  "ruleName": "Small informational text size",
+  "category": "accessibility",
+  "typeBadge": "VIOLATION" or "WARNING",
+  "sizeCategory": "<13px" or "13-14px",
+  "evidence": "text-xs used in DialogDescription.tsx, FormLabel.tsx",
+  "diagnosis": "Informational text in [components] uses [size]. WCAG does not specify a minimum font size, but usability guidelines recommend ~16px for informational content.",
+  "contextualHint": "Consider increasing font size for improved readability.",
+  "confidence": 0.70,
+  "semanticRole": "informational" or "secondary"
+}
+\`\`\`
+
+**STRICT RULES:**
+- text-sm (14px, 0.875rem) → DO NOT include in violations array
+- Only flag text-xs or smaller for secondary components
+- ALWAYS include typeBadge and sizeCategory in output
+- Frame as best-practice concern, never WCAG violation
+- Group similar findings by size category
 
 **DO NOT:**
-- Use "fails", "does not comply", "violates WCAG", or similar absolute language
-- Imply the issue is objectively measurable or a standards violation
-- Treat this as equivalent to contrast violations
-- Reference aria-labels when evaluating visual text size (aria-labels affect screen readers, not visual readability)
-- Generate an A2 finding for excluded elements — simply skip reporting
-
-**OUTPUT TEMPLATE:**
-"Several informational text elements in [file/component] use small font sizes (≈14px). While WCAG does not specify a minimum font size, usability and accessibility guidelines commonly recommend using at least ~16px for important informational content to support readability, particularly for users with visual impairments. This represents a heuristic readability risk identified through static code analysis."
+- Flag text-sm as a violation (it's acceptable)
+- Use "fails", "violates WCAG", or compliance language
+- Evaluate aria-labels (screen reader only)
+- Flag interactive elements (buttons, links)
+- Speculate about runtime rendering
 
 ### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
 
@@ -619,10 +663,45 @@ ${codeContent}`,
       throw new Error("Failed to parse AI analysis response");
     }
 
-    // Enhance violations with corrective prompts and filter out invalid A5 reports
+    // Enhance violations with corrective prompts and filter out invalid reports
     const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
     const aiViolations = (analysisResult.violations || [])
       .filter((v: any) => {
+        // Filter out A2 violations that don't meet threshold criteria
+        if (v.ruleId === 'A2') {
+          const evidence = (v.evidence || '').toLowerCase();
+          const diagnosis = (v.diagnosis || '').toLowerCase();
+          const combined = evidence + ' ' + diagnosis;
+          
+          // FILTER: text-sm (14px, 0.875rem) should NOT be reported as violation
+          const mentionsTextSm = /\btext-sm\b|0\.875rem|14px|≈14px|~14px|approximately 14/.test(combined);
+          const mentionsSmaller = /text-xs|0\.75rem|12px|11px|10px|<13px|smaller than 13/.test(combined);
+          
+          // If only text-sm is mentioned without smaller sizes, filter out
+          if (mentionsTextSm && !mentionsSmaller) {
+            console.log(`Filtering out A2 (text-sm is acceptable): ${v.evidence}`);
+            return false;
+          }
+          
+          // Filter out excluded elements (buttons, icons, navigation, etc.)
+          const isExcludedElement = /\bbutton\b|icon|navigation|nav-|menu item|\bbtn\b|interactive element|action button/.test(combined);
+          if (isExcludedElement && !/description|label|helper|caption|metadata/.test(combined)) {
+            console.log(`Filtering out A2 (excluded element type): ${v.evidence}`);
+            return false;
+          }
+          
+          // Ensure typeBadge is set correctly based on size
+          if (!v.typeBadge) {
+            if (mentionsSmaller) {
+              v.typeBadge = 'VIOLATION';
+              v.sizeCategory = '<13px';
+            } else {
+              v.typeBadge = 'WARNING';
+              v.sizeCategory = '13-14px';
+            }
+          }
+        }
+        
         // Filter out A5 violations that should be PASS or NOT APPLICABLE
         if (v.ruleId === 'A5') {
           const evidence = (v.evidence || '').toLowerCase();
