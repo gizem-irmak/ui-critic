@@ -1078,38 +1078,80 @@ ${codeContent}`,
     const a4DedupeMap = new Map<string, A4AffectedItem>();
     const detectedSizeRanges = new Set<string>();
     
+    // Invalid identifiers for A4 component naming - filter out non-component strings
+    const a4InvalidComponentNames = new Set([
+      'increase', 'ensure', 'add', 'use', 'apply', 'set', 'get', 'make', 'create',
+      'element', 'elements', 'interactive', 'dimensions', 'target', 'targets',
+      'minimum', 'size', 'sizes', 'width', 'height', 'padding', 'constraint',
+      'button', 'buttons', 'icon', 'icons', 'control', 'controls',
+      'component', 'components', 'item', 'items', 'unknown', 'default',
+      'variants', 'variant', 'props', 'className', 'style', 'styles'
+    ]);
+    
+    // Helper to validate component name (must be PascalCase, no spaces, no verbs/instructions)
+    function isValidA4ComponentName(name: string): boolean {
+      if (!name || name.length < 3) return false;
+      // Must start with uppercase (PascalCase)
+      if (!/^[A-Z]/.test(name)) return false;
+      // No spaces allowed
+      if (/\s/.test(name)) return false;
+      // No instructional/verb phrases
+      if (/^(Increase|Ensure|Add|Use|Apply|Set|Get|Make|Create|Should|Must|Will|Can)/i.test(name)) return false;
+      // Not in invalid set
+      if (a4InvalidComponentNames.has(name.toLowerCase())) return false;
+      return true;
+    }
+    
     for (const v of a4Violations) {
-      const evidence = (v.evidence || '').toLowerCase();
+      const evidence = (v.evidence || '');
+      const evidenceLower = evidence.toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
-      const combined = evidence + ' ' + diagnosis;
+      const combined = evidenceLower + ' ' + diagnosis;
       
-      // Extract component info from evidence/diagnosis
-      const componentMatch = (v.evidence || '').match(/(?:in\s+)?([A-Z][a-zA-Z0-9]*(?:Previous|Next|Button|Icon|Close|Nav|Toggle|Trigger|Control|Action)?)/);
-      const fileMatch = (v.evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js|vue|svelte))/i);
+      // Extract component info from evidence - prioritize compound PascalCase names
+      const compoundMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Previous|Next|Button|Icon|Close|Nav|Toggle|Trigger|Control|Action|Arrow|Pagination|Calendar|Carousel))\b/);
+      const simpleMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]{3,})\b/);
+      const fileMatch = (evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js|vue|svelte))/i);
       
-      // Resolve component name
+      // Resolve component name with strict validation
       let componentName = '';
-      if (componentMatch?.[1] && componentMatch[1].length > 2) {
-        componentName = componentMatch[1];
-      } else if (fileMatch?.[1]) {
-        componentName = fileMatch[1].replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
-      } else if (v.componentName) {
-        componentName = v.componentName;
+      
+      // 1. Try compound component name first (e.g., CarouselPrevious, CalendarNavButton)
+      if (compoundMatch?.[1] && isValidA4ComponentName(compoundMatch[1])) {
+        componentName = compoundMatch[1];
+      }
+      // 2. Try simple PascalCase component
+      else if (simpleMatch?.[1] && isValidA4ComponentName(simpleMatch[1])) {
+        componentName = simpleMatch[1];
+      }
+      // 3. Fallback to file name
+      else if (fileMatch?.[1]) {
+        const fileName = fileMatch[1].replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
+        // Convert file name to PascalCase if needed (e.g., carousel -> Carousel)
+        if (fileName && fileName.length > 2) {
+          componentName = fileName.charAt(0).toUpperCase() + fileName.slice(1);
+        }
       }
       
-      const filePath = fileMatch?.[1] || v.filePath || v.contextualHint || '';
+      const filePath = fileMatch?.[1] || v.filePath || '';
       
-      // Extract size token and approximate px
+      // Extract size token and approximate px - be more specific when possible
       let sizeToken = '';
       let approxPx = '';
       
-      // Common Tailwind size patterns
-      if (/h-8|w-8|size-8/.test(combined)) { sizeToken = 'h-8/w-8'; approxPx = '≈32px'; detectedSizeRanges.add('~32px'); }
-      else if (/h-9|w-9|size-9/.test(combined)) { sizeToken = 'h-9/w-9'; approxPx = '≈36px'; detectedSizeRanges.add('~36px'); }
-      else if (/h-10|w-10|size-10/.test(combined)) { sizeToken = 'h-10/w-10'; approxPx = '≈40px'; detectedSizeRanges.add('~40px'); }
-      else if (/h-7|w-7|size-7/.test(combined)) { sizeToken = 'h-7/w-7'; approxPx = '≈28px'; detectedSizeRanges.add('~28px'); }
-      else if (/h-6|w-6|size-6/.test(combined)) { sizeToken = 'h-6/w-6'; approxPx = '≈24px'; detectedSizeRanges.add('~24px'); }
+      // Common Tailwind size patterns - check most specific first
+      if (/h-6\b|w-6\b|size-6\b/.test(combined)) { sizeToken = 'h-6/w-6'; approxPx = '~24px'; detectedSizeRanges.add('~24px'); }
+      else if (/h-7\b|w-7\b|size-7\b/.test(combined)) { sizeToken = 'h-7/w-7'; approxPx = '~28px'; detectedSizeRanges.add('~28px'); }
+      else if (/h-8\b|w-8\b|size-8\b/.test(combined)) { sizeToken = 'h-8/w-8'; approxPx = '~32px'; detectedSizeRanges.add('~32px'); }
+      else if (/h-9\b|w-9\b|size-9\b/.test(combined)) { sizeToken = 'h-9/w-9'; approxPx = '~36px'; detectedSizeRanges.add('~36px'); }
+      else if (/h-10\b|w-10\b|size-10\b/.test(combined)) { sizeToken = 'h-10/w-10'; approxPx = '~40px'; detectedSizeRanges.add('~40px'); }
+      else if (/24px|1\.5rem/.test(combined)) { sizeToken = '24px'; approxPx = '~24px'; detectedSizeRanges.add('~24px'); }
+      else if (/28px|1\.75rem/.test(combined)) { sizeToken = '28px'; approxPx = '~28px'; detectedSizeRanges.add('~28px'); }
+      else if (/32px|2rem/.test(combined)) { sizeToken = '32px'; approxPx = '~32px'; detectedSizeRanges.add('~32px'); }
+      else if (/36px|2\.25rem/.test(combined)) { sizeToken = '36px'; approxPx = '~36px'; detectedSizeRanges.add('~36px'); }
+      else if (/40px|2\.5rem/.test(combined)) { sizeToken = '40px'; approxPx = '~40px'; detectedSizeRanges.add('~40px'); }
       else if (/min-h-|min-w-/.test(combined)) { sizeToken = 'min-h/w constraint'; approxPx = 'variable'; }
+      else if (/small|compact|undersized/.test(combined)) { sizeToken = 'implicit sizing'; approxPx = '<44px'; detectedSizeRanges.add('<44px'); }
       else { sizeToken = 'implicit sizing'; approxPx = '<44px'; detectedSizeRanges.add('<44px'); }
       
       // Calculate confidence
@@ -1156,22 +1198,27 @@ ${codeContent}`,
       const overallConfidence = Math.max(...a4AffectedItems.map(i => i.confidence));
       const confidenceReason = `Confidence is based on code-level size tokens (${Array.from(detectedSizeRanges).join(', ')}) and the absence of runtime layout evaluation. Static analysis cannot confirm actual rendered dimensions.`;
       
-      // Build unique component names list (filter invalid identifiers)
+      // Build unique component names list (filter invalid identifiers and non-component strings)
       const invalidIdentifiers = new Set([
         'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
         'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
         'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
         'component', 'components', 'element', 'elements', 'item', 'items', 'button',
-        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array'
+        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array',
+        // Instructional/guideline words that should never be component names
+        'increase', 'ensure', 'add', 'use', 'apply', 'set', 'get', 'make', 'create',
+        'interactive', 'dimensions', 'target', 'targets', 'minimum', 'size', 'sizes'
       ]);
       
       const uniqueComponentNames = new Set<string>();
       for (const item of a4AffectedItems) {
         const name = item.component_name || '';
-        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
-          if (!/^(use|get|set|is|has|can|should|will|on|handle)[A-Z]/.test(name)) {
-            uniqueComponentNames.add(name);
-          }
+        // Validate: must be PascalCase, no spaces, not in invalid set
+        if (name && name.length > 2 && 
+            /^[A-Z][a-zA-Z0-9]+$/.test(name) && // PascalCase, no spaces
+            !invalidIdentifiers.has(name.toLowerCase()) &&
+            !/^(Use|Get|Set|Is|Has|Can|Should|Will|On|Handle)[A-Z]/.test(name)) {
+          uniqueComponentNames.add(name);
         }
       }
       
@@ -1182,7 +1229,9 @@ ${codeContent}`,
           if (filePath) {
             const fileName = filePath.replace(/.*[\/\\]/, '').replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
             if (fileName && fileName.length > 2 && !invalidIdentifiers.has(fileName.toLowerCase())) {
-              uniqueComponentNames.add(fileName);
+              // Convert to PascalCase for display
+              const displayName = fileName.charAt(0).toUpperCase() + fileName.slice(1);
+              uniqueComponentNames.add(displayName);
             }
           }
         }

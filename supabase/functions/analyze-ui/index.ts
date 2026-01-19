@@ -860,31 +860,66 @@ serve(async (req) => {
     const a4DedupeMapUI = new Map<string, A4AffectedItemUI>();
     const detectedSizeRangesUI = new Set<string>();
     
+    // Invalid identifiers for A4 component naming - filter out non-component strings
+    const a4InvalidComponentNamesUI = new Set([
+      'increase', 'ensure', 'add', 'use', 'apply', 'set', 'get', 'make', 'create',
+      'element', 'elements', 'interactive', 'dimensions', 'target', 'targets',
+      'minimum', 'size', 'sizes', 'width', 'height', 'padding', 'constraint',
+      'button', 'buttons', 'icon', 'icons', 'control', 'controls',
+      'component', 'components', 'item', 'items', 'unknown', 'default',
+      'variants', 'variant', 'props', 'className', 'style', 'styles'
+    ]);
+    
+    // Helper to validate component name (must be PascalCase, no spaces, no verbs/instructions)
+    function isValidA4ComponentNameUI(name: string): boolean {
+      if (!name || name.length < 3) return false;
+      // Must start with uppercase (PascalCase)
+      if (!/^[A-Z]/.test(name)) return false;
+      // No spaces allowed
+      if (/\s/.test(name)) return false;
+      // No instructional/verb phrases
+      if (/^(Increase|Ensure|Add|Use|Apply|Set|Get|Make|Create|Should|Must|Will|Can)/i.test(name)) return false;
+      // Not in invalid set
+      if (a4InvalidComponentNamesUI.has(name.toLowerCase())) return false;
+      return true;
+    }
+    
     for (const v of a4Violations) {
-      const evidence = (v.evidence || '').toLowerCase();
+      const evidence = (v.evidence || '');
+      const evidenceLower = evidence.toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
-      const combined = evidence + ' ' + diagnosis;
+      const combined = evidenceLower + ' ' + diagnosis;
       
-      // Extract component/element info from evidence
-      const componentMatch = (v.evidence || '').match(/(?:the\s+)?([A-Z][a-zA-Z0-9]*(?:Previous|Next|Button|Icon|Close|Nav|Toggle|Trigger)?)/);
-      const locationMatch = (v.evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar|carousel|navigation)?)/i);
+      // Extract component/element info from evidence - prioritize compound PascalCase names
+      const compoundMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Previous|Next|Button|Icon|Close|Nav|Toggle|Trigger|Control|Action|Arrow|Pagination|Calendar|Carousel))\b/);
+      const simpleMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]{3,})\b/);
+      const locationMatch = (evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar|carousel|navigation)?)/i);
       
-      // Resolve component name
+      // Resolve component name with strict validation
       let componentName = '';
-      if (componentMatch?.[1] && componentMatch[1].length > 3) {
-        componentName = componentMatch[1];
+      
+      // 1. Try compound component name first (e.g., CarouselPrevious, CalendarNavButton)
+      if (compoundMatch?.[1] && isValidA4ComponentNameUI(compoundMatch[1])) {
+        componentName = compoundMatch[1];
+      }
+      // 2. Try simple PascalCase component
+      else if (simpleMatch?.[1] && isValidA4ComponentNameUI(simpleMatch[1])) {
+        componentName = simpleMatch[1];
       }
       
       const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
       
-      // Estimate size from visual description
+      // Estimate size from visual description - be more specific when possible
       let sizeEstimate = '<44px (visual estimate)';
-      if (/very small|tiny|noticeably small/.test(combined)) { 
+      if (/very small|tiny|noticeably small|~24|~28/.test(combined)) { 
         sizeEstimate = '~24-28px (visual estimate)'; 
         detectedSizeRangesUI.add('~24-28px'); 
-      } else if (/small|compact/.test(combined)) { 
+      } else if (/small|compact|~32|~36/.test(combined)) { 
         sizeEstimate = '~32-36px (visual estimate)'; 
         detectedSizeRangesUI.add('~32-36px'); 
+      } else if (/~40|borderline/.test(combined)) {
+        sizeEstimate = '~40px (visual estimate)';
+        detectedSizeRangesUI.add('~40px');
       } else { 
         sizeEstimate = '<44px (visual estimate)'; 
         detectedSizeRangesUI.add('<44px'); 
@@ -897,8 +932,8 @@ serve(async (req) => {
       
       const rationale = v.diagnosis || `Interactive element appears to be below the commonly recommended touch target size of 44×44 CSS px. Visual inspection cannot confirm actual dimensions.`;
       
-      // Deduplication key - by component name or location
-      const dedupeKey = componentName || location || 'unknown';
+      // Deduplication key - by component name or location (but filter out generic locations)
+      const dedupeKey = componentName || (location !== 'UI area' ? location : 'unknown');
       
       if (a4DedupeMapUI.has(dedupeKey)) {
         const existing = a4DedupeMapUI.get(dedupeKey)!;
@@ -929,21 +964,33 @@ serve(async (req) => {
       const overallConfidence = Math.max(...a4AffectedItemsUI.map(i => i.confidence));
       const confidenceReason = `Confidence is based on visual size assessment of interactive elements. Screenshot analysis cannot measure exact rendered dimensions, so findings are based on visual estimation.`;
       
-      // Build unique component/location names list
+      // Build unique component/location names list - filter out non-component strings
       const invalidIdentifiers = new Set([
         'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
         'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
         'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
         'component', 'components', 'element', 'elements', 'item', 'items', 'button',
-        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area'
+        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area',
+        // Instructional/guideline words that should never be component names
+        'increase', 'ensure', 'add', 'use', 'apply', 'set', 'get', 'make', 'create',
+        'interactive', 'dimensions', 'target', 'targets', 'minimum', 'size', 'sizes'
       ]);
       
       const uniqueNames = new Set<string>();
       for (const item of a4AffectedItemsUI) {
-        const name = item.component_name || item.location || '';
-        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
-          if (!/^(the\s+)?ui\s*(area|section|component)?$/i.test(name)) {
-            uniqueNames.add(name);
+        // Prefer component_name (PascalCase), then location (if descriptive)
+        const name = item.component_name || '';
+        // Validate: must be PascalCase, no spaces
+        if (name && name.length > 2 && 
+            /^[A-Z][a-zA-Z0-9]+$/.test(name) && 
+            !invalidIdentifiers.has(name.toLowerCase())) {
+          uniqueNames.add(name);
+        } else if (item.location && item.location !== 'UI area') {
+          // Fall back to location, but only if descriptive and not generic
+          const loc = item.location;
+          if (loc.length > 3 && !invalidIdentifiers.has(loc.toLowerCase()) &&
+              !/^(the\s+)?ui\s*(area|section|component)?$/i.test(loc)) {
+            uniqueNames.add(loc);
           }
         }
       }
@@ -958,6 +1005,7 @@ serve(async (req) => {
       const areaCountText = uniqueNamesArray.length > 0 
         ? `${uniqueNamesArray.length} unique element(s): ${displayedNames.join(', ')}${moreText}`
         : `${a4AffectedItemsUI.length} element(s)`;
+      
       
       const sizeRangesText = detectedSizeRangesUI.size > 0 
         ? `Estimated size ranges: ${Array.from(detectedSizeRangesUI).join(', ')}.`
