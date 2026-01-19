@@ -580,11 +580,43 @@ serve(async (req) => {
       const violationCount = affectedItemsUI.filter(i => i.severity === 'violation').length;
       const warningCount = affectedItemsUI.filter(i => i.severity === 'warning').length;
       
-      // Build location list - prefer component_name, fall back to location
-      const locationList = affectedItemsUI.slice(0, 3).map(i => i.component_name || i.location || 'UI area').filter(Boolean).join(', ');
-      const moreText = affectedItemsUI.length > 3 ? ` and ${affectedItemsUI.length - 3} more` : '';
+      // Build summary with DEDUPLICATED and FILTERED component/location names
+      // 1. Extract unique names, filtering out invalid identifiers
+      const invalidIdentifiers = new Set([
+        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
+        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
+        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
+        'component', 'components', 'element', 'elements', 'item', 'items', 'text',
+        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area'
+      ]);
       
-      const summary = `Small text size visually detected in ${affectedItemsUI.length} area(s): ${locationList}${moreText}. ` +
+      const uniqueNames = new Set<string>();
+      for (const item of affectedItemsUI) {
+        // Prefer component_name, then location
+        const name = item.component_name || item.location || '';
+        // Filter out invalid identifiers (case-insensitive check)
+        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
+          // Also filter out generic location names
+          if (!/^(the\s+)?ui\s*(area|section|component)?$/i.test(name)) {
+            uniqueNames.add(name);
+          }
+        }
+      }
+      
+      // 2. Build deduplicated list (max 4, with "and N more")
+      const uniqueNamesArray = Array.from(uniqueNames);
+      const displayLimit = 4;
+      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
+      const moreCount = uniqueNamesArray.length - displayLimit;
+      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
+      
+      // 3. Build summary with "X unique area(s)" wording
+      const locationList = displayedNames.join(', ');
+      const areaCountText = uniqueNamesArray.length > 0 
+        ? `${uniqueNamesArray.length} unique area(s): ${locationList}${moreText}`
+        : `${affectedItemsUI.length} location(s)`;
+      
+      const summary = `Small text size visually detected in ${areaCountText}. ` +
         `${violationCount > 0 ? `${violationCount} appear noticeably small` : ''}` +
         `${violationCount > 0 && warningCount > 0 ? ' and ' : ''}` +
         `${warningCount > 0 ? `${warningCount} appear borderline` : ''}. ` +

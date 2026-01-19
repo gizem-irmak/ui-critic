@@ -853,12 +853,56 @@ ${codeContent}`,
       const violationCount = affectedItems.filter(i => i.severity === 'violation').length;
       const warningCount = affectedItems.filter(i => i.severity === 'warning').length;
       
-      // Build summary
-      // Build component list - prefer component_name, fall back to file_path
-      const componentList = affectedItems.slice(0, 5).map(i => i.component_name || i.file_path || 'Unknown').filter(Boolean).join(', ');
-      const moreText = affectedItems.length > 5 ? ` and ${affectedItems.length - 5} more` : '';
+      // Build summary with DEDUPLICATED and FILTERED component names
+      // 1. Extract unique component names, filtering out invalid identifiers
+      const invalidIdentifiers = new Set([
+        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
+        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
+        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
+        'component', 'components', 'element', 'elements', 'item', 'items', 'text',
+        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array'
+      ]);
       
-      const summary = `Small text size detected in ${affectedItems.length} component(s): ${componentList}${moreText}. ` +
+      const uniqueComponentNames = new Set<string>();
+      for (const item of affectedItems) {
+        const name = item.component_name || '';
+        // Filter out invalid identifiers (case-insensitive check)
+        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
+          // Also filter out names that look like utility tokens or non-UI identifiers
+          if (!/^(use|get|set|is|has|can|should|will|on|handle)[A-Z]/.test(name)) {
+            uniqueComponentNames.add(name);
+          }
+        }
+      }
+      
+      // Fall back to file paths if no valid component names
+      if (uniqueComponentNames.size === 0) {
+        for (const item of affectedItems) {
+          const filePath = item.file_path || '';
+          if (filePath) {
+            // Extract meaningful name from file path
+            const fileName = filePath.replace(/.*[\/\\]/, '').replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
+            if (fileName && fileName.length > 2 && !invalidIdentifiers.has(fileName.toLowerCase())) {
+              uniqueComponentNames.add(fileName);
+            }
+          }
+        }
+      }
+      
+      // 2. Build deduplicated component list (max 4, with "and N more")
+      const uniqueNamesArray = Array.from(uniqueComponentNames);
+      const displayLimit = 4;
+      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
+      const moreCount = uniqueNamesArray.length - displayLimit;
+      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
+      
+      // 3. Build summary with "X unique component(s)" wording
+      const componentList = displayedNames.join(', ');
+      const componentCountText = uniqueNamesArray.length > 0 
+        ? `${uniqueNamesArray.length} unique component(s): ${componentList}${moreText}`
+        : `${affectedItems.length} location(s)`;
+      
+      const summary = `Small text size detected in ${componentCountText}. ` +
         `${violationCount > 0 ? `${violationCount} violation(s) (<13px)` : ''}` +
         `${violationCount > 0 && warningCount > 0 ? ' and ' : ''}` +
         `${warningCount > 0 ? `${warningCount} warning(s) (13-14px)` : ''}. ` +
