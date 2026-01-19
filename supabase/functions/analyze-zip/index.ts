@@ -11,7 +11,7 @@ const corsHeaders = {
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small informational text size', diagnosis: 'WCAG does not specify a minimum font size. However, ~16px is commonly recommended in usability and accessibility guidelines as a widely adopted design practice for informational content to support readability.', correctivePrompt: 'Consider increasing informational text size to at least ~16px and adjusting line spacing for improved readability. This follows widely adopted design practices for readability.' },
+    { id: 'A2', name: 'Small informational text size', diagnosis: 'WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.', correctivePrompt: 'Consider increasing informational text size and adjusting line spacing for improved readability. Larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly ensure minimum tap target size (44×44px), and rendered dimensions may vary across devices.', correctivePrompt: 'Explicitly enforce minimum interactive element dimensions (44×44px) with adequate spacing to ensure tap target compliance across devices.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
@@ -322,7 +322,7 @@ Base confidence on three factors:
   "typeBadge": "VIOLATION" or "WARNING",
   "sizeCategory": "<13px" or "13-14px",
   "evidence": "text-xs used in DialogDescription.tsx, FormLabel.tsx",
-  "diagnosis": "Informational text in [components] uses [size]. WCAG does not specify a minimum font size, but usability guidelines recommend ~16px for informational content.",
+  "diagnosis": "Informational text in [components] uses [size]. WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.",
   "contextualHint": "Consider increasing font size for improved readability.",
   "confidence": 0.70,
   "semanticRole": "informational" or "secondary"
@@ -862,7 +862,7 @@ ${codeContent}`,
         `${violationCount > 0 ? `${violationCount} violation(s) (<13px)` : ''}` +
         `${violationCount > 0 && warningCount > 0 ? ' and ' : ''}` +
         `${warningCount > 0 ? `${warningCount} warning(s) (13-14px)` : ''}. ` +
-        `WCAG does not mandate a minimum font size, but ~16px is commonly recommended in usability and accessibility guidelines.`;
+        `WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.`;
       
       const a2Rule = allRules.find(r => r.id === 'A2');
       
