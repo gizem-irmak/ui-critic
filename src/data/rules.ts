@@ -33,8 +33,8 @@ export const rules: Rule[] = [
     id: 'A4',
     category: 'accessibility',
     name: 'Small tap / click targets',
-    diagnosis: 'Interactive elements do not explicitly ensure minimum tap target size (44×44px), and rendered dimensions may vary across devices.',
-    correctivePrompt: 'Explicitly enforce minimum interactive element dimensions (44×44px) with adequate spacing to ensure tap target compliance across devices.'
+    diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.',
+    correctivePrompt: 'Explicitly enforce minimum interactive element dimensions (44×44 CSS px) using min-width and min-height constraints with adequate spacing. This ensures tap target compliance across devices regardless of content or padding variations.'
   },
   {
     id: 'A5',
