@@ -431,9 +431,10 @@ serve(async (req) => {
     
     const allRulesForViolations = [...rules.accessibility, ...rules.usability, ...rules.ethics];
     
-    // Separate A2 and A4 violations for aggregation
+    // Separate A2, A4, and A5 violations for aggregation
     const a2Violations: any[] = [];
     const a4Violations: any[] = [];
+    const a5Violations: any[] = [];
     const otherViolations: any[] = [];
     
     (analysisResult.violations || []).forEach((v: any) => {
@@ -441,32 +442,15 @@ serve(async (req) => {
         a2Violations.push(v);
       } else if (v.ruleId === 'A4') {
         a4Violations.push(v);
+      } else if (v.ruleId === 'A5') {
+        a5Violations.push(v);
       } else {
         otherViolations.push(v);
       }
     });
     
-    // Process non-A2 violations with existing filters
+    // Process non-A2/A4/A5 violations (no special filtering needed)
     const filteredOtherViolations = otherViolations
-      .filter((v: any) => {
-        // Filter out A5 violations that should be PASS (have valid focus replacement)
-        if (v.ruleId === 'A5') {
-          const evidence = (v.evidence || '').toLowerCase();
-          const diagnosis = (v.diagnosis || '').toLowerCase();
-          const combined = evidence + ' ' + diagnosis;
-          
-          // Check if this was incorrectly flagged as a violation despite having valid focus styles
-          const mentionsAcceptable = /acceptable|compliant|pass|valid|proper focus|visible focus|clear focus/.test(combined);
-          const mentionsRingOrBorder = /has.*ring|has.*border|visible ring|visible border|shows.*ring|shows.*border/.test(combined);
-          
-          // If evidence mentions acceptable implementation or visible focus styles, filter it out
-          if (mentionsAcceptable || mentionsRingOrBorder) {
-            console.log(`Filtering out A5 PASS case: ${v.evidence}`);
-            return false;
-          }
-        }
-        return true;
-      })
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
         
@@ -817,11 +801,193 @@ serve(async (req) => {
       console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${uniqueNamesArray.length} unique elements, sizes: ${Array.from(detectedSizeRangesUI).join(', ')})`);
     }
     
+    // ========== A5 AGGREGATION LOGIC (Screenshot Analysis) ==========
+    // Process and aggregate A5 violations into a single result object
+    // Only report A5 when there is visual evidence of missing focus indicator
+    interface A5AffectedItemUI {
+      component_name: string;
+      location: string;
+      typeBadge: 'Confirmed' | 'Heuristic';
+      confidence: number;
+      rationale: string;
+      occurrence_count?: number;
+    }
+    
+    const a5DedupeMapUI = new Map<string, A5AffectedItemUI>();
+    const a5ValidViolationsUI: any[] = [];
+    
+    // First pass: filter A5 violations to only include actual violations
+    for (const v of a5Violations) {
+      const evidence = (v.evidence || '').toLowerCase();
+      const diagnosis = (v.diagnosis || '').toLowerCase();
+      const combined = evidence + ' ' + diagnosis;
+      
+      // Check for indicators that this is a PASS (has visible focus)
+      const mentionsVisibleFocus = /visible focus|clear focus|shows.*focus|has.*focus ring|has.*focus indicator|focus.*visible/.test(combined);
+      const mentionsAcceptable = /acceptable|compliant|pass\b|valid|proper focus|adequate/.test(combined);
+      const mentionsRingOrBorder = /has.*ring|has.*border|visible ring|visible border|shows.*ring|shows.*border/.test(combined);
+      
+      // If evidence shows visible focus or acceptable, this is a PASS - skip entirely
+      if (mentionsVisibleFocus || mentionsAcceptable || mentionsRingOrBorder) {
+        console.log(`A5 PASS (has visible focus): ${v.evidence}`);
+        continue;
+      }
+      
+      // Check if screenshot cannot determine focus state
+      const cannotDetermine = /cannot determine|unable to assess|not visible in screenshot|no focus state shown/.test(combined);
+      if (cannotDetermine) {
+        console.log(`A5 SKIP (cannot determine from screenshot): ${v.evidence}`);
+        continue;
+      }
+      
+      // Check for weak indicators (background-only focus)
+      const hasBackgroundOnlyFocus = /only.*background|background.*change|background.*color/.test(combined);
+      
+      // This is a valid violation - add it
+      a5ValidViolationsUI.push({
+        ...v,
+        isHeuristicRisk: hasBackgroundOnlyFocus,
+      });
+    }
+    
+    // Second pass: aggregate valid A5 violations
+    for (const v of a5ValidViolationsUI) {
+      const evidence = (v.evidence || '');
+      const combined = (evidence + ' ' + (v.diagnosis || '')).toLowerCase();
+      
+      // Extract component/location info
+      const componentMatch = evidence.match(/(?:the\s+)?([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link)?)/);
+      const locationMatch = (evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar)?)/i);
+      
+      // Resolve component name
+      let componentName = '';
+      if (componentMatch?.[1] && componentMatch[1].length > 3) {
+        componentName = componentMatch[1];
+      }
+      
+      const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
+      
+      // Determine type badge
+      const typeBadge: 'Confirmed' | 'Heuristic' = v.isHeuristicRisk ? 'Heuristic' : 'Confirmed';
+      
+      // Calculate confidence (lower for screenshot analysis)
+      let confidence = v.confidence || 0.55;
+      if (v.isHeuristicRisk) {
+        confidence = Math.min(confidence, 0.45); // Lower confidence for heuristic
+      }
+      confidence = Math.min(confidence, 0.65); // Cap for screenshot analysis
+      
+      const rationale = v.isHeuristicRisk 
+        ? 'Focus indication appears to rely only on background color change, which may be insufficient.'
+        : 'Interactive element appears to lack a visible focus indicator for keyboard users.';
+      
+      // Deduplication key
+      const dedupeKey = componentName || location || 'unknown';
+      
+      if (a5DedupeMapUI.has(dedupeKey)) {
+        const existing = a5DedupeMapUI.get(dedupeKey)!;
+        existing.occurrence_count = (existing.occurrence_count || 1) + 1;
+        if (confidence > existing.confidence) {
+          existing.confidence = confidence;
+        }
+      } else {
+        const item: A5AffectedItemUI = {
+          component_name: componentName,
+          location,
+          typeBadge,
+          confidence: Math.round(confidence * 100) / 100,
+          rationale,
+          occurrence_count: 1,
+        };
+        a5DedupeMapUI.set(dedupeKey, item);
+      }
+    }
+    
+    const a5AffectedItemsUI = Array.from(a5DedupeMapUI.values());
+    
+    // Create aggregated A5 result ONLY if there are actual violations
+    let aggregatedA5UI: any = null;
+    if (a5AffectedItemsUI.length > 0) {
+      // Calculate overall confidence (max of all findings)
+      const overallConfidence = Math.max(...a5AffectedItemsUI.map(i => i.confidence));
+      
+      const confirmedCount = a5AffectedItemsUI.filter(i => i.typeBadge === 'Confirmed').length;
+      const heuristicCount = a5AffectedItemsUI.filter(i => i.typeBadge === 'Heuristic').length;
+      
+      const confidenceReason = `Confidence is based on visual assessment of focus indicators. Screenshot analysis cannot confirm actual focus behavior, so findings are based on visual observation.`;
+      
+      // Build unique component/location names list
+      const invalidIdentifiers = new Set([
+        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
+        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
+        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
+        'component', 'components', 'element', 'elements', 'item', 'items', 'button',
+        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area'
+      ]);
+      
+      const uniqueNames = new Set<string>();
+      for (const item of a5AffectedItemsUI) {
+        const name = item.component_name || item.location || '';
+        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
+          if (!/^(the\s+)?ui\s*(area|section|component)?$/i.test(name)) {
+            uniqueNames.add(name);
+          }
+        }
+      }
+      
+      // Build deduplicated list (max 4, with "and N more")
+      const uniqueNamesArray = Array.from(uniqueNames);
+      const displayLimit = 4;
+      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
+      const moreCount = uniqueNamesArray.length - displayLimit;
+      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
+      
+      const areaCountText = uniqueNamesArray.length > 0 
+        ? `${uniqueNamesArray.length} unique element(s): ${displayedNames.join(', ')}${moreText}`
+        : `${a5AffectedItemsUI.length} element(s)`;
+      
+      const typeBreakdown = [
+        confirmedCount > 0 ? `${confirmedCount} appear to lack visible focus` : '',
+        heuristicCount > 0 ? `${heuristicCount} may rely only on background color` : '',
+      ].filter(Boolean).join(' and ');
+      
+      const summary = `Focus visibility issues detected in ${areaCountText}. ${typeBreakdown}. ` +
+        `Interactive elements should have visible focus indicators for keyboard accessibility.`;
+      
+      const a5Rule = allRulesForViolations.find(r => r.id === 'A5');
+      
+      aggregatedA5UI = {
+        ruleId: 'A5',
+        ruleName: 'Poor focus visibility',
+        category: 'accessibility',
+        overall_confidence: Math.round(overallConfidence * 100) / 100,
+        confidence_reason: confidenceReason,
+        summary,
+        affected_items: a5AffectedItemsUI.map(item => ({
+          component_name: item.component_name,
+          location: item.location,
+          typeBadge: item.typeBadge,
+          confidence: item.confidence,
+          rationale: item.rationale,
+          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
+        })),
+        diagnosis: summary,
+        contextualHint: 'Add visible focus indicators (ring, border, or outline) for interactive elements.',
+        correctivePrompt: a5Rule?.correctivePrompt || '',
+        confidence: Math.round(overallConfidence * 100) / 100,
+      };
+      
+      console.log(`A5 aggregated: ${a5Violations.length} findings → ${a5AffectedItemsUI.length} valid violations → 1 result (${confirmedCount} confirmed, ${heuristicCount} heuristic)`);
+    } else {
+      console.log(`A5: No valid violations found (${a5Violations.length} filtered out as PASS or NOT APPLICABLE)`);
+    }
+    
     // Combine all violations
     const enhancedViolations = [
       ...filteredOtherViolations,
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),
+      ...(aggregatedA5UI ? [aggregatedA5UI] : []),
     ];
 
     console.log(`Analysis complete: ${enhancedViolations.length} violations found`);
