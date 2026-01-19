@@ -1060,22 +1060,44 @@ serve(async (req) => {
     }
     
     // Second pass: aggregate valid A5 violations
+    // Invalid identifiers for component naming - single words, utility tokens, non-UI terms
+    const a5InvalidComponentNamesUI = new Set([
+      'clear', 'close', 'open', 'toggle', 'show', 'hide', 'set', 'get', 'add', 'remove',
+      'delete', 'edit', 'update', 'create', 'submit', 'cancel', 'save', 'reset',
+      'next', 'previous', 'prev', 'back', 'forward', 'up', 'down', 'left', 'right',
+      'true', 'false', 'yes', 'no', 'on', 'off', 'enabled', 'disabled',
+      'button', 'link', 'input', 'icon', 'text', 'label', 'container', 'wrapper',
+      'component', 'element', 'item', 'items', 'default', 'variants', 'variant'
+    ]);
+    
     for (const v of a5ValidViolationsUI) {
       const evidence = (v.evidence || '');
       const combined = (evidence + ' ' + (v.diagnosis || '')).toLowerCase();
       
-      // Extract component/location info
-      const componentMatch = evidence.match(/(?:the\s+)?([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link)?)/);
+      // Extract location description for screenshots (no file paths in screenshots)
       const locationMatch = (evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar)?)/i);
       
-      // Resolve component name
+      // Extract PascalCase component names (prioritize compound names like CloseButton, NavToggle)
+      const componentMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link|Card|Dialog|Modal|Menu|Header|Footer|Sidebar|Panel|Form))\b/);
+      const simpleComponentMatch = evidence.match(/(?:the\s+)?([A-Z][a-zA-Z0-9]{3,})/);
+      
+      // Resolve component name - prioritize compound PascalCase names
       let componentName = '';
-      if (componentMatch?.[1] && componentMatch[1].length > 3) {
+      
+      // 1. Try compound component name first (e.g., CloseButton, NavToggle)
+      if (componentMatch?.[1] && componentMatch[1].length > 4) {
         componentName = componentMatch[1];
       }
+      // 2. Try simple PascalCase component (but not single-word utility names)
+      else if (simpleComponentMatch?.[1] && simpleComponentMatch[1].length > 3) {
+        const candidate = simpleComponentMatch[1];
+        if (!a5InvalidComponentNamesUI.has(candidate.toLowerCase())) {
+          componentName = candidate;
+        }
+      }
       
+      // Extract location from matched text
       const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
-      
       // Determine type badge
       const typeBadge: 'Confirmed' | 'Heuristic' = v.isHeuristicRisk ? 'Heuristic' : 'Confirmed';
       
@@ -1125,13 +1147,17 @@ serve(async (req) => {
       
       const confidenceReason = `Confidence is based on visual assessment of focus indicators. Screenshot analysis cannot confirm actual focus behavior, so findings are based on visual observation.`;
       
-      // Build unique component/location names list
+      // Build unique component/location names list - filter out non-semantic identifiers
       const invalidIdentifiers = new Set([
         'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
         'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
         'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
         'component', 'components', 'element', 'elements', 'item', 'items', 'button',
-        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area'
+        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area',
+        // Single words that are not UI components
+        'clear', 'close', 'open', 'toggle', 'show', 'hide', 'set', 'get', 'add', 'remove',
+        'delete', 'edit', 'update', 'create', 'submit', 'cancel', 'save', 'reset',
+        'next', 'previous', 'prev', 'back', 'forward', 'up', 'down', 'left', 'right'
       ]);
       
       const uniqueNames = new Set<string>();
@@ -1181,8 +1207,8 @@ serve(async (req) => {
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
         })),
         diagnosis: summary,
-        contextualHint: 'Add visible focus indicators (ring, border, or outline) for interactive elements.',
-        correctivePrompt: a5Rule?.correctivePrompt || '',
+        contextualHint: 'Interactive elements appear to lack visible focus indicators for keyboard users.',
+        correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements. Do not alter layout structure or component behavior beyond focus styling.',
         confidence: Math.round(overallConfidence * 100) / 100,
       };
       

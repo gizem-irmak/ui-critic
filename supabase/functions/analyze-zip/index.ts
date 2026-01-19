@@ -1315,25 +1315,55 @@ ${codeContent}`,
     }
     
     // Second pass: aggregate valid A5 violations
+    // Invalid identifiers for component naming - single words, utility tokens, non-UI terms
+    const a5InvalidComponentNames = new Set([
+      'clear', 'close', 'open', 'toggle', 'show', 'hide', 'set', 'get', 'add', 'remove',
+      'delete', 'edit', 'update', 'create', 'submit', 'cancel', 'save', 'reset',
+      'next', 'previous', 'prev', 'back', 'forward', 'up', 'down', 'left', 'right',
+      'true', 'false', 'yes', 'no', 'on', 'off', 'enabled', 'disabled',
+      'button', 'link', 'input', 'icon', 'text', 'label', 'container', 'wrapper',
+      'component', 'element', 'item', 'items', 'default', 'variants', 'variant'
+    ]);
+    
     for (const v of a5ValidViolations) {
       const evidence = (v.evidence || '');
       const combined = (evidence + ' ' + (v.diagnosis || '')).toLowerCase();
       
-      // Extract component info
-      const componentMatch = evidence.match(/(?:in\s+)?([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link)?)/);
+      // Extract file path first (most reliable for component identification)
       const fileMatch = (evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js|vue|svelte))/i);
       
-      // Resolve component name
+      // Extract PascalCase component names (prioritize compound names like CloseButton, NavToggle)
+      const componentMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link|Card|Dialog|Modal|Menu|Header|Footer|Sidebar|Panel|Form))\b/);
+      const simpleComponentMatch = evidence.match(/(?:in\s+)?([A-Z][a-zA-Z0-9]{3,})/);
+      
+      // Resolve component name - prioritize compound PascalCase names
       let componentName = '';
-      if (componentMatch?.[1] && componentMatch[1].length > 2) {
+      let filePath = fileMatch?.[1] || v.filePath || '';
+      
+      // 1. Try compound component name first (e.g., CloseButton, NavToggle)
+      if (componentMatch?.[1] && componentMatch[1].length > 4) {
         componentName = componentMatch[1];
-      } else if (fileMatch?.[1]) {
-        componentName = fileMatch[1].replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
-      } else if (v.componentName) {
+      }
+      // 2. Try simple PascalCase component (but not single-word utility names)
+      else if (simpleComponentMatch?.[1] && simpleComponentMatch[1].length > 3) {
+        const candidate = simpleComponentMatch[1];
+        if (!a5InvalidComponentNames.has(candidate.toLowerCase())) {
+          componentName = candidate;
+        }
+      }
+      // 3. Fallback to file name with "Unnamed component" prefix if no valid component name
+      if (!componentName && filePath) {
+        const fileName = filePath.replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
+        if (fileName && fileName.length > 2 && !a5InvalidComponentNames.has(fileName.toLowerCase())) {
+          componentName = `Unnamed component (${filePath})`;
+        }
+      }
+      // 4. Final fallback if still no name
+      if (!componentName && v.componentName && !a5InvalidComponentNames.has(v.componentName.toLowerCase())) {
         componentName = v.componentName;
       }
       
-      const filePath = fileMatch?.[1] || v.filePath || v.contextualHint || '';
+      // filePath already extracted above
       
       // Extract focus-related classes mentioned
       const focusClasses: string[] = [];
@@ -1397,13 +1427,18 @@ ${codeContent}`,
       
       const confidenceReason = `Confidence is based on static analysis of focus-related CSS classes. Elements that remove outline-none without visible ring/border/shadow replacements are flagged. Confidence may be lower for background-only focus patterns.`;
       
-      // Build unique component names list
+      // Build unique component names list - filter out non-semantic/utility identifiers
       const invalidIdentifiers = new Set([
         'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
         'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
         'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
         'component', 'components', 'element', 'elements', 'item', 'items', 'button',
-        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array'
+        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array',
+        // Single words that are not UI components
+        'clear', 'close', 'open', 'toggle', 'show', 'hide', 'set', 'get', 'add', 'remove',
+        'delete', 'edit', 'update', 'create', 'submit', 'cancel', 'save', 'reset',
+        'next', 'previous', 'prev', 'back', 'forward', 'up', 'down', 'left', 'right',
+        'true', 'false', 'yes', 'no', 'on', 'off', 'enabled', 'disabled'
       ]);
       
       const uniqueComponentNames = new Set<string>();
@@ -1468,8 +1503,8 @@ ${codeContent}`,
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
         })),
         diagnosis: summary,
-        contextualHint: 'Add visible focus indicators (ring, border, or shadow) for elements that remove the default outline.',
-        correctivePrompt: a5Rule?.correctivePrompt || '',
+        contextualHint: 'Interactive elements remove the default focus outline (outline-none) without a visible replacement indicator.',
+        correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline. Do not alter layout structure or component behavior beyond focus styling.',
         confidence: Math.round(overallConfidence * 100) / 100,
       };
       

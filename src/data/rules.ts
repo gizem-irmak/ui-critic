@@ -40,8 +40,8 @@ export const rules: Rule[] = [
     id: 'A5',
     category: 'accessibility',
     name: 'Poor focus visibility',
-    diagnosis: 'Lack of visible focus reduces keyboard accessibility.',
-    correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.'
+    diagnosis: 'The default browser focus outline is removed without providing a visible replacement focus indicator, reducing keyboard accessibility.',
+    correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline. Do not alter layout structure or component behavior beyond focus styling.'
   },
   // Usability (HCI)
   {
