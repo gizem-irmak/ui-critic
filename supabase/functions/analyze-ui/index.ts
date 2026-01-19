@@ -818,32 +818,47 @@ serve(async (req) => {
     
     // First pass: filter A5 violations to only include actual violations
     for (const v of a5Violations) {
-      const evidence = (v.evidence || '').toLowerCase();
+      const evidence = (v.evidence || '');
+      const evidenceLower = evidence.toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
-      const combined = evidence + ' ' + diagnosis;
+      const combined = evidenceLower + ' ' + diagnosis;
       
       // Check for indicators that this is a PASS (has visible focus)
-      const mentionsVisibleFocus = /visible focus|clear focus|shows.*focus|has.*focus ring|has.*focus indicator|focus.*visible/.test(combined);
-      const mentionsAcceptable = /acceptable|compliant|pass\b|valid|proper focus|adequate/.test(combined);
-      const mentionsRingOrBorder = /has.*ring|has.*border|visible ring|visible border|shows.*ring|shows.*border/.test(combined);
+      // Use positive checks for visible focus indicators
+      const hasVisibleFocusRing = /has.*ring|visible ring|shows.*ring|focus ring|ring.*focus/i.test(combined);
+      const hasVisibleFocusBorder = /has.*border|visible border|shows.*border|focus border|border.*focus/i.test(combined);
+      const hasVisibleFocusIndicator = /has.*focus indicator|visible focus indicator|clear focus/i.test(combined);
+      
+      const hasVisibleReplacement = hasVisibleFocusRing || hasVisibleFocusBorder || hasVisibleFocusIndicator;
+      
+      // Check if explicitly marked as acceptable
+      // IMPORTANT: Avoid matching negative phrases like "no visible", "lacks", etc.
+      const mentionsAcceptable = /(?<!no\s)(?<!without\s)(?<!lacks?\s)(?<!missing\s)(?:acceptable|compliant|proper focus|adequate)/i.test(combined);
+      const explicitlyPasses = /\bpass\b(?!word)/i.test(combined) && !/does not pass|doesn't pass|fail/i.test(combined);
       
       // If evidence shows visible focus or acceptable, this is a PASS - skip entirely
-      if (mentionsVisibleFocus || mentionsAcceptable || mentionsRingOrBorder) {
-        console.log(`A5 PASS (has visible focus): ${v.evidence}`);
+      if (hasVisibleReplacement) {
+        console.log(`A5 PASS (has visible focus indicator): ${evidence}`);
+        continue;
+      }
+      
+      if (mentionsAcceptable || explicitlyPasses) {
+        console.log(`A5 PASS (explicitly acceptable): ${evidence}`);
         continue;
       }
       
       // Check if screenshot cannot determine focus state
       const cannotDetermine = /cannot determine|unable to assess|not visible in screenshot|no focus state shown/.test(combined);
       if (cannotDetermine) {
-        console.log(`A5 SKIP (cannot determine from screenshot): ${v.evidence}`);
+        console.log(`A5 SKIP (cannot determine from screenshot): ${evidence}`);
         continue;
       }
       
       // Check for weak indicators (background-only focus)
-      const hasBackgroundOnlyFocus = /only.*background|background.*change|background.*color/.test(combined);
+      const hasBackgroundOnlyFocus = /only.*background|background.*change|background.*color|relies on.*background/.test(combined);
       
       // This is a valid violation - add it
+      console.log(`A5 VIOLATION: ${evidence} [background-only: ${hasBackgroundOnlyFocus}]`);
       a5ValidViolationsUI.push({
         ...v,
         isHeuristicRisk: hasBackgroundOnlyFocus,
