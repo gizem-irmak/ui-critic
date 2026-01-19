@@ -1128,42 +1128,63 @@ ${codeContent}`,
     
     // First pass: filter A5 violations to only include actual violations
     for (const v of a5Violations) {
-      const evidence = (v.evidence || '').toLowerCase();
+      const evidence = (v.evidence || '');
+      const evidenceLower = evidence.toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
-      const combined = evidence + ' ' + diagnosis;
+      const combined = evidenceLower + ' ' + diagnosis;
       
       // ABSOLUTE RULE: Only evaluate elements that explicitly remove the browser outline
       const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none/.test(combined);
       if (!mentionsOutlineRemoval) {
-        console.log(`A5 SKIP (no outline removal): ${v.evidence}`);
+        console.log(`A5 SKIP (no outline removal): ${evidence}`);
         continue;
       }
       
-      // Check for visible focus replacement indicators
-      // These indicate a PASS (outline removed but replaced with visible alternative)
-      const hasRingReplacement = /focus:ring-|focus-visible:ring-|ring-offset-|focus:ring\b|focus-visible:ring\b/.test(combined);
-      const hasBorderReplacement = /focus:border-|focus-visible:border-/.test(combined);
-      const hasShadowReplacement = /focus:shadow-|focus-visible:shadow-/.test(combined);
-      const hasOutlineReplacement = /focus-visible:outline-(?!none)|focus:outline-(?!none)/.test(combined);
+      // Extract actual focus-related class tokens from the evidence
+      // These are the actual Tailwind classes found in code, not just text descriptions
+      const focusClassTokens: string[] = evidence.match(/focus(?:-visible)?:(?:ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?|bg-\w+)/gi) || [];
       
-      const hasVisibleReplacement = hasRingReplacement || hasBorderReplacement || hasShadowReplacement || hasOutlineReplacement;
+      // Check for visible focus replacement indicators (actual class tokens)
+      const hasRingToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:ring/i.test(t));
+      const hasBorderToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:border/i.test(t));
+      const hasShadowToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:shadow/i.test(t));
+      const hasOutlineToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:outline-(?!none)/i.test(t));
+      
+      // Also check in diagnosis for class mentions
+      const hasRingInDiagnosis = /focus:ring-|focus-visible:ring-|ring-offset-\d/.test(combined);
+      const hasBorderInDiagnosis = /focus:border-|focus-visible:border-/.test(combined);
+      const hasShadowInDiagnosis = /focus:shadow-|focus-visible:shadow-/.test(combined);
+      
+      const hasVisibleReplacement = hasRingToken || hasBorderToken || hasShadowToken || hasOutlineToken ||
+                                     hasRingInDiagnosis || hasBorderInDiagnosis || hasShadowInDiagnosis;
       
       // Check if explicitly marked as pass/acceptable
-      const mentionsAcceptable = /acceptable|compliant|pass\b|valid replacement|proper focus|browser default|visible replacement|adequate focus/.test(combined);
+      // IMPORTANT: Avoid matching negative phrases like "no visible replacement"
+      const mentionsAcceptable = /(?<!no\s)(?<!without\s)(?<!lacks?\s)(?<!missing\s)(?:acceptable|compliant|has visible|proper focus|adequate focus|valid focus)/i.test(combined);
+      const explicitlyPasses = /\bpass\b(?!word)/i.test(combined) && !/does not pass|doesn't pass|fail/i.test(combined);
       
       // If evidence shows valid replacement or acceptable, this is a PASS - skip entirely
-      if (hasVisibleReplacement || mentionsAcceptable) {
-        console.log(`A5 PASS (has replacement): ${v.evidence}`);
+      if (hasVisibleReplacement) {
+        console.log(`A5 PASS (has focus replacement tokens): ${evidence} [tokens: ${focusClassTokens.join(', ')}]`);
+        continue;
+      }
+      
+      if (mentionsAcceptable || explicitlyPasses) {
+        console.log(`A5 PASS (explicitly acceptable): ${evidence}`);
         continue;
       }
       
       // Check for weak indicators (background-only focus)
-      const hasBackgroundOnlyFocus = /focus:bg-|focus-visible:bg-|bg-.*focus/.test(combined) && !hasRingReplacement && !hasBorderReplacement;
+      const hasBgToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:bg-/i.test(t));
+      const hasBackgroundOnlyFocus = (hasBgToken || /focus:bg-|focus-visible:bg-/.test(combined)) && 
+                                      !hasRingToken && !hasBorderToken && !hasShadowToken && !hasOutlineToken;
       
       // This is a valid violation - add it
+      console.log(`A5 VIOLATION: ${evidence} [background-only: ${hasBackgroundOnlyFocus}]`);
       a5ValidViolations.push({
         ...v,
         isHeuristicRisk: hasBackgroundOnlyFocus,
+        detectedFocusClasses: focusClassTokens,
       });
     }
     
