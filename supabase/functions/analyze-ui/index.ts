@@ -49,49 +49,82 @@ Run visual inspection for accessibility issues:
 - Line spacing and readability
 - Focus indicator visibility
 
-### A2 (Small informational text size) — STRICT CLASSIFICATION & WORDING RULES:
+### A2 (Small informational text size) — PRECISE VISUAL DETECTION RULES:
 
-**CLASSIFICATION:**
-- ALWAYS classify A2 as "⚠️ Heuristic Readability Risk" — NEVER "Confirmed"
-- Use medium confidence level (55–65%), NOT high confidence
-- WCAG does NOT define a minimum font-size requirement — explicitly state this
+**VISUAL SIZE THRESHOLDS (approximate visual assessment):**
+1. **VIOLATION** (typeBadge: "VIOLATION"): Text appears noticeably small, estimated <13px
+   - Only for INFORMATIONAL content (descriptions, labels, help text)
+   - Confidence: 55-65% (visual estimation has inherent uncertainty)
+   
+2. **WARNING** (typeBadge: "WARNING"): Text appears borderline small, estimated 13-14px
+   - Flag as readability concern
+   - Confidence: 45-55%
+   
+3. **NO ACTION**: Text appears normal sized (≈14px or larger)
+   - Do NOT include in violations array
+   - Skip entirely
 
-**EXCLUSION RULE — DO NOT EVALUATE THESE UNDER A2:**
-1. Icon-only elements or control affordances (close buttons, dismiss icons, action icons)
-2. Elements whose primary purpose is interaction (dismiss, close, confirm) rather than conveying readable information
-3. Single-character controls (e.g., "×", "X", "−", "+")
-4. Buttons whose label is not meant to be read as informational content
-5. Elements that visually appear to have font size ≥16px or equivalent
+**SEMANTIC ROLE VISUAL CLASSIFICATION:**
+Identify UI element purpose by visual context and location:
 
-**FONT SIZE CONDITION:**
-- Only trigger this rule when text visually appears to be approximately ≤14px or smaller
-- Do NOT trigger if the text size appears to be ≥16px or larger
+**INFORMATIONAL ELEMENTS (Primary A2 targets):**
+- Dialog/modal description text
+- Form field labels and helper text
+- Card descriptions and captions
+- Alert/notification body text
+- Metadata displays (dates, counts, status text)
 
-**SEMANTIC FILTER — ONLY APPLY A2 TO:**
-- Informational or descriptive text that users need to read or compare
-- Labels, metadata, descriptions, captions, helper text
-- NOT interactive controls, icons, or single-character elements
+**SECONDARY/DECORATIVE ELEMENTS (Only flag if clearly <13px):**
+- Badges, tags, status indicators
+- Keyboard shortcut hints
+- Tooltip content
+- Breadcrumb separators
 
-**WHAT TO REPORT:**
-1. Report text elements that visually appear to use small font sizes (appears to be ≈14px or smaller)
-2. Focus on informational/metadata text (labels, descriptors, captions, helper text)
-3. Do NOT treat this as a strict WCAG violation
+**EXCLUDED ELEMENTS (DO NOT EVALUATE):**
+- Icon-only elements, action buttons
+- Navigation menu items (intentionally styled)
+- Button labels (interactive elements)
+- Code blocks, monospace text
+- Large headings or display text
 
-**REQUIRED WORDING:**
-- Do NOT call this "Small body font size" unless the text is primary body content
-- Prefer: "Small informational text size" or "Reduced readability due to small text"
-- Frame as usability and accessibility best-practice concern, NOT standards violation
-- Explicitly state: "WCAG does not specify a minimum font size"
+**CONFIDENCE ADJUSTMENT FACTORS:**
+1. **Visual certainty** (±15%):
+   - Text clearly tiny compared to surroundings → +10%
+   - Text size ambiguous or borderline → -10%
+   
+2. **Context clarity** (±10%):
+   - Standalone informational text → +5%
+   - Part of complex UI pattern → -5%
+
+**OUTPUT FORMAT FOR A2 FINDINGS:**
+\`\`\`json
+{
+  "ruleId": "A2",
+  "ruleName": "Small informational text size",
+  "category": "accessibility",
+  "typeBadge": "VIOLATION" or "WARNING",
+  "sizeCategory": "<13px" or "13-14px",
+  "evidence": "Description text in dialog appears noticeably small",
+  "diagnosis": "Informational text in [location] appears to use small font size. WCAG does not specify a minimum, but ~16px is recommended for readability.",
+  "contextualHint": "Consider increasing font size for improved readability.",
+  "confidence": 0.55,
+  "semanticRole": "informational" or "secondary"
+}
+\`\`\`
+
+**STRICT RULES:**
+- Text appearing ~14px or normal → DO NOT report
+- Only flag visually tiny text for secondary elements
+- Include typeBadge and sizeCategory in output
+- Frame as best-practice concern, never WCAG violation
+- Lower confidence than code analysis (visual estimation)
 
 **DO NOT:**
-- Use "fails", "does not comply", "violates WCAG", or similar absolute language
-- Imply the issue is objectively measurable or a standards violation
-- Treat this as equivalent to contrast violations
-- Reference aria-labels when evaluating visual text size (aria-labels affect screen readers, not visual readability)
-- Generate an A2 finding for excluded elements — simply skip reporting
-
-**OUTPUT TEMPLATE:**
-"Several informational text elements in [component/location] appear to use small font sizes. While WCAG does not specify a minimum font size, usability and accessibility guidelines commonly recommend using at least ~16px for important informational content to support readability, particularly for users with visual impairments. This represents a heuristic readability risk."
+- Flag normal-sized text as violations
+- Use "fails", "violates WCAG", or compliance language
+- Assume text size without clear visual evidence
+- Flag interactive elements (buttons, links)
+- Over-report borderline cases
 
 ### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
 
@@ -378,9 +411,44 @@ serve(async (req) => {
 
     // Enhance violations with corrective prompts from our rule registry
     // Also ensure A1 violations from screenshots are marked as "potential"
-    // Filter out invalid A5 PASS cases
+    // Filter out invalid A2/A5 cases
     const enhancedViolations = (analysisResult.violations || [])
       .filter((v: any) => {
+        // Filter out A2 violations that don't meet criteria
+        if (v.ruleId === 'A2') {
+          const evidence = (v.evidence || '').toLowerCase();
+          const diagnosis = (v.diagnosis || '').toLowerCase();
+          const combined = evidence + ' ' + diagnosis;
+          
+          // FILTER: Normal-sized text (~14px or larger) should NOT be reported
+          const mentionsNormalSize = /normal size|normal-sized|adequate|14px|~14px|approximately 14|appears normal/.test(combined);
+          const mentionsSmall = /noticeably small|very small|tiny|<13|smaller than 13|clearly small/.test(combined);
+          
+          // If text appears normal sized and not explicitly small, filter out
+          if (mentionsNormalSize && !mentionsSmall) {
+            console.log(`Filtering out A2 (normal text size): ${v.evidence}`);
+            return false;
+          }
+          
+          // Filter out excluded elements
+          const isExcludedElement = /\bbutton\b|icon|navigation|menu item|action button/.test(combined);
+          if (isExcludedElement && !/description|label|helper|caption/.test(combined)) {
+            console.log(`Filtering out A2 (excluded element): ${v.evidence}`);
+            return false;
+          }
+          
+          // Ensure typeBadge is set
+          if (!v.typeBadge) {
+            if (mentionsSmall) {
+              v.typeBadge = 'VIOLATION';
+              v.sizeCategory = '<13px';
+            } else {
+              v.typeBadge = 'WARNING';
+              v.sizeCategory = '13-14px';
+            }
+          }
+        }
+        
         // Filter out A5 violations that should be PASS (have valid focus replacement)
         if (v.ruleId === 'A5') {
           const evidence = (v.evidence || '').toLowerCase();
