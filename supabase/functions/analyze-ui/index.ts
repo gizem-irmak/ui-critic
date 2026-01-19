@@ -431,13 +431,16 @@ serve(async (req) => {
     
     const allRulesForViolations = [...rules.accessibility, ...rules.usability, ...rules.ethics];
     
-    // Separate A2 violations for aggregation
+    // Separate A2 and A4 violations for aggregation
     const a2Violations: any[] = [];
+    const a4Violations: any[] = [];
     const otherViolations: any[] = [];
     
     (analysisResult.violations || []).forEach((v: any) => {
       if (v.ruleId === 'A2') {
         a2Violations.push(v);
+      } else if (v.ruleId === 'A4') {
+        a4Violations.push(v);
       } else {
         otherViolations.push(v);
       }
@@ -666,10 +669,160 @@ serve(async (req) => {
       console.log(`A2 aggregated: ${affectedItemsUI.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
     }
     
+    // ========== A4 AGGREGATION LOGIC (Screenshot Analysis) ==========
+    interface A4AffectedItemUI {
+      component_name: string;
+      location: string;
+      size_estimate: string;
+      confidence: number;
+      rationale: string;
+      occurrence_count?: number;
+    }
+    
+    const a4DedupeMapUI = new Map<string, A4AffectedItemUI>();
+    const detectedSizeRangesUI = new Set<string>();
+    
+    for (const v of a4Violations) {
+      const evidence = (v.evidence || '').toLowerCase();
+      const diagnosis = (v.diagnosis || '').toLowerCase();
+      const combined = evidence + ' ' + diagnosis;
+      
+      // Extract component/element info from evidence
+      const componentMatch = (v.evidence || '').match(/(?:the\s+)?([A-Z][a-zA-Z0-9]*(?:Previous|Next|Button|Icon|Close|Nav|Toggle|Trigger)?)/);
+      const locationMatch = (v.evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar|carousel|navigation)?)/i);
+      
+      // Resolve component name
+      let componentName = '';
+      if (componentMatch?.[1] && componentMatch[1].length > 3) {
+        componentName = componentMatch[1];
+      }
+      
+      const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
+      
+      // Estimate size from visual description
+      let sizeEstimate = '<44px (visual estimate)';
+      if (/very small|tiny|noticeably small/.test(combined)) { 
+        sizeEstimate = '~24-28px (visual estimate)'; 
+        detectedSizeRangesUI.add('~24-28px'); 
+      } else if (/small|compact/.test(combined)) { 
+        sizeEstimate = '~32-36px (visual estimate)'; 
+        detectedSizeRangesUI.add('~32-36px'); 
+      } else { 
+        sizeEstimate = '<44px (visual estimate)'; 
+        detectedSizeRangesUI.add('<44px'); 
+      }
+      
+      // Calculate confidence (lower for screenshot analysis due to visual estimation)
+      let confidence = v.confidence || 0.50;
+      // Reduce confidence since visual inspection cannot measure exact dimensions
+      confidence = Math.min(confidence, 0.65);
+      
+      const rationale = v.diagnosis || `Interactive element appears to be below the commonly recommended touch target size of 44×44 CSS px. Visual inspection cannot confirm actual dimensions.`;
+      
+      // Deduplication key - by component name or location
+      const dedupeKey = componentName || location || 'unknown';
+      
+      if (a4DedupeMapUI.has(dedupeKey)) {
+        const existing = a4DedupeMapUI.get(dedupeKey)!;
+        existing.occurrence_count = (existing.occurrence_count || 1) + 1;
+        if (confidence > existing.confidence) {
+          existing.confidence = confidence;
+          existing.size_estimate = sizeEstimate;
+        }
+      } else {
+        const item: A4AffectedItemUI = {
+          component_name: componentName,
+          location,
+          size_estimate: sizeEstimate,
+          confidence: Math.round(confidence * 100) / 100,
+          rationale,
+          occurrence_count: 1,
+        };
+        a4DedupeMapUI.set(dedupeKey, item);
+      }
+    }
+    
+    const a4AffectedItemsUI = Array.from(a4DedupeMapUI.values());
+    
+    // Create aggregated A4 result if there are any items
+    let aggregatedA4UI: any = null;
+    if (a4AffectedItemsUI.length > 0) {
+      // Calculate overall confidence (max of all findings - deterministic)
+      const overallConfidence = Math.max(...a4AffectedItemsUI.map(i => i.confidence));
+      const confidenceReason = `Confidence is based on visual size assessment of interactive elements. Screenshot analysis cannot measure exact rendered dimensions, so findings are based on visual estimation.`;
+      
+      // Build unique component/location names list
+      const invalidIdentifiers = new Set([
+        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
+        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
+        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
+        'component', 'components', 'element', 'elements', 'item', 'items', 'button',
+        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area'
+      ]);
+      
+      const uniqueNames = new Set<string>();
+      for (const item of a4AffectedItemsUI) {
+        const name = item.component_name || item.location || '';
+        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
+          if (!/^(the\s+)?ui\s*(area|section|component)?$/i.test(name)) {
+            uniqueNames.add(name);
+          }
+        }
+      }
+      
+      // Build deduplicated list (max 4, with "and N more")
+      const uniqueNamesArray = Array.from(uniqueNames);
+      const displayLimit = 4;
+      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
+      const moreCount = uniqueNamesArray.length - displayLimit;
+      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
+      
+      const areaCountText = uniqueNamesArray.length > 0 
+        ? `${uniqueNamesArray.length} unique element(s): ${displayedNames.join(', ')}${moreText}`
+        : `${a4AffectedItemsUI.length} element(s)`;
+      
+      const sizeRangesText = detectedSizeRangesUI.size > 0 
+        ? `Estimated size ranges: ${Array.from(detectedSizeRangesUI).join(', ')}.`
+        : '';
+      
+      const summary = `Interactive elements in ${areaCountText} appear to be below the commonly recommended touch target size of 44×44 CSS px. ${sizeRangesText} ` +
+        `44×44 CSS px is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). ` +
+        `Visual inspection cannot confirm actual rendered dimensions; padding or layout constraints may increase the clickable area.`;
+      
+      const a4Rule = allRulesForViolations.find(r => r.id === 'A4');
+      
+      aggregatedA4UI = {
+        ruleId: 'A4',
+        ruleName: 'Small tap / click targets',
+        category: 'accessibility',
+        typeBadge: 'Potential Risk (Heuristic)',
+        overall_confidence: Math.round(overallConfidence * 100) / 100,
+        confidence_reason: confidenceReason,
+        summary,
+        detected_size_ranges: Array.from(detectedSizeRangesUI),
+        affected_items: a4AffectedItemsUI.map(item => ({
+          component_name: item.component_name,
+          location: item.location,
+          size_estimate: item.size_estimate,
+          confidence: item.confidence,
+          rationale: item.rationale,
+          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
+        })),
+        diagnosis: summary,
+        contextualHint: 'Explicitly enforce minimum dimensions (44×44 CSS px) for interactive elements using visible padding or size constraints.',
+        correctivePrompt: a4Rule?.correctivePrompt || '',
+        confidence: Math.round(overallConfidence * 100) / 100,
+      };
+      
+      console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${uniqueNamesArray.length} unique elements, sizes: ${Array.from(detectedSizeRangesUI).join(', ')})`);
+    }
+    
     // Combine all violations
-    const enhancedViolations = aggregatedA2UI 
-      ? [...filteredOtherViolations, aggregatedA2UI]
-      : filteredOtherViolations;
+    const enhancedViolations = [
+      ...filteredOtherViolations,
+      ...(aggregatedA2UI ? [aggregatedA2UI] : []),
+      ...(aggregatedA4UI ? [aggregatedA4UI] : []),
+    ];
 
     console.log(`Analysis complete: ${enhancedViolations.length} violations found`);
 

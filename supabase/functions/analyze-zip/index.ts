@@ -686,13 +686,16 @@ ${codeContent}`,
     // Enhance violations with corrective prompts and filter out invalid reports
     const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
     
-    // Separate A2 violations for aggregation
+    // Separate A2 and A4 violations for aggregation
     const a2Violations: any[] = [];
+    const a4Violations: any[] = [];
     const otherViolations: any[] = [];
     
     (analysisResult.violations || []).forEach((v: any) => {
       if (v.ruleId === 'A2') {
         a2Violations.push(v);
+      } else if (v.ruleId === 'A4') {
+        a4Violations.push(v);
       } else {
         otherViolations.push(v);
       }
@@ -957,10 +960,185 @@ ${codeContent}`,
       console.log(`A2 aggregated: ${affectedItems.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
     }
     
+    // ========== A4 AGGREGATION LOGIC ==========
+    // Process and aggregate A4 violations into a single result object
+    interface A4AffectedItem {
+      component_name: string;
+      file_path: string;
+      size_token: string;
+      approx_px: string;
+      confidence: number;
+      rationale: string;
+      occurrence_count?: number;
+    }
+    
+    const a4DedupeMap = new Map<string, A4AffectedItem>();
+    const detectedSizeRanges = new Set<string>();
+    
+    for (const v of a4Violations) {
+      const evidence = (v.evidence || '').toLowerCase();
+      const diagnosis = (v.diagnosis || '').toLowerCase();
+      const combined = evidence + ' ' + diagnosis;
+      
+      // Extract component info from evidence/diagnosis
+      const componentMatch = (v.evidence || '').match(/(?:in\s+)?([A-Z][a-zA-Z0-9]*(?:Previous|Next|Button|Icon|Close|Nav|Toggle|Trigger|Control|Action)?)/);
+      const fileMatch = (v.evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js|vue|svelte))/i);
+      
+      // Resolve component name
+      let componentName = '';
+      if (componentMatch?.[1] && componentMatch[1].length > 2) {
+        componentName = componentMatch[1];
+      } else if (fileMatch?.[1]) {
+        componentName = fileMatch[1].replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
+      } else if (v.componentName) {
+        componentName = v.componentName;
+      }
+      
+      const filePath = fileMatch?.[1] || v.filePath || v.contextualHint || '';
+      
+      // Extract size token and approximate px
+      let sizeToken = '';
+      let approxPx = '';
+      
+      // Common Tailwind size patterns
+      if (/h-8|w-8|size-8/.test(combined)) { sizeToken = 'h-8/w-8'; approxPx = '≈32px'; detectedSizeRanges.add('~32px'); }
+      else if (/h-9|w-9|size-9/.test(combined)) { sizeToken = 'h-9/w-9'; approxPx = '≈36px'; detectedSizeRanges.add('~36px'); }
+      else if (/h-10|w-10|size-10/.test(combined)) { sizeToken = 'h-10/w-10'; approxPx = '≈40px'; detectedSizeRanges.add('~40px'); }
+      else if (/h-7|w-7|size-7/.test(combined)) { sizeToken = 'h-7/w-7'; approxPx = '≈28px'; detectedSizeRanges.add('~28px'); }
+      else if (/h-6|w-6|size-6/.test(combined)) { sizeToken = 'h-6/w-6'; approxPx = '≈24px'; detectedSizeRanges.add('~24px'); }
+      else if (/min-h-|min-w-/.test(combined)) { sizeToken = 'min-h/w constraint'; approxPx = 'variable'; }
+      else { sizeToken = 'implicit sizing'; approxPx = '<44px'; detectedSizeRanges.add('<44px'); }
+      
+      // Calculate confidence
+      let confidence = v.confidence || 0.60;
+      // Adjust based on size proximity to 44px
+      if (approxPx.includes('40')) confidence = Math.max(confidence - 0.1, 0.45);
+      else if (approxPx.includes('36')) confidence = Math.min(confidence + 0.05, 0.75);
+      else if (approxPx.includes('32') || approxPx.includes('28') || approxPx.includes('24')) confidence = Math.min(confidence + 0.1, 0.80);
+      
+      const rationale = v.diagnosis || `Element may be below the commonly recommended touch target size of 44×44 CSS px.`;
+      
+      // Deduplication key - by component name only (to aggregate all instances)
+      const dedupeKey = componentName || filePath || 'unknown';
+      
+      if (a4DedupeMap.has(dedupeKey)) {
+        const existing = a4DedupeMap.get(dedupeKey)!;
+        existing.occurrence_count = (existing.occurrence_count || 1) + 1;
+        // Keep the higher confidence
+        if (confidence > existing.confidence) {
+          existing.confidence = confidence;
+          existing.size_token = sizeToken;
+          existing.approx_px = approxPx;
+        }
+      } else {
+        const item: A4AffectedItem = {
+          component_name: componentName,
+          file_path: filePath,
+          size_token: sizeToken,
+          approx_px: approxPx,
+          confidence: Math.round(confidence * 100) / 100,
+          rationale,
+          occurrence_count: 1,
+        };
+        a4DedupeMap.set(dedupeKey, item);
+      }
+    }
+    
+    const a4AffectedItems = Array.from(a4DedupeMap.values());
+    
+    // Create aggregated A4 result if there are any items
+    let aggregatedA4: any = null;
+    if (a4AffectedItems.length > 0) {
+      // Calculate overall confidence (max of all findings - deterministic)
+      const overallConfidence = Math.max(...a4AffectedItems.map(i => i.confidence));
+      const confidenceReason = `Confidence is based on code-level size tokens (${Array.from(detectedSizeRanges).join(', ')}) and the absence of runtime layout evaluation. Static analysis cannot confirm actual rendered dimensions.`;
+      
+      // Build unique component names list (filter invalid identifiers)
+      const invalidIdentifiers = new Set([
+        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
+        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
+        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
+        'component', 'components', 'element', 'elements', 'item', 'items', 'button',
+        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array'
+      ]);
+      
+      const uniqueComponentNames = new Set<string>();
+      for (const item of a4AffectedItems) {
+        const name = item.component_name || '';
+        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
+          if (!/^(use|get|set|is|has|can|should|will|on|handle)[A-Z]/.test(name)) {
+            uniqueComponentNames.add(name);
+          }
+        }
+      }
+      
+      // Fall back to file paths if no valid component names
+      if (uniqueComponentNames.size === 0) {
+        for (const item of a4AffectedItems) {
+          const filePath = item.file_path || '';
+          if (filePath) {
+            const fileName = filePath.replace(/.*[\/\\]/, '').replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
+            if (fileName && fileName.length > 2 && !invalidIdentifiers.has(fileName.toLowerCase())) {
+              uniqueComponentNames.add(fileName);
+            }
+          }
+        }
+      }
+      
+      // Build deduplicated component list (max 4, with "and N more")
+      const uniqueNamesArray = Array.from(uniqueComponentNames);
+      const displayLimit = 4;
+      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
+      const moreCount = uniqueNamesArray.length - displayLimit;
+      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
+      
+      const componentCountText = uniqueNamesArray.length > 0 
+        ? `${uniqueNamesArray.length} unique component(s): ${displayedNames.join(', ')}${moreText}`
+        : `${a4AffectedItems.length} element(s)`;
+      
+      const sizeRangesText = detectedSizeRanges.size > 0 
+        ? `Detected size ranges: ${Array.from(detectedSizeRanges).join(', ')}.`
+        : '';
+      
+      const summary = `Interactive elements in ${componentCountText} may be below the commonly recommended touch target size of 44×44 CSS px. ${sizeRangesText} ` +
+        `44×44 CSS px is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). ` +
+        `Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.`;
+      
+      const a4Rule = allRules.find(r => r.id === 'A4');
+      
+      aggregatedA4 = {
+        ruleId: 'A4',
+        ruleName: 'Small tap / click targets',
+        category: 'accessibility',
+        typeBadge: 'Potential Risk (Heuristic)',
+        overall_confidence: Math.round(overallConfidence * 100) / 100,
+        confidence_reason: confidenceReason,
+        summary,
+        detected_size_ranges: Array.from(detectedSizeRanges),
+        affected_items: a4AffectedItems.map(item => ({
+          component_name: item.component_name,
+          file_path: item.file_path,
+          size_token: item.size_token,
+          approx_px: item.approx_px,
+          confidence: item.confidence,
+          rationale: item.rationale,
+          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
+        })),
+        diagnosis: summary,
+        contextualHint: 'Explicitly enforce minimum dimensions (44×44 CSS px) using min-width and min-height constraints for interactive elements.',
+        correctivePrompt: a4Rule?.correctivePrompt || '',
+        confidence: Math.round(overallConfidence * 100) / 100,
+      };
+      
+      console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${uniqueNamesArray.length} unique components, sizes: ${Array.from(detectedSizeRanges).join(', ')})`);
+    }
+    
     // Combine all violations
-    const aiViolations = aggregatedA2 
-      ? [...filteredOtherViolations, aggregatedA2]
-      : filteredOtherViolations;
+    const aiViolations = [
+      ...filteredOtherViolations,
+      ...(aggregatedA2 ? [aggregatedA2] : []),
+      ...(aggregatedA4 ? [aggregatedA4] : []),
+    ];
 
     // Merge contrast violations with AI violations
     const allViolations = [...contrastViolations, ...aiViolations];
