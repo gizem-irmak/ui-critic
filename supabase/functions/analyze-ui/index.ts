@@ -9,7 +9,7 @@ const corsHeaders = {
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small informational text size', diagnosis: 'While WCAG does not specify a minimum font size, usability and accessibility guidelines commonly recommend using at least ~16px for important informational content to support readability, particularly for users with visual impairments.', correctivePrompt: 'Consider increasing informational text size to at least ~16px and adjusting line spacing for improved readability. This is a recommended best practice, not a WCAG requirement.' },
+    { id: 'A2', name: 'Small informational text size', diagnosis: 'WCAG does not specify a minimum font size. However, ~16px is commonly recommended in usability and accessibility guidelines as a widely adopted design practice for informational content to support readability.', correctivePrompt: 'Consider increasing informational text size to at least ~16px and adjusting line spacing for improved readability. This follows widely adopted design practices for readability.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly ensure minimum tap target size (44×44px), and rendered dimensions may vary across devices.', correctivePrompt: 'Explicitly enforce minimum interactive element dimensions (44×44px) with adequate spacing to ensure tap target compliance across devices.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
@@ -499,10 +499,17 @@ serve(async (req) => {
       }
       
       // Extract info from evidence/diagnosis for screenshots
-      const locationMatch = (v.evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel)?)/i);
-      const componentMatch = (v.evidence || '').match(/([A-Z][a-zA-Z0-9]*(?:Description|Label|Text|Badge|Caption)?)/i);
+      // Priority: 1) Named UI element, 2) Location description, 3) Fallback to location only
+      const locationMatch = (v.evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar|tooltip|popover|alert|banner)?)/i);
+      const componentMatch = (v.evidence || '').match(/([A-Z][a-zA-Z0-9]*(?:Description|Label|Text|Badge|Caption|Content|Title|Subtitle|Header|Footer)?)/);
       
-      const componentName = componentMatch?.[1] || 'Text element';
+      // Resolve component name - avoid placeholders like "Text" alone
+      let componentName = '';
+      if (componentMatch?.[1] && componentMatch[1].length > 4) {
+        componentName = componentMatch[1];
+      }
+      // If no specific component, leave empty and rely on location
+      
       const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
       
       // Determine size estimate
@@ -573,14 +580,15 @@ serve(async (req) => {
       const violationCount = affectedItemsUI.filter(i => i.severity === 'violation').length;
       const warningCount = affectedItemsUI.filter(i => i.severity === 'warning').length;
       
-      const locationList = affectedItemsUI.slice(0, 3).map(i => i.location).join(', ');
+      // Build location list - prefer component_name, fall back to location
+      const locationList = affectedItemsUI.slice(0, 3).map(i => i.component_name || i.location || 'UI area').filter(Boolean).join(', ');
       const moreText = affectedItemsUI.length > 3 ? ` and ${affectedItemsUI.length - 3} more` : '';
       
       const summary = `Small text size visually detected in ${affectedItemsUI.length} area(s): ${locationList}${moreText}. ` +
         `${violationCount > 0 ? `${violationCount} appear noticeably small` : ''}` +
         `${violationCount > 0 && warningCount > 0 ? ' and ' : ''}` +
         `${warningCount > 0 ? `${warningCount} appear borderline` : ''}. ` +
-        `While WCAG does not mandate a minimum font size, ~16px is recommended for informational content.`;
+        `WCAG does not mandate a minimum font size, but ~16px is commonly recommended in usability and accessibility guidelines.`;
       
       const a2Rule = allRulesForViolations.find(r => r.id === 'A2');
       
