@@ -13,7 +13,7 @@ export const rules: Rule[] = [
     category: 'accessibility',
     name: 'Insufficient text contrast',
     diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.',
-    correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).'
+    correctivePrompt: 'Replace low-contrast text colors (gray-300/400) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.'
   },
   {
     id: 'A2',
