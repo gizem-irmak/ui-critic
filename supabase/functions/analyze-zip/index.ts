@@ -665,43 +665,22 @@ ${codeContent}`,
 
     // Enhance violations with corrective prompts and filter out invalid reports
     const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
-    const aiViolations = (analysisResult.violations || [])
+    
+    // Separate A2 violations for aggregation
+    const a2Violations: any[] = [];
+    const otherViolations: any[] = [];
+    
+    (analysisResult.violations || []).forEach((v: any) => {
+      if (v.ruleId === 'A2') {
+        a2Violations.push(v);
+      } else {
+        otherViolations.push(v);
+      }
+    });
+    
+    // Process non-A2 violations with existing filters
+    const filteredOtherViolations = otherViolations
       .filter((v: any) => {
-        // Filter out A2 violations that don't meet threshold criteria
-        if (v.ruleId === 'A2') {
-          const evidence = (v.evidence || '').toLowerCase();
-          const diagnosis = (v.diagnosis || '').toLowerCase();
-          const combined = evidence + ' ' + diagnosis;
-          
-          // FILTER: text-sm (14px, 0.875rem) should NOT be reported as violation
-          const mentionsTextSm = /\btext-sm\b|0\.875rem|14px|≈14px|~14px|approximately 14/.test(combined);
-          const mentionsSmaller = /text-xs|0\.75rem|12px|11px|10px|<13px|smaller than 13/.test(combined);
-          
-          // If only text-sm is mentioned without smaller sizes, filter out
-          if (mentionsTextSm && !mentionsSmaller) {
-            console.log(`Filtering out A2 (text-sm is acceptable): ${v.evidence}`);
-            return false;
-          }
-          
-          // Filter out excluded elements (buttons, icons, navigation, etc.)
-          const isExcludedElement = /\bbutton\b|icon|navigation|nav-|menu item|\bbtn\b|interactive element|action button/.test(combined);
-          if (isExcludedElement && !/description|label|helper|caption|metadata/.test(combined)) {
-            console.log(`Filtering out A2 (excluded element type): ${v.evidence}`);
-            return false;
-          }
-          
-          // Ensure typeBadge is set correctly based on size
-          if (!v.typeBadge) {
-            if (mentionsSmaller) {
-              v.typeBadge = 'VIOLATION';
-              v.sizeCategory = '<13px';
-            } else {
-              v.typeBadge = 'WARNING';
-              v.sizeCategory = '13-14px';
-            }
-          }
-        }
-        
         // Filter out A5 violations that should be PASS or NOT APPLICABLE
         if (v.ruleId === 'A5') {
           const evidence = (v.evidence || '').toLowerCase();
@@ -734,6 +713,177 @@ ${codeContent}`,
           correctivePrompt: rule?.correctivePrompt || v.correctivePrompt || '',
         };
       });
+
+    // ========== A2 AGGREGATION LOGIC ==========
+    // Process and aggregate A2 violations into a single result object
+    interface A2AffectedItem {
+      component_name: string;
+      file_path: string;
+      size_token: string;
+      approx_px: string;
+      semantic_role: string;
+      severity: 'violation' | 'warning';
+      confidence: number;
+      rationale: string;
+      occurrence_count?: number;
+    }
+    
+    const processedA2Items: A2AffectedItem[] = [];
+    const dedupeMap = new Map<string, A2AffectedItem>();
+    
+    for (const v of a2Violations) {
+      const evidence = (v.evidence || '').toLowerCase();
+      const diagnosis = (v.diagnosis || '').toLowerCase();
+      const combined = evidence + ' ' + diagnosis;
+      
+      // FILTER: text-sm (14px, 0.875rem) should NOT be reported as violation
+      const mentionsTextSm = /\btext-sm\b|0\.875rem|14px|≈14px|~14px|approximately 14/.test(combined);
+      const mentionsSmaller = /text-xs|0\.75rem|12px|11px|10px|<13px|smaller than 13/.test(combined);
+      
+      // If only text-sm is mentioned without smaller sizes, filter out
+      if (mentionsTextSm && !mentionsSmaller) {
+        console.log(`Filtering out A2 (text-sm is acceptable): ${v.evidence}`);
+        continue;
+      }
+      
+      // Filter out excluded elements (buttons, icons, navigation, etc.)
+      const isExcludedElement = /\bbutton\b|icon|navigation|nav-|menu item|\bbtn\b|interactive element|action button/.test(combined);
+      if (isExcludedElement && !/description|label|helper|caption|metadata/.test(combined)) {
+        console.log(`Filtering out A2 (excluded element type): ${v.evidence}`);
+        continue;
+      }
+      
+      // Extract component info from evidence/diagnosis
+      const componentMatch = (v.evidence || '').match(/(?:in\s+)?([A-Z][a-zA-Z0-9]*(?:Component|Description|Label|Text|Badge|Caption|Shortcut|Tooltip|Content)?)/i);
+      const fileMatch = (v.evidence || '').match(/([a-zA-Z0-9_-]+\.[a-z]+)/i);
+      const sizeMatch = combined.match(/text-xs|text-\[[\d.]+(?:rem|px)\]|font-size:\s*[\d.]+(?:px|rem)/i);
+      
+      const componentName = componentMatch?.[1] || v.componentName || 'Unknown';
+      const filePath = fileMatch?.[1] || v.filePath || v.contextualHint || '';
+      const sizeToken = sizeMatch?.[0] || (mentionsSmaller ? 'text-xs' : 'text-sm');
+      
+      // Determine approximate px value
+      let approxPx = '<13px';
+      if (/text-xs|0\.75rem|12px/.test(combined)) approxPx = '≈12px';
+      else if (/11px/.test(combined)) approxPx = '≈11px';
+      else if (/10px/.test(combined)) approxPx = '≈10px';
+      else if (/13px|13-14/.test(combined)) approxPx = '≈13px';
+      else if (/0\.8rem|0\.85rem/.test(combined)) approxPx = '≈13-14px';
+      
+      // Determine semantic role
+      const semanticRole = /description|label|helper|caption|metadata|alert|dialog|form/i.test(componentName + combined)
+        ? 'informational' 
+        : 'secondary';
+      
+      // Determine severity
+      const severity: 'violation' | 'warning' = mentionsSmaller ? 'violation' : 'warning';
+      
+      // Calculate confidence
+      let confidence = v.confidence || 0.65;
+      // Adjust based on semantic role
+      if (semanticRole === 'informational') confidence = Math.min(confidence + 0.1, 0.85);
+      // Adjust based on threshold proximity
+      if (mentionsSmaller) confidence = Math.min(confidence + 0.05, 0.85);
+      else confidence = Math.max(confidence - 0.1, 0.4);
+      
+      const rationale = v.diagnosis || `Small text size (${approxPx}) used for ${semanticRole} content.`;
+      
+      // Deduplication key
+      const dedupeKey = `${filePath}|${componentName}|${sizeToken}`;
+      
+      if (dedupeMap.has(dedupeKey)) {
+        const existing = dedupeMap.get(dedupeKey)!;
+        existing.occurrence_count = (existing.occurrence_count || 1) + 1;
+        // Keep the higher confidence
+        if (confidence > existing.confidence) {
+          existing.confidence = confidence;
+        }
+      } else {
+        const item: A2AffectedItem = {
+          component_name: componentName,
+          file_path: filePath,
+          size_token: sizeToken,
+          approx_px: approxPx,
+          semantic_role: semanticRole,
+          severity,
+          confidence: Math.round(confidence * 100) / 100,
+          rationale,
+          occurrence_count: 1,
+        };
+        dedupeMap.set(dedupeKey, item);
+      }
+    }
+    
+    const affectedItems = Array.from(dedupeMap.values());
+    
+    // Create aggregated A2 result if there are any items
+    let aggregatedA2: any = null;
+    if (affectedItems.length > 0) {
+      // Calculate overall confidence
+      const highImpactItems = affectedItems.filter(i => i.semantic_role === 'informational');
+      let overallConfidence: number;
+      let confidenceReason: string;
+      
+      if (highImpactItems.length > 0) {
+        overallConfidence = Math.max(...highImpactItems.map(i => i.confidence));
+        confidenceReason = `Based on maximum confidence (${overallConfidence.toFixed(2)}) from ${highImpactItems.length} informational component(s).`;
+      } else {
+        // Use median of all items
+        const sortedConfidences = affectedItems.map(i => i.confidence).sort((a, b) => a - b);
+        const midIdx = Math.floor(sortedConfidences.length / 2);
+        overallConfidence = sortedConfidences.length % 2 === 0
+          ? (sortedConfidences[midIdx - 1] + sortedConfidences[midIdx]) / 2
+          : sortedConfidences[midIdx];
+        confidenceReason = `Based on median confidence (${overallConfidence.toFixed(2)}) across ${affectedItems.length} secondary component(s).`;
+      }
+      
+      // Count violations vs warnings
+      const violationCount = affectedItems.filter(i => i.severity === 'violation').length;
+      const warningCount = affectedItems.filter(i => i.severity === 'warning').length;
+      
+      // Build summary
+      const componentList = affectedItems.slice(0, 5).map(i => i.component_name).join(', ');
+      const moreText = affectedItems.length > 5 ? ` and ${affectedItems.length - 5} more` : '';
+      
+      const summary = `Small text size detected in ${affectedItems.length} component(s): ${componentList}${moreText}. ` +
+        `${violationCount > 0 ? `${violationCount} violation(s) (<13px)` : ''}` +
+        `${violationCount > 0 && warningCount > 0 ? ' and ' : ''}` +
+        `${warningCount > 0 ? `${warningCount} warning(s) (13-14px)` : ''}. ` +
+        `While WCAG does not mandate a minimum font size, ~16px is recommended for informational content to support readability.`;
+      
+      const a2Rule = allRules.find(r => r.id === 'A2');
+      
+      aggregatedA2 = {
+        ruleId: 'A2',
+        ruleName: 'Small informational text size',
+        category: 'accessibility',
+        overall_confidence: Math.round(overallConfidence * 100) / 100,
+        confidence_reason: confidenceReason,
+        summary,
+        affected_items: affectedItems.map(item => ({
+          component_name: item.component_name,
+          file_path: item.file_path,
+          size_token: item.size_token,
+          approx_px: item.approx_px,
+          semantic_role: item.semantic_role,
+          severity: item.severity,
+          confidence: item.confidence,
+          rationale: item.rationale,
+          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
+        })),
+        diagnosis: summary,
+        contextualHint: 'Review text sizing in the listed components and consider increasing to ~16px for improved readability.',
+        correctivePrompt: a2Rule?.correctivePrompt || '',
+        confidence: Math.round(overallConfidence * 100) / 100,
+      };
+      
+      console.log(`A2 aggregated: ${affectedItems.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
+    }
+    
+    // Combine all violations
+    const aiViolations = aggregatedA2 
+      ? [...filteredOtherViolations, aggregatedA2]
+      : filteredOtherViolations;
 
     // Merge contrast violations with AI violations
     const allViolations = [...contrastViolations, ...aiViolations];
