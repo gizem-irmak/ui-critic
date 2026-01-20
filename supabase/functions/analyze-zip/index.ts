@@ -621,24 +621,41 @@ Analyze code structure for usability patterns:
 
 ### U1 (Unclear primary action) — STRICT EVIDENCE-BASED DETECTION RULES:
 
+**CRITICAL — BUTTON VARIANT RESOLUTION:**
+In shadcn/Radix Button components, the default behavior is important to understand:
+- If a Button has NO variant prop specified → it uses \`variant="default"\` → renders as a FILLED/PRIMARY button (bg-primary)
+- \`variant="default"\` = FILLED button (visually prominent, solid background)
+- \`variant="outline"\` = OUTLINED button (border only, transparent background)
+- \`variant="ghost"\` = GHOST button (no border, transparent background)
+- \`variant="secondary"\` = SECONDARY button (muted background)
+
+**DO NOT assume a button with \`type="submit"\` and no variant is an outline button!**
+If no variant is specified, the button renders as the DEFAULT variant which is a FILLED/PRIMARY button.
+
 **PREREQUISITE — MANDATORY EVIDENCE REQUIREMENTS:**
 ONLY emit a U1 violation when ALL of the following conditions are met:
 1. **Two or more actionable controls** are explicitly detected in the same action area (e.g., DialogFooter, ButtonGroup, form actions, modal footer, card actions)
 2. **The primary action is explicitly identifiable** via one of:
    - type="submit" attribute
-   - variant="default" or variant="primary" or solid styling
+   - variant="default" or variant="primary" or solid styling or NO VARIANT (defaults to filled)
    - Primary action label (e.g., "Save", "Submit", "Confirm", "Create", "Send")
-3. **The primary action has equal or lower visual emphasis** than secondary actions:
-   - Both use the same variant (e.g., both outline, both ghost, both text)
-   - OR the cancel/secondary button is MORE prominent (e.g., default vs outline where cancel is default)
+3. **BOTH buttons' variants MUST be explicitly extracted and compared:**
+   - If primary button has variant="default" OR no variant → it's a FILLED button
+   - If secondary button has variant="outline" or variant="ghost" → secondary is de-emphasized
+   - **PASS (no violation)**: Primary is filled AND secondary is outline/ghost
+   - **VIOLATION**: Both use identical variant (e.g., both outline, both ghost, both default)
+   - **VIOLATION**: Secondary is MORE prominent than primary
 
 **NO SPECULATION RULE — ABSOLUTE:**
 - If the primary action button is NOT present in the analyzed code, DO NOT emit U1
 - If the primary action's variant/classes cannot be extracted from the code, DO NOT emit U1
+- If a button has NO variant prop, assume it uses variant="default" (FILLED button) — NOT outline
 - DO NOT use conditional language ("if", "could", "might", "would", "may") to justify a violation
 - DO NOT speculate about buttons that might exist but are not in the code context
+- DO NOT claim "equal emphasis" unless BOTH buttons' variants are explicitly the SAME value
 
 **PASS-SILENCE POLICY:**
+- If the primary button uses default/filled variant AND secondary uses outline/ghost → PASS (no output)
 - If U1 cannot be confirmed with available evidence → produce NO OUTPUT for U1
 - Silent PASS means: do not include U1 in violations array, no corrective prompt, no contextual hint
 
@@ -648,21 +665,24 @@ ONLY emit a U1 violation when ALL of the following conditions are met:
   "ruleId": "U1",
   "ruleName": "Unclear primary action",
   "category": "usability",
-  "evidence": "DialogFooter contains two buttons: Cancel (variant='outline') and Submit (variant='outline'). Both use identical styling.",
-  "primaryAction": "Submit button (type='submit')",
-  "secondaryAction": "Cancel button",
-  "stylingComparison": "Both buttons use variant='outline' with no visual hierarchy differentiation.",
-  "diagnosis": "In [File.tsx], the primary action (Submit) and secondary action (Cancel) have equal visual emphasis due to identical outline variants. Users may struggle to identify the main action.",
-  "contextualHint": "Differentiate primary and secondary actions in dialog footer by using a solid variant for the primary action.",
+  "evidence": "DialogFooter contains two buttons: Cancel (variant='outline') and Submit (variant='outline'). Both use identical outline styling.",
+  "primaryAction": "Submit button (type='submit', variant='outline')",
+  "secondaryAction": "Cancel button (variant='outline')",
+  "primaryVariant": "outline",
+  "secondaryVariant": "outline",
+  "stylingComparison": "Both buttons explicitly use variant='outline' with no visual hierarchy differentiation.",
+  "diagnosis": "In [File.tsx], the primary action (Submit) and secondary action (Cancel) have equal visual emphasis because BOTH explicitly use variant='outline'. Users may struggle to identify the main action.",
+  "contextualHint": "Differentiate primary and secondary actions in dialog footer by using the default (solid) variant for the primary action.",
   "confidence": 0.75
 }
 \`\`\`
 
-**DO NOT REPORT:**
+**DO NOT REPORT (PASS silently):**
 - Single-button forms or dialogs (no competing actions)
 - Areas where only one actionable button is detected
-- Cases where primary button already uses default/primary/solid variant while secondary uses outline/ghost/text
-- Speculative scenarios based on assumptions about missing buttons
+- Cases where primary button uses default/primary/solid/NO VARIANT while secondary uses outline/ghost/text
+- Cases where submit button has NO variant prop (it defaults to filled, not outline)
+- Speculative scenarios based on assumptions about missing buttons or inferred variants
 
 Usability rules to check:
 ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name}`).join('\n')}
@@ -939,6 +959,41 @@ ${codeContent}`,
       if (!hasStylingEvidence) {
         console.log(`U1: Filtering out - no styling comparison evidence: ${v.evidence?.substring(0, 100)}`);
         return false;
+      }
+      
+      // FILTER: Check for false positives where primary is actually emphasized correctly
+      // If primary has default/filled/no-variant AND secondary has outline/ghost → PASS (filter out)
+      const primaryVariant = (v.primaryVariant || '').toLowerCase();
+      const secondaryVariant = (v.secondaryVariant || '').toLowerCase();
+      
+      // Extract variants from evidence/diagnosis if not explicitly provided
+      const primaryIsDefault = /primary.*(?:variant=['"]?default|no variant|default variant|filled|solid|bg-primary)/.test(combined) ||
+                               /submit.*(?:no variant|default|filled|solid)/.test(combined) ||
+                               (primaryVariant === 'default' || primaryVariant === '' || primaryVariant === 'primary');
+      const secondaryIsOutlineOrGhost = /(?:cancel|secondary).*(?:variant=['"]?outline|variant=['"]?ghost|outline|ghost)/.test(combined) ||
+                                        (secondaryVariant === 'outline' || secondaryVariant === 'ghost');
+      
+      // If primary is emphasized (default/filled) and secondary is de-emphasized (outline/ghost) → NOT a violation
+      if (primaryIsDefault && secondaryIsOutlineOrGhost) {
+        console.log(`U1: Filtering out - primary uses default/filled variant, secondary uses outline/ghost (correct hierarchy): ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      // FILTER: Must explicitly state BOTH buttons use the SAME variant for "equal emphasis" claim
+      const claimsEqualEmphasis = /equal.*emphasis|identical.*styl|same.*variant|both.*outline|both.*ghost|both.*default/.test(combined);
+      const explicitlyMatchingVariants = /both.*(?:use|have|are).*(?:outline|ghost|default)|(?:cancel|secondary).*(?:outline|ghost).*(?:submit|primary|confirm).*(?:outline|ghost)|variant=['"]?outline['"]?.*variant=['"]?outline/.test(combined);
+      
+      // If claiming equal emphasis but evidence doesn't show explicit matching → filter out
+      if (claimsEqualEmphasis && !explicitlyMatchingVariants) {
+        // Check if the submit button is claimed to have "outline" when it might actually be default
+        const submitClaimedOutline = /submit.*(?:variant=['"]?outline|outline.*button)/.test(combined);
+        const submitHasNoVariantMentioned = !/submit.*variant=/.test(combined);
+        
+        // If submit has no explicit variant mentioned, assume it's default (filled), not outline
+        if (submitHasNoVariantMentioned && !submitClaimedOutline) {
+          console.log(`U1: Filtering out - submit button variant not explicitly specified (defaults to filled): ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
       }
       
       console.log(`U1: Valid violation with evidence: ${v.evidence?.substring(0, 100)}`);
