@@ -290,23 +290,32 @@ Perform qualitative judgment based on UI intent and visual hierarchy.
 
 ### U1 (Unclear primary action) — STRICT EVIDENCE-BASED DETECTION RULES:
 
+**CRITICAL — VISUAL EMPHASIS DETECTION:**
+When analyzing button styling in screenshots, carefully distinguish between:
+- **FILLED/PRIMARY button**: Solid background color (e.g., blue, dark, primary color filled)
+- **OUTLINED button**: Border only, transparent/white background
+- **GHOST button**: No border, transparent background, text only
+
 **PREREQUISITE — MANDATORY EVIDENCE REQUIREMENTS:**
 ONLY emit a U1 violation when ALL of the following conditions are met:
 1. **Two or more actionable controls** are VISUALLY present in the same action area (e.g., dialog footer, button group, form actions, modal footer, card actions)
 2. **The primary action is explicitly identifiable** via one of:
    - Semantic label (e.g., "Save", "Submit", "Confirm", "Create", "Send", "Delete", "Continue")
    - Visual prominence (solid/filled button appearance)
-3. **The primary action has equal or lower visual emphasis** than secondary actions:
-   - Both buttons appear visually identical (same fill, same border style)
-   - OR the cancel/secondary button appears MORE prominent
+3. **BOTH buttons' visual styling MUST be observable and compared:**
+   - **PASS (no violation)**: Primary button is visually FILLED/SOLID AND secondary is OUTLINED/GHOST
+   - **VIOLATION**: BOTH buttons appear visually identical (both outlined, both ghost, or both filled)
+   - **VIOLATION**: Secondary appears MORE prominent than primary
 
 **NO SPECULATION RULE — ABSOLUTE:**
 - If you cannot SEE both the primary and secondary actions in the screenshot, DO NOT emit U1
 - If you cannot determine the styling difference from the visual, DO NOT emit U1
+- If the primary button appears FILLED (solid background) and secondary appears OUTLINED → that is CORRECT hierarchy, NOT a violation
 - DO NOT use conditional language ("if", "could", "might", "would", "may") to justify a violation
 - DO NOT speculate about buttons that might exist outside the visible area
 
 **PASS-SILENCE POLICY:**
+- If the primary button is visually prominent (filled/solid) AND secondary is de-emphasized (outlined/ghost) → PASS (no output)
 - If U1 cannot be confirmed with available visual evidence → produce NO OUTPUT for U1
 - Silent PASS means: do not include U1 in violations array, no corrective prompt, no contextual hint
 
@@ -316,20 +325,20 @@ ONLY emit a U1 violation when ALL of the following conditions are met:
   "ruleId": "U1",
   "ruleName": "Unclear primary action",
   "category": "usability",
-  "evidence": "Dialog footer shows two buttons: 'Cancel' and 'Submit'. Both appear as outlined buttons with no visual distinction.",
-  "primaryAction": "Submit button",
-  "secondaryAction": "Cancel button",
-  "stylingComparison": "Both buttons appear as outlined/ghost buttons with identical visual weight.",
-  "diagnosis": "The primary action (Submit) and secondary action (Cancel) have equal visual emphasis. Users may struggle to identify the main action.",
-  "contextualHint": "Differentiate primary and secondary actions in dialog footer by making the primary action visually prominent.",
+  "evidence": "Dialog footer shows two buttons: 'Cancel' and 'Submit'. BOTH appear as outlined buttons with transparent backgrounds and no visual distinction.",
+  "primaryAction": "Submit button (appears outlined)",
+  "secondaryAction": "Cancel button (appears outlined)",
+  "stylingComparison": "Both buttons appear as outlined buttons with identical visual weight - neither has a filled/solid background.",
+  "diagnosis": "The primary action (Submit) and secondary action (Cancel) have equal visual emphasis because BOTH appear as outlined buttons. Users may struggle to identify the main action.",
+  "contextualHint": "Differentiate primary and secondary actions in dialog footer by making the primary action visually prominent with a solid/filled background.",
   "confidence": 0.75
 }
 \`\`\`
 
-**DO NOT REPORT:**
+**DO NOT REPORT (PASS silently):**
 - Single-button forms or dialogs (no competing actions visible)
 - Areas where only one actionable button is visible
-- Cases where primary button is clearly more prominent (solid/filled) than secondary (outlined/ghost)
+- Cases where primary button is clearly more prominent (solid/filled background) than secondary (outlined/ghost)
 - Speculative scenarios based on assumptions about buttons outside the screenshot
 
 For EACH of the following rules, explicitly decide whether it is violated or not:
@@ -591,6 +600,29 @@ serve(async (req) => {
       const hasStylingEvidence = /variant|outline|ghost|default|primary|solid|filled|identical|equal.*emphasis|similar.*appearance|same.*styl|no.*distinction|equal.*weight|visual.*weight/.test(combined);
       if (!hasStylingEvidence) {
         console.log(`U1: Filtering out - no styling comparison evidence: ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      // FILTER: Check for false positives where primary is actually visually emphasized correctly
+      // If primary is described as "filled/solid/prominent" AND secondary is "outlined/ghost" → PASS (filter out)
+      const primaryIsFilled = /(?:submit|primary|confirm|save|create|send|continue).*(?:filled|solid|prominent|dark|colored|bg-)/.test(combined) ||
+                              /primary.*(?:filled|solid|prominent)/.test(combined);
+      const secondaryIsOutlined = /(?:cancel|secondary|dismiss|close).*(?:outline|ghost|transparent|border)/.test(combined) ||
+                                  /secondary.*(?:outline|ghost)/.test(combined);
+      
+      // If primary appears emphasized and secondary appears de-emphasized → correct hierarchy, not a violation
+      if (primaryIsFilled && secondaryIsOutlined) {
+        console.log(`U1: Filtering out - primary is visually filled/prominent, secondary is outlined/ghost (correct hierarchy): ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      // FILTER: Must explicitly state BOTH buttons appear similar for "equal emphasis" claim
+      const claimsEqualEmphasis = /equal.*emphasis|identical|same.*styl|both.*outline|both.*ghost|both.*filled|no.*distinction|equal.*weight/.test(combined);
+      const explicitlyBothSimilar = /both.*(?:appear|look|are|use).*(?:outline|ghost|filled|identical|same)|neither.*(?:filled|prominent)|no.*visual.*distinction/.test(combined);
+      
+      // If claiming equal emphasis but not explicitly stating both appear similar → filter out
+      if (claimsEqualEmphasis && !explicitlyBothSimilar) {
+        console.log(`U1: Filtering out - claims equal emphasis without explicit comparison of both buttons' appearance: ${v.evidence?.substring(0, 100)}`);
         return false;
       }
       
