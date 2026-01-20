@@ -288,6 +288,50 @@ ${rules.accessibility.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id
 Independently reason about the UI based on HCI principles. Do NOT rely solely on code warnings.
 Perform qualitative judgment based on UI intent and visual hierarchy.
 
+### U1 (Unclear primary action) — STRICT EVIDENCE-BASED DETECTION RULES:
+
+**PREREQUISITE — MANDATORY EVIDENCE REQUIREMENTS:**
+ONLY emit a U1 violation when ALL of the following conditions are met:
+1. **Two or more actionable controls** are VISUALLY present in the same action area (e.g., dialog footer, button group, form actions, modal footer, card actions)
+2. **The primary action is explicitly identifiable** via one of:
+   - Semantic label (e.g., "Save", "Submit", "Confirm", "Create", "Send", "Delete", "Continue")
+   - Visual prominence (solid/filled button appearance)
+3. **The primary action has equal or lower visual emphasis** than secondary actions:
+   - Both buttons appear visually identical (same fill, same border style)
+   - OR the cancel/secondary button appears MORE prominent
+
+**NO SPECULATION RULE — ABSOLUTE:**
+- If you cannot SEE both the primary and secondary actions in the screenshot, DO NOT emit U1
+- If you cannot determine the styling difference from the visual, DO NOT emit U1
+- DO NOT use conditional language ("if", "could", "might", "would", "may") to justify a violation
+- DO NOT speculate about buttons that might exist outside the visible area
+
+**PASS-SILENCE POLICY:**
+- If U1 cannot be confirmed with available visual evidence → produce NO OUTPUT for U1
+- Silent PASS means: do not include U1 in violations array, no corrective prompt, no contextual hint
+
+**WHAT TO REPORT (when evidence is complete):**
+\`\`\`json
+{
+  "ruleId": "U1",
+  "ruleName": "Unclear primary action",
+  "category": "usability",
+  "evidence": "Dialog footer shows two buttons: 'Cancel' and 'Submit'. Both appear as outlined buttons with no visual distinction.",
+  "primaryAction": "Submit button",
+  "secondaryAction": "Cancel button",
+  "stylingComparison": "Both buttons appear as outlined/ghost buttons with identical visual weight.",
+  "diagnosis": "The primary action (Submit) and secondary action (Cancel) have equal visual emphasis. Users may struggle to identify the main action.",
+  "contextualHint": "Differentiate primary and secondary actions in dialog footer by making the primary action visually prominent.",
+  "confidence": 0.75
+}
+\`\`\`
+
+**DO NOT REPORT:**
+- Single-button forms or dialogs (no competing actions visible)
+- Areas where only one actionable button is visible
+- Cases where primary button is clearly more prominent (solid/filled) than secondary (outlined/ghost)
+- Speculative scenarios based on assumptions about buttons outside the screenshot
+
 For EACH of the following rules, explicitly decide whether it is violated or not:
 ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name} — ${r.diagnosis}`).join('\n')}
 
@@ -298,7 +342,6 @@ Consider:
 - Element grouping and alignment
 - Feedback mechanisms
 - Navigation clarity
-- Cross-screen consistency
 
 ## PASS 3 — Ethical & Dark Pattern Risks
 Reason about potential manipulation or deceptive design:
@@ -510,8 +553,57 @@ serve(async (req) => {
       }
     });
     
-    // Process non-A1/A2/A4/A5 violations (no special filtering needed)
-    const filteredOtherViolations = otherViolations
+    // ========== U1 EVIDENCE GATING ==========
+    // Filter out speculative U1 violations that lack proper evidence
+    const u1Violations: any[] = [];
+    const nonU1OtherViolations: any[] = [];
+    
+    otherViolations.forEach((v: any) => {
+      if (v.ruleId === 'U1') {
+        u1Violations.push(v);
+      } else {
+        nonU1OtherViolations.push(v);
+      }
+    });
+    
+    // Validate U1 violations with strict evidence requirements
+    const validatedU1Violations = u1Violations.filter((v: any) => {
+      const evidence = (v.evidence || '').toLowerCase();
+      const diagnosis = (v.diagnosis || '').toLowerCase();
+      const combined = evidence + ' ' + diagnosis;
+      
+      // FILTER: Speculative language indicates incomplete evidence
+      const hasSpeculativeLanguage = /\bif\b.*\b(also|uses?|were?|is)\b|\bcould\b|\bmight\b|\bwould\b|\bmay\b(?!\s+struggle)|\bpossibly\b|\bpotentially\b|\bassuming\b|\bif the\b/.test(combined);
+      if (hasSpeculativeLanguage) {
+        console.log(`U1: Filtering out speculative violation: ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      // FILTER: Must mention at least two distinct actions/buttons
+      const hasTwoActions = /\btwo\b|\bboth\b|\band\b.*\bbutton|\bcancel.*submit\b|\bsubmit.*cancel\b|\bprimary.*secondary\b|\bsecondary.*primary\b|\bconfirm.*cancel\b|\bcancel.*confirm\b/.test(combined);
+      const mentionsMultipleButtons = (combined.match(/\bbutton/g) || []).length >= 2;
+      if (!hasTwoActions && !mentionsMultipleButtons) {
+        console.log(`U1: Filtering out - does not evidence two actions: ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      // FILTER: Must identify styling comparison or visual prominence information
+      const hasStylingEvidence = /variant|outline|ghost|default|primary|solid|filled|identical|equal.*emphasis|similar.*appearance|same.*styl|no.*distinction|equal.*weight|visual.*weight/.test(combined);
+      if (!hasStylingEvidence) {
+        console.log(`U1: Filtering out - no styling comparison evidence: ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      console.log(`U1: Valid violation with evidence: ${v.evidence?.substring(0, 100)}`);
+      return true;
+    });
+    
+    if (u1Violations.length > 0 && validatedU1Violations.length === 0) {
+      console.log(`U1: No valid violations found (${u1Violations.length} filtered out as speculative or lacking evidence)`);
+    }
+    
+    // Process non-A1/A2/A4/A5/U1 violations
+    const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
         
