@@ -684,6 +684,17 @@ serve(async (req) => {
       );
     }
 
+    // Validate selectedRules
+    const selectedRulesSet = new Set(selectedRules || []);
+    if (selectedRulesSet.size === 0) {
+      return new Response(
+        JSON.stringify({ success: false, error: "No rules selected for analysis" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    console.log(`Selected rules for analysis: ${Array.from(selectedRulesSet).join(', ')}`);
+
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       throw new Error("LOVABLE_API_KEY is not configured");
@@ -731,12 +742,14 @@ serve(async (req) => {
     const stack = detectStack(files);
     console.log(`Detected stack: ${stack}`);
 
-    // Compute A1 contrast violations directly
+    // Compute A1 contrast violations directly - ONLY if A1 is selected
     const contrastViolations: ContrastViolation[] = [];
-    if (selectedRules.includes('A1')) {
+    if (selectedRulesSet.has('A1')) {
       const computed = analyzeContrastInCode(files);
       contrastViolations.push(...computed);
       console.log(`Computed ${contrastViolations.length} contrast violations`);
+    } else {
+      console.log('A1 not selected, skipping contrast analysis');
     }
 
     // Build code summary for AI
@@ -812,13 +825,25 @@ ${codeContent}`,
     // Enhance violations with corrective prompts and filter out invalid reports
     const allRules = [...rules.accessibility, ...rules.usability, ...rules.ethics];
     
-    // Separate A2, A4, and A5 violations for aggregation
+    // CRITICAL: Filter violations to ONLY include selected rules
+    // This ensures unselected rules are never reported, even if AI returns them
+    const filteredBySelection = (analysisResult.violations || []).filter((v: any) => {
+      const isSelected = selectedRulesSet.has(v.ruleId);
+      if (!isSelected) {
+        console.log(`Filtering out violation for unselected rule: ${v.ruleId}`);
+      }
+      return isSelected;
+    });
+    
+    console.log(`Filtered ${(analysisResult.violations || []).length - filteredBySelection.length} violations from unselected rules`);
+    
+    // Separate A2, A4, and A5 violations for aggregation (only from selected rules)
     const a2Violations: any[] = [];
     const a4Violations: any[] = [];
     const a5Violations: any[] = [];
     const otherViolations: any[] = [];
     
-    (analysisResult.violations || []).forEach((v: any) => {
+    filteredBySelection.forEach((v: any) => {
       if (v.ruleId === 'A2') {
         a2Violations.push(v);
       } else if (v.ruleId === 'A4') {
