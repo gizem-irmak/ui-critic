@@ -318,15 +318,25 @@ Trigger U1 when ALL are true:
 
 ---
 
-**CASE B — Multiple competing primary actions**
+**CASE B — Multiple equally emphasized actions (no clear primary)**
 
 Trigger U1 when ALL are true:
-- Three or more actions are visible in the same visual group or container
-- Two or more actions appear as high-emphasis buttons (filled/solid backgrounds)
+- Two or more actions are visible in the same action group or container
+- Two or more actions appear as high-emphasis buttons (filled/solid backgrounds, dark colored, prominent styling)
 - No single action is visually distinguished as dominant (all appear equally prominent)
 
+IMPORTANT FOR CASE B:
+- Does NOT require a de-emphasized action to exist
+- Detection is based on observable visual styles, NOT inferred intent from labels
+- Use confidence 70-80% when 2+ filled/primary-styled buttons are detected
+
 **Example evidence for CASE B:**
+"Form footer shows 'Apply' and 'Submit' buttons. Both appear as filled buttons with identical visual prominence - no clear primary action."
 "Card actions area shows three buttons: 'Save', 'Submit', 'Publish'. All three appear as filled buttons with equal prominence."
+
+**Output wording for CASE B:**
+- Describe as "multiple equally emphasized actions" or "no clear primary action among high-emphasis buttons"
+- Do NOT mention secondary actions being weaker (since none are)
 
 ---
 
@@ -697,25 +707,33 @@ serve(async (req) => {
       }
       
       // ========== CASE B: Multiple competing primary actions ==========
-      const isCaseB = caseType === 'B' || /three.*(?:button|action)|multiple.*(?:primary|filled)|competing.*primary|all.*(?:filled|prominent)|no.*single.*dominant/.test(combined);
+      const isCaseB = caseType === 'B' || /(?:two|2|multiple|both).*(?:filled|primary|high.*emphasis)|competing.*(?:primary|action)|all.*(?:filled|prominent)|no.*(?:clear|single).*(?:primary|dominant|hierarchy)|equally.*(?:emphasized|prominent)|same.*(?:emphasis|prominence)/.test(combined);
       
       if (isCaseB) {
-        // Must mention 3+ actions or buttons
-        const hasThreeOrMore = /three|3|multiple|all.*button|several/.test(combined);
+        // Must mention 2+ actions or buttons with high emphasis
+        const hasTwoOrMore = /two|2|both|multiple|all.*button|several|three|3/.test(combined);
         const buttonCount = (combined.match(/\bbutton/g) || []).length;
-        if (!hasThreeOrMore && buttonCount < 3) {
-          console.log(`U1 Case B: Filtering out - does not evidence 3+ actions: ${v.evidence?.substring(0, 100)}`);
+        if (!hasTwoOrMore && buttonCount < 2) {
+          console.log(`U1 Case B: Filtering out - does not evidence 2+ actions: ${v.evidence?.substring(0, 100)}`);
           return false;
         }
         
-        // Must evidence that 2+ actions have high emphasis
-        const hasCompetingEmphasis = /all.*(?:filled|prominent)|(?:two|2|multiple).*(?:filled|primary|high.*emphasis)|no.*(?:single|clear).*dominant|equal.*prominence/.test(combined);
-        if (!hasCompetingEmphasis) {
-          console.log(`U1 Case B: Filtering out - no evidence of competing high-emphasis actions: ${v.evidence?.substring(0, 100)}`);
+        // Must evidence that 2+ actions have high emphasis (filled/primary/solid styling)
+        const hasMultipleHighEmphasis = /(?:both|two|2|all|multiple).*(?:filled|primary|solid|prominent|dark|colored|high.*emphasis)|(?:filled|primary|solid).*(?:and|,).*(?:filled|primary|solid)|no.*(?:single|clear).*(?:dominant|primary|hierarchy)|equally.*(?:emphasized|prominent)|same.*(?:emphasis|prominence|styling)|multiple.*equally|identical.*(?:visual|prominence|weight)/.test(combined);
+        if (!hasMultipleHighEmphasis) {
+          console.log(`U1 Case B: Filtering out - no evidence of multiple high-emphasis actions: ${v.evidence?.substring(0, 100)}`);
           return false;
         }
         
-        console.log(`U1 Case B: Valid violation with evidence: ${v.evidence?.substring(0, 100)}`);
+        // FALSE POSITIVE CHECK: If only one high-emphasis action exists, this is NOT Case B
+        const singlePrimaryExists = /(?:single|one|only).*(?:primary|filled|prominent)/.test(combined) && 
+                                    !/no.*(?:single|clear)|(?:two|both|multiple)/.test(combined);
+        if (singlePrimaryExists) {
+          console.log(`U1 Case B: Filtering out - single primary action exists (correct hierarchy): ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        console.log(`U1 Case B: Valid violation - multiple equally emphasized actions: ${v.evidence?.substring(0, 100)}`);
         return true;
       }
       
