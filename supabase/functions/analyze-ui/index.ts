@@ -288,58 +288,121 @@ ${rules.accessibility.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id
 Independently reason about the UI based on HCI principles. Do NOT rely solely on code warnings.
 Perform qualitative judgment based on UI intent and visual hierarchy.
 
-### U1 (Unclear primary action) — STRICT EVIDENCE-BASED DETECTION RULES:
+### U1 (Unclear primary action) — COMPREHENSIVE EVIDENCE-BASED DETECTION RULES:
+
+**GOAL:** Detect unclear primary action issues whenever visual hierarchy fails, based only on observable visual evidence. Do not speculate. Do not infer intent.
 
 **CRITICAL — VISUAL EMPHASIS DETECTION:**
 When analyzing button styling in screenshots, carefully distinguish between:
 - **FILLED/PRIMARY button**: Solid background color (e.g., blue, dark, primary color filled)
 - **OUTLINED button**: Border only, transparent/white background
 - **GHOST button**: No border, transparent background, text only
+- **TEXT/LINK button**: Just text, possibly underlined, no background or border
 
-**PREREQUISITE — MANDATORY EVIDENCE REQUIREMENTS:**
-ONLY emit a U1 violation when ALL of the following conditions are met:
-1. **Two or more actionable controls** are VISUALLY present in the same action area (e.g., dialog footer, button group, form actions, modal footer, card actions)
-2. **The primary action is explicitly identifiable** via one of:
-   - Semantic label (e.g., "Save", "Submit", "Confirm", "Create", "Send", "Delete", "Continue")
-   - Visual prominence (solid/filled button appearance)
-3. **BOTH buttons' visual styling MUST be observable and compared:**
-   - **PASS (no violation)**: Primary button is visually FILLED/SOLID AND secondary is OUTLINED/GHOST
-   - **VIOLATION**: BOTH buttons appear visually identical (both outlined, both ghost, or both filled)
-   - **VIOLATION**: Secondary appears MORE prominent than primary
+---
+
+**U1 MUST TRIGGER if ANY of the following evidence-based cases are met:**
+
+---
+
+**CASE A — Equal emphasis between primary and secondary actions**
+
+Trigger U1 when ALL are true:
+- Two or more actions are VISUALLY present in the same action area (dialog footer, card actions, button group)
+- A primary action is identifiable (e.g., Submit, Save, Confirm, Apply, Create, Send, Continue)
+- The primary action has equal or lower visual emphasis than at least one secondary action
+  (e.g., BOTH appear as outlined buttons, or secondary appears more prominent)
+
+**Example evidence for CASE A:**
+"Dialog footer shows 'Cancel' and 'Submit'. BOTH appear as outlined buttons with identical visual weight."
+
+---
+
+**CASE B — Multiple competing primary actions**
+
+Trigger U1 when ALL are true:
+- Three or more actions are visible in the same visual group or container
+- Two or more actions appear as high-emphasis buttons (filled/solid backgrounds)
+- No single action is visually distinguished as dominant (all appear equally prominent)
+
+**Example evidence for CASE B:**
+"Card actions area shows three buttons: 'Save', 'Submit', 'Publish'. All three appear as filled buttons with equal prominence."
+
+---
+
+**CASE C — Hidden affordance in default state**
+
+Trigger U1 when ALL are true:
+- An important action lacks clear button affordance in its visible DEFAULT state
+- The element appears as plain text or has minimal styling that doesn't suggest clickability
+- Button-like styling (background, border, shadow) is not visible in the screenshot
+
+**Example evidence for CASE C:**
+"Primary action appears as plain text without visible button styling (no background, border, or shadow visible)."
+
+---
+
+**CASE D — Primary action visually de-emphasized**
+
+Trigger U1 when ALL are true:
+- A primary action is visible (submit, confirm, save, etc.)
+- It appears with low emphasis styling (outlined, ghost, or text-only)
+- Secondary or less important actions appear with higher emphasis (filled/solid background)
+
+**Example evidence for CASE D:**
+"Submit button appears outlined while Cancel button appears filled. Primary action is less prominent than secondary."
+
+---
+
+**STRICT FALSE-POSITIVE PREVENTION — DO NOT TRIGGER U1 if ANY are true:**
+- Only ONE action is visible (no competing actions)
+- The primary action is clearly MORE visually prominent (filled/solid background) than others (outlined/ghost)
+- Action hierarchy cannot be evaluated due to incomplete visibility
+- The issue relies on speculation ("if", "could", "might", "would")
+- Cannot visually determine styling for BOTH actions in the screenshot
+
+---
 
 **NO SPECULATION RULE — ABSOLUTE:**
-- If you cannot SEE both the primary and secondary actions in the screenshot, DO NOT emit U1
-- If you cannot determine the styling difference from the visual, DO NOT emit U1
-- If the primary button appears FILLED (solid background) and secondary appears OUTLINED → that is CORRECT hierarchy, NOT a violation
+- If you cannot SEE both the primary and secondary actions in the screenshot → DO NOT emit U1
+- If you cannot determine the styling difference from the visual → DO NOT emit U1
+- If the primary button appears FILLED and secondary appears OUTLINED → that is CORRECT hierarchy, NOT a violation
 - DO NOT use conditional language ("if", "could", "might", "would", "may") to justify a violation
 - DO NOT speculate about buttons that might exist outside the visible area
 
-**PASS-SILENCE POLICY:**
-- If the primary button is visually prominent (filled/solid) AND secondary is de-emphasized (outlined/ghost) → PASS (no output)
-- If U1 cannot be confirmed with available visual evidence → produce NO OUTPUT for U1
-- Silent PASS means: do not include U1 in violations array, no corrective prompt, no contextual hint
+---
 
-**WHAT TO REPORT (when evidence is complete):**
+**OUTPUT FORMAT (when evidence is complete):**
 \`\`\`json
 {
   "ruleId": "U1",
   "ruleName": "Unclear primary action",
   "category": "usability",
-  "evidence": "Dialog footer shows two buttons: 'Cancel' and 'Submit'. BOTH appear as outlined buttons with transparent backgrounds and no visual distinction.",
-  "primaryAction": "Submit button (appears outlined)",
-  "secondaryAction": "Cancel button (appears outlined)",
-  "stylingComparison": "Both buttons appear as outlined buttons with identical visual weight - neither has a filled/solid background.",
-  "diagnosis": "The primary action (Submit) and secondary action (Cancel) have equal visual emphasis because BOTH appear as outlined buttons. Users may struggle to identify the main action.",
-  "contextualHint": "Differentiate primary and secondary actions in dialog footer by making the primary action visually prominent with a solid/filled background.",
-  "confidence": 0.75
+  "caseType": "A" | "B" | "C" | "D",
+  "evidence": "[Specific visual observation for the triggered case]",
+  "primaryAction": "[Button label and visual appearance]",
+  "secondaryAction": "[Button label and visual appearance]" (if applicable),
+  "stylingComparison": "[Explicit comparison of visual treatments observed]",
+  "diagnosis": "Users may struggle to identify the main action because [evidence-based reason]. [Explain visual hierarchy failure].",
+  "contextualHint": "[Location]-specific guidance on establishing visual hierarchy.",
+  "confidence": 0.65-0.80
 }
 \`\`\`
 
-**DO NOT REPORT (PASS silently):**
-- Single-button forms or dialogs (no competing actions visible)
-- Areas where only one actionable button is visible
-- Cases where primary button is clearly more prominent (solid/filled background) than secondary (outlined/ghost)
-- Speculative scenarios based on assumptions about buttons outside the screenshot
+---
+
+**PASS-SILENCE POLICY:**
+- If none of Cases A, B, C, D apply → produce NO OUTPUT for U1 (silent PASS)
+- If primary appears filled/solid AND secondary appears outlined/ghost → PASS (correct hierarchy)
+- Silent PASS means: do not include U1 in violations array, no corrective prompt
+
+---
+
+**AGGREGATION:**
+- Emit ONE aggregated U1 entry per run
+- Reference only detected UI components or locations (not guideline text as component names)
+- Use heuristic language ("may reduce clarity", "may increase cognitive load")
+- Confidence: 65–80% depending on clarity of evidence
 
 For EACH of the following rules, explicitly decide whether it is violated or not:
 ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name} — ${r.diagnosis}`).join('\n')}
@@ -562,8 +625,9 @@ serve(async (req) => {
       }
     });
     
-    // ========== U1 EVIDENCE GATING ==========
+    // ========== U1 EVIDENCE GATING (Cases A, B, C, D) ==========
     // Filter out speculative U1 violations that lack proper evidence
+    // Supports 4 cases: A (equal emphasis), B (competing primaries), C (hidden affordance), D (de-emphasized primary)
     const u1Violations: any[] = [];
     const nonU1OtherViolations: any[] = [];
     
@@ -575,20 +639,132 @@ serve(async (req) => {
       }
     });
     
-    // Validate U1 violations with strict evidence requirements
+    // Validate U1 violations with strict evidence requirements for all 4 cases
     const validatedU1Violations = u1Violations.filter((v: any) => {
       const evidence = (v.evidence || '').toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
+      const caseType = (v.caseType || '').toUpperCase();
       const combined = evidence + ' ' + diagnosis;
       
-      // FILTER: Speculative language indicates incomplete evidence
+      // FILTER: Speculative language indicates incomplete evidence (applies to ALL cases)
       const hasSpeculativeLanguage = /\bif\b.*\b(also|uses?|were?|is)\b|\bcould\b|\bmight\b|\bwould\b|\bmay\b(?!\s+struggle)|\bpossibly\b|\bpotentially\b|\bassuming\b|\bif the\b/.test(combined);
       if (hasSpeculativeLanguage) {
         console.log(`U1: Filtering out speculative violation: ${v.evidence?.substring(0, 100)}`);
         return false;
       }
       
-      // FILTER: Must mention at least two distinct actions/buttons
+      // ========== CASE A: Equal emphasis between primary and secondary ==========
+      const isCaseA = caseType === 'A' || /equal.*emphasis|identical|same.*styl|both.*outline|both.*ghost|both.*filled|no.*distinction|equal.*weight/.test(combined);
+      
+      if (isCaseA) {
+        // Must mention at least two distinct actions/buttons
+        const hasTwoActions = /\btwo\b|\bboth\b|\band\b.*\bbutton|\bcancel.*submit\b|\bsubmit.*cancel\b|\bprimary.*secondary\b|\bsecondary.*primary\b|\bconfirm.*cancel\b|\bcancel.*confirm\b/.test(combined);
+        const mentionsMultipleButtons = (combined.match(/\bbutton/g) || []).length >= 2;
+        if (!hasTwoActions && !mentionsMultipleButtons) {
+          console.log(`U1 Case A: Filtering out - does not evidence two actions: ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        // Must identify visual styling comparison
+        const hasStylingEvidence = /variant|outline|ghost|default|primary|solid|filled|identical|equal.*emphasis|similar.*appearance|same.*styl|no.*distinction|equal.*weight|visual.*weight/.test(combined);
+        if (!hasStylingEvidence) {
+          console.log(`U1 Case A: Filtering out - no styling comparison evidence: ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        // Check for false positives: primary is filled AND secondary is outline/ghost → PASS
+        const primaryIsFilled = /(?:submit|primary|confirm|save|create|send|continue).*(?:filled|solid|prominent|dark|colored|bg-)/.test(combined) ||
+                                /primary.*(?:filled|solid|prominent)/.test(combined);
+        const secondaryIsOutlined = /(?:cancel|secondary|dismiss|close).*(?:outline|ghost|transparent|border)/.test(combined) ||
+                                    /secondary.*(?:outline|ghost)/.test(combined);
+        
+        if (primaryIsFilled && secondaryIsOutlined) {
+          console.log(`U1 Case A: Filtering out - correct hierarchy (primary=filled, secondary=outlined): ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        // Must explicitly state BOTH buttons appear similar
+        const claimsEqualEmphasis = /equal.*emphasis|identical|same.*styl|both.*outline|both.*ghost|both.*filled|no.*distinction|equal.*weight/.test(combined);
+        const explicitlyBothSimilar = /both.*(?:appear|look|are|use).*(?:outline|ghost|filled|identical|same)|neither.*(?:filled|prominent)|no.*visual.*distinction/.test(combined);
+        
+        if (claimsEqualEmphasis && !explicitlyBothSimilar) {
+          console.log(`U1 Case A: Filtering out - claims equal emphasis without explicit comparison: ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        console.log(`U1 Case A: Valid violation with evidence: ${v.evidence?.substring(0, 100)}`);
+        return true;
+      }
+      
+      // ========== CASE B: Multiple competing primary actions ==========
+      const isCaseB = caseType === 'B' || /three.*(?:button|action)|multiple.*(?:primary|filled)|competing.*primary|all.*(?:filled|prominent)|no.*single.*dominant/.test(combined);
+      
+      if (isCaseB) {
+        // Must mention 3+ actions or buttons
+        const hasThreeOrMore = /three|3|multiple|all.*button|several/.test(combined);
+        const buttonCount = (combined.match(/\bbutton/g) || []).length;
+        if (!hasThreeOrMore && buttonCount < 3) {
+          console.log(`U1 Case B: Filtering out - does not evidence 3+ actions: ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        // Must evidence that 2+ actions have high emphasis
+        const hasCompetingEmphasis = /all.*(?:filled|prominent)|(?:two|2|multiple).*(?:filled|primary|high.*emphasis)|no.*(?:single|clear).*dominant|equal.*prominence/.test(combined);
+        if (!hasCompetingEmphasis) {
+          console.log(`U1 Case B: Filtering out - no evidence of competing high-emphasis actions: ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        console.log(`U1 Case B: Valid violation with evidence: ${v.evidence?.substring(0, 100)}`);
+        return true;
+      }
+      
+      // ========== CASE C: Hidden affordance in default state ==========
+      const isCaseC = caseType === 'C' || /hidden.*affordance|no.*visible.*(?:background|border|styling)|plain.*text|lacks.*button.*styling|discover.*click/.test(combined);
+      
+      if (isCaseC) {
+        // Must evidence lack of button affordance
+        const hasHiddenAffordanceEvidence = /no.*(?:background|border|shadow)|text.*only|plain.*text|link.*style|minimal.*styling|lacks.*affordance|not.*visible|no.*button.*styling/.test(combined);
+        if (!hasHiddenAffordanceEvidence) {
+          console.log(`U1 Case C: Filtering out - no evidence of hidden affordance: ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        // Must identify the element as a primary/important action
+        const isPrimaryAction = /(?:submit|confirm|save|create|send|primary|important|main).*(?:action|button)/.test(combined);
+        if (!isPrimaryAction) {
+          console.log(`U1 Case C: Filtering out - element not identified as primary action: ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        console.log(`U1 Case C: Valid violation with evidence: ${v.evidence?.substring(0, 100)}`);
+        return true;
+      }
+      
+      // ========== CASE D: Primary action visually de-emphasized ==========
+      const isCaseD = caseType === 'D' || /primary.*(?:outline|ghost|less.*prominent)|secondary.*(?:more|higher).*(?:prominent|emphasis)|inverted.*hierarchy/.test(combined);
+      
+      if (isCaseD) {
+        // Must evidence primary has low emphasis
+        const primaryLowEmphasis = /(?:submit|confirm|save|primary).*(?:outline|ghost|text|de-emphasis|less.*prominent)|primary.*(?:appears?|looks?).*(?:outline|ghost|secondary)/.test(combined);
+        if (!primaryLowEmphasis) {
+          console.log(`U1 Case D: Filtering out - no evidence of primary de-emphasis: ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        // Must evidence secondary has higher emphasis
+        const secondaryHighEmphasis = /(?:cancel|secondary|dismiss).*(?:filled|solid|more.*prominent|higher.*emphasis)|secondary.*(?:appears?|looks?).*(?:filled|primary|prominent)/.test(combined);
+        if (!secondaryHighEmphasis) {
+          console.log(`U1 Case D: Filtering out - no evidence of secondary having higher emphasis: ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+        
+        console.log(`U1 Case D: Valid violation with evidence: ${v.evidence?.substring(0, 100)}`);
+        return true;
+      }
+      
+      // ========== Fallback: Generic U1 validation for untagged cases ==========
+      // Must mention at least two distinct actions/buttons
       const hasTwoActions = /\btwo\b|\bboth\b|\band\b.*\bbutton|\bcancel.*submit\b|\bsubmit.*cancel\b|\bprimary.*secondary\b|\bsecondary.*primary\b|\bconfirm.*cancel\b|\bcancel.*confirm\b/.test(combined);
       const mentionsMultipleButtons = (combined.match(/\bbutton/g) || []).length >= 2;
       if (!hasTwoActions && !mentionsMultipleButtons) {
@@ -596,33 +772,21 @@ serve(async (req) => {
         return false;
       }
       
-      // FILTER: Must identify styling comparison or visual prominence information
+      // Must identify styling comparison
       const hasStylingEvidence = /variant|outline|ghost|default|primary|solid|filled|identical|equal.*emphasis|similar.*appearance|same.*styl|no.*distinction|equal.*weight|visual.*weight/.test(combined);
       if (!hasStylingEvidence) {
         console.log(`U1: Filtering out - no styling comparison evidence: ${v.evidence?.substring(0, 100)}`);
         return false;
       }
       
-      // FILTER: Check for false positives where primary is actually visually emphasized correctly
-      // If primary is described as "filled/solid/prominent" AND secondary is "outlined/ghost" → PASS (filter out)
+      // Check for false positives
       const primaryIsFilled = /(?:submit|primary|confirm|save|create|send|continue).*(?:filled|solid|prominent|dark|colored|bg-)/.test(combined) ||
                               /primary.*(?:filled|solid|prominent)/.test(combined);
       const secondaryIsOutlined = /(?:cancel|secondary|dismiss|close).*(?:outline|ghost|transparent|border)/.test(combined) ||
                                   /secondary.*(?:outline|ghost)/.test(combined);
       
-      // If primary appears emphasized and secondary appears de-emphasized → correct hierarchy, not a violation
       if (primaryIsFilled && secondaryIsOutlined) {
-        console.log(`U1: Filtering out - primary is visually filled/prominent, secondary is outlined/ghost (correct hierarchy): ${v.evidence?.substring(0, 100)}`);
-        return false;
-      }
-      
-      // FILTER: Must explicitly state BOTH buttons appear similar for "equal emphasis" claim
-      const claimsEqualEmphasis = /equal.*emphasis|identical|same.*styl|both.*outline|both.*ghost|both.*filled|no.*distinction|equal.*weight/.test(combined);
-      const explicitlyBothSimilar = /both.*(?:appear|look|are|use).*(?:outline|ghost|filled|identical|same)|neither.*(?:filled|prominent)|no.*visual.*distinction/.test(combined);
-      
-      // If claiming equal emphasis but not explicitly stating both appear similar → filter out
-      if (claimsEqualEmphasis && !explicitlyBothSimilar) {
-        console.log(`U1: Filtering out - claims equal emphasis without explicit comparison of both buttons' appearance: ${v.evidence?.substring(0, 100)}`);
+        console.log(`U1: Filtering out - correct hierarchy (primary=filled, secondary=outlined): ${v.evidence?.substring(0, 100)}`);
         return false;
       }
       
