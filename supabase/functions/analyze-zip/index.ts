@@ -733,10 +733,26 @@ Trigger U1 when ALL are true:
 
 ---
 
-**PASS-SILENCE POLICY:**
-- If none of Cases A, B, C, D apply → produce NO OUTPUT for U1 (silent PASS)
-- If primary is variant="default"/filled AND secondary is outline/ghost → PASS (correct hierarchy)
-- Silent PASS means: do not include U1 in violations array, no corrective prompt
+**PASS-SILENCE POLICY — ABSOLUTE:**
+U1 must produce output ONLY when a violation is detected. All other cases must be SILENT.
+
+**EXPLICIT PASS CASES (DO NOT OUTPUT ANYTHING):**
+1. **Single action present**: Only one button/action exists in an action group → PASS (no output)
+2. **Utility action alone**: A single utility action (Clear, Reset, Refresh, Filter, Cancel) without competing actions → PASS (no output)
+3. **Clear hierarchy exists**: Primary action is variant="default"/filled AND secondary actions are outline/ghost → PASS (no output)
+4. **One dominant action**: Multiple actions exist but exactly one uses variant="default"/filled → PASS (no output)
+5. **No visual hierarchy issue**: Action styling is appropriate for context → PASS (no output)
+
+**FORBIDDEN FOR PASS CASES:**
+- DO NOT emit text explaining why something is acceptable
+- DO NOT emit confidence scores for PASS cases
+- DO NOT emit corrective prompts for PASS cases
+- DO NOT emit contextual hints for PASS cases
+- DO NOT include PASS cases in the violations array
+
+**VIOLATION-ONLY OUTPUT:**
+- Only emit U1 when one of Cases A, B, C, or D is TRIGGERED with complete evidence
+- If none apply → produce NO OUTPUT for U1 (do not include in violations array)
 
 ---
 
@@ -1000,9 +1016,48 @@ ${codeContent}`,
     const validatedU1Violations = u1Violations.filter((v: any) => {
       const evidence = (v.evidence || '').toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
+      const contextualHint = (v.contextualHint || '').toLowerCase();
       const caseType = (v.caseType || '').toUpperCase();
-      const combined = evidence + ' ' + diagnosis;
+      const combined = evidence + ' ' + diagnosis + ' ' + contextualHint;
       
+      // ========== PASS CASE SUPPRESSION ==========
+      // Filter out any PASS explanations or non-violation outputs
+      
+      // PASS FILTER 1: Explicit PASS language or explanatory non-violation text
+      const isPassExplanation = /(?:is\s+)?(?:appropriate|acceptable|correct|clear|proper|adequate|sufficient)|hierarchy\s+is\s+(?:clear|correct|appropriate)|no\s+(?:issue|violation|problem)|pass(?:es)?|not\s+a\s+(?:concern|issue|violation)|(?:single|lone)\s+(?:action|button)\s+(?:is|does)|utility\s+(?:action|button)\s+(?:is|does)|correctly\s+(?:styled|emphasized)|proper\s+(?:hierarchy|emphasis)/.test(combined);
+      if (isPassExplanation) {
+        console.log(`U1: Filtering out PASS explanation: ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      // PASS FILTER 2: Single action contexts (no competing actions)
+      const mentionsSingleAction = /(?:only|single|lone|one)\s+(?:action|button|cta)|no\s+(?:other|competing|secondary)\s+(?:action|button)|standalone\s+(?:action|button)/.test(combined);
+      const noMultipleActions = !/(?:two|both|multiple|several|2|3)\s+(?:action|button)|(?:action|button)s?\s+(?:and|,)/.test(combined);
+      if (mentionsSingleAction || (noMultipleActions && !/equal|competing|same|identical|no.*clear|multiple|both/.test(combined))) {
+        // Check if this is truly describing a single action scenario
+        const buttonCount = (combined.match(/\bbutton/g) || []).length;
+        const actionCount = (combined.match(/\baction/g) || []).length;
+        if (buttonCount <= 1 && actionCount <= 1) {
+          console.log(`U1: Filtering out single action context (PASS): ${v.evidence?.substring(0, 100)}`);
+          return false;
+        }
+      }
+      
+      // PASS FILTER 3: Utility action alone without competing primary
+      const isUtilityActionAlone = /(?:clear|reset|refresh|filter|cancel|dismiss|close)\s+(?:all\s+)?(?:button|action|filter).*(?:alone|only|single|standalone)|only\s+(?:a\s+)?(?:clear|reset|refresh|filter)\s+(?:button|action)/.test(combined);
+      if (isUtilityActionAlone) {
+        console.log(`U1: Filtering out utility action alone (PASS): ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      // PASS FILTER 4: Clear hierarchy stated (primary filled, secondary outlined)
+      const statesCorrectHierarchy = /primary\s+(?:is|uses?|has)\s+(?:variant=['"]?default|filled|solid)|(?:submit|confirm|save).*(?:variant=['"]?default|filled).*(?:cancel|dismiss).*(?:variant=['"]?(?:outline|ghost)|outline|ghost)|clear\s+(?:visual\s+)?hierarchy|(?:filled|default)\s+primary.*(?:outlined?|ghost)\s+secondary/.test(combined);
+      if (statesCorrectHierarchy && !/equal|competing|same|identical|no.*clear|multiple.*(?:default|filled)/.test(combined)) {
+        console.log(`U1: Filtering out correct hierarchy description (PASS): ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      // ========== SPECULATIVE LANGUAGE FILTER ==========
       // FILTER: Speculative language indicates incomplete evidence (applies to ALL cases)
       const hasSpeculativeLanguage = /\bif\b.*\b(also|uses?|were?|is)\b|\bcould\b|\bmight\b|\bwould\b|\bmay\b(?!\s+struggle)|\bpossibly\b|\bpotentially\b|\bassuming\b|\bif the\b/.test(combined);
       if (hasSpeculativeLanguage) {
