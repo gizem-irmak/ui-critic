@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { decode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import { ZipReader, BlobReader, TextWriter } from "https://deno.land/x/zipjs@v2.7.32/index.js";
+import * as ts from "npm:typescript@5.4.5";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -44,6 +45,465 @@ const ANALYZABLE_EXTENSIONS = [
   '.css', '.scss', '.sass', '.less',
   '.vue', '.svelte', '.astro'
 ];
+
+// =====================
+// Deterministic UI emphasis inference (static)
+// =====================
+// NOTE: Used to enforce evidence extraction for U1 (competing primary actions)
+// when shadcn-style components omit `variant` and rely on `defaultVariants`.
+
+type Emphasis = 'high' | 'medium' | 'low' | 'unknown';
+
+interface CvaVariantConfig {
+  defaultVariant?: string;
+  variantClassMap: Record<string, string>;
+}
+
+function normalizePath(p: string): string {
+  return p.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function resolveImportToFilePaths(fromFile: string, spec: string): string[] {
+  const s = normalizePath(spec);
+  const fromDir = normalizePath(fromFile).split('/').slice(0, -1).join('/');
+
+  const candidates: string[] = [];
+
+  const withExts = (base: string) => {
+    candidates.push(base);
+    candidates.push(`${base}.tsx`);
+    candidates.push(`${base}.ts`);
+    candidates.push(`${base}.jsx`);
+    candidates.push(`${base}.js`);
+    candidates.push(`${base}/index.tsx`);
+    candidates.push(`${base}/index.ts`);
+    candidates.push(`${base}/index.jsx`);
+    candidates.push(`${base}/index.js`);
+  };
+
+  // Alias @/ -> src/
+  if (s.startsWith('@/')) {
+    const rest = s.slice(2);
+    withExts(`src/${rest}`);
+    // Some zips may omit src/ prefix (rare) — try as-is too
+    withExts(rest);
+    return candidates;
+  }
+
+  // Absolute-ish alias without @ (rare)
+  if (s.startsWith('src/')) {
+    withExts(s);
+    return candidates;
+  }
+
+  // Relative
+  if (s.startsWith('./') || s.startsWith('../')) {
+    const combined = normalizePath(`${fromDir}/${s}`);
+    withExts(combined);
+    return candidates;
+  }
+
+  // Bare module specifier (node_modules) — not resolvable from zip
+  return candidates;
+}
+
+function extractCvaVariantConfig(source: string, cvaVarName: string): CvaVariantConfig | null {
+  try {
+    const sf = ts.createSourceFile('component.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let configObj: ts.ObjectLiteralExpression | null = null;
+
+    // Find: const <cvaVarName> = cva("...", { ... })
+    const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === cvaVarName) {
+        const init = node.initializer;
+        if (
+          init &&
+          ts.isCallExpression(init) &&
+          ts.isIdentifier(init.expression) &&
+          init.expression.text === 'cva' &&
+          init.arguments.length >= 2
+        ) {
+          const secondArg = init.arguments[1];
+          if (ts.isObjectLiteralExpression(secondArg)) {
+            configObj = secondArg;
+            return;
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+    if (!configObj) return null;
+
+    const getProp = (obj: ts.ObjectLiteralExpression, name: string): ts.ObjectLiteralElementLike | undefined =>
+      obj.properties.find((p) => {
+        if (!ts.isPropertyAssignment(p)) return false;
+        const key = p.name;
+        return (ts.isIdentifier(key) && key.text === name) || (ts.isStringLiteral(key) && key.text === name);
+      });
+
+    const variantsProp = getProp(configObj, 'variants');
+    if (!variantsProp || !ts.isPropertyAssignment(variantsProp) || !ts.isObjectLiteralExpression(variantsProp.initializer)) {
+      return null;
+    }
+
+    const variantsObj = variantsProp.initializer;
+    const variantProp = getProp(variantsObj, 'variant');
+    if (!variantProp || !ts.isPropertyAssignment(variantProp) || !ts.isObjectLiteralExpression(variantProp.initializer)) {
+      return null;
+    }
+
+    const variantObj = variantProp.initializer;
+    const variantClassMap: Record<string, string> = {};
+    for (const prop of variantObj.properties) {
+      if (!ts.isPropertyAssignment(prop)) continue;
+      const keyNode = prop.name;
+      const key = ts.isIdentifier(keyNode) ? keyNode.text : ts.isStringLiteral(keyNode) ? keyNode.text : null;
+      if (!key) continue;
+
+      const val = prop.initializer;
+      if (ts.isStringLiteral(val)) {
+        variantClassMap[key] = val.text;
+      } else if (ts.isNoSubstitutionTemplateLiteral(val)) {
+        variantClassMap[key] = val.text;
+      }
+    }
+
+    // defaultVariants: { variant: "default" }
+    let defaultVariant: string | undefined;
+    const defaultVariantsProp = getProp(configObj, 'defaultVariants');
+    if (defaultVariantsProp && ts.isPropertyAssignment(defaultVariantsProp) && ts.isObjectLiteralExpression(defaultVariantsProp.initializer)) {
+      const dvObj = defaultVariantsProp.initializer;
+      const dvVariantProp = getProp(dvObj, 'variant');
+      if (dvVariantProp && ts.isPropertyAssignment(dvVariantProp)) {
+        const init = dvVariantProp.initializer;
+        if (ts.isStringLiteral(init)) defaultVariant = init.text;
+        if (ts.isNoSubstitutionTemplateLiteral(init)) defaultVariant = init.text;
+      }
+    }
+
+    // If not explicitly declared, infer common default
+    if (!defaultVariant) {
+      if (variantClassMap['default']) defaultVariant = 'default';
+      else {
+        const keys = Object.keys(variantClassMap);
+        defaultVariant = keys[0];
+      }
+    }
+
+    return { defaultVariant, variantClassMap };
+  } catch {
+    return null;
+  }
+}
+
+function getJsxAttrString(opening: ts.JsxOpeningLikeElement, attrName: string): string | null {
+  const attr = opening.attributes.properties.find((p) => {
+    if (!ts.isJsxAttribute(p)) return false;
+    return p.name.text === attrName;
+  });
+  if (!attr || !ts.isJsxAttribute(attr)) return null;
+  const init = attr.initializer;
+  if (!init) return null;
+  if (ts.isStringLiteral(init)) return init.text;
+  if (ts.isJsxExpression(init)) {
+    const expr = init.expression;
+    if (!expr) return null;
+    if (ts.isStringLiteral(expr)) return expr.text;
+    if (ts.isNoSubstitutionTemplateLiteral(expr)) return expr.text;
+  }
+  return null;
+}
+
+function hasJsxAttr(opening: ts.JsxOpeningLikeElement, attrName: string): boolean {
+  return opening.attributes.properties.some((p) => ts.isJsxAttribute(p) && p.name.text === attrName);
+}
+
+function getJsxTagName(opening: ts.JsxOpeningLikeElement): string | null {
+  const tag = opening.tagName;
+  if (ts.isIdentifier(tag)) return tag.text;
+  if (ts.isPropertyAccessExpression(tag) && ts.isIdentifier(tag.name)) return tag.name.text;
+  return null;
+}
+
+function looksLikeFilledClass(className: string): boolean {
+  const s = className.toLowerCase();
+  // High-emphasis indicators
+  if (/\bbg-(primary|destructive|blue|indigo|emerald|green|red|accent)(?:-|\b)/.test(s)) return true;
+  // Avoid treating bg-background as filled
+  if (/\bbg-background\b/.test(s)) return false;
+  // Generic filled background heuristic (not transparent)
+  if (/\bbg-/.test(s) && !/\bbg-transparent\b/.test(s)) return true;
+  return false;
+}
+
+function looksLikeOutlineOrGhostClass(className: string): boolean {
+  const s = className.toLowerCase();
+  return /\bborder\b/.test(s) || /\bbg-transparent\b/.test(s) || /\bunderline\b/.test(s);
+}
+
+function classifyButtonEmphasis(params: {
+  resolvedVariant: string | null;
+  variantConfig: CvaVariantConfig | null;
+  instanceClassName: string;
+}): { emphasis: Emphasis; styleKey: string | null } {
+  const { resolvedVariant, variantConfig, instanceClassName } = params;
+
+  if (!resolvedVariant || !variantConfig) {
+    // Fall back to className-only heuristics (still deterministic)
+    if (!instanceClassName) return { emphasis: 'unknown', styleKey: null };
+    if (looksLikeFilledClass(instanceClassName) && !looksLikeOutlineOrGhostClass(instanceClassName)) return { emphasis: 'high', styleKey: 'filled' };
+    if (looksLikeOutlineOrGhostClass(instanceClassName)) return { emphasis: 'low', styleKey: 'outline' };
+    return { emphasis: 'unknown', styleKey: null };
+  }
+
+  const lowVariants = new Set(['outline', 'ghost', 'link']);
+  const mediumVariants = new Set(['secondary']);
+  const highVariants = new Set(['default', 'primary', 'destructive']);
+
+  const variantClasses = variantConfig.variantClassMap[resolvedVariant] || '';
+  const combined = `${variantClasses} ${instanceClassName}`.trim();
+
+  if (lowVariants.has(resolvedVariant)) return { emphasis: 'low', styleKey: resolvedVariant };
+  if (mediumVariants.has(resolvedVariant)) return { emphasis: 'medium', styleKey: resolvedVariant };
+  if (highVariants.has(resolvedVariant)) return { emphasis: 'high', styleKey: resolvedVariant };
+
+  // Deterministic fallback using extracted variant classes
+  if (looksLikeFilledClass(combined) && !looksLikeOutlineOrGhostClass(combined)) return { emphasis: 'high', styleKey: resolvedVariant };
+  if (looksLikeOutlineOrGhostClass(combined)) return { emphasis: 'low', styleKey: resolvedVariant };
+  return { emphasis: 'unknown', styleKey: null };
+}
+
+function extractCtaLabel(node: ts.JsxElement | ts.JsxSelfClosingElement): string {
+  if (ts.isJsxSelfClosingElement(node)) return getJsxTagName(node) || 'CTA';
+  for (const child of node.children) {
+    if (ts.isJsxText(child)) {
+      const t = child.text.replace(/\s+/g, ' ').trim();
+      if (t) return t;
+    }
+    if (ts.isJsxExpression(child) && child.expression && ts.isStringLiteral(child.expression)) {
+      const t = child.expression.text.trim();
+      if (t) return t;
+    }
+  }
+  return getJsxTagName(node.openingElement) || 'CTA';
+}
+
+function detectU1CompetingPrimaryActions(allFiles: Map<string, string>): {
+  violation: any | null;
+} {
+  // 1) Find Button implementation via common shadcn import paths
+  const resolveKnownButtonImpl = (): { filePath: string; config: CvaVariantConfig } | null => {
+    const candidates = [
+      'src/components/ui/button.tsx',
+      'src/components/ui/button.ts',
+      'components/ui/button.tsx',
+      'components/ui/button.ts',
+    ];
+    for (const p of candidates) {
+      const content = allFiles.get(p);
+      if (!content) continue;
+      const cfg = extractCvaVariantConfig(content, 'buttonVariants');
+      if (cfg) return { filePath: p, config: cfg };
+    }
+    return null;
+  };
+
+  const buttonImpl = resolveKnownButtonImpl();
+
+  // If we cannot parse Button, we must not emit U1 (safe fallback).
+  if (!buttonImpl) return { violation: null };
+
+  const findings: Array<{
+    filePath: string;
+    componentName: string;
+    groupTag: string;
+    labels: string[];
+    resolvedVariant: string;
+  }> = [];
+
+  for (const [filePathRaw, content] of allFiles.entries()) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx)$/.test(filePath)) continue;
+
+    let sf: ts.SourceFile;
+    try {
+      sf = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    } catch {
+      continue;
+    }
+
+    // Build import map for Button identifiers in this file
+    const buttonLocalNames = new Set<string>();
+    const importDecls: ts.ImportDeclaration[] = [];
+
+    ts.forEachChild(sf, (node) => {
+      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+        importDecls.push(node);
+      }
+    });
+
+    for (const decl of importDecls) {
+      const spec = decl.moduleSpecifier.text;
+      const clause = decl.importClause;
+      if (!clause) continue;
+      const named = clause.namedBindings;
+
+      // Only consider imports that resolve to the shadcn Button file
+      const resolvedPaths = resolveImportToFilePaths(filePath, spec);
+      const resolvesToButton = resolvedPaths.some((p) => normalizePath(p) === normalizePath(buttonImpl.filePath));
+      const alsoAllowCommonSpec = /components\/ui\/button$|components\/ui\/button\.tsx$|@\/components\/ui\/button$|@\/components\/ui\/button\.tsx$/.test(
+        normalizePath(spec),
+      );
+      if (!resolvesToButton && !alsoAllowCommonSpec) continue;
+
+      if (named && ts.isNamedImports(named)) {
+        for (const el of named.elements) {
+          const imported = el.propertyName ? el.propertyName.text : el.name.text;
+          const local = el.name.text;
+          if (imported === 'Button') buttonLocalNames.add(local);
+        }
+      }
+      if (clause.name && clause.name.text) {
+        // default import — treat as potentially Button
+        buttonLocalNames.add(clause.name.text);
+      }
+    }
+
+    if (buttonLocalNames.size === 0) continue;
+
+    // Best-effort component name extraction
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || 'UnknownComponent';
+    const exportedFn = content.match(/export\s+function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+const\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+    else if (exportedConst?.[1]) componentName = exportedConst[1];
+
+    // Traverse JSX elements to find action groups
+    const visit = (node: ts.Node) => {
+      if (ts.isJsxElement(node)) {
+        const opening = node.openingElement;
+        const tagName = getJsxTagName(opening) || 'Unknown';
+        const className = getJsxAttrString(opening, 'className') || '';
+
+        const isFlexGapRow = /\bflex\b/.test(className) && (/\bgap-\d+\b/.test(className) || /\bspace-x-\d+\b/.test(className) || /\bjustify-/.test(className));
+        const isCardFooter = tagName === 'CardFooter' || /footer/i.test(tagName);
+
+        // Collect direct CTA-like children (siblings)
+        const ctas: Array<{ node: ts.JsxElement | ts.JsxSelfClosingElement; emphasis: Emphasis; styleKey: string | null; resolvedVariant: string | null }> = [];
+
+        for (const child of node.children) {
+          const el = ts.isJsxElement(child) ? child : ts.isJsxSelfClosingElement(child) ? child : null;
+          if (!el) continue;
+
+          const childOpening = ts.isJsxElement(el) ? el.openingElement : el;
+          const childTag = getJsxTagName(childOpening);
+          if (!childTag) continue;
+
+          const childClass = getJsxAttrString(childOpening, 'className') || '';
+          const hasOnClick = hasJsxAttr(childOpening, 'onClick');
+          const role = getJsxAttrString(childOpening, 'role');
+
+          const isNativeButton = childTag === 'button';
+          const isRoleButton = role === 'button';
+          const isHeuristicCtaComponent = /(?:Button|Action|CTA|Apply|Save|Share)$/i.test(childTag);
+          const isButtonComponent = buttonLocalNames.has(childTag);
+          const looksButtonishByClasses = hasOnClick && (/\brounded\b/.test(childClass) || /\bpx-\d+\b/.test(childClass) || /\bpy-\d+\b/.test(childClass) || /\bbg-/.test(childClass));
+
+          const isCta = isNativeButton || isRoleButton || isButtonComponent || isHeuristicCtaComponent || looksButtonishByClasses;
+          if (!isCta) continue;
+
+          // Emphasis inference
+          let emphasis: Emphasis = 'unknown';
+          let styleKey: string | null = null;
+          let resolvedVariant: string | null = null;
+
+          if (isButtonComponent) {
+            const explicitVariant = getJsxAttrString(childOpening, 'variant');
+            // default prop resolution: missing variant => Button defaultVariants.variant
+            resolvedVariant = explicitVariant || buttonImpl.config.defaultVariant || 'default';
+            const classified = classifyButtonEmphasis({
+              resolvedVariant,
+              variantConfig: buttonImpl.config,
+              instanceClassName: childClass,
+            });
+            emphasis = classified.emphasis;
+            styleKey = classified.styleKey;
+          } else {
+            // native/custom without central variant config: className-only heuristics
+            const classified = classifyButtonEmphasis({
+              resolvedVariant: null,
+              variantConfig: null,
+              instanceClassName: childClass,
+            });
+            emphasis = classified.emphasis;
+            styleKey = classified.styleKey;
+          }
+
+          ctas.push({ node: el as any, emphasis, styleKey, resolvedVariant });
+        }
+
+        const hasTwoOrMore = ctas.length >= 2;
+        const qualifiesAsActionGroup = hasTwoOrMore && (isCardFooter || isFlexGapRow || ctas.length >= 2);
+
+        if (qualifiesAsActionGroup) {
+          // Safe fallback: if any CTA emphasis is unknown, do NOT emit U1
+          if (ctas.some((c) => c.emphasis === 'unknown' || !c.styleKey)) {
+            ts.forEachChild(node, visit);
+            return;
+          }
+
+          const highs = ctas.filter((c) => c.emphasis === 'high');
+          if (highs.length >= 2) {
+            const highStyleKeys = new Set(highs.map((h) => h.styleKey));
+            // Competing primaries only if high-emphasis CTAs share the same styleKey (no single dominant CTA)
+            if (highStyleKeys.size === 1) {
+              // False-positive prevention: exactly one high -> PASS (already excluded by highs.length>=2)
+              const labels = ctas.map((c) => extractCtaLabel(c.node));
+              const resolvedVariant = highs[0].resolvedVariant || buttonImpl.config.defaultVariant || 'default';
+              findings.push({
+                filePath,
+                componentName,
+                groupTag: tagName,
+                labels,
+                resolvedVariant,
+              });
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sf);
+  }
+
+  if (findings.length === 0) return { violation: null };
+
+  // Aggregate into ONE U1 violation per run
+  const first = findings[0];
+  const labelList = first.labels.slice(0, 4).join(', ');
+  const u1Rule = rules.usability.find((r) => r.id === 'U1');
+
+  const evidence = `${first.filePath} / ${first.componentName}: ${first.groupTag} action group contains ${first.labels.length} sibling CTAs (${labelList}). All shadcn <Button> instances omit variant and therefore resolve to variant="${first.resolvedVariant}" (filled/high emphasis), resulting in multiple equally emphasized primary actions.`;
+
+  const diagnosis = `In ${first.filePath} (${first.componentName}), the card action group contains multiple sibling CTAs that all resolve to the same high-emphasis filled button styling (implicit default variant). With no single visually dominant primary action, the primary action is unclear.`;
+
+  const contextualHint = `In ${first.filePath}, make exactly one action the filled/default button and demote the other actions to outline/ghost/link or an overflow menu.`;
+
+  return {
+    violation: {
+      ruleId: 'U1',
+      ruleName: u1Rule?.name || 'Unclear primary action',
+      category: 'usability',
+      evidence,
+      diagnosis,
+      contextualHint,
+      correctivePrompt: u1Rule?.correctivePrompt || '',
+      confidence: 0.78,
+    },
+  };
+}
 
 // Tailwind color mappings to approximate hex values
 const TAILWIND_COLORS: Record<string, string> = {
@@ -904,16 +1364,29 @@ serve(async (req) => {
     const zipReader = new ZipReader(new BlobReader(blob));
     const entries = await zipReader.getEntries();
 
-    const files = new Map<string, string>();
+    // IMPORTANT: Keep AI context small, but keep a larger static-analysis map for import/style resolution.
+    const files = new Map<string, string>(); // AI + existing heuristics (bounded)
+    const allFiles = new Map<string, string>(); // deterministic static checks (larger)
     let totalSize = 0;
+    let totalStaticSize = 0;
     const maxContentSize = 100000; // 100KB limit for AI context
+    const maxStaticContentSize = 750000; // 750KB cap for deterministic analyzers (import graph, style lookup)
 
     for (const entry of entries) {
       if (entry.directory || !isAnalyzableFile(entry.filename)) continue;
       
       try {
         const content = await entry.getData!(new TextWriter());
-        if (content && totalSize + content.length < maxContentSize) {
+        if (!content) continue;
+
+        // Always try to retain a broader set for static analysis first
+        if (totalStaticSize + content.length < maxStaticContentSize) {
+          allFiles.set(normalizePath(entry.filename), content);
+          totalStaticSize += content.length;
+        }
+
+        // Keep a smaller subset for AI context
+        if (totalSize + content.length < maxContentSize) {
           files.set(entry.filename, content);
           totalSize += content.length;
         }
@@ -924,15 +1397,15 @@ serve(async (req) => {
 
     await zipReader.close();
 
-    if (files.size === 0) {
+    if (files.size === 0 && allFiles.size === 0) {
       return new Response(
         JSON.stringify({ success: false, error: "No analyzable files found in ZIP (HTML, CSS, JS, JSX, TSX, etc.)" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`Extracted ${files.size} files for analysis`);
-    const stack = detectStack(files);
+    console.log(`Extracted ${files.size} files for AI context and ${allFiles.size} files for static analysis`);
+    const stack = detectStack(files.size > 0 ? files : allFiles);
     console.log(`Detected stack: ${stack}`);
 
     // Compute A1 contrast violations directly - ONLY if A1 is selected
@@ -2088,12 +2561,25 @@ ${codeContent}`,
     }
     
     // Combine all violations
-    const aiViolations = [
+    let aiViolations = [
       ...filteredOtherViolations,
       ...(aggregatedA2 ? [aggregatedA2] : []),
       ...(aggregatedA4 ? [aggregatedA4] : []),
       ...(aggregatedA5 ? [aggregatedA5] : []),
     ];
+
+    // ========== Deterministic U1 (competing primary actions) ==========
+    // Enforce import-resolution + default-variant inference for shadcn Button.
+    // Safe fallback: if Button implementation cannot be found/parsed, do not emit U1.
+    if (selectedRulesSet.has('U1')) {
+      const deterministic = detectU1CompetingPrimaryActions(allFiles);
+      if (deterministic.violation) {
+        // Ensure exactly one aggregated U1 per run
+        aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'U1');
+        aiViolations.push(deterministic.violation);
+        console.log(`Deterministic U1 added: ${deterministic.violation.evidence?.substring(0, 140)}`);
+      }
+    }
 
     // Merge contrast violations with AI violations
     const allViolations = [...contrastViolations, ...aiViolations];
@@ -2105,7 +2591,7 @@ ${codeContent}`,
         success: true,
         violations: allViolations,
         passNotes: analysisResult.passNotes || {},
-        filesAnalyzed: files.size,
+        filesAnalyzed: files.size > 0 ? files.size : allFiles.size,
         stackDetected: stack,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
