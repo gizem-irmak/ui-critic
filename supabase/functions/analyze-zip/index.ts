@@ -633,6 +633,24 @@ Analyze code structure for usability patterns:
 
 ---
 
+**ACTION GROUP DETECTION (CRITICAL - expanded container patterns):**
+Treat ANY of the following as an action group for U1 detection:
+1. **DialogFooter / modal footer**: Dialog action areas
+2. **CardFooter / CardActions**: Card action areas at bottom of cards
+3. **Footer div with flex**: \`<div className="flex..."\` containing buttons
+4. **Button rows**: Sibling \`<Button>\` elements within the same parent container
+5. **Action bars / toolbars**: Elements with \`actions\`, \`toolbar\`, \`action-bar\` in className
+6. **Form action sections**: Form footers or button groups at end of forms
+7. **Any parent with flex + gap/space-x**: Parent element containing 2+ Button children
+
+**CTA/BUTTON RECOGNITION (expanded - avoid missing wrapped components):**
+Treat ALL of the following as CTAs for U1 analysis:
+- \`<Button>\`, \`<button>\`, elements with \`role="button"\`
+- Custom components: \`*Button\`, \`*Action\`, \`*CTA\`, \`*Apply\`, \`*Save\`, \`*Share\`, \`*Submit\`, \`*Publish\`
+- Any element with \`onClick\` handler AND button-like classes (bg-*, rounded, px-*, py-*)
+
+---
+
 **U1 MUST TRIGGER if ANY of the following evidence-based cases are met:**
 
 ---
@@ -650,48 +668,46 @@ Trigger U1 when ALL are true:
 
 ---
 
-**CASE B — Multiple equally emphasized actions (no clear primary)**
+**CASE B — Multiple equally emphasized actions (competing primaries) [CRITICAL]**
 
-Trigger U1 when ALL are true:
-- Two or more actions (>=2 is sufficient; >=3 increases confidence) are present in the same action group or container
-- Two or more actions use high-emphasis styling (variant="default"/primary/filled, solid background, bg-primary, bg-blue, etc.)
-- No single action is visually distinguished as dominant (all appear equally prominent)
+**TRIGGER CONDITION:** Emit U1 when ALL are true within ONE detected action group:
+1. Two or more CTAs (>=2 is sufficient) are present in the SAME action group/container
+2. Two or more CTAs are HIGH emphasis (see emphasis detection below)
+3. The HIGH emphasis CTAs share the SAME emphasis level (no single dominant CTA)
 
-**ACTION GROUP DETECTION (expanded):**
-Treat ALL of the following as action groups for Case B detection:
-- Dialog footers (DialogFooter, modal footer)
-- Card footers and action areas (CardFooter, card actions, CardActions)
-- Footer button rows
-- Action bars (action bar, toolbar)
-- Button groups (sibling buttons within same parent container/row)
-- Form action sections
+**HIGH-EMPHASIS DETECTION (variant resolution - CRITICAL):**
+A button is HIGH emphasis if ANY of the following:
+- Has NO \`variant\` prop specified (defaults to \`variant="default"\` = filled = HIGH)
+- Uses \`variant="default"\` or \`variant="primary"\` (filled/solid background)
+- Uses \`bg-primary\`, \`bg-blue-*\`, \`bg-indigo-*\`, or similar filled background classes
+- Appears with solid color styling (not just border)
 
-**HIGH-EMPHASIS DETECTION (variant resolution):**
-A button is high-emphasis if ANY of the following:
-- Has NO variant prop specified (defaults to variant="default" = filled)
-- Uses variant="default" (filled/solid background)
-- Uses variant="primary" or similar filled variant
-- Uses bg-primary, bg-blue, or similar filled background classes
+**LOW/MEDIUM-EMPHASIS DETECTION:**
+A button is LOW/MEDIUM emphasis if ANY of the following:
+- Uses \`variant="outline"\`, \`variant="ghost"\`, \`variant="link"\`, \`variant="secondary"\`
+- Uses \`border-*\`, \`bg-transparent\`, text-only styling
 
-IMPORTANT FOR CASE B:
+**CRITICAL FOR CASE B:**
 - Does NOT require a de-emphasized action to exist
 - Detection is based on observable styles, NOT inferred intent from labels
-- Use confidence 70-80% when 2+ filled/primary actions are detected
+- If multiple Buttons have NO variant prop, ALL default to high emphasis → TRIGGER
+- Confidence: 70-80% when 2+ filled/primary actions are detected
 
 **FALSE POSITIVE AVOIDANCE:**
-- Do NOT trigger if exactly one button is high-emphasis and others are outline/ghost/link
+- Do NOT trigger if exactly one CTA is high-emphasis and others are outline/ghost/link
 - Do NOT trigger if only one action exists in the group
-- Do NOT trigger if actions are clearly separated by context (e.g., one in header, one in footer)
+- Do NOT trigger if CTAs are in different containers/regions (e.g., one in header, one in footer)
 
-**Example evidence for CASE B:**
+**Example evidence for CASE B (use these patterns):**
 "CardFooter contains 'Save' (no variant), 'Share' (no variant), and 'Apply' (no variant). All three default to filled styling with equal visual prominence - no clear primary action."
-"ButtonGroup contains 'Apply' (variant='default') and 'Submit' (variant='default'). Both use filled styling with no clear visual hierarchy."
-"Form footer contains three buttons: 'Save Draft', 'Submit', 'Publish'. All three use variant='default' (filled) with equal visual prominence."
+"ButtonGroup contains 'Apply' and 'Submit'. Both buttons have no variant prop (defaulting to filled) with identical visual prominence."
+"Form footer contains 'Save Draft', 'Submit', 'Publish' buttons. All three use default variant (filled) with equal visual prominence."
+"CardActions area shows Save, Share, Apply buttons. All appear as filled buttons with no clear visual hierarchy."
 
 **Output wording for CASE B:**
 - Describe as "multiple equally emphasized actions" or "no clear primary action among high-emphasis buttons"
-- List affected components/files (e.g., ProposalCard.tsx / CardFooter)
-- Do NOT mention secondary actions being weaker (since none are)
+- List affected components/files (e.g., ProposalCard.tsx / CardFooter, SettingsForm / actions)
+- Do NOT mention secondary actions being weaker (since none are in Case B)
 
 ---
 
@@ -733,7 +749,7 @@ Trigger U1 when ALL are true:
 - If the primary action's variant/classes cannot be extracted → DO NOT emit U1
 - If a button has NO variant prop → assume variant="default" (FILLED) — NOT outline
 - DO NOT use conditional language ("if", "could", "might", "would", "may") to justify a violation
-- DO NOT claim "equal emphasis" unless BOTH buttons' variants are explicitly the SAME value
+- DO NOT claim "equal emphasis" unless BOTH buttons' variants are explicitly the SAME value OR both have no variant (both default to filled)
 
 ---
 
@@ -744,12 +760,13 @@ Trigger U1 when ALL are true:
   "ruleName": "Unclear primary action",
   "category": "usability",
   "caseType": "A" | "B" | "C" | "D",
-  "evidence": "[Specific observed evidence for the triggered case]",
+  "evidence": "[Specific observed evidence for the triggered case - mention container, buttons, variants]",
   "primaryAction": "[Button label and variant]",
   "secondaryAction": "[Button label and variant]" (if applicable),
   "stylingComparison": "[Explicit comparison of visual treatments]",
+  "affectedContainer": "[CardFooter | DialogFooter | ButtonGroup | form actions | etc.]",
   "diagnosis": "Users may struggle to identify the main action because [evidence-based reason]. [Explain visual hierarchy failure].",
-  "contextualHint": "In [location], make '[primary action label]' the filled/default button and demote '[secondary action label]' to outline/ghost variant.",
+  "contextualHint": "In [component/file], make '[primary action label]' the filled/default button and demote '[other actions]' to outline/ghost variant.",
   "confidence": 0.65-0.80
 }
 \`\`\`
@@ -1140,37 +1157,76 @@ ${codeContent}`,
         return true;
       }
       
-      // ========== CASE B: Multiple equally emphasized actions (no clear primary) ==========
+      // ========== CASE B: Multiple equally emphasized actions (competing primaries) ==========
       // Expanded to detect competing primaries in Card footers, action bars, button groups
-      const isCaseB = caseType === 'B' || /(?:two|2|multiple|both|all).*(?:filled|primary|default|high.*emphasis)|competing.*(?:primary|action)|all.*(?:filled|default|prominent)|no.*clear.*(?:primary|dominant|hierarchy)|equally.*(?:emphasized|prominent)|same.*(?:emphasis|prominence)|(?:card|footer|action).*(?:save|share|apply|submit)|(?:save|share|apply).*(?:and|,).*(?:save|share|apply|submit)/.test(combined);
+      // Key patterns: "no variant" (defaults to filled), multiple action labels (save/share/apply), CardFooter context
+      const isCaseB = caseType === 'B' || 
+        /(?:two|2|multiple|both|all).*(?:filled|primary|default|high.*emphasis)/.test(combined) ||
+        /competing.*(?:primary|action)/.test(combined) ||
+        /all.*(?:filled|default|prominent)/.test(combined) ||
+        /no.*(?:clear|single).*(?:primary|dominant|hierarchy)/.test(combined) ||
+        /equally.*(?:emphasized|prominent)/.test(combined) ||
+        /same.*(?:emphasis|prominence|styling|visual)/.test(combined) ||
+        /multiple.*equally/.test(combined) ||
+        /identical.*(?:styling|visual|weight|prominence)/.test(combined) ||
+        // No variant = defaults to filled (high emphasis)
+        /(?:no\s+variant|default(?:s|ing)?.*(?:to\s+)?filled)/.test(combined) ||
+        // Card/footer context with action labels
+        /(?:card|footer|cardfooter|cardactions|action\s*(?:bar|area|group)).*(?:save|share|apply|submit|publish)/.test(combined) ||
+        // Multiple action labels together
+        /(?:save|share|apply).*(?:and|,).*(?:save|share|apply|submit|publish)/.test(combined);
       
       if (isCaseB) {
-        // Must mention 2+ actions or buttons (>=2 is enough to trigger)
+        // Must evidence 2+ actions or buttons (>=2 is enough to trigger)
         const hasTwoOrMore = /two|2|both|multiple|all.*button|several|three|3/.test(combined);
         const buttonCount = (combined.match(/\bbutton/g) || []).length;
         const ctaCount = (combined.match(/\bcta/g) || []).length;
-        const actionLabels = (combined.match(/\b(save|share|apply|submit|publish|send|create|confirm|delete|remove)\b/g) || []);
+        // Expanded action label detection
+        const actionLabels = (combined.match(/\b(save|share|apply|submit|publish|send|create|confirm|delete|remove|draft|update|export|download)\b/g) || []);
         const uniqueActionLabels = new Set(actionLabels);
         
-        if (!hasTwoOrMore && buttonCount < 2 && ctaCount < 2 && uniqueActionLabels.size < 2) {
+        // Count action mentions even without explicit "button" word
+        const hasMultipleActionMentions = uniqueActionLabels.size >= 2;
+        
+        if (!hasTwoOrMore && buttonCount < 2 && ctaCount < 2 && !hasMultipleActionMentions) {
           console.log(`U1 Case B: Filtering out - does not evidence 2+ actions: ${v.evidence?.substring(0, 100)}`);
           return false;
         }
         
         // Evidence for high emphasis: filled/default/primary styling OR no variant specified (defaults to high emphasis)
-        // Per requirements: if Button has no explicit variant prop, resolve to default (high emphasis)
-        const hasMultipleHighEmphasis = /(?:both|two|2|all|multiple).*(?:filled|default|primary|solid|bg-primary|high.*emphasis)|(?:filled|default|primary).*(?:and|,).*(?:filled|default|primary)|no.*(?:single|clear).*(?:dominant|primary|hierarchy)|equally.*(?:emphasized|prominent)|same.*(?:emphasis|prominence|styling)|multiple.*equally|(?:both|all).*(?:no\s+variant|default\s+variant)|identical.*(?:styling|visual|weight)|no.*(?:visually?\s+)?(?:distinguished|dominant)/.test(combined);
+        // CRITICAL: "no variant" pattern means buttons default to filled = high emphasis
+        const hasMultipleHighEmphasis = 
+          // Explicit multiple high-emphasis mentions
+          /(?:both|two|2|all|multiple).*(?:filled|default|primary|solid|bg-primary|high.*emphasis)/.test(combined) ||
+          // Multiple filled/default patterns
+          /(?:filled|default|primary).*(?:and|,).*(?:filled|default|primary)/.test(combined) ||
+          // No clear/single primary
+          /no.*(?:single|clear).*(?:dominant|primary|hierarchy)/.test(combined) ||
+          // Equal emphasis
+          /equally.*(?:emphasized|prominent)/.test(combined) ||
+          /same.*(?:emphasis|prominence|styling|visual)/.test(combined) ||
+          /multiple.*equally/.test(combined) ||
+          // No variant = all default to high emphasis
+          /(?:no\s+variant|without\s+variant|default(?:s|ing)?.*to.*filled)/.test(combined) ||
+          /all.*(?:default|filled).*styl/.test(combined) ||
+          // Identical styling
+          /identical.*(?:styling|visual|weight|prominence)/.test(combined) ||
+          // No visually distinguished
+          /no.*(?:visually?\s+)?(?:distinguished|dominant)/.test(combined);
         
-        // Also check for card action group context with multiple high-emphasis buttons
-        const isCardActionContext = /(?:card|cardfooter|cardactions|footer|action\s*(?:bar|area|group)|button\s*(?:group|row)).*(?:button|action)|(?:button|action).*(?:card|footer|action\s*(?:bar|area|group))/.test(combined);
-        const multipleActionLabelsDetected = uniqueActionLabels.size >= 2;
+        // Also check for card action group context with multiple action labels
+        const isCardActionContext = 
+          /(?:card|cardfooter|cardactions|footer|action\s*(?:bar|area|group)|button\s*(?:group|row))/.test(combined);
         
-        if (!hasMultipleHighEmphasis && !(isCardActionContext && multipleActionLabelsDetected)) {
+        // If we have card context + multiple action labels, that's strong evidence for Case B
+        const cardWithMultipleActions = isCardActionContext && hasMultipleActionMentions;
+        
+        if (!hasMultipleHighEmphasis && !cardWithMultipleActions) {
           console.log(`U1 Case B: Filtering out - no evidence of multiple high-emphasis actions: ${v.evidence?.substring(0, 100)}`);
           return false;
         }
         
-        // FALSE POSITIVE CHECK: If exactly one action is clearly dominant (outline/ghost others), this is NOT Case B
+        // FALSE POSITIVE CHECK: If exactly one action is clearly dominant with demoted others, this is NOT Case B
         const singlePrimaryExists = /(?:single|one|only).*(?:primary|filled|prominent)/.test(combined) && 
                                     !/no.*(?:single|clear)|(?:two|both|multiple)/.test(combined);
         const othersAreDemoted = /(?:other|rest|remaining).*(?:outline|ghost|secondary|demoted)/.test(combined);
