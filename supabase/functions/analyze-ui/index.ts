@@ -815,6 +815,7 @@ serve(async (req) => {
       // ========== CASE B: Multiple competing primary actions ==========
       // Expanded to detect competing primaries in Card footers, action bars, button groups
       // Key patterns: multiple filled buttons, card/footer context, multiple action labels
+      // CRITICAL: For shadcn Button - when variant prop is omitted, defaults to variant="default" (filled/high emphasis)
       const isCaseB = caseType === 'B' || 
         /(?:two|2|multiple|both|all).*(?:filled|primary|high.*emphasis)/.test(combined) ||
         /competing.*(?:primary|action)/.test(combined) ||
@@ -827,7 +828,9 @@ serve(async (req) => {
         // Card/footer context with action labels
         /(?:card|footer|cardfooter|cardactions|action\s*(?:bar|area|group)).*(?:save|share|apply|submit|publish)/.test(combined) ||
         // Multiple action labels together
-        /(?:save|share|apply).*(?:and|,).*(?:save|share|apply|submit|publish)/.test(combined);
+        /(?:save|share|apply).*(?:and|,|\/)\s*(?:save|share|apply|submit|publish)/.test(combined) ||
+        // ProposalCard or similar card components with multiple actions
+        /(?:proposal|settings|edit|detail).*(?:card|panel|section).*(?:save|share|apply|submit)/.test(combined);
       
       if (isCaseB) {
         // Must evidence 2+ actions or buttons (>=2 is enough to trigger)
@@ -846,24 +849,28 @@ serve(async (req) => {
           return false;
         }
         
-        // Evidence for high emphasis: filled/solid styling
+        // Evidence for high emphasis: filled/solid styling (visual inspection for screenshots)
+        // CRITICAL: For vision analysis, look for buttons that appear equally styled/prominent
         const hasMultipleHighEmphasis = 
           // Explicit multiple high-emphasis mentions
-          /(?:both|two|2|all|multiple).*(?:filled|primary|solid|prominent|dark|colored|high.*emphasis)/.test(combined) ||
+          /(?:both|two|2|all|multiple|three|3).*(?:filled|primary|solid|prominent|dark|colored|high.*emphasis)/.test(combined) ||
           // Multiple filled patterns
-          /(?:filled|primary|solid).*(?:and|,).*(?:filled|primary|solid)/.test(combined) ||
+          /(?:filled|primary|solid).*(?:and|,|\/)\s*(?:filled|primary|solid)/.test(combined) ||
           // No clear/single primary
           /no.*(?:single|clear).*(?:dominant|primary|hierarchy)/.test(combined) ||
           // Equal emphasis
-          /equally.*(?:emphasized|prominent)/.test(combined) ||
-          /same.*(?:emphasis|prominence|styling|visual)/.test(combined) ||
+          /equally.*(?:emphasized|prominent|styled|weighted)/.test(combined) ||
+          /same.*(?:emphasis|prominence|styling|visual|weight|color|background)/.test(combined) ||
           /multiple.*equally/.test(combined) ||
           // All appear as filled/solid
-          /all.*(?:appear|look).*(?:filled|solid|prominent)/.test(combined) ||
+          /all\s+(?:three|two|2|3|\d+)?\s*(?:buttons?|ctas?|actions?)\s*(?:appear|look|are|have)/.test(combined) ||
+          /(?:buttons?|ctas?)\s+all\s+(?:appear|look|are)/.test(combined) ||
           // Identical visual treatment
-          /identical.*(?:styling|visual|weight|prominence)/.test(combined) ||
+          /identical.*(?:styling|visual|weight|prominence|appearance|color)/.test(combined) ||
           // No visually distinguished
-          /no.*(?:visually?\s+)?(?:distinguished|dominant)/.test(combined);
+          /no.*(?:visually?\s+)?(?:distinguished|dominant|clear\s+primary)/.test(combined) ||
+          // Equal visual weight/prominence
+          /equal\s+(?:visual\s+)?(?:weight|prominence|emphasis)/.test(combined);
         
         // Also check for card action group context with multiple action labels
         const isCardActionContext = 
