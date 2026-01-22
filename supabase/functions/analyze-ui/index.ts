@@ -301,6 +301,25 @@ When analyzing button styling in screenshots, carefully distinguish between:
 
 ---
 
+**ACTION GROUP DETECTION (CRITICAL - expanded container patterns):**
+Treat ANY of the following as an action group for U1 detection:
+1. **Dialog footers / modal footers**: Action areas at bottom of dialogs/modals
+2. **Card footers / CardActions**: Card action areas at bottom of cards
+3. **Footer button rows**: Horizontal button arrangements at bottom of containers
+4. **Action bars / toolbars**: Rows of action buttons
+5. **Button groups**: Multiple buttons visually grouped together in a row
+6. **Form action sections**: Buttons at the end of forms
+7. **Any horizontal flex container with multiple buttons**: Parent containing 2+ button-like elements
+
+**CTA/BUTTON RECOGNITION (expanded - avoid missing styled buttons):**
+Treat ALL of the following as CTAs for U1 analysis:
+- Buttons with visible labels (Save, Share, Apply, Submit, Create, Delete, etc.)
+- Icon-only action buttons with clear action intent
+- Buttons in card footers, dialog footers, or action bars
+- Any element that appears clickable with action-oriented text
+
+---
+
 **U1 MUST TRIGGER if ANY of the following evidence-based cases are met:**
 
 ---
@@ -318,12 +337,24 @@ Trigger U1 when ALL are true:
 
 ---
 
-**CASE B — Multiple equally emphasized actions (no clear primary)**
+**CASE B — Multiple equally emphasized actions (competing primaries) [CRITICAL]**
 
-Trigger U1 when ALL are true:
-- Two or more actions (>=2 is sufficient; >=3 increases confidence) are visible in the same action group or container
-- Two or more actions appear as high-emphasis buttons (filled/solid backgrounds, dark colored, prominent styling)
-- No single action is visually distinguished as dominant (all appear equally prominent)
+**TRIGGER CONDITION:** Emit U1 when ALL are true within ONE detected action group:
+1. Two or more CTAs (>=2 is sufficient) are VISUALLY present in the SAME action group/container
+2. Two or more CTAs appear with HIGH emphasis styling (filled/solid backgrounds)
+3. The HIGH emphasis CTAs share the SAME visual prominence (no single dominant CTA)
+
+**HIGH-EMPHASIS VISUAL INDICATORS:**
+A button is HIGH emphasis if it shows:
+- Solid/filled background color (blue, dark, primary color)
+- Prominent visual weight compared to container background
+- Colored/dark fill (not just border or transparent)
+
+**LOW/MEDIUM-EMPHASIS VISUAL INDICATORS:**
+A button is LOW/MEDIUM emphasis if it shows:
+- Only a border/outline (transparent background)
+- Ghost styling (minimal visual presence)
+- Text-only or link appearance
 
 **ACTION GROUP DETECTION (expanded):**
 Treat ALL of the following as action groups for Case B detection:
@@ -334,32 +365,27 @@ Treat ALL of the following as action groups for Case B detection:
 - Button groups (sibling buttons within same parent container/row)
 - Form action sections
 
-**HIGH-EMPHASIS DETECTION:**
-A button is high-emphasis if ANY of the following:
-- Has filled/solid background color (blue, primary, dark, colored fill)
-- Uses variant="default" or no variant prop (defaults to high emphasis)
-- Uses bg-primary, bg-blue, or similar filled background classes
-- Appears visually prominent with solid styling
-
-IMPORTANT FOR CASE B:
+**CRITICAL FOR CASE B:**
 - Does NOT require a de-emphasized action to exist
 - Detection is based on observable visual styles, NOT inferred intent from labels
-- Use confidence 70-80% when 2+ filled/primary-styled buttons are detected
+- If multiple buttons all appear with filled/solid backgrounds → TRIGGER
+- Confidence: 70-80% when 2+ filled/primary-styled buttons are detected
 
 **FALSE POSITIVE AVOIDANCE:**
 - Do NOT trigger if exactly one button is high-emphasis and others are outline/ghost/link
 - Do NOT trigger if only one action exists in the group
 - Do NOT trigger if actions are clearly separated by context (e.g., one in header, one in footer)
 
-**Example evidence for CASE B:**
+**Example evidence for CASE B (use these patterns):**
 "Card footer shows 'Save', 'Share', and 'Apply' buttons. All three appear as filled buttons with identical visual prominence - no clear primary action."
 "Form footer shows 'Apply' and 'Submit' buttons. Both appear as filled buttons with identical visual prominence."
-"CardActions area shows multiple equally emphasized CTAs with no visual hierarchy."
+"CardActions area shows multiple CTAs (Save, Share, Apply). All appear equally emphasized with solid backgrounds."
+"Action bar shows Save, Share, Apply buttons. All appear as filled/primary buttons with equal visual weight."
 
 **Output wording for CASE B:**
 - Describe as "multiple equally emphasized actions" or "no clear primary action among high-emphasis buttons"
-- List affected components/files (e.g., ProposalCard / CardActions, SettingsForm / footer)
-- Do NOT mention secondary actions being weaker (since none are)
+- List affected components/locations (e.g., ProposalCard / CardActions, SettingsForm / footer)
+- Do NOT mention secondary actions being weaker (since none are in Case B)
 
 ---
 
@@ -412,12 +438,13 @@ Trigger U1 when ALL are true:
   "ruleName": "Unclear primary action",
   "category": "usability",
   "caseType": "A" | "B" | "C" | "D",
-  "evidence": "[Specific visual observation for the triggered case]",
+  "evidence": "[Specific visual observation for the triggered case - mention container, buttons, visual appearance]",
   "primaryAction": "[Button label and visual appearance]",
   "secondaryAction": "[Button label and visual appearance]" (if applicable),
   "stylingComparison": "[Explicit comparison of visual treatments observed]",
+  "affectedContainer": "[CardFooter | DialogFooter | button group | action bar | etc.]",
   "diagnosis": "Users may struggle to identify the main action because [evidence-based reason]. [Explain visual hierarchy failure].",
-  "contextualHint": "In [location], make '[primary action label]' the filled/prominent button and demote '[secondary action label]' to outline/ghost styling.",
+  "contextualHint": "In [location], make '[primary action label]' the filled/prominent button and demote '[other actions]' to outline/ghost styling.",
   "confidence": 0.65-0.80
 }
 \`\`\`
@@ -787,29 +814,65 @@ serve(async (req) => {
       
       // ========== CASE B: Multiple competing primary actions ==========
       // Expanded to detect competing primaries in Card footers, action bars, button groups
-      const isCaseB = caseType === 'B' || /(?:two|2|multiple|both|all).*(?:filled|primary|high.*emphasis)|competing.*(?:primary|action)|all.*(?:filled|prominent)|no.*(?:clear|single).*(?:primary|dominant|hierarchy)|equally.*(?:emphasized|prominent)|same.*(?:emphasis|prominence)|(?:card|footer|action).*(?:save|share|apply|submit)|(?:save|share|apply).*(?:and|,).*(?:save|share|apply|submit)/.test(combined);
+      // Key patterns: multiple filled buttons, card/footer context, multiple action labels
+      const isCaseB = caseType === 'B' || 
+        /(?:two|2|multiple|both|all).*(?:filled|primary|high.*emphasis)/.test(combined) ||
+        /competing.*(?:primary|action)/.test(combined) ||
+        /all.*(?:filled|prominent)/.test(combined) ||
+        /no.*(?:clear|single).*(?:primary|dominant|hierarchy)/.test(combined) ||
+        /equally.*(?:emphasized|prominent)/.test(combined) ||
+        /same.*(?:emphasis|prominence|visual)/.test(combined) ||
+        /multiple.*equally/.test(combined) ||
+        /identical.*(?:visual|prominence|weight|styling)/.test(combined) ||
+        // Card/footer context with action labels
+        /(?:card|footer|cardfooter|cardactions|action\s*(?:bar|area|group)).*(?:save|share|apply|submit|publish)/.test(combined) ||
+        // Multiple action labels together
+        /(?:save|share|apply).*(?:and|,).*(?:save|share|apply|submit|publish)/.test(combined);
       
       if (isCaseB) {
-        // Must mention 2+ actions or buttons (>=2 is enough to trigger)
+        // Must evidence 2+ actions or buttons (>=2 is enough to trigger)
         const hasTwoOrMore = /two|2|both|multiple|all.*button|several|three|3/.test(combined);
         const buttonCount = (combined.match(/\bbutton/g) || []).length;
         const ctaCount = (combined.match(/\bcta/g) || []).length;
-        const actionLabels = (combined.match(/\b(save|share|apply|submit|publish|send|create|confirm|delete|remove)\b/g) || []);
+        // Expanded action label detection
+        const actionLabels = (combined.match(/\b(save|share|apply|submit|publish|send|create|confirm|delete|remove|draft|update|export|download)\b/g) || []);
         const uniqueActionLabels = new Set(actionLabels);
         
-        if (!hasTwoOrMore && buttonCount < 2 && ctaCount < 2 && uniqueActionLabels.size < 2) {
+        // Count action mentions even without explicit "button" word
+        const hasMultipleActionMentions = uniqueActionLabels.size >= 2;
+        
+        if (!hasTwoOrMore && buttonCount < 2 && ctaCount < 2 && !hasMultipleActionMentions) {
           console.log(`U1 Case B: Filtering out - does not evidence 2+ actions: ${v.evidence?.substring(0, 100)}`);
           return false;
         }
         
-        // Evidence for high emphasis: filled/primary/solid styling OR no variant specified (defaults to high emphasis)
-        const hasMultipleHighEmphasis = /(?:both|two|2|all|multiple).*(?:filled|primary|solid|prominent|dark|colored|high.*emphasis)|(?:filled|primary|solid).*(?:and|,).*(?:filled|primary|solid)|no.*(?:single|clear).*(?:dominant|primary|hierarchy)|equally.*(?:emphasized|prominent)|same.*(?:emphasis|prominence|styling)|multiple.*equally|identical.*(?:visual|prominence|weight|styling)|no.*(?:visually?\s+)?(?:distinguished|dominant)/.test(combined);
+        // Evidence for high emphasis: filled/solid styling
+        const hasMultipleHighEmphasis = 
+          // Explicit multiple high-emphasis mentions
+          /(?:both|two|2|all|multiple).*(?:filled|primary|solid|prominent|dark|colored|high.*emphasis)/.test(combined) ||
+          // Multiple filled patterns
+          /(?:filled|primary|solid).*(?:and|,).*(?:filled|primary|solid)/.test(combined) ||
+          // No clear/single primary
+          /no.*(?:single|clear).*(?:dominant|primary|hierarchy)/.test(combined) ||
+          // Equal emphasis
+          /equally.*(?:emphasized|prominent)/.test(combined) ||
+          /same.*(?:emphasis|prominence|styling|visual)/.test(combined) ||
+          /multiple.*equally/.test(combined) ||
+          // All appear as filled/solid
+          /all.*(?:appear|look).*(?:filled|solid|prominent)/.test(combined) ||
+          // Identical visual treatment
+          /identical.*(?:styling|visual|weight|prominence)/.test(combined) ||
+          // No visually distinguished
+          /no.*(?:visually?\s+)?(?:distinguished|dominant)/.test(combined);
         
-        // Also check for card action group context with multiple high-emphasis buttons
-        const isCardActionContext = /(?:card|cardfooter|cardactions|footer|action\s*(?:bar|area|group)|button\s*(?:group|row)).*(?:button|action)|(?:button|action).*(?:card|footer|action\s*(?:bar|area|group))/.test(combined);
-        const multipleActionLabelsDetected = uniqueActionLabels.size >= 2;
+        // Also check for card action group context with multiple action labels
+        const isCardActionContext = 
+          /(?:card|cardfooter|cardactions|footer|action\s*(?:bar|area|group)|button\s*(?:group|row))/.test(combined);
         
-        if (!hasMultipleHighEmphasis && !(isCardActionContext && multipleActionLabelsDetected)) {
+        // If we have card context + multiple action labels, that's strong evidence for Case B
+        const cardWithMultipleActions = isCardActionContext && hasMultipleActionMentions;
+        
+        if (!hasMultipleHighEmphasis && !cardWithMultipleActions) {
           console.log(`U1 Case B: Filtering out - no evidence of multiple high-emphasis actions: ${v.evidence?.substring(0, 100)}`);
           return false;
         }
