@@ -623,13 +623,23 @@ Analyze code structure for usability patterns:
 
 **GOAL:** Detect unclear primary action issues whenever visual hierarchy fails, based only on observable evidence. Do not speculate. Do not infer intent.
 
-**CRITICAL — BUTTON VARIANT RESOLUTION (shadcn/Radix):**
-- NO variant prop specified → uses \`variant="default"\` → FILLED/PRIMARY button (bg-primary)
-- \`variant="default"\` = FILLED button (visually prominent, solid background)
-- \`variant="outline"\` = OUTLINED button (border only, transparent background)
-- \`variant="ghost"\` = GHOST button (no border, transparent background)
-- \`variant="secondary"\` = SECONDARY button (muted background)
-- \`variant="link"\` = TEXT LINK style (underline on hover, no background)
+**CRITICAL — BUTTON VARIANT RESOLUTION (shadcn/Radix - MUST FOLLOW):**
+When analyzing \`<Button>\` components, you MUST resolve the visual emphasis as follows:
+1. **Look up the Button component definition** (usually in \`@/components/ui/button\` or \`button.tsx\`)
+2. **Check the \`defaultVariants\` in the cva/variants definition** to determine what happens when variant is omitted
+3. For shadcn Button, the default is almost always \`variant: "default"\` which maps to FILLED/PRIMARY styling
+
+**VARIANT → EMPHASIS MAPPING (standard shadcn Button):**
+- NO variant prop specified → uses \`variant="default"\` → HIGH EMPHASIS (filled, bg-primary)
+- \`variant="default"\` = HIGH EMPHASIS (filled button with solid background)
+- \`variant="primary"\` = HIGH EMPHASIS (filled button with primary color)
+- \`variant="outline"\` = LOW EMPHASIS (border only, transparent background)
+- \`variant="ghost"\` = LOW EMPHASIS (no border, transparent background)
+- \`variant="secondary"\` = MEDIUM EMPHASIS (muted background)
+- \`variant="link"\` = LOW EMPHASIS (text link style, underline on hover)
+
+**CRITICAL: When a Button has NO variant prop, treat it as HIGH EMPHASIS (filled/default).**
+Do NOT treat missing variant as "unknown emphasis" — it is HIGH emphasis by default.
 
 ---
 
@@ -1160,6 +1170,7 @@ ${codeContent}`,
       // ========== CASE B: Multiple equally emphasized actions (competing primaries) ==========
       // Expanded to detect competing primaries in Card footers, action bars, button groups
       // Key patterns: "no variant" (defaults to filled), multiple action labels (save/share/apply), CardFooter context
+      // CRITICAL: When buttons omit variant prop, they default to variant="default" which is FILLED/HIGH emphasis
       const isCaseB = caseType === 'B' || 
         /(?:two|2|multiple|both|all).*(?:filled|primary|default|high.*emphasis)/.test(combined) ||
         /competing.*(?:primary|action)/.test(combined) ||
@@ -1169,12 +1180,20 @@ ${codeContent}`,
         /same.*(?:emphasis|prominence|styling|visual)/.test(combined) ||
         /multiple.*equally/.test(combined) ||
         /identical.*(?:styling|visual|weight|prominence)/.test(combined) ||
-        // No variant = defaults to filled (high emphasis)
-        /(?:no\s+variant|default(?:s|ing)?.*(?:to\s+)?filled)/.test(combined) ||
+        // No variant = defaults to filled (high emphasis) - CRITICAL for shadcn Button detection
+        /(?:no\s+variant|without\s+variant|omit\w*\s+variant|missing\s+variant)/.test(combined) ||
+        /default(?:s|ing)?.*(?:to\s+)?(?:filled|variant\s*=\s*["']?default)/.test(combined) ||
+        /variant\s+(?:is\s+)?(?:not\s+)?(?:specified|set|defined|explicit)/.test(combined) ||
+        // Multiple buttons without explicit variant
+        /buttons?\s+(?:have|has|with|without)\s+no\s+(?:explicit\s+)?variant/.test(combined) ||
+        // All buttons default to high emphasis
+        /all\s+(?:three|two|2|3|\d+)?\s*(?:buttons?|ctas?)\s+(?:default|use|have)/.test(combined) ||
         // Card/footer context with action labels
         /(?:card|footer|cardfooter|cardactions|action\s*(?:bar|area|group)).*(?:save|share|apply|submit|publish)/.test(combined) ||
-        // Multiple action labels together
-        /(?:save|share|apply).*(?:and|,).*(?:save|share|apply|submit|publish)/.test(combined);
+        // Multiple action labels together (save/share/apply pattern)
+        /(?:save|share|apply).*(?:and|,|\/)\s*(?:save|share|apply|submit|publish)/.test(combined) ||
+        // ProposalCard or similar card components with multiple actions
+        /(?:proposal|settings|edit|detail).*(?:card|panel|section).*(?:save|share|apply|submit)/.test(combined);
       
       if (isCaseB) {
         // Must evidence 2+ actions or buttons (>=2 is enough to trigger)
@@ -1195,24 +1214,31 @@ ${codeContent}`,
         
         // Evidence for high emphasis: filled/default/primary styling OR no variant specified (defaults to high emphasis)
         // CRITICAL: "no variant" pattern means buttons default to filled = high emphasis
+        // For shadcn Button: omitting variant prop = variant="default" = filled button (bg-primary)
         const hasMultipleHighEmphasis = 
           // Explicit multiple high-emphasis mentions
-          /(?:both|two|2|all|multiple).*(?:filled|default|primary|solid|bg-primary|high.*emphasis)/.test(combined) ||
+          /(?:both|two|2|all|multiple|three|3).*(?:filled|default|primary|solid|bg-primary|high.*emphasis)/.test(combined) ||
           // Multiple filled/default patterns
-          /(?:filled|default|primary).*(?:and|,).*(?:filled|default|primary)/.test(combined) ||
+          /(?:filled|default|primary).*(?:and|,|\/)\s*(?:filled|default|primary)/.test(combined) ||
           // No clear/single primary
           /no.*(?:single|clear).*(?:dominant|primary|hierarchy)/.test(combined) ||
           // Equal emphasis
-          /equally.*(?:emphasized|prominent)/.test(combined) ||
-          /same.*(?:emphasis|prominence|styling|visual)/.test(combined) ||
+          /equally.*(?:emphasized|prominent|styled|weighted)/.test(combined) ||
+          /same.*(?:emphasis|prominence|styling|visual|weight)/.test(combined) ||
           /multiple.*equally/.test(combined) ||
-          // No variant = all default to high emphasis
-          /(?:no\s+variant|without\s+variant|default(?:s|ing)?.*to.*filled)/.test(combined) ||
-          /all.*(?:default|filled).*styl/.test(combined) ||
+          // CRITICAL: No variant = all default to high emphasis (shadcn Button detection)
+          /(?:no\s+variant|without\s+variant|omit\w*\s+variant|missing\s+variant)/.test(combined) ||
+          /variant\s+(?:is\s+)?(?:not\s+)?(?:specified|set|defined|explicit)/.test(combined) ||
+          /default(?:s|ing)?.*(?:to\s+)?(?:filled|high|variant\s*=)/.test(combined) ||
+          // All buttons use default/filled styling
+          /all\s+(?:three|two|2|3|\d+)?\s*(?:buttons?|ctas?|actions?)/.test(combined) ||
+          /(?:buttons?|ctas?)\s+(?:all\s+)?(?:default|use\s+default|have\s+no)/.test(combined) ||
           // Identical styling
           /identical.*(?:styling|visual|weight|prominence)/.test(combined) ||
           // No visually distinguished
-          /no.*(?:visually?\s+)?(?:distinguished|dominant)/.test(combined);
+          /no.*(?:visually?\s+)?(?:distinguished|dominant|clear\s+primary)/.test(combined) ||
+          // Equal visual weight/prominence
+          /equal\s+(?:visual\s+)?(?:weight|prominence|emphasis)/.test(combined);
         
         // Also check for card action group context with multiple action labels
         const isCardActionContext = 
