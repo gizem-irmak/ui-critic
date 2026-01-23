@@ -620,6 +620,7 @@ serve(async (req) => {
         model: "google/gemini-2.5-pro", // Using pro for better vision analysis
         messages,
         temperature: 0.3, // Lower temperature for more consistent analysis
+        max_tokens: 16000, // Ensure sufficient tokens for complete response
       }),
     });
 
@@ -643,6 +644,7 @@ serve(async (req) => {
 
     const aiResponse = await response.json();
     const content = aiResponse.choices?.[0]?.message?.content;
+    const finishReason = aiResponse.choices?.[0]?.finish_reason;
 
     if (!content) {
       throw new Error("No content in AI response");
@@ -650,16 +652,68 @@ serve(async (req) => {
 
     console.log("AI response received, parsing...");
 
-    // Parse the JSON response from the AI
+    // Check if response was truncated due to token limits
+    if (finishReason === 'length') {
+      console.warn("AI response was truncated due to token limits, attempting to salvage partial response");
+    }
+
+    // Parse the JSON response from the AI with improved error handling
     let analysisResult;
     try {
       // Extract JSON from the response (it might be wrapped in markdown code blocks)
-      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, content];
-      const jsonStr = jsonMatch[1] || content;
-      analysisResult = JSON.parse(jsonStr.trim());
+      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+      let jsonStr = jsonMatch ? jsonMatch[1] : content;
+      
+      // Clean up the JSON string
+      jsonStr = jsonStr.trim();
+      
+      // If response appears truncated (ends mid-string or mid-object), try to repair
+      if (!jsonStr.endsWith('}') && !jsonStr.endsWith(']')) {
+        console.warn("JSON appears truncated, attempting repair...");
+        
+        // Find last complete object in violations array
+        const lastCompleteMatch = jsonStr.match(/([\s\S]*"contextualHint"\s*:\s*"[^"]*"[^}]*})/);
+        if (lastCompleteMatch) {
+          jsonStr = lastCompleteMatch[1];
+          
+          // Count remaining open structures
+          const openBraces = (jsonStr.match(/{/g) || []).length;
+          const closeBraces = (jsonStr.match(/}/g) || []).length;
+          const openBrackets = (jsonStr.match(/\[/g) || []).length;
+          const closeBrackets = (jsonStr.match(/\]/g) || []).length;
+          
+          // Close violations array if needed
+          if (openBrackets > closeBrackets) {
+            jsonStr += ']';
+          }
+          // Add empty passNotes and close root object
+          if (!jsonStr.includes('"passNotes"')) {
+            jsonStr += ', "passNotes": {}';
+          }
+          if (openBraces > closeBraces) {
+            jsonStr += '}';
+          }
+        } else {
+          // Fallback: return empty result if we can't salvage
+          console.error("Could not salvage truncated response, returning empty result");
+          analysisResult = { violations: [], passNotes: {} };
+        }
+      }
+      
+      if (!analysisResult) {
+        analysisResult = JSON.parse(jsonStr);
+      }
     } catch (parseError) {
-      console.error("Failed to parse AI response:", content);
-      throw new Error("Failed to parse AI analysis response");
+      console.error("Failed to parse AI response:", content.substring(0, 500));
+      
+      // Final fallback: return empty violations with error note
+      console.warn("Using fallback empty result due to parse failure");
+      analysisResult = { 
+        violations: [], 
+        passNotes: { 
+          _error: "AI response parsing failed - please retry analysis" 
+        } 
+      };
     }
 
     // Enhance violations with corrective prompts from our rule registry
