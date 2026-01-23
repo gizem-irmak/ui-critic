@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Play, Loader2, ChevronRight, CheckCircle, XCircle } from 'lucide-react';
+import { ArrowLeft, Play, Loader2, ChevronRight, CheckCircle, XCircle, FileText, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ToolBadge } from '@/components/ui/tool-badge';
@@ -8,6 +8,7 @@ import { InputSelector } from '@/components/analysis/InputSelector';
 import { RuleSelector } from '@/components/analysis/RuleSelector';
 import { AnalysisResults } from '@/components/analysis/AnalysisResults';
 import { IterationReportModal } from '@/components/analysis/IterationReportModal';
+import { FinalAnalysisSummary } from '@/components/analysis/FinalAnalysisSummary';
 import { useProjectStore } from '@/stores/projectStore';
 import { rules } from '@/data/rules';
 import { runUIAnalysis, fileToBase64, fileToRawBase64 } from '@/lib/api/analysis';
@@ -24,7 +25,7 @@ export default function ProjectDetail() {
   const project = getProject(projectId || '');
   
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [currentView, setCurrentView] = useState<'setup' | 'results'>('setup');
+  const [currentView, setCurrentView] = useState<'setup' | 'results' | 'final'>('setup');
   
   // Modal state for viewing past iterations
   const [selectedIteration, setSelectedIteration] = useState<Iteration | null>(null);
@@ -166,11 +167,19 @@ export default function ProjectDetail() {
       };
 
       setAnalysis(project.id, iteration.id, analysis);
-      setCurrentView('results');
+      
+      // Navigate to final summary if converged, otherwise show intermediate results
+      if (analysis.isAcceptable) {
+        setCurrentView('final');
+      } else {
+        setCurrentView('results');
+      }
 
       toast({
-        title: 'Analysis Complete',
-        description: `Found ${violations.length} violation${violations.length !== 1 ? 's' : ''}`,
+        title: analysis.isAcceptable ? 'Convergence Reached' : 'Analysis Complete',
+        description: analysis.isAcceptable 
+          ? `Acceptance threshold met with ${violations.length} violation${violations.length !== 1 ? 's' : ''}`
+          : `Found ${violations.length} violation${violations.length !== 1 ? 's' : ''}`,
       });
     } catch (error) {
       console.error('Analysis error:', error);
@@ -209,6 +218,19 @@ export default function ProjectDetail() {
   const updatedProject = getProject(project.id);
   const currentIteration = updatedProject?.iterations[updatedProject.iterations.length - 1];
 
+  // Check if we should show the final summary view 
+  // (either from current analysis or user viewing a converged project)
+  const showFinalSummary = currentView === 'final' || 
+    (currentView === 'setup' && isConverged && project.iterations.length > 0);
+
+  const handleViewFinalSummary = () => {
+    setCurrentView('final');
+  };
+
+  const handleBackToSetup = () => {
+    setCurrentView('setup');
+  };
+
   return (
     <div className="page-container space-y-6">
       {/* Header */}
@@ -232,10 +254,43 @@ export default function ProjectDetail() {
             <span>{project.iterations.length} iteration{project.iterations.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
+        
+        {/* Action buttons for converged projects */}
+        {isConverged && currentView !== 'final' && (
+          <Button 
+            variant="outline" 
+            onClick={handleViewFinalSummary}
+            className="gap-2"
+          >
+            <FileText className="h-4 w-4" />
+            View Final Summary
+          </Button>
+        )}
+        {currentView === 'final' && (
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="outline" 
+              onClick={() => window.print()}
+              className="gap-2 print:hidden"
+            >
+              <Printer className="h-4 w-4" />
+              Print / Export PDF
+            </Button>
+            <Button 
+              variant="ghost" 
+              onClick={handleBackToSetup}
+              className="print:hidden"
+            >
+              Back to Project
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Content */}
-      {currentView === 'results' && currentIteration?.analysis ? (
+      {showFinalSummary ? (
+        <FinalAnalysisSummary project={updatedProject!} />
+      ) : currentView === 'results' && currentIteration?.analysis ? (
         <AnalysisResults
           analysis={currentIteration.analysis}
           project={updatedProject!}
@@ -298,8 +353,8 @@ export default function ProjectDetail() {
         </div>
       )}
 
-      {/* Iteration History */}
-      {project.iterations.length > 0 && currentView === 'setup' && (
+      {/* Iteration History - only show when in setup view */}
+      {project.iterations.length > 0 && currentView === 'setup' && !showFinalSummary && (
         <Card>
           <CardHeader>
             <CardTitle>Previous Iterations</CardTitle>
