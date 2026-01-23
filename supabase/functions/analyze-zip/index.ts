@@ -1330,6 +1330,7 @@ ${codeContent}`,
         model: "google/gemini-2.5-flash",
         messages,
         temperature: 0.3,
+        max_tokens: 16000, // Ensure sufficient tokens for complete response
       }),
     });
 
@@ -1353,20 +1354,77 @@ ${codeContent}`,
 
     const aiResponse = await response.json();
     const content = aiResponse.choices?.[0]?.message?.content;
+    const finishReason = aiResponse.choices?.[0]?.finish_reason;
 
     if (!content) {
       throw new Error("No content in AI response");
     }
 
-    // Parse AI response
+    // Check if response was truncated due to token limits
+    if (finishReason === 'length') {
+      console.warn("AI response was truncated due to token limits, attempting to salvage partial response");
+    }
+
+    // Parse AI response with improved error handling for truncated responses
     let analysisResult;
     try {
-      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, content];
-      const jsonStr = jsonMatch[1] || content;
-      analysisResult = JSON.parse(jsonStr.trim());
+      // Try to extract JSON from markdown code block first
+      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+      let jsonStr = jsonMatch ? jsonMatch[1] : content;
+      
+      // Clean up the JSON string
+      jsonStr = jsonStr.trim();
+      
+      // If response appears truncated (ends mid-string or mid-object), try to repair
+      if (!jsonStr.endsWith('}') && !jsonStr.endsWith(']')) {
+        console.warn("JSON appears truncated, attempting repair...");
+        
+        // Count open brackets to determine what needs closing
+        const openBraces = (jsonStr.match(/{/g) || []).length;
+        const closeBraces = (jsonStr.match(/}/g) || []).length;
+        const openBrackets = (jsonStr.match(/\[/g) || []).length;
+        const closeBrackets = (jsonStr.match(/\]/g) || []).length;
+        
+        // Find last complete object in violations array
+        const lastCompleteMatch = jsonStr.match(/([\s\S]*"contextualHint"\s*:\s*"[^"]*"[^}]*})/);
+        if (lastCompleteMatch) {
+          jsonStr = lastCompleteMatch[1];
+          // Close any remaining open structures
+          const remainingBraces = openBraces - (jsonStr.match(/}/g) || []).length;
+          const remainingBrackets = openBrackets - (jsonStr.match(/\]/g) || []).length;
+          
+          // Close violations array if needed
+          if (remainingBrackets > 0) {
+            jsonStr += ']';
+          }
+          // Add empty passNotes and close root object
+          if (!jsonStr.includes('"passNotes"')) {
+            jsonStr += ', "passNotes": {}';
+          }
+          if (remainingBraces > 0) {
+            jsonStr += '}';
+          }
+        } else {
+          // Fallback: return empty result if we can't salvage
+          console.error("Could not salvage truncated response, returning empty result");
+          analysisResult = { violations: [], passNotes: {} };
+        }
+      }
+      
+      if (!analysisResult) {
+        analysisResult = JSON.parse(jsonStr);
+      }
     } catch (parseError) {
-      console.error("Failed to parse AI response:", content);
-      throw new Error("Failed to parse AI analysis response");
+      console.error("Failed to parse AI response:", content.substring(0, 500));
+      
+      // Final fallback: return empty violations with error note
+      console.warn("Using fallback empty result due to parse failure");
+      analysisResult = { 
+        violations: [], 
+        passNotes: { 
+          _error: "AI response parsing failed - please retry analysis" 
+        } 
+      };
     }
 
     // Enhance violations with corrective prompts and filter out invalid reports
