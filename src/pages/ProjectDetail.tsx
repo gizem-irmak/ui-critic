@@ -267,23 +267,14 @@ export default function ProjectDetail() {
           </Button>
         )}
         {currentView === 'final' && (
-          <div className="flex items-center gap-2">
-            <Button 
-              variant="outline" 
-              onClick={() => window.print()}
-              className="gap-2 print:hidden"
-            >
-              <Printer className="h-4 w-4" />
-              Print / Export PDF
-            </Button>
-            <Button 
-              variant="ghost" 
-              onClick={handleBackToSetup}
-              className="print:hidden"
-            >
-              Back to Project
-            </Button>
-          </div>
+          <Button 
+            variant="outline" 
+            onClick={() => window.print()}
+            className="gap-2 print:hidden"
+          >
+            <Printer className="h-4 w-4" />
+            Print / Export PDF
+          </Button>
         )}
       </div>
 
