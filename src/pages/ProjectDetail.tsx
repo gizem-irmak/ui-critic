@@ -254,18 +254,6 @@ export default function ProjectDetail() {
             <span>{project.iterations.length} iteration{project.iterations.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
-        
-        {/* Action buttons for converged projects */}
-        {isConverged && currentView !== 'final' && (
-          <Button 
-            variant="outline" 
-            onClick={handleViewFinalSummary}
-            className="gap-2"
-          >
-            <FileText className="h-4 w-4" />
-            View Final Summary
-          </Button>
-        )}
         {currentView === 'final' && (
           <Button 
             variant="outline" 
