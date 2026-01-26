@@ -330,8 +330,8 @@ export default function ProjectDetail() {
             </div>
           )}
 
-          {/* Previous Iterations List */}
-          {project.iterations.length > 0 && (
+          {/* Previous Iterations List - hide when showing fresh results */}
+          {project.iterations.length > 0 && currentView !== 'results' && (
             <Card>
               <CardHeader>
                 <CardTitle>
