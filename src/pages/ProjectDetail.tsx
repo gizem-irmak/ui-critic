@@ -168,12 +168,8 @@ export default function ProjectDetail() {
 
       setAnalysis(project.id, iteration.id, analysis);
       
-      // Navigate to final summary if converged, otherwise show intermediate results
-      if (analysis.isAcceptable) {
-        setCurrentView('final');
-      } else {
-        setCurrentView('results');
-      }
+      // Always show results view first - user must explicitly navigate to final report
+      setCurrentView('results');
 
       toast({
         title: analysis.isAcceptable ? 'Convergence Reached' : 'Analysis Complete',
@@ -218,10 +214,8 @@ export default function ProjectDetail() {
   const updatedProject = getProject(project.id);
   const currentIteration = updatedProject?.iterations[updatedProject.iterations.length - 1];
 
-  // Check if we should show the final summary view 
-  // (either from current analysis or user viewing a converged project)
-  const showFinalSummary = currentView === 'final' || 
-    (currentView === 'setup' && isConverged && project.iterations.length > 0);
+  // Only show final summary when explicitly navigated to via 'View Final Report'
+  const showFinalSummary = currentView === 'final';
 
   const handleViewFinalSummary = () => {
     setCurrentView('final');
@@ -275,6 +269,7 @@ export default function ProjectDetail() {
           project={updatedProject!}
           iterationNumber={currentIteration.iterationNumber}
           onStartNextIteration={startNextIteration}
+          onViewFinalReport={handleViewFinalSummary}
         />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
