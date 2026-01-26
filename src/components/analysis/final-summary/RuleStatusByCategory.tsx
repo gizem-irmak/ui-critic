@@ -18,7 +18,7 @@ interface RuleStatusByCategoryProps {
 const categoryLabels: Record<string, string> = {
   accessibility: 'Accessibility',
   usability: 'Usability',
-  ethics: 'Ethical UI',
+  ethics: 'Ethics',
 };
 
 const categoryOrder = ['accessibility', 'usability', 'ethics'];

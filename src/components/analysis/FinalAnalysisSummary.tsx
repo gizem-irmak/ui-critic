@@ -87,7 +87,7 @@ export function FinalAnalysisSummary({ project }: FinalAnalysisSummaryProps) {
   const categoryLabels: Record<string, string> = {
     accessibility: 'Accessibility',
     usability: 'Usability',
-    ethics: 'Ethical UI',
+    ethics: 'Ethics',
   };
 
   const categoryColors: Record<string, string> = {

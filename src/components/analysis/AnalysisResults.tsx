@@ -63,7 +63,7 @@ export function AnalysisResults({
     const categoryLabels: Record<string, string> = {
       accessibility: 'Accessibility',
       usability: 'Usability',
-      ethics: 'Ethical Design'
+      ethics: 'Ethics'
     };
     
     const grouped: Record<string, typeof deduplicatedPrompts> = {};
