@@ -914,7 +914,7 @@ serve(async (req) => {
     
     console.log(`Sending to AI: ${userPrompt.length} chars of code context`);
     
-    const aiResponse = await fetch("https://ai.lovable.dev/api/chat", {
+    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
