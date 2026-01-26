@@ -1,14 +1,17 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Play, Loader2, ChevronRight, CheckCircle, XCircle, FileText, Printer } from 'lucide-react';
+import { ArrowLeft, Play, Loader2, ChevronRight, CheckCircle, XCircle, FileText, Printer, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ToolBadge } from '@/components/ui/tool-badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { InputSelector } from '@/components/analysis/InputSelector';
 import { RuleSelector } from '@/components/analysis/RuleSelector';
 import { AnalysisResults } from '@/components/analysis/AnalysisResults';
 import { IterationReportModal } from '@/components/analysis/IterationReportModal';
 import { FinalAnalysisSummary } from '@/components/analysis/FinalAnalysisSummary';
+import { ConvergedSummaryCard } from '@/components/projects/ConvergedSummaryCard';
 import { useProjectStore } from '@/stores/projectStore';
 import { rules } from '@/data/rules';
 import { runUIAnalysis, fileToBase64, fileToRawBase64 } from '@/lib/api/analysis';
@@ -24,8 +27,14 @@ export default function ProjectDetail() {
   const { getProject, createIteration, updateIteration, setAnalysis } = useProjectStore();
   const project = getProject(projectId || '');
   
+  // Determine if project is converged
+  const latestIteration = project?.iterations[project.iterations.length - 1];
+  const isConverged = latestIteration?.analysis?.isAcceptable ?? false;
+  
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [currentView, setCurrentView] = useState<'setup' | 'results' | 'final'>('setup');
+  // Default tab based on convergence status
+  const [activeTab, setActiveTab] = useState<string>(isConverged ? 'final-report' : 'new-iteration');
+  const [currentView, setCurrentView] = useState<'setup' | 'results' | 'final'>(isConverged ? 'final' : 'setup');
   
   // Modal state for viewing past iterations
   const [selectedIteration, setSelectedIteration] = useState<Iteration | null>(null);
@@ -48,9 +57,6 @@ export default function ProjectDetail() {
   }, [project, navigate]);
 
   if (!project) return null;
-
-  const latestIteration = project.iterations[project.iterations.length - 1];
-  const isConverged = latestIteration?.analysis?.isAcceptable;
 
   const handleInputTypeChange = (type: InputType) => {
     setInputType(type);
@@ -168,7 +174,8 @@ export default function ProjectDetail() {
 
       setAnalysis(project.id, iteration.id, analysis);
       
-      // Always show results view first - user must explicitly navigate to final report
+      // Switch to iterations tab to show results - user must explicitly navigate to final report
+      setActiveTab('iterations');
       setCurrentView('results');
 
       toast({
@@ -190,6 +197,7 @@ export default function ProjectDetail() {
   };
 
   const startNextIteration = () => {
+    setActiveTab('new-iteration');
     setCurrentView('setup');
     setInputType('screenshots');
     setInputData({ type: 'screenshots', files: [], previews: [] });
@@ -214,15 +222,18 @@ export default function ProjectDetail() {
   const updatedProject = getProject(project.id);
   const currentIteration = updatedProject?.iterations[updatedProject.iterations.length - 1];
 
-  // Only show final summary when explicitly navigated to via 'View Final Report'
-  const showFinalSummary = currentView === 'final';
-
   const handleViewFinalSummary = () => {
+    setActiveTab('final-report');
     setCurrentView('final');
   };
 
-  const handleBackToSetup = () => {
-    setCurrentView('setup');
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    if (value === 'final-report') {
+      setCurrentView('final');
+    } else if (value === 'new-iteration') {
+      setCurrentView('setup');
+    }
   };
 
   return (
@@ -248,7 +259,7 @@ export default function ProjectDetail() {
             <span>{project.iterations.length} iteration{project.iterations.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
-        {currentView === 'final' && (
+        {activeTab === 'final-report' && (
           <Button 
             variant="outline" 
             onClick={() => window.print()}
@@ -260,131 +271,198 @@ export default function ProjectDetail() {
         )}
       </div>
 
-      {/* Content */}
-      {showFinalSummary ? (
-        <FinalAnalysisSummary project={updatedProject!} />
-      ) : currentView === 'results' && currentIteration?.analysis ? (
-        <AnalysisResults
-          analysis={currentIteration.analysis}
-          project={updatedProject!}
-          iterationNumber={currentIteration.iterationNumber}
-          onStartNextIteration={startNextIteration}
-          onViewFinalReport={handleViewFinalSummary}
-        />
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Input Section */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Iteration #{project.iterations.length + 1} - Input</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <InputSelector
-                inputType={inputType}
-                onInputTypeChange={handleInputTypeChange}
-                inputData={inputData}
-                onInputDataChange={setInputData}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Rules Section */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Rule Selection</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <RuleSelector
-                selectedCategories={selectedCategories}
-                selectedRules={selectedRules}
-                onCategoriesChange={setSelectedCategories}
-                onRulesChange={setSelectedRules}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Run Analysis Button */}
-          <div className="lg:col-span-2 flex justify-center">
-            <Button
-              size="lg"
-              onClick={runAnalysis}
-              disabled={!canRunAnalysis() || isAnalyzing}
-              className="gap-2 min-w-48"
-            >
-              {isAnalyzing ? (
-                <>
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                  Analyzing...
-                </>
-              ) : (
-                <>
-                  <Play className="h-5 w-5" />
-                  Run Automated Analysis
-                </>
-              )}
-            </Button>
-          </div>
-        </div>
+      {/* Converged Banner */}
+      {isConverged && (
+        <Alert className="border-success/30 bg-success/5">
+          <CheckCircle className="h-4 w-4 text-success" />
+          <AlertDescription className="text-success-foreground">
+            <strong>Converged</strong> — Acceptance threshold reached. This project is read-only.
+          </AlertDescription>
+        </Alert>
       )}
 
-      {/* Iteration History - only show when in setup view */}
-      {project.iterations.length > 0 && currentView === 'setup' && !showFinalSummary && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Previous Iterations</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {[...project.iterations].reverse().map((iter) => (
-                <button
-                  key={iter.id}
-                  onClick={() => openIterationReport(iter)}
-                  className={cn(
-                    'w-full flex items-center justify-between p-3 rounded-lg border transition-all',
-                    'hover:bg-muted/80 hover:border-primary/30 hover:shadow-sm',
-                    'focus:outline-none focus:ring-2 focus:ring-primary/20',
-                    iter.analysis?.isAcceptable
-                      ? 'bg-success/5 border-success/20'
-                      : 'bg-muted/50 border-border'
-                  )}
-                >
-                  <div className="flex items-center gap-3">
-                    {iter.analysis && (
-                      iter.analysis.isAcceptable ? (
-                        <CheckCircle className="h-4 w-4 text-success" />
-                      ) : (
-                        <XCircle className="h-4 w-4 text-destructive" />
-                      )
-                    )}
-                    <span className="font-mono text-sm font-medium">
-                      #{iter.iterationNumber}
-                    </span>
-                    <span className="text-sm text-muted-foreground">
-                      {inputTypeLabels[iter.inputType]}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    {iter.analysis && (
-                      <>
-                        <span className="text-sm text-muted-foreground">
-                          {iter.analysis.totalViolations} violation{iter.analysis.totalViolations !== 1 ? 's' : ''}
-                        </span>
-                        <span className={cn(
-                          'status-badge',
-                          iter.analysis.isAcceptable ? 'status-acceptable' : 'status-not-acceptable'
-                        )}>
-                          {iter.analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
-                        </span>
-                      </>
-                    )}
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                </button>
-              ))}
+      {/* Tab Navigation */}
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
+        <TabsList className="grid w-full max-w-md grid-cols-3">
+          <TabsTrigger 
+            value="final-report" 
+            disabled={!isConverged}
+            className={cn(!isConverged && "opacity-50 cursor-not-allowed")}
+          >
+            <FileText className="h-4 w-4 mr-2" />
+            Final Report
+          </TabsTrigger>
+          <TabsTrigger value="iterations">
+            Iterations
+          </TabsTrigger>
+          {!isConverged && (
+            <TabsTrigger value="new-iteration">
+              New Iteration
+            </TabsTrigger>
+          )}
+        </TabsList>
+
+        {/* Final Report Tab */}
+        <TabsContent value="final-report" className="mt-6">
+          {isConverged && updatedProject && (
+            <FinalAnalysisSummary project={updatedProject} />
+          )}
+        </TabsContent>
+
+        {/* Iterations Tab */}
+        <TabsContent value="iterations" className="mt-6">
+          {/* Show current iteration results if viewing results */}
+          {currentView === 'results' && currentIteration?.analysis && (
+            <div className="space-y-6">
+              <AnalysisResults
+                analysis={currentIteration.analysis}
+                project={updatedProject!}
+                iterationNumber={currentIteration.iterationNumber}
+                onStartNextIteration={startNextIteration}
+                onViewFinalReport={handleViewFinalSummary}
+              />
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+
+          {/* Converged Summary Card (when converged and not viewing results) */}
+          {isConverged && currentView !== 'results' && (
+            <div className="mb-6">
+              <ConvergedSummaryCard 
+                project={project} 
+                onOpenFinalReport={handleViewFinalSummary} 
+              />
+            </div>
+          )}
+
+          {/* Previous Iterations List */}
+          {project.iterations.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {isConverged ? 'All Iterations' : 'Previous Iterations'}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {[...project.iterations].reverse().map((iter) => (
+                    <button
+                      key={iter.id}
+                      onClick={() => openIterationReport(iter)}
+                      className={cn(
+                        'w-full flex items-center justify-between p-3 rounded-lg border transition-all',
+                        'hover:bg-muted/80 hover:border-primary/30 hover:shadow-sm',
+                        'focus:outline-none focus:ring-2 focus:ring-primary/20',
+                        iter.analysis?.isAcceptable
+                          ? 'bg-success/5 border-success/20'
+                          : 'bg-muted/50 border-border'
+                      )}
+                    >
+                      <div className="flex items-center gap-3">
+                        {iter.analysis && (
+                          iter.analysis.isAcceptable ? (
+                            <CheckCircle className="h-4 w-4 text-success" />
+                          ) : (
+                            <XCircle className="h-4 w-4 text-destructive" />
+                          )
+                        )}
+                        <span className="font-mono text-sm font-medium">
+                          #{iter.iterationNumber}
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          {inputTypeLabels[iter.inputType]}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {iter.analysis && (
+                          <>
+                            <span className="text-sm text-muted-foreground">
+                              {iter.analysis.totalViolations} violation{iter.analysis.totalViolations !== 1 ? 's' : ''}
+                            </span>
+                            <span className={cn(
+                              'status-badge',
+                              iter.analysis.isAcceptable ? 'status-acceptable' : 'status-not-acceptable'
+                            )}>
+                              {iter.analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
+                            </span>
+                          </>
+                        )}
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {project.iterations.length === 0 && (
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                <p>No iterations yet. Start by running your first analysis.</p>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        {/* New Iteration Tab (only for non-converged) */}
+        {!isConverged && (
+          <TabsContent value="new-iteration" className="mt-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Input Section */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Iteration #{project.iterations.length + 1} - Input</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <InputSelector
+                    inputType={inputType}
+                    onInputTypeChange={handleInputTypeChange}
+                    inputData={inputData}
+                    onInputDataChange={setInputData}
+                  />
+                </CardContent>
+              </Card>
+
+              {/* Rules Section */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Rule Selection</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <RuleSelector
+                    selectedCategories={selectedCategories}
+                    selectedRules={selectedRules}
+                    onCategoriesChange={setSelectedCategories}
+                    onRulesChange={setSelectedRules}
+                  />
+                </CardContent>
+              </Card>
+
+              {/* Run Analysis Button */}
+              <div className="lg:col-span-2 flex justify-center">
+                <Button
+                  size="lg"
+                  onClick={runAnalysis}
+                  disabled={!canRunAnalysis() || isAnalyzing}
+                  className="gap-2 min-w-48"
+                >
+                  {isAnalyzing ? (
+                    <>
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      Analyzing...
+                    </>
+                  ) : (
+                    <>
+                      <Play className="h-5 w-5" />
+                      Run Automated Analysis
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          </TabsContent>
+        )}
+      </Tabs>
 
       {/* Iteration Report Modal */}
       <IterationReportModal
