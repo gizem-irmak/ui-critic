@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { 
-  ArrowLeft, CheckCircle, XCircle, Copy, Check, TrendingDown, 
+  ArrowLeft, CheckCircle, XCircle, Copy, Check, 
   AlertTriangle, ShieldCheck, AlertCircle, FileText, Printer 
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -56,14 +56,6 @@ export default function IterationReport() {
   }
 
   const analysis = iteration.analysis;
-  const prevAnalysis = previousIteration?.analysis;
-
-  // Calculate comparison metrics
-  const violationDiff = prevAnalysis 
-    ? prevAnalysis.totalViolations - analysis.totalViolations 
-    : null;
-  const violationsFixed = violationDiff !== null && violationDiff > 0 ? violationDiff : 0;
-  const violationsAdded = violationDiff !== null && violationDiff < 0 ? Math.abs(violationDiff) : 0;
 
   // Deduplicate prompts
   const deduplicatedPrompts = (() => {
@@ -239,42 +231,6 @@ export default function IterationReport() {
         </div>
       </div>
 
-      {/* Comparison with Previous Iteration */}
-      {prevAnalysis && (
-        <Card className="border-dashed">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <TrendingDown className="h-4 w-4" />
-              Comparison with Iteration #{iteration.iterationNumber - 1}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="text-center p-3 rounded-lg bg-muted/50">
-                <div className="text-2xl font-bold text-muted-foreground">
-                  {prevAnalysis.totalViolations}
-                </div>
-                <div className="text-xs text-muted-foreground">Previous Violations</div>
-              </div>
-              <div className="text-center p-3 rounded-lg bg-muted/50">
-                <div className={cn(
-                  'text-2xl font-bold',
-                  violationsFixed > 0 ? 'text-success' : violationsAdded > 0 ? 'text-destructive' : 'text-muted-foreground'
-                )}>
-                  {violationsFixed > 0 ? `-${violationsFixed}` : violationsAdded > 0 ? `+${violationsAdded}` : '0'}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {violationsFixed > 0 ? 'Fixed' : violationsAdded > 0 ? 'New Issues' : 'No Change'}
-                </div>
-              </div>
-              <div className="text-center p-3 rounded-lg bg-muted/50">
-                <div className="text-2xl font-bold">{analysis.totalViolations}</div>
-                <div className="text-xs text-muted-foreground">Remaining</div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* Metrics Grid */}
       <div className="grid grid-cols-3 gap-4">
