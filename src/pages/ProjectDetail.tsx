@@ -268,16 +268,6 @@ export default function ProjectDetail() {
         )}
       </div>
 
-      {/* Converged Banner */}
-      {isConverged && (
-        <Alert className="border-success/30 bg-success/5">
-          <CheckCircle className="h-4 w-4 text-success" />
-          <AlertDescription className="text-success-foreground">
-            <strong>Converged</strong> — Acceptance threshold reached. This project is read-only.
-          </AlertDescription>
-        </Alert>
-      )}
-
       {/* Tab Navigation */}
       <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
         <TabsList className="grid w-full max-w-md grid-cols-3">
