@@ -12,6 +12,7 @@ interface AnalysisResultsProps {
   project: Project;
   iterationNumber: number;
   onStartNextIteration: () => void;
+  onViewFinalReport?: () => void;
 }
 
 export function AnalysisResults({
@@ -19,6 +20,7 @@ export function AnalysisResults({
   project,
   iterationNumber,
   onStartNextIteration,
+  onViewFinalReport,
 }: AnalysisResultsProps) {
   const [copied, setCopied] = useState(false);
 
@@ -423,14 +425,18 @@ export function AnalysisResults({
         </Card>
       )}
 
-      {/* Next Iteration Button */}
-      {!analysis.isAcceptable && (
-        <div className="flex justify-center pt-4">
+      {/* Action Button - View Final Report when converged, Start Next Iteration otherwise */}
+      <div className="flex justify-center pt-4">
+        {analysis.isAcceptable ? (
+          <Button size="lg" onClick={onViewFinalReport} className="gap-2">
+            View Final Report
+          </Button>
+        ) : (
           <Button size="lg" onClick={onStartNextIteration} className="gap-2">
             Start Next Iteration
           </Button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
