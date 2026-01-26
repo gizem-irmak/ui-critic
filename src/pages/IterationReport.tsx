@@ -500,23 +500,6 @@ export default function IterationReport() {
         </Card>
       )}
 
-      {/* Action Buttons */}
-      <div className="flex justify-center gap-4 pt-4 print:hidden">
-        <Link to={`/projects/${projectId}`} state={{ tab: 'iterations' }}>
-          <Button variant="outline" className="gap-2">
-            <ArrowLeft className="h-4 w-4" />
-            Back to Iterations
-          </Button>
-        </Link>
-        {isFinalIteration && isConverged && (
-          <Link to={`/projects/${projectId}`}>
-            <Button className="gap-2">
-              <FileText className="h-4 w-4" />
-              View Final Report
-            </Button>
-          </Link>
-        )}
-      </div>
     </div>
   );
 }
