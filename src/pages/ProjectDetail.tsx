@@ -9,7 +9,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { InputSelector } from '@/components/analysis/InputSelector';
 import { RuleSelector } from '@/components/analysis/RuleSelector';
 import { AnalysisResults } from '@/components/analysis/AnalysisResults';
-import { IterationReportModal } from '@/components/analysis/IterationReportModal';
+
 import { FinalAnalysisSummary } from '@/components/analysis/FinalAnalysisSummary';
 import { ConvergedSummaryCard } from '@/components/projects/ConvergedSummaryCard';
 import { useProjectStore } from '@/stores/projectStore';
@@ -36,9 +36,6 @@ export default function ProjectDetail() {
   const [activeTab, setActiveTab] = useState<string>(isConverged ? 'final-report' : 'new-iteration');
   const [currentView, setCurrentView] = useState<'setup' | 'results' | 'final'>(isConverged ? 'final' : 'setup');
   
-  // Modal state for viewing past iterations
-  const [selectedIteration, setSelectedIteration] = useState<Iteration | null>(null);
-  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   
   // Current iteration state
   const [inputType, setInputType] = useState<InputType>('screenshots');
@@ -204,14 +201,9 @@ export default function ProjectDetail() {
   };
 
   const openIterationReport = (iter: Iteration) => {
-    setSelectedIteration(iter);
-    setIsReportModalOpen(true);
+    navigate(`/projects/${project.id}/iterations/${iter.id}`);
   };
 
-  const getPreviousIteration = (iter: Iteration): Iteration | null => {
-    const idx = project.iterations.findIndex(i => i.id === iter.id);
-    return idx > 0 ? project.iterations[idx - 1] : null;
-  };
 
   const inputTypeLabels: Record<string, string> = {
     screenshots: 'Screenshots',
@@ -464,14 +456,6 @@ export default function ProjectDetail() {
         )}
       </Tabs>
 
-      {/* Iteration Report Modal */}
-      <IterationReportModal
-        iteration={selectedIteration}
-        project={updatedProject!}
-        previousIteration={selectedIteration ? getPreviousIteration(selectedIteration) : null}
-        open={isReportModalOpen}
-        onOpenChange={setIsReportModalOpen}
-      />
     </div>
   );
 }

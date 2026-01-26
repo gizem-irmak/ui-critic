@@ -7,6 +7,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import Index from "./pages/Index";
 import Projects from "./pages/Projects";
 import ProjectDetail from "./pages/ProjectDetail";
+import IterationReport from "./pages/IterationReport";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -21,6 +22,7 @@ const App = () => (
           <Route element={<AppLayout><Index /></AppLayout>} path="/" />
           <Route element={<AppLayout><Projects /></AppLayout>} path="/projects" />
           <Route element={<AppLayout><ProjectDetail /></AppLayout>} path="/projects/:projectId" />
+          <Route element={<AppLayout><IterationReport /></AppLayout>} path="/projects/:projectId/iterations/:iterationId" />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
