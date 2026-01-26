@@ -4,6 +4,7 @@ import type { Violation } from '@/types/project';
 export interface AnalysisRequest {
   images?: string[]; // base64 encoded images (for screenshots)
   zipBase64?: string; // base64 encoded zip file
+  githubUrl?: string; // GitHub repository URL
   categories: string[];
   selectedRules: string[];
   inputType: 'screenshots' | 'zip' | 'github';
@@ -21,26 +22,43 @@ export interface AnalysisResponse {
   error?: string;
   filesAnalyzed?: number;
   stackDetected?: string;
+  repoInfo?: {
+    owner: string;
+    repo: string;
+  };
 }
 
 export async function runUIAnalysis(request: AnalysisRequest): Promise<AnalysisResponse> {
   // Route to appropriate edge function based on input type
-  const functionName = request.inputType === 'zip' ? 'analyze-zip' : 'analyze-ui';
-  
-  const body = request.inputType === 'zip' 
-    ? {
-        zipBase64: request.zipBase64,
-        categories: request.categories,
-        selectedRules: request.selectedRules,
-        toolUsed: request.toolUsed,
-      }
-    : {
-        images: request.images,
-        categories: request.categories,
-        selectedRules: request.selectedRules,
-        inputType: request.inputType,
-        toolUsed: request.toolUsed,
-      };
+  let functionName: string;
+  let body: Record<string, unknown>;
+
+  if (request.inputType === 'zip') {
+    functionName = 'analyze-zip';
+    body = {
+      zipBase64: request.zipBase64,
+      categories: request.categories,
+      selectedRules: request.selectedRules,
+      toolUsed: request.toolUsed,
+    };
+  } else if (request.inputType === 'github') {
+    functionName = 'analyze-github';
+    body = {
+      githubUrl: request.githubUrl,
+      categories: request.categories,
+      selectedRules: request.selectedRules,
+      toolUsed: request.toolUsed,
+    };
+  } else {
+    functionName = 'analyze-ui';
+    body = {
+      images: request.images,
+      categories: request.categories,
+      selectedRules: request.selectedRules,
+      inputType: request.inputType,
+      toolUsed: request.toolUsed,
+    };
+  }
 
   const { data, error } = await supabase.functions.invoke(functionName, {
     body,
