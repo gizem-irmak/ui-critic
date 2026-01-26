@@ -206,6 +206,7 @@ export default function IterationReport() {
       <div className="flex items-center gap-2 text-sm print:hidden">
         <Link 
           to={`/projects/${projectId}`}
+          state={{ tab: 'iterations' }}
           className="text-primary hover:underline flex items-center gap-1"
         >
           <ArrowLeft className="h-3 w-3" />
@@ -501,7 +502,7 @@ export default function IterationReport() {
 
       {/* Action Buttons */}
       <div className="flex justify-center gap-4 pt-4 print:hidden">
-        <Link to={`/projects/${projectId}`}>
+        <Link to={`/projects/${projectId}`} state={{ tab: 'iterations' }}>
           <Button variant="outline" className="gap-2">
             <ArrowLeft className="h-4 w-4" />
             Back to Iterations
