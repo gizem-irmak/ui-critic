@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { ArrowLeft, Play, Loader2, ChevronRight, CheckCircle, XCircle, FileText, Printer, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 export default function ProjectDetail() {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
   
   const { getProject, createIteration, updateIteration, setAnalysis } = useProjectStore();
@@ -31,9 +32,12 @@ export default function ProjectDetail() {
   const latestIteration = project?.iterations[project.iterations.length - 1];
   const isConverged = latestIteration?.analysis?.isAcceptable ?? false;
   
+  // Check if we should default to iterations tab (from navigation state)
+  const defaultTab = location.state?.tab || (isConverged ? 'final-report' : 'new-iteration');
+  
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  // Default tab based on convergence status
-  const [activeTab, setActiveTab] = useState<string>(isConverged ? 'final-report' : 'new-iteration');
+  // Default tab based on convergence status or navigation state
+  const [activeTab, setActiveTab] = useState<string>(defaultTab);
   const [currentView, setCurrentView] = useState<'setup' | 'results' | 'final'>(isConverged ? 'final' : 'setup');
   
   
