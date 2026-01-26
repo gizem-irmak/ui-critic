@@ -122,14 +122,15 @@ export default function ProjectDetail() {
           toolUsed: project.toolUsed,
         };
       } else {
-        // GitHub analysis not yet supported
-        toast({
-          title: 'Input Type Not Supported',
-          description: 'GitHub repository analysis coming soon.',
-          variant: 'destructive',
-        });
-        setIsAnalyzing(false);
-        return;
+        // GitHub analysis
+        const githubInput = inputData as GithubInput;
+        analysisRequest = {
+          githubUrl: githubInput.url,
+          categories: selectedCategories,
+          selectedRules,
+          inputType,
+          toolUsed: project.toolUsed,
+        };
       }
 
       // Call the AI analysis backend
