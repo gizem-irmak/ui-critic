@@ -260,15 +260,6 @@ export function IterationReportModal({
               </Card>
             </div>
 
-            {/* Confidence Note for A1 */}
-            {(hasConfirmedA1 || hasPotentialA1) && (
-              <div className="flex items-start gap-3 p-4 rounded-lg bg-muted/50 border border-border">
-                <AlertCircle className="h-5 w-5 text-muted-foreground mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-muted-foreground">
-                  <strong>About contrast analysis:</strong> Confirmed issues require computed DOM styles. Potential issues are heuristic observations that should be verified with accessibility audit tools.
-                </p>
-              </div>
-            )}
 
             {/* Violations by Category */}
             <Card>
