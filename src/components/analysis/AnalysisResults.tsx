@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle, XCircle, Copy, Check, AlertTriangle, ShieldCheck, AlertCircle } from 'lucide-react';
+import { CheckCircle, XCircle, Copy, Check, AlertTriangle, ShieldCheck, AlertCircle, MapPin } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -355,7 +355,10 @@ export function AnalysisResults({
                     {/* A1 Affected Items with Location Details - structured display only */}
                     {violation.ruleId === 'A1' && violation.affected_items && violation.affected_items.length > 0 && (
                       <div className="text-xs bg-muted/30 p-3 rounded border border-border space-y-2">
-                        <p className="font-medium text-muted-foreground">Locations:</p>
+                        <p className="font-medium text-muted-foreground flex items-center gap-1.5">
+                          <MapPin className="h-3 w-3" />
+                          Locations
+                        </p>
                         <div className="grid gap-1 pl-2">
                           {violation.affected_items.slice(0, 5).map((item, aIdx) => (
                             <div key={aIdx} className="flex items-center gap-2 text-muted-foreground">
