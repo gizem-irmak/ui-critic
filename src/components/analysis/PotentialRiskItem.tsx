@@ -28,6 +28,15 @@ function cleanDiagnosisText(diagnosis?: string): string {
     .replace(/This finding does not block convergence\.?\s*/gi, '')
     .replace(/This is reported as a potential risk\.?\s*/gi, '')
     .replace(/reported as a potential risk\.?\s*/gi, '')
+    // Remove ALL convergence-related phrases (policy communicated at section level only)
+    .replace(/and does not block convergence\.?\s*/gi, '')
+    .replace(/does not block convergence\.?\s*/gi, '')
+    .replace(/,?\s*and is non-blocking\.?\s*/gi, '')
+    .replace(/,?\s*which is non-blocking\.?\s*/gi, '')
+    .replace(/\(?non-blocking\)?\.?\s*/gi, '')
+    .replace(/blocking/gi, '')
+    .replace(/convergence/gi, '')
+    .replace(/threshold/gi, '')
     // Remove static analysis mentions (redundant with input type badge)
     .replace(/Detected via static analysis\.?\s*/gi, '')
     .replace(/based on static analysis\.?\s*/gi, '')
@@ -37,9 +46,12 @@ function cleanDiagnosisText(diagnosis?: string): string {
     .replace(/Found in:?\s*/gi, '')
     .replace(/Detected in:?\s*/gi, '')
     .replace(/Occurs in:?\s*/gi, '')
-    // Clean up artifacts
+    // Clean up artifacts (extra spaces, dangling punctuation)
     .replace(/\s+/g, ' ')
+    .replace(/,\s*,/g, ',')
+    .replace(/\.\s*\./g, '.')
     .replace(/^\s*[,.:]\s*/, '')
+    .replace(/\s*[,]\s*$/g, '.')
     .trim();
 }
 
