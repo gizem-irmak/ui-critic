@@ -307,92 +307,79 @@ export function AnalysisResults({
       {/* Potential Risks (Non-blocking) */}
       {analysis.potentialRisks > 0 && (
         <Card className="border-warning/30">
-          <CardHeader>
+          <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2">
               <AlertCircle className="h-5 w-5 text-warning" />
               Potential Risks (Non-blocking) — {analysis.potentialRisks}
             </CardTitle>
+            <p className="text-sm text-muted-foreground mt-1">
+              Reported for awareness only. These findings do not affect convergence.
+            </p>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="p-3 rounded-lg bg-warning/10 border border-warning/20 text-sm text-warning-foreground">
-              <strong>Note:</strong> Potential risks are reported for awareness and do not affect convergence. 
-              These are heuristic observations that may require runtime verification.
-            </div>
-            <div className="space-y-3">
-              {analysis.violations.filter(v => v.status === 'potential').map((violation, idx) => (
-                <div
-                  key={idx}
-                  className="p-4 rounded-lg bg-warning/5 border border-warning/20 space-y-3"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <span className={cn('category-badge flex-shrink-0', categoryColors[violation.category])}>
-                        {violation.ruleId}
-                      </span>
-                      <span className="font-medium">{violation.ruleName}</span>
-                      <Badge className="gap-1 text-xs bg-warning/10 text-warning border-warning/30">
-                        <AlertCircle className="h-3 w-3" />
-                        Heuristic
-                      </Badge>
-                      {/* Input Type Badge */}
-                      {violation.inputType && (
-                        <Badge variant="outline" className="text-xs font-normal">
-                          Input: {violation.inputType === 'screenshots' ? 'Screenshot' : violation.inputType === 'zip' ? 'ZIP' : 'GitHub'}
-                        </Badge>
-                      )}
-                    </div>
-                    <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
-                      {Math.round(violation.confidence * 100)}% confidence
+          <CardContent className="space-y-3">
+            {analysis.violations.filter(v => v.status === 'potential').map((violation, idx) => (
+              <div
+                key={idx}
+                className="p-4 rounded-lg bg-warning/5 border border-warning/20 space-y-3"
+              >
+                {/* Header: Rule ID, Name, Input Type, Confidence */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={cn('category-badge flex-shrink-0', categoryColors[violation.category])}>
+                      {violation.ruleId}
                     </span>
-                  </div>
-
-                  {violation.evidence && (
-                    <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
-                  )}
-                  
-                  <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
-                  
-                  {/* A1 Affected Items with Location Details */}
-                  {violation.ruleId === 'A1' && violation.affected_items && violation.affected_items.length > 0 && (
-                    <div className="text-xs bg-muted/30 p-3 rounded border border-border space-y-2">
-                      <p className="font-medium text-muted-foreground">📍 Locations:</p>
-                      <div className="grid gap-1 pl-2">
-                        {violation.affected_items.slice(0, 5).map((item, aIdx) => (
-                          <div key={aIdx} className="flex items-center gap-2 text-muted-foreground">
-                            <span className={cn(
-                              'w-2 h-2 rounded-full',
-                              item.riskLevel === 'high' ? 'bg-destructive' : 
-                              item.riskLevel === 'medium' ? 'bg-warning' : 'bg-muted-foreground'
-                            )} />
-                            <span>
-                              {item.componentName || item.location || item.filePath || 'Unknown location'}
-                              {item.colorClass && <span className="font-mono ml-1">({item.colorClass})</span>}
-                              {item.screenshotIndex && <span className="ml-1">[Screenshot #{item.screenshotIndex}]</span>}
-                            </span>
-                          </div>
-                        ))}
-                        {violation.affected_items.length > 5 && (
-                          <span className="text-muted-foreground italic">...and {violation.affected_items.length - 5} more</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Input Limitation - Use dynamic value if available */}
-                  <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border">
-                    <span className="font-medium">⚠️ Cannot be confirmed:</span>{' '}
-                    {violation.inputLimitation || 'This issue is detected via static/heuristic analysis. Runtime styles, theme settings, or interaction state could not be evaluated.'}
+                    <span className="font-medium">— {violation.ruleName}</span>
                   </div>
                 </div>
-              ))}
-            </div>
+                
+                {/* Metadata line: Input + Confidence */}
+                <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                  {violation.inputType && (
+                    <span>• Input: {violation.inputType === 'screenshots' ? 'Screenshot' : violation.inputType === 'zip' ? 'ZIP' : 'GitHub'}</span>
+                  )}
+                  <span>• Confidence: {Math.round(violation.confidence * 100)}%</span>
+                </div>
+
+                {/* Finding description */}
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-muted-foreground">Finding:</p>
+                  <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
+                </div>
+                
+                {/* Affected locations for A1 */}
+                {violation.affected_items && violation.affected_items.length > 0 && (
+                  <div className="text-sm text-muted-foreground pl-1">
+                    <span>Low-contrast text color tokens detected in:</span>
+                    <ul className="list-disc list-inside mt-1 space-y-0.5">
+                      {violation.affected_items.slice(0, 5).map((item, aIdx) => (
+                        <li key={aIdx} className="text-foreground">
+                          <span className="font-medium">{item.componentName || 'Component'}</span>
+                          {item.filePath && <span className="text-muted-foreground"> ({item.filePath})</span>}
+                          {item.colorClass && <span className="font-mono text-xs ml-1 text-muted-foreground">[{item.colorClass}]</span>}
+                        </li>
+                      ))}
+                      {violation.affected_items.length > 5 && (
+                        <li className="text-muted-foreground italic">...and {violation.affected_items.length - 5} more locations</li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Concise explanation (only if inputLimitation exists, shown once) */}
+                {violation.inputLimitation && (
+                  <p className="text-xs text-muted-foreground italic">
+                    {violation.inputLimitation}
+                  </p>
+                )}
+              </div>
+            ))}
             
-            {/* Advisory Guidance - Use dynamic value from first potential violation if available */}
-            <div className="p-4 rounded-lg bg-muted/30 border border-border space-y-2">
-              <p className="text-sm font-medium text-muted-foreground">💡 Advisory Guidance (Optional)</p>
+            {/* Single Advisory section at the bottom */}
+            <div className="p-4 rounded-lg bg-primary/5 border border-primary/20 space-y-1">
+              <p className="text-sm font-medium text-primary">💡 Advisory (Optional)</p>
               <p className="text-sm text-muted-foreground">
-                {analysis.violations.find(v => v.status === 'potential' && v.advisoryGuidance)?.advisoryGuidance || 
-                  'These issues are reported as potential risks due to analysis limitations. To confirm and resolve definitively, consider uploading screenshots of the rendered UI or verifying in a runtime environment.'}
+                To evaluate these issues with higher confidence, upload screenshots of the rendered UI. 
+                Screenshot-based analysis allows direct contrast measurement and confirmed WCAG evaluation.
               </p>
             </div>
           </CardContent>
