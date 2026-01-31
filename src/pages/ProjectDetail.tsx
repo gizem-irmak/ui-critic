@@ -142,7 +142,15 @@ export default function ProjectDetail() {
 
       const violations = result.violations || [];
 
-      // Calculate violations by category
+      // Separate confirmed violations from potential risks
+      const confirmedViolations = violations.filter(v => v.status === 'confirmed' || !v.status);
+      const potentialRisks = violations.filter(v => v.status === 'potential');
+      
+      // Only count confirmed violations toward convergence
+      const confirmedCount = confirmedViolations.length;
+      const potentialCount = potentialRisks.length;
+
+      // Calculate violations by category (for display purposes, includes all)
       const violationsByCategory: Record<string, number> = {
         accessibility: 0,
         usability: 0,
@@ -162,14 +170,17 @@ export default function ProjectDetail() {
             .join('\n\n')
         : '';
 
+      // CRITICAL: Only confirmed violations affect convergence
       const analysis: Analysis = {
         id: Math.random().toString(36).substring(2),
         iterationId: iteration.id,
         violations,
         totalViolations: violations.length,
+        confirmedViolations: confirmedCount,
+        potentialRisks: potentialCount,
         violationsByCategory,
         correctivePrompt,
-        isAcceptable: violations.length <= project.threshold,
+        isAcceptable: confirmedCount <= project.threshold, // Only confirmed count toward threshold
         analyzedAt: new Date(),
         passNotes: result.passNotes,
       };
@@ -183,8 +194,8 @@ export default function ProjectDetail() {
       toast({
         title: analysis.isAcceptable ? 'Convergence Reached' : 'Analysis Complete',
         description: analysis.isAcceptable 
-          ? `Acceptance threshold met with ${violations.length} violation${violations.length !== 1 ? 's' : ''}`
-          : `Found ${violations.length} violation${violations.length !== 1 ? 's' : ''}`,
+          ? `Acceptance threshold met with ${analysis.confirmedViolations} confirmed violation${analysis.confirmedViolations !== 1 ? 's' : ''}${analysis.potentialRisks > 0 ? ` (+ ${analysis.potentialRisks} potential risk${analysis.potentialRisks !== 1 ? 's' : ''})` : ''}`
+          : `Found ${analysis.confirmedViolations} confirmed violation${analysis.confirmedViolations !== 1 ? 's' : ''}${analysis.potentialRisks > 0 ? ` + ${analysis.potentialRisks} potential risk${analysis.potentialRisks !== 1 ? 's' : ''}` : ''}`,
       });
     } catch (error) {
       console.error('Analysis error:', error);
@@ -363,7 +374,10 @@ export default function ProjectDetail() {
                         {iter.analysis && (
                           <>
                             <span className="text-sm text-muted-foreground">
-                              {iter.analysis.totalViolations} violation{iter.analysis.totalViolations !== 1 ? 's' : ''}
+                              {iter.analysis.confirmedViolations} confirmed
+                              {iter.analysis.potentialRisks > 0 && (
+                                <span className="text-warning"> + {iter.analysis.potentialRisks} potential</span>
+                              )}
                             </span>
                             <span className={cn(
                               'status-badge',

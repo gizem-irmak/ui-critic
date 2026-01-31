@@ -45,6 +45,8 @@ export interface Analysis {
   iterationId: string;
   violations: Violation[];
   totalViolations: number;
+  confirmedViolations: number; // Only confirmed violations count toward convergence
+  potentialRisks: number; // Heuristic issues that don't block convergence
   violationsByCategory: Record<string, number>;
   correctivePrompt: string;
   isAcceptable: boolean;
