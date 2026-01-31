@@ -138,7 +138,10 @@ export function AnalysisResults({
       {analysis.isAcceptable && (
         <div className="ml-auto px-4 py-2 bg-success/10 rounded-lg">
           <span className="text-sm font-medium text-success">
-            Converged at iteration {iterationNumber}
+            {project.convergedAtIteration 
+              ? `Converged at iteration #${project.convergedAtIteration}`
+              : `Converged at iteration #${iterationNumber}`
+            }
           </span>
         </div>
       )}

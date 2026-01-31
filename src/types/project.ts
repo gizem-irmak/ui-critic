@@ -9,6 +9,9 @@ export interface Project {
   threshold: number;
   createdAt: Date;
   iterations: Iteration[];
+  // Immutable convergence tracking - set once, never modified
+  convergedAtIteration: number | null; // The iteration index (1-based) when convergence was first reached
+  convergedAt: Date | null; // Timestamp of first convergence
 }
 
 export interface Iteration {

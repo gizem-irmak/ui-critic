@@ -28,20 +28,31 @@ interface FinalAnalysisSummaryProps {
 }
 
 export function FinalAnalysisSummary({ project }: FinalAnalysisSummaryProps) {
-  const iterations = project.iterations.filter(i => i.analysis !== null);
-  const totalIterations = iterations.length;
+  // Use immutable convergence data
+  const convergenceIterationNumber = project.convergedAtIteration;
+  
+  // Only include iterations up to and including convergence for metrics
+  const allIterations = project.iterations.filter(i => i.analysis !== null);
+  const iterations = convergenceIterationNumber 
+    ? allIterations.filter(i => i.iterationNumber <= convergenceIterationNumber)
+    : allIterations;
+  const postConvergenceIterations = convergenceIterationNumber
+    ? allIterations.filter(i => i.iterationNumber > convergenceIterationNumber)
+    : [];
+  
+  const totalIterations = convergenceIterationNumber ?? iterations.length;
   
   const firstIteration = iterations[0];
   const lastIteration = iterations[iterations.length - 1];
   
-  const initialIssues = firstIteration?.analysis?.totalViolations ?? 0;
-  const finalIssues = lastIteration?.analysis?.totalViolations ?? 0;
+  const initialIssues = firstIteration?.analysis?.confirmedViolations ?? 0;
+  const finalIssues = lastIteration?.analysis?.confirmedViolations ?? 0;
   const overallImprovement = initialIssues > 0 
     ? Math.round(((initialIssues - finalIssues) / initialIssues) * 100) 
     : 0;
 
   // Detect baseline-compliant UI (converged at iteration 1)
-  const isBaselineCompliant = totalIterations === 1 && firstIteration?.analysis?.isAcceptable === true;
+  const isBaselineCompliant = convergenceIterationNumber === 1 && firstIteration?.analysis?.isAcceptable === true;
 
   // Category-level stats with trend data
   const categoryStats = ['accessibility', 'usability', 'ethics'].map(category => {
@@ -124,7 +135,15 @@ export function FinalAnalysisSummary({ project }: FinalAnalysisSummaryProps) {
               <span className="text-muted-foreground/50">•</span>
               <ToolBadge tool={project.toolUsed} />
               <span className="text-muted-foreground/50">•</span>
-              <span>{totalIterations} iteration{totalIterations !== 1 ? 's' : ''} executed</span>
+              <span>{totalIterations} iteration{totalIterations !== 1 ? 's' : ''} to convergence</span>
+              {postConvergenceIterations.length > 0 && (
+                <span className="text-muted-foreground/50">•</span>
+              )}
+              {postConvergenceIterations.length > 0 && (
+                <span className="text-muted-foreground">
+                  (+{postConvergenceIterations.length} post-convergence)
+                </span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-3 print:hidden">

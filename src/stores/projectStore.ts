@@ -19,6 +19,10 @@ interface ProjectStore {
   
   // Analysis actions
   setAnalysis: (projectId: string, iterationId: string, analysis: Analysis) => void;
+  
+  // Convergence helpers
+  isProjectConverged: (projectId: string) => boolean;
+  getConvergenceIteration: (projectId: string) => number | null;
 }
 
 const generateId = () => Math.random().toString(36).substring(2, 15);
@@ -37,6 +41,8 @@ export const useProjectStore = create<ProjectStore>()(
           threshold,
           createdAt: new Date(),
           iterations: [],
+          convergedAtIteration: null,
+          convergedAt: null,
         };
         set((state) => ({ projects: [...state.projects, project] }));
         return project;
@@ -111,17 +117,49 @@ export const useProjectStore = create<ProjectStore>()(
 
       setAnalysis: (projectId, iterationId, analysis) => {
         set((state) => ({
-          projects: state.projects.map((p) =>
-            p.id === projectId
-              ? {
-                  ...p,
-                  iterations: p.iterations.map((i) =>
-                    i.id === iterationId ? { ...i, analysis } : i
-                  ),
-                }
-              : p
-          ),
+          projects: state.projects.map((p) => {
+            if (p.id !== projectId) return p;
+            
+            // Update the iteration with analysis
+            const updatedIterations = p.iterations.map((i) =>
+              i.id === iterationId ? { ...i, analysis } : i
+            );
+            
+            // Find the iteration to check if this is a convergence event
+            const iteration = updatedIterations.find((i) => i.id === iterationId);
+            
+            // CRITICAL: Only set convergence if not already converged AND analysis is acceptable
+            // Once convergedAtIteration is set, it is IMMUTABLE
+            const shouldSetConvergence = 
+              p.convergedAtIteration === null && 
+              analysis.isAcceptable &&
+              iteration;
+            
+            return {
+              ...p,
+              iterations: updatedIterations,
+              // Set convergence fields only once - never modify after first convergence
+              convergedAtIteration: shouldSetConvergence 
+                ? iteration!.iterationNumber 
+                : p.convergedAtIteration,
+              convergedAt: shouldSetConvergence 
+                ? new Date() 
+                : p.convergedAt,
+            };
+          }),
         }));
+      },
+
+      // Helper: Check if a project has ever converged
+      isProjectConverged: (projectId) => {
+        const project = get().getProject(projectId);
+        return project?.convergedAtIteration !== null && project?.convergedAtIteration !== undefined;
+      },
+
+      // Helper: Get the iteration number where convergence was first reached
+      getConvergenceIteration: (projectId) => {
+        const project = get().getProject(projectId);
+        return project?.convergedAtIteration ?? null;
       },
     }),
     {

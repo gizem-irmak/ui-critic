@@ -25,20 +25,21 @@ export default function ProjectDetail() {
   const location = useLocation();
   const { toast } = useToast();
   
-  const { getProject, createIteration, updateIteration, setAnalysis } = useProjectStore();
+  const { getProject, createIteration, updateIteration, setAnalysis, isProjectConverged, getConvergenceIteration } = useProjectStore();
   const project = getProject(projectId || '');
   
-  // Determine if project is converged
+  // Use immutable convergence tracking - once converged, always converged
+  const hasConverged = isProjectConverged(projectId || '');
+  const convergenceIterationNumber = getConvergenceIteration(projectId || '');
   const latestIteration = project?.iterations[project.iterations.length - 1];
-  const isConverged = latestIteration?.analysis?.isAcceptable ?? false;
   
   // Check if we should default to iterations tab (from navigation state)
-  const defaultTab = location.state?.tab || (isConverged ? 'final-report' : 'new-iteration');
+  const defaultTab = location.state?.tab || (hasConverged ? 'final-report' : 'new-iteration');
   
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   // Default tab based on convergence status or navigation state
   const [activeTab, setActiveTab] = useState<string>(defaultTab);
-  const [currentView, setCurrentView] = useState<'setup' | 'results' | 'final'>(isConverged ? 'final' : 'setup');
+  const [currentView, setCurrentView] = useState<'setup' | 'results' | 'final'>(hasConverged ? 'final' : 'setup');
   
   
   // Current iteration state
@@ -257,8 +258,10 @@ export default function ProjectDetail() {
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-foreground">{project.name}</h1>
             <ToolBadge tool={project.toolUsed} />
-            {isConverged && (
-              <span className="status-badge status-acceptable">Converged</span>
+            {hasConverged && (
+              <span className="status-badge status-acceptable">
+                Converged at #{convergenceIterationNumber}
+              </span>
             )}
           </div>
           <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
@@ -284,8 +287,8 @@ export default function ProjectDetail() {
         <TabsList className="grid w-full max-w-md grid-cols-3">
           <TabsTrigger 
             value="final-report" 
-            disabled={!isConverged}
-            className={cn(!isConverged && "opacity-50 cursor-not-allowed")}
+            disabled={!hasConverged}
+            className={cn(!hasConverged && "opacity-50 cursor-not-allowed")}
           >
             <FileText className="h-4 w-4 mr-2" />
             Final Report
@@ -293,16 +296,14 @@ export default function ProjectDetail() {
           <TabsTrigger value="iterations">
             Iterations
           </TabsTrigger>
-          {!isConverged && (
-            <TabsTrigger value="new-iteration">
-              New Iteration
-            </TabsTrigger>
-          )}
+          <TabsTrigger value="new-iteration">
+            {hasConverged ? 'Re-Iterate' : 'New Iteration'}
+          </TabsTrigger>
         </TabsList>
 
         {/* Final Report Tab */}
         <TabsContent value="final-report" className="mt-6">
-          {isConverged && updatedProject && (
+          {hasConverged && updatedProject && (
             <FinalAnalysisSummary project={updatedProject} />
           )}
         </TabsContent>
@@ -323,7 +324,7 @@ export default function ProjectDetail() {
           )}
 
           {/* Converged Summary Card (when converged and not viewing results) */}
-          {isConverged && currentView !== 'results' && (
+          {hasConverged && currentView !== 'results' && (
             <div className="mb-6">
               <ConvergedSummaryCard 
                 project={project} 
@@ -337,60 +338,74 @@ export default function ProjectDetail() {
             <Card>
               <CardHeader>
                 <CardTitle>
-                  {isConverged ? 'All Iterations' : 'Previous Iterations'}
+                  {hasConverged ? 'All Iterations' : 'Previous Iterations'}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  {[...project.iterations].reverse().map((iter) => (
-                    <button
-                      key={iter.id}
-                      onClick={() => openIterationReport(iter)}
-                      className={cn(
-                        'w-full flex items-center justify-between p-3 rounded-lg border transition-all',
-                        'hover:bg-muted/80 hover:border-primary/30 hover:shadow-sm',
-                        'focus:outline-none focus:ring-2 focus:ring-primary/20',
-                        iter.analysis?.isAcceptable
-                          ? 'bg-success/5 border-success/20'
-                          : 'bg-muted/50 border-border'
-                      )}
-                    >
-                      <div className="flex items-center gap-3">
-                        {iter.analysis && (
-                          iter.analysis.isAcceptable ? (
-                            <CheckCircle className="h-4 w-4 text-success" />
-                          ) : (
-                            <XCircle className="h-4 w-4 text-destructive" />
-                          )
+                  {[...project.iterations].reverse().map((iter) => {
+                    // Determine if this is a post-convergence iteration
+                    const isPostConvergence = hasConverged && 
+                      convergenceIterationNumber !== null && 
+                      iter.iterationNumber > convergenceIterationNumber;
+                    
+                    return (
+                      <button
+                        key={iter.id}
+                        onClick={() => openIterationReport(iter)}
+                        className={cn(
+                          'w-full flex items-center justify-between p-3 rounded-lg border transition-all',
+                          'hover:bg-muted/80 hover:border-primary/30 hover:shadow-sm',
+                          'focus:outline-none focus:ring-2 focus:ring-primary/20',
+                          isPostConvergence
+                            ? 'bg-muted/30 border-dashed border-muted-foreground/30'
+                            : iter.analysis?.isAcceptable
+                              ? 'bg-success/5 border-success/20'
+                              : 'bg-muted/50 border-border'
                         )}
-                        <span className="font-mono text-sm font-medium">
-                          #{iter.iterationNumber}
-                        </span>
-                        <span className="text-sm text-muted-foreground">
-                          {inputTypeLabels[iter.inputType]}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {iter.analysis && (
-                          <>
-                            <span className="text-sm text-muted-foreground">
-                              {iter.analysis.confirmedViolations} confirmed
-                              {iter.analysis.potentialRisks > 0 && (
-                                <span className="text-warning"> + {iter.analysis.potentialRisks} potential</span>
-                              )}
+                      >
+                        <div className="flex items-center gap-3">
+                          {iter.analysis && (
+                            iter.analysis.isAcceptable ? (
+                              <CheckCircle className="h-4 w-4 text-success" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-destructive" />
+                            )
+                          )}
+                          <span className="font-mono text-sm font-medium">
+                            #{iter.iterationNumber}
+                          </span>
+                          {isPostConvergence && (
+                            <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                              Post-convergence
                             </span>
-                            <span className={cn(
-                              'status-badge',
-                              iter.analysis.isAcceptable ? 'status-acceptable' : 'status-not-acceptable'
-                            )}>
-                              {iter.analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
-                            </span>
-                          </>
-                        )}
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      </div>
-                    </button>
-                  ))}
+                          )}
+                          <span className="text-sm text-muted-foreground">
+                            {inputTypeLabels[iter.inputType]}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {iter.analysis && (
+                            <>
+                              <span className="text-sm text-muted-foreground">
+                                {iter.analysis.confirmedViolations} confirmed
+                                {iter.analysis.potentialRisks > 0 && (
+                                  <span className="text-warning"> + {iter.analysis.potentialRisks} potential</span>
+                                )}
+                              </span>
+                              <span className={cn(
+                                'status-badge',
+                                iter.analysis.isAcceptable ? 'status-acceptable' : 'status-not-acceptable'
+                              )}>
+                                {iter.analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
+                              </span>
+                            </>
+                          )}
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -405,64 +420,76 @@ export default function ProjectDetail() {
           )}
         </TabsContent>
 
-        {/* New Iteration Tab (only for non-converged) */}
-        {!isConverged && (
-          <TabsContent value="new-iteration" className="mt-6">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Input Section */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Iteration #{project.iterations.length + 1} - Input</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <InputSelector
-                    inputType={inputType}
-                    onInputTypeChange={handleInputTypeChange}
-                    inputData={inputData}
-                    onInputDataChange={setInputData}
-                  />
-                </CardContent>
-              </Card>
+        {/* New Iteration / Re-Iterate Tab */}
+        <TabsContent value="new-iteration" className="mt-6">
+          {/* Post-convergence warning banner */}
+          {hasConverged && (
+            <Alert className="mb-6 border-warning/30 bg-warning/5">
+              <AlertCircle className="h-4 w-4 text-warning" />
+              <AlertDescription>
+                <strong>Post-Convergence Iteration:</strong> This project converged at Iteration #{convergenceIterationNumber}. 
+                Additional iterations will be recorded but will not affect the convergence status or tool comparison metrics.
+              </AlertDescription>
+            </Alert>
+          )}
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Input Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  Iteration #{project.iterations.length + 1} - Input
+                  {hasConverged && <span className="text-xs font-normal text-muted-foreground ml-2">(Post-convergence)</span>}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <InputSelector
+                  inputType={inputType}
+                  onInputTypeChange={handleInputTypeChange}
+                  inputData={inputData}
+                  onInputDataChange={setInputData}
+                />
+              </CardContent>
+            </Card>
 
-              {/* Rules Section */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Rule Selection</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <RuleSelector
-                    selectedCategories={selectedCategories}
-                    selectedRules={selectedRules}
-                    onCategoriesChange={setSelectedCategories}
-                    onRulesChange={setSelectedRules}
-                  />
-                </CardContent>
-              </Card>
+            {/* Rules Section */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Rule Selection</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <RuleSelector
+                  selectedCategories={selectedCategories}
+                  selectedRules={selectedRules}
+                  onCategoriesChange={setSelectedCategories}
+                  onRulesChange={setSelectedRules}
+                />
+              </CardContent>
+            </Card>
 
-              {/* Run Analysis Button */}
-              <div className="lg:col-span-2 flex justify-center">
-                <Button
-                  size="lg"
-                  onClick={runAnalysis}
-                  disabled={!canRunAnalysis() || isAnalyzing}
-                  className="gap-2 min-w-48"
-                >
-                  {isAnalyzing ? (
-                    <>
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                      Analyzing...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="h-5 w-5" />
-                      Run Automated Analysis
-                    </>
-                  )}
-                </Button>
-              </div>
+            {/* Run Analysis Button */}
+            <div className="lg:col-span-2 flex justify-center">
+              <Button
+                size="lg"
+                onClick={runAnalysis}
+                disabled={!canRunAnalysis() || isAnalyzing}
+                className="gap-2 min-w-48"
+              >
+                {isAnalyzing ? (
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-5 w-5" />
+                    {hasConverged ? 'Run Post-Convergence Analysis' : 'Run Automated Analysis'}
+                  </>
+                )}
+              </Button>
             </div>
-          </TabsContent>
-        )}
+          </div>
+        </TabsContent>
       </Tabs>
 
     </div>
