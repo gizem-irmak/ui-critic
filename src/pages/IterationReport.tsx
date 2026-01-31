@@ -447,6 +447,12 @@ export default function IterationReport() {
                         <AlertCircle className="h-3 w-3" />
                         Heuristic
                       </Badge>
+                      {/* Input Type Badge */}
+                      {violation.inputType && (
+                        <Badge variant="outline" className="text-xs font-normal">
+                          {violation.inputType === 'screenshots' ? 'Screenshot' : violation.inputType === 'zip' ? 'ZIP' : 'GitHub'}
+                        </Badge>
+                      )}
                     </div>
                     <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
                       {Math.round(violation.confidence * 100)}% confidence
@@ -459,21 +465,47 @@ export default function IterationReport() {
 
                   <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
                   
-                  {/* Input Limitation */}
+                  {/* A1 Affected Items with Location Details */}
+                  {violation.ruleId === 'A1' && violation.affected_items && violation.affected_items.length > 0 && (
+                    <div className="text-xs bg-muted/30 p-2 rounded border border-border space-y-1">
+                      <p className="font-medium text-muted-foreground">📍 Locations:</p>
+                      <div className="grid gap-0.5 pl-2">
+                        {violation.affected_items.slice(0, 4).map((item, aIdx) => (
+                          <div key={aIdx} className="flex items-center gap-1.5 text-muted-foreground">
+                            <span className={cn(
+                              'w-1.5 h-1.5 rounded-full',
+                              item.riskLevel === 'high' ? 'bg-destructive' : 
+                              item.riskLevel === 'medium' ? 'bg-warning' : 'bg-muted-foreground'
+                            )} />
+                            <span>
+                              {item.componentName || item.location || item.filePath || 'Unknown'}
+                              {item.colorClass && <span className="font-mono ml-1">({item.colorClass})</span>}
+                              {item.screenshotIndex && <span className="ml-1">[#${item.screenshotIndex}]</span>}
+                            </span>
+                          </div>
+                        ))}
+                        {violation.affected_items.length > 4 && (
+                          <span className="text-muted-foreground italic">...+{violation.affected_items.length - 4} more</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Input Limitation - Use dynamic value if available */}
                   <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border">
-                    <span className="font-medium">⚠️ Cannot be confirmed:</span> Static/heuristic analysis only. 
-                    Runtime styles or theme settings could not be evaluated.
+                    <span className="font-medium">⚠️ Cannot be confirmed:</span>{' '}
+                    {violation.inputLimitation || 'Static/heuristic analysis only. Runtime styles or theme settings could not be evaluated.'}
                   </div>
                 </div>
               ))}
             </div>
             
-            {/* Advisory Guidance */}
+            {/* Advisory Guidance - Use dynamic value from first potential violation if available */}
             <div className="p-3 rounded-lg bg-muted/30 border border-border space-y-1">
               <p className="text-xs font-medium text-muted-foreground">💡 Advisory Guidance (Optional)</p>
               <p className="text-xs text-muted-foreground">
-                These issues are reported as potential risks due to analysis limitations. 
-                To confirm, consider uploading screenshots of the rendered UI.
+                {analysis.violations.find(v => v.status === 'potential' && v.advisoryGuidance)?.advisoryGuidance || 
+                  'These issues are reported as potential risks due to analysis limitations. To confirm, consider uploading screenshots of the rendered UI.'}
               </p>
             </div>
           </CardContent>

@@ -71,10 +71,30 @@ export interface Violation {
   confidence: number;
   // A1 contrast-specific fields
   status?: 'confirmed' | 'potential';
+  inputType?: 'screenshots' | 'zip' | 'github'; // Which input type was used for this finding
   contrastRatio?: number;
   thresholdUsed?: 4.5 | 3.0;
   foregroundHex?: string;
   backgroundHex?: string;
   elementDescription?: string;
   evidence?: string;
+  riskLevel?: 'high' | 'medium' | 'low';
+  // Location tracking for A1 findings
+  inputLimitation?: string; // Explanation of why this is heuristic
+  advisoryGuidance?: string; // Non-mandatory guidance for potential risks
+  // A1 affected items for aggregated display
+  affected_items?: Array<{
+    location?: string;
+    screenshotIndex?: number;
+    componentName?: string;
+    filePath?: string;
+    colorClass?: string;
+    hexColor?: string;
+    riskLevel?: 'high' | 'medium' | 'low';
+    status?: 'confirmed' | 'potential';
+    confidence?: number;
+    rationale?: string;
+    occurrence_count?: number;
+    elementContext?: string;
+  }>;
 }

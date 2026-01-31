@@ -334,6 +334,12 @@ export function AnalysisResults({
                         <AlertCircle className="h-3 w-3" />
                         Heuristic
                       </Badge>
+                      {/* Input Type Badge */}
+                      {violation.inputType && (
+                        <Badge variant="outline" className="text-xs font-normal">
+                          Input: {violation.inputType === 'screenshots' ? 'Screenshot' : violation.inputType === 'zip' ? 'ZIP' : 'GitHub'}
+                        </Badge>
+                      )}
                     </div>
                     <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
                       {Math.round(violation.confidence * 100)}% confidence
@@ -343,24 +349,50 @@ export function AnalysisResults({
                   {violation.evidence && (
                     <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
                   )}
+                  
                   <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
                   
-                  {/* Input Limitation */}
+                  {/* A1 Affected Items with Location Details */}
+                  {violation.ruleId === 'A1' && violation.affected_items && violation.affected_items.length > 0 && (
+                    <div className="text-xs bg-muted/30 p-3 rounded border border-border space-y-2">
+                      <p className="font-medium text-muted-foreground">📍 Locations:</p>
+                      <div className="grid gap-1 pl-2">
+                        {violation.affected_items.slice(0, 5).map((item, aIdx) => (
+                          <div key={aIdx} className="flex items-center gap-2 text-muted-foreground">
+                            <span className={cn(
+                              'w-2 h-2 rounded-full',
+                              item.riskLevel === 'high' ? 'bg-destructive' : 
+                              item.riskLevel === 'medium' ? 'bg-warning' : 'bg-muted-foreground'
+                            )} />
+                            <span>
+                              {item.componentName || item.location || item.filePath || 'Unknown location'}
+                              {item.colorClass && <span className="font-mono ml-1">({item.colorClass})</span>}
+                              {item.screenshotIndex && <span className="ml-1">[Screenshot #{item.screenshotIndex}]</span>}
+                            </span>
+                          </div>
+                        ))}
+                        {violation.affected_items.length > 5 && (
+                          <span className="text-muted-foreground italic">...and {violation.affected_items.length - 5} more</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Input Limitation - Use dynamic value if available */}
                   <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border">
-                    <span className="font-medium">⚠️ Cannot be confirmed:</span> This issue is detected via static/heuristic analysis. 
-                    Runtime styles, theme settings, or interaction state could not be evaluated.
+                    <span className="font-medium">⚠️ Cannot be confirmed:</span>{' '}
+                    {violation.inputLimitation || 'This issue is detected via static/heuristic analysis. Runtime styles, theme settings, or interaction state could not be evaluated.'}
                   </div>
                 </div>
               ))}
             </div>
             
-            {/* Advisory Guidance */}
+            {/* Advisory Guidance - Use dynamic value from first potential violation if available */}
             <div className="p-4 rounded-lg bg-muted/30 border border-border space-y-2">
               <p className="text-sm font-medium text-muted-foreground">💡 Advisory Guidance (Optional)</p>
               <p className="text-sm text-muted-foreground">
-                These issues are reported as potential risks due to analysis limitations. 
-                To confirm and resolve definitively, consider uploading screenshots of the rendered UI 
-                or verifying in a runtime environment.
+                {analysis.violations.find(v => v.status === 'potential' && v.advisoryGuidance)?.advisoryGuidance || 
+                  'These issues are reported as potential risks due to analysis limitations. To confirm and resolve definitively, consider uploading screenshots of the rendered UI or verifying in a runtime environment.'}
               </p>
             </div>
           </CardContent>

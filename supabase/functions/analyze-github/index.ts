@@ -522,6 +522,9 @@ function detectU1CompetingPrimaryActions(allFiles: Map<string, string>): {
 }
 
 // Contrast analysis (simplified for GitHub - static only)
+// GITHUB INPUT = HEURISTIC: Cannot confirm contrast without runtime rendering
+// GitHub repositories may have incomplete styling context, missing runtime configuration,
+// or external themes not available locally
 const TAILWIND_COLORS: Record<string, string> = {
   'gray-200': '#e5e7eb',
   'gray-300': '#d1d5db',
@@ -542,12 +545,15 @@ interface ContrastViolation {
   ruleName: string;
   category: string;
   status: string;
+  inputType: 'github' | 'zip' | 'screenshots';
   evidence?: string;
   diagnosis: string;
   contextualHint: string;
   correctivePrompt: string;
   confidence: number;
   riskLevel?: string;
+  inputLimitation?: string;
+  advisoryGuidance?: string;
   affectedComponents?: any[];
 }
 
@@ -558,7 +564,7 @@ function extractTextColors(content: string): Array<{ colorClass: string; context
   let match;
   while ((match = classPattern.exec(content)) !== null) {
     const classes = match[1] || match[2] || match[3] || '';
-    const textColorMatch = classes.match(/text-(gray|slate|zinc)-[234]00/g);
+    const textColorMatch = classes.match(/text-(gray|slate|zinc)-[2345]00/g);
     
     if (textColorMatch) {
       for (const colorClass of textColorMatch) {
@@ -576,15 +582,15 @@ function extractTextColors(content: string): Array<{ colorClass: string; context
 }
 
 const A1_COLOR_RISK_TIERS: Record<string, { riskLevel: 'high' | 'medium' | 'low'; baseConfidence: number }> = {
-  'gray-200': { riskLevel: 'high', baseConfidence: 0.75 },
-  'gray-300': { riskLevel: 'high', baseConfidence: 0.75 },
-  'slate-200': { riskLevel: 'high', baseConfidence: 0.75 },
-  'slate-300': { riskLevel: 'high', baseConfidence: 0.75 },
-  'zinc-200': { riskLevel: 'high', baseConfidence: 0.75 },
-  'zinc-300': { riskLevel: 'high', baseConfidence: 0.75 },
-  'gray-400': { riskLevel: 'medium', baseConfidence: 0.65 },
-  'slate-400': { riskLevel: 'medium', baseConfidence: 0.65 },
-  'zinc-400': { riskLevel: 'medium', baseConfidence: 0.65 },
+  'gray-200': { riskLevel: 'high', baseConfidence: 0.70 },
+  'gray-300': { riskLevel: 'high', baseConfidence: 0.70 },
+  'slate-200': { riskLevel: 'high', baseConfidence: 0.70 },
+  'slate-300': { riskLevel: 'high', baseConfidence: 0.70 },
+  'zinc-200': { riskLevel: 'high', baseConfidence: 0.70 },
+  'zinc-300': { riskLevel: 'high', baseConfidence: 0.70 },
+  'gray-400': { riskLevel: 'medium', baseConfidence: 0.60 },
+  'slate-400': { riskLevel: 'medium', baseConfidence: 0.60 },
+  'zinc-400': { riskLevel: 'medium', baseConfidence: 0.60 },
   'gray-500': { riskLevel: 'low', baseConfidence: 0.45 },
   'slate-500': { riskLevel: 'low', baseConfidence: 0.45 },
   'zinc-500': { riskLevel: 'low', baseConfidence: 0.45 },
@@ -596,12 +602,20 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     colorName: string;
     hexColor?: string;
     filePath: string;
+    componentName?: string;
     riskLevel: 'high' | 'medium' | 'low';
     confidence: number;
   }> = [];
   
   for (const [filepath, content] of files) {
     const textColors = extractTextColors(content);
+    
+    // Try to extract component name from file
+    let componentName = filepath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+    else if (exportedConst?.[1]) componentName = exportedConst[1];
     
     for (const { colorClass } of textColors) {
       const colorMatch = colorClass.match(/text-(\w+-?\d*)/);
@@ -619,6 +633,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         colorName,
         hexColor,
         filePath: filepath,
+        componentName: componentName || undefined,
         riskLevel: riskTier.riskLevel,
         confidence: riskTier.baseConfidence,
       });
@@ -645,12 +660,15 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   
   const highRiskCount = affectedComponents.filter(c => c.riskLevel === 'high').length;
   const mediumRiskCount = affectedComponents.filter(c => c.riskLevel === 'medium').length;
+  const lowRiskCount = affectedComponents.filter(c => c.riskLevel === 'low').length;
   
   let overallRiskLevel: 'high' | 'medium' | 'low' = 'low';
   if (highRiskCount > 0) overallRiskLevel = 'high';
   else if (mediumRiskCount > 0) overallRiskLevel = 'medium';
   
+  // Reduce confidence by 15% for GitHub (even less context than ZIP - no local theme files)
   const maxConfidence = Math.max(...affectedComponents.map(c => c.confidence));
+  const overallConfidence = Math.round((maxConfidence * 0.85) * 100) / 100;
   
   const uniqueColorClasses = [...new Set(affectedComponents.map(c => c.colorClass))];
   const displayLimit = 4;
@@ -658,32 +676,59 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   const moreCount = uniqueColorClasses.length - displayLimit;
   const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
   
+  // Build file list with component names for location tracking
+  const uniqueFiles = [...new Set(affectedComponents.map(c => {
+    const fileName = c.filePath.split('/').pop() || c.filePath;
+    return c.componentName ? `${c.componentName} (${fileName})` : fileName;
+  }))];
+  const fileDisplayLimit = 4;
+  const displayedFiles = uniqueFiles.slice(0, fileDisplayLimit);
+  const fileMoreCount = uniqueFiles.length - fileDisplayLimit;
+  const fileMoreText = fileMoreCount > 0 ? ` and ${fileMoreCount} more` : '';
+  
   const riskBreakdown = [
     highRiskCount > 0 ? `${highRiskCount} high-risk` : '',
     mediumRiskCount > 0 ? `${mediumRiskCount} medium-risk` : '',
+    lowRiskCount > 0 ? `${lowRiskCount} low-risk` : '',
   ].filter(Boolean).join(', ');
   
-  const diagnosis = `Potential WCAG AA contrast risk (static analysis): ${affectedComponents.length} text color occurrence(s) detected ` +
-    `using ${displayedColors.join(', ')}${moreText}. ` +
+  // Input limitation explanation for GitHub analysis
+  const inputLimitation = 'GitHub repository analysis cannot access runtime rendering, computed styles, or theme configurations. ' +
+    'Foreground colors are detected from Tailwind classes, but background context is often inherited, theme-dependent, or dynamic. ' +
+    'External stylesheets, CSS variables, or theme providers may not be available in the analyzed code.';
+  
+  // Advisory guidance for heuristic findings
+  const advisoryGuidance = 'This issue is reported as a potential risk based on static analysis of GitHub repository code. ' +
+    'To confirm and resolve definitively, consider uploading screenshots of the rendered UI for visual verification.';
+  
+  const diagnosis = `Potential WCAG AA contrast risk (GitHub static analysis): ${affectedComponents.length} text color occurrence(s) detected ` +
+    `in ${displayedFiles.join(', ')}${fileMoreText} using ${displayedColors.join(', ')}${moreText}. ` +
     `Risk breakdown: ${riskBreakdown || 'low-risk'}. ` +
-    `Static analysis cannot determine the actual rendered background color. ` +
-    `This finding is labeled as "Heuristic (requires runtime verification)".`;
+    `GitHub analysis cannot determine actual rendered background colors or runtime configurations. ` +
+    `This finding is labeled as "Potential Risk (Heuristic)" and does not block convergence.`;
+  
+  // NO corrective prompt for GitHub heuristic findings
+  const correctivePrompt = ''; // Empty - no mandatory corrective prompt for heuristic findings
   
   return [{
     ruleId: 'A1',
     ruleName: 'Insufficient text contrast',
     category: 'accessibility',
-    status: 'potential',
-    evidence: `Text color classes detected: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
+    status: 'potential', // Always potential for GitHub analysis
+    inputType: 'github', // Explicit input type tracking
+    evidence: `Text color classes detected in ${displayedFiles.join(', ')}${fileMoreText}: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
     diagnosis,
     contextualHint: `Light text colors may be insufficient for informational text on light backgrounds.`,
-    correctivePrompt: `Replace low-contrast text colors (gray-300/400) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.`,
-    confidence: maxConfidence * 0.9, // Reduce confidence for GitHub (no runtime context)
+    correctivePrompt,
+    confidence: overallConfidence,
     riskLevel: overallRiskLevel,
+    inputLimitation,
+    advisoryGuidance,
     affectedComponents: affectedComponents.map(c => ({
       colorClass: c.colorClass,
       hexColor: c.hexColor,
       filePath: c.filePath,
+      componentName: c.componentName,
       riskLevel: c.riskLevel,
       occurrence_count: c.occurrence_count,
     })),
