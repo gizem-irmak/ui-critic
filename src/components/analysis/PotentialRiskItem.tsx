@@ -46,12 +46,17 @@ function cleanDiagnosisText(diagnosis?: string): string {
     .replace(/Found in:?\s*/gi, '')
     .replace(/Detected in:?\s*/gi, '')
     .replace(/Occurs in:?\s*/gi, '')
-    // Clean up artifacts (extra spaces, dangling punctuation)
+    // Clean up artifacts (extra spaces, dangling punctuation, trailing quotes)
     .replace(/\s+/g, ' ')
     .replace(/,\s*,/g, ',')
     .replace(/\.\s*\./g, '.')
     .replace(/^\s*[,.:]\s*/, '')
     .replace(/\s*[,]\s*$/g, '.')
+    // Remove trailing quotation marks and stray punctuation
+    .replace(/\s*["']+\s*$/g, '')
+    .replace(/\s*[)\]]+\s*$/g, '')
+    .replace(/\.\s*["']+$/g, '.')
+    .replace(/\s+\.$/g, '.')
     .trim();
 }
 
