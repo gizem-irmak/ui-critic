@@ -264,39 +264,56 @@ export function AnalysisResults({
                     </span>
                   </div>
 
-                  {violation.ruleId === 'A1' && violation.contrastRatio && (
-                    <div className="flex flex-wrap items-center gap-4 p-2 rounded bg-destructive/5 border border-destructive/20 text-sm">
-                      {violation.elementDescription && (
-                        <div className="flex items-center gap-2">
-                          <span className="text-muted-foreground">Element:</span>
-                          <span className="font-medium">{violation.elementDescription}</span>
+                  {/* A1 Contrast Violation - Structured Display */}
+                  {violation.ruleId === 'A1' && violation.contrastRatio ? (
+                    <div className="space-y-3">
+                      {/* Location */}
+                      {violation.evidence && (
+                        <div className="flex items-start gap-2 text-sm">
+                          <span className="text-muted-foreground font-medium">📍 Location:</span>
+                          <span>{violation.evidence}</span>
                         </div>
                       )}
-                      {violation.foregroundHex && (
-                        <div className="flex items-center gap-2">
-                          <span className="text-muted-foreground">FG:</span>
-                          <span className="font-mono font-medium">{violation.foregroundHex}</span>
-                          <span className="w-4 h-4 rounded border border-border" style={{ backgroundColor: violation.foregroundHex }} />
-                        </div>
-                      )}
-                      {violation.backgroundHex && (
-                        <div className="flex items-center gap-2">
-                          <span className="text-muted-foreground">BG:</span>
-                          <span className="font-mono font-medium">{violation.backgroundHex}</span>
-                          <span className="w-4 h-4 rounded border border-border" style={{ backgroundColor: violation.backgroundHex }} />
-                        </div>
-                      )}
-                      <div className="flex items-center gap-2">
-                        <span className="text-muted-foreground">Ratio:</span>
-                        <span className="font-mono font-medium text-destructive">{violation.contrastRatio}:1</span>
+                      
+                      {/* Affected Element */}
+                      <div className="flex items-start gap-2 text-sm">
+                        <span className="text-muted-foreground font-medium">Element:</span>
+                        <span>
+                          {violation.elementDescription || 'Text element'} — 
+                          foreground <span className="font-mono inline-flex items-center gap-1">
+                            {violation.foregroundHex}
+                            <span className="w-3 h-3 rounded border border-border inline-block" style={{ backgroundColor: violation.foregroundHex }} />
+                          </span> on background <span className="font-mono inline-flex items-center gap-1">
+                            {violation.backgroundHex}
+                            <span className="w-3 h-3 rounded border border-border inline-block" style={{ backgroundColor: violation.backgroundHex }} />
+                          </span>
+                        </span>
+                      </div>
+                      
+                      {/* Why it fails */}
+                      <div className="flex items-start gap-2 text-sm">
+                        <span className="text-muted-foreground font-medium">Contrast:</span>
+                        <span>
+                          Measured ratio <span className="font-mono font-medium text-destructive">{violation.contrastRatio}:1</span> — 
+                          below WCAG AA minimum (4.5:1 for normal text, 3:1 for large text)
+                        </span>
+                      </div>
+                      
+                      {/* Confirmation source */}
+                      <div className="flex items-start gap-2 text-sm text-muted-foreground">
+                        <span className="font-medium">Verified via:</span>
+                        <span>Screenshot analysis of rendered UI</span>
                       </div>
                     </div>
+                  ) : (
+                    <>
+                      {/* Non-A1 violations - original display */}
+                      {violation.evidence && (
+                        <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
+                      )}
+                      <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
+                    </>
                   )}
-
-                  {violation.evidence && (
-                    <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
-                  )}
-                  <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
                 </div>
               ))}
             </div>
