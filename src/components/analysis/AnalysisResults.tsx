@@ -25,6 +25,9 @@ export function AnalysisResults({
   const [copied, setCopied] = useState(false);
 
   // Deduplicate prompts: group by prompt text, collect unique hints
+  // ONLY include confirmed violations - potential risks don't get corrective prompts
+  const confirmedViolations = analysis.violations.filter(v => v.status !== 'potential');
+  
   const deduplicatedPrompts = (() => {
     const promptMap = new Map<string, { 
       prompt: string; 
@@ -34,7 +37,7 @@ export function AnalysisResults({
       category: string;
     }>();
     
-    for (const v of analysis.violations) {
+    for (const v of confirmedViolations) {
       const key = v.correctivePrompt;
       if (!promptMap.has(key)) {
         promptMap.set(key, {
@@ -57,9 +60,9 @@ export function AnalysisResults({
   })();
 
   const copyPrompt = async () => {
-    if (!analysis?.violations.length) return;
+    if (!confirmedViolations.length) return;
     
-    // Group by category for clipboard
+    // Group by category for clipboard - only confirmed violations
     const categoryLabels: Record<string, string> = {
       accessibility: 'Accessibility',
       usability: 'Usability',
@@ -333,7 +336,7 @@ export function AnalysisResults({
                       </Badge>
                     </div>
                     <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
-                      {Math.round(violation.confidence * 100)}%
+                      {Math.round(violation.confidence * 100)}% confidence
                     </span>
                   </div>
 
@@ -341,8 +344,24 @@ export function AnalysisResults({
                     <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
                   )}
                   <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
+                  
+                  {/* Input Limitation */}
+                  <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border">
+                    <span className="font-medium">⚠️ Cannot be confirmed:</span> This issue is detected via static/heuristic analysis. 
+                    Runtime styles, theme settings, or interaction state could not be evaluated.
+                  </div>
                 </div>
               ))}
+            </div>
+            
+            {/* Advisory Guidance */}
+            <div className="p-4 rounded-lg bg-muted/30 border border-border space-y-2">
+              <p className="text-sm font-medium text-muted-foreground">💡 Advisory Guidance (Optional)</p>
+              <p className="text-sm text-muted-foreground">
+                These issues are reported as potential risks due to analysis limitations. 
+                To confirm and resolve definitively, consider uploading screenshots of the rendered UI 
+                or verifying in a runtime environment.
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -356,8 +375,8 @@ export function AnalysisResults({
         </Card>
       )}
 
-      {/* Corrective Prompt Section - includes all corrective prompts and hints */}
-      {analysis.violations.length > 0 && (
+      {/* Corrective Prompt Section - ONLY for confirmed violations */}
+      {confirmedViolations.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>Corrective Prompts</CardTitle>
