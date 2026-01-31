@@ -12,6 +12,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
 import type { Iteration, Project } from '@/types/project';
+import { PotentialRisksSection } from './PotentialRiskItem';
 
 interface IterationReportModalProps {
   iteration: Iteration | null;
@@ -379,48 +380,8 @@ export function IterationReportModal({
                     Reported for awareness only. These findings do not affect convergence.
                   </p>
                 </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="space-y-3">
-                    {analysis.violations.filter(v => v.status === 'potential').map((violation, idx) => {
-                      // Clean diagnosis: remove redundant status/location statements already shown in UI
-                      const cleanDiagnosis = violation.diagnosis
-                        ?.replace(/This finding is labeled as ['"]?Potential Risk.*?['".]?\s*/gi, '')
-                        .replace(/This finding does not block convergence\.?\s*/gi, '')
-                        .replace(/Detected via static analysis\.?\s*/gi, '')
-                        .trim();
-                      
-                      return (
-                        <div
-                          key={idx}
-                          className="p-3 rounded-lg bg-warning/5 border border-warning/20 space-y-2"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
-                                {violation.ruleId}
-                              </span>
-                              <span className="font-medium text-sm">{violation.ruleName}</span>
-                            </div>
-                            <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                              {Math.round(violation.confidence * 100)}%
-                            </span>
-                          </div>
-
-                          {cleanDiagnosis && (
-                            <p className="text-sm text-foreground leading-relaxed">{cleanDiagnosis}</p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  
-                  {/* Advisory Guidance */}
-                  <div className="p-3 rounded-lg bg-muted/30 border border-border space-y-1">
-                    <p className="text-xs font-medium text-muted-foreground">💡 Advisory Guidance</p>
-                    <p className="text-xs text-muted-foreground">
-                      To confirm these findings, consider uploading screenshots of the rendered UI.
-                    </p>
-                  </div>
+                <CardContent>
+                  <PotentialRisksSection violations={analysis.violations} compact />
                 </CardContent>
               </Card>
             )}
