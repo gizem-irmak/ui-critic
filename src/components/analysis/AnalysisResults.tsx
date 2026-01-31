@@ -318,61 +318,67 @@ export function AnalysisResults({
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="space-y-3">
-              {analysis.violations.filter(v => v.status === 'potential').map((violation, idx) => (
-                <div
-                  key={idx}
-                  className="p-4 rounded-lg bg-warning/5 border border-warning/20 space-y-3"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <span className={cn('category-badge flex-shrink-0', categoryColors[violation.category])}>
-                        {violation.ruleId}
-                      </span>
-                      <span className="font-medium">{violation.ruleName}</span>
-                      {violation.inputType && (
-                        <Badge variant="outline" className="text-xs font-normal">
-                          {violation.inputType === 'screenshots' ? 'Screenshot' : violation.inputType === 'zip' ? 'ZIP' : 'GitHub'}
-                        </Badge>
-                      )}
-                    </div>
-                    <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
-                      {Math.round(violation.confidence * 100)}%
-                    </span>
-                  </div>
-
-                  {violation.evidence && (
-                    <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
-                  )}
-                  
-                  <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
-                  
-                  {/* A1 Affected Items with Location Details */}
-                  {violation.ruleId === 'A1' && violation.affected_items && violation.affected_items.length > 0 && (
-                    <div className="text-xs bg-muted/30 p-3 rounded border border-border space-y-2">
-                      <p className="font-medium text-muted-foreground">📍 Locations:</p>
-                      <div className="grid gap-1 pl-2">
-                        {violation.affected_items.slice(0, 5).map((item, aIdx) => (
-                          <div key={aIdx} className="flex items-center gap-2 text-muted-foreground">
-                            <span className={cn(
-                              'w-2 h-2 rounded-full',
-                              item.riskLevel === 'high' ? 'bg-destructive' : 
-                              item.riskLevel === 'medium' ? 'bg-warning' : 'bg-muted-foreground'
-                            )} />
-                            <span>
-                              {item.componentName || item.location || item.filePath || 'Unknown location'}
-                              {item.colorClass && <span className="font-mono ml-1">({item.colorClass})</span>}
-                              {item.screenshotIndex && <span className="ml-1">[Screenshot #{item.screenshotIndex}]</span>}
-                            </span>
-                          </div>
-                        ))}
-                        {violation.affected_items.length > 5 && (
-                          <span className="text-muted-foreground italic">...and {violation.affected_items.length - 5} more</span>
+              {analysis.violations.filter(v => v.status === 'potential').map((violation, idx) => {
+                // Clean diagnosis: remove redundant status/location statements already shown in UI
+                const cleanDiagnosis = violation.diagnosis
+                  ?.replace(/This finding is labeled as ['"]?Potential Risk.*?['".]?\s*/gi, '')
+                  .replace(/This finding does not block convergence\.?\s*/gi, '')
+                  .replace(/Detected via static analysis\.?\s*/gi, '')
+                  .trim();
+                
+                return (
+                  <div
+                    key={idx}
+                    className="p-4 rounded-lg bg-warning/5 border border-warning/20 space-y-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <span className={cn('category-badge flex-shrink-0', categoryColors[violation.category])}>
+                          {violation.ruleId}
+                        </span>
+                        <span className="font-medium">{violation.ruleName}</span>
+                        {violation.inputType && (
+                          <Badge variant="outline" className="text-xs font-normal">
+                            {violation.inputType === 'screenshots' ? 'Screenshot' : violation.inputType === 'zip' ? 'ZIP' : 'GitHub'}
+                          </Badge>
                         )}
                       </div>
+                      <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
+                        {Math.round(violation.confidence * 100)}%
+                      </span>
                     </div>
-                  )}
-                </div>
-              ))}
+
+                    {cleanDiagnosis && (
+                      <p className="text-sm text-foreground leading-relaxed pl-1">{cleanDiagnosis}</p>
+                    )}
+                    
+                    {/* A1 Affected Items with Location Details - structured display only */}
+                    {violation.ruleId === 'A1' && violation.affected_items && violation.affected_items.length > 0 && (
+                      <div className="text-xs bg-muted/30 p-3 rounded border border-border space-y-2">
+                        <p className="font-medium text-muted-foreground">Locations:</p>
+                        <div className="grid gap-1 pl-2">
+                          {violation.affected_items.slice(0, 5).map((item, aIdx) => (
+                            <div key={aIdx} className="flex items-center gap-2 text-muted-foreground">
+                              <span className={cn(
+                                'w-2 h-2 rounded-full',
+                                item.riskLevel === 'high' ? 'bg-destructive' : 
+                                item.riskLevel === 'medium' ? 'bg-warning' : 'bg-muted-foreground'
+                              )} />
+                              <span>
+                                {item.componentName || item.location || item.filePath || 'Unknown location'}
+                                {item.colorClass && <span className="font-mono ml-1">({item.colorClass})</span>}
+                              </span>
+                            </div>
+                          ))}
+                          {violation.affected_items.length > 5 && (
+                            <span className="text-muted-foreground italic">+{violation.affected_items.length - 5} more</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             
             {/* Advisory Guidance */}

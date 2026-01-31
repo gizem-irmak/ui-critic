@@ -381,30 +381,37 @@ export function IterationReportModal({
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="space-y-3">
-                    {analysis.violations.filter(v => v.status === 'potential').map((violation, idx) => (
-                      <div
-                        key={idx}
-                        className="p-3 rounded-lg bg-warning/5 border border-warning/20 space-y-2"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
-                              {violation.ruleId}
+                    {analysis.violations.filter(v => v.status === 'potential').map((violation, idx) => {
+                      // Clean diagnosis: remove redundant status/location statements already shown in UI
+                      const cleanDiagnosis = violation.diagnosis
+                        ?.replace(/This finding is labeled as ['"]?Potential Risk.*?['".]?\s*/gi, '')
+                        .replace(/This finding does not block convergence\.?\s*/gi, '')
+                        .replace(/Detected via static analysis\.?\s*/gi, '')
+                        .trim();
+                      
+                      return (
+                        <div
+                          key={idx}
+                          className="p-3 rounded-lg bg-warning/5 border border-warning/20 space-y-2"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
+                                {violation.ruleId}
+                              </span>
+                              <span className="font-medium text-sm">{violation.ruleName}</span>
+                            </div>
+                            <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                              {Math.round(violation.confidence * 100)}%
                             </span>
-                            <span className="font-medium text-sm">{violation.ruleName}</span>
                           </div>
-                          <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                            {Math.round(violation.confidence * 100)}%
-                          </span>
+
+                          {cleanDiagnosis && (
+                            <p className="text-sm text-foreground leading-relaxed">{cleanDiagnosis}</p>
+                          )}
                         </div>
-
-                        {violation.evidence && (
-                          <p className="text-xs text-muted-foreground italic">📍 {violation.evidence}</p>
-                        )}
-
-                        <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                   
                   {/* Advisory Guidance */}
