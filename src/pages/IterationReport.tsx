@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { 
   ArrowLeft, CheckCircle, XCircle, Copy, Check, TrendingDown, 
-  AlertTriangle, ShieldCheck, AlertCircle, FileText, Printer, MapPin 
+  AlertTriangle, ShieldCheck, AlertCircle, FileText, Printer 
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -468,10 +468,7 @@ export default function IterationReport() {
                     {/* A1 Affected Items with Location Details - structured display only */}
                     {violation.ruleId === 'A1' && violation.affected_items && violation.affected_items.length > 0 && (
                       <div className="text-xs bg-muted/30 p-2 rounded border border-border space-y-1">
-                        <p className="font-medium text-muted-foreground flex items-center gap-1.5">
-                          <MapPin className="h-3 w-3" />
-                          Locations
-                        </p>
+                        <p className="font-medium text-muted-foreground">Locations:</p>
                         <div className="grid gap-0.5 pl-2">
                           {violation.affected_items.slice(0, 4).map((item, aIdx) => (
                             <div key={aIdx} className="flex items-center gap-1.5 text-muted-foreground">

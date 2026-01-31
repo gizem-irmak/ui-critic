@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { 
   CheckCircle, XCircle, Copy, Check, TrendingDown, TrendingUp, 
-  AlertTriangle, ShieldCheck, AlertCircle, FileText, X, MapPin 
+  AlertTriangle, ShieldCheck, AlertCircle, FileText, X 
 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -408,34 +408,6 @@ export function IterationReportModal({
 
                           {cleanDiagnosis && (
                             <p className="text-sm text-foreground leading-relaxed">{cleanDiagnosis}</p>
-                          )}
-                          
-                          {/* A1 Affected Items with Location Details */}
-                          {violation.ruleId === 'A1' && violation.affected_items && violation.affected_items.length > 0 && (
-                            <div className="text-xs bg-muted/30 p-2 rounded border border-border space-y-1">
-                              <p className="font-medium text-muted-foreground flex items-center gap-1.5">
-                                <MapPin className="h-3 w-3" />
-                                Locations
-                              </p>
-                              <div className="grid gap-0.5 pl-2">
-                                {violation.affected_items.slice(0, 4).map((item, aIdx) => (
-                                  <div key={aIdx} className="flex items-center gap-1.5 text-muted-foreground">
-                                    <span className={cn(
-                                      'w-1.5 h-1.5 rounded-full',
-                                      item.riskLevel === 'high' ? 'bg-destructive' : 
-                                      item.riskLevel === 'medium' ? 'bg-warning' : 'bg-muted-foreground'
-                                    )} />
-                                    <span>
-                                      {item.componentName || item.location || item.filePath || 'Unknown'}
-                                      {item.colorClass && <span className="font-mono ml-1">({item.colorClass})</span>}
-                                    </span>
-                                  </div>
-                                ))}
-                                {violation.affected_items.length > 4 && (
-                                  <span className="text-muted-foreground italic">+{violation.affected_items.length - 4} more</span>
-                                )}
-                              </div>
-                            </div>
                           )}
                         </div>
                       );
