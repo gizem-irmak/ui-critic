@@ -234,49 +234,68 @@ An element is ONLY considered focusable if:
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
-### SPECIAL HANDLING FOR A1 (Text Contrast) — TIERED HEURISTIC ANALYSIS
+### SPECIAL HANDLING FOR A1 (Text Contrast) — SCREENSHOT-BASED ANALYSIS
 
-Since this is screenshot-based analysis, exact contrast ratios CANNOT be computed. Report A1 as a heuristic risk with tiered severity based on visual observation.
+Since this is screenshot analysis, you CAN visually assess contrast and determine pass/fail status with confidence.
 
 **DETECTION RULES:**
-- ONLY report if you observe visually apparent low-contrast text (light gray on white, faint text, etc.)
-- Status is ALWAYS "potential" (never "confirmed" for screenshot analysis)
-- Use cautious language: "may be insufficient", "potential risk", "appears to have low contrast"
-- Do NOT provide numeric contrast ratios (cannot be measured from screenshots)
+- Observe foreground text color and background color from the rendered screenshot
+- For text that is CLEARLY low-contrast (very light gray on white, faint text that is hard to read):
+  - Status: "confirmed" — this is a CONFIRMED violation
+  - Confidence: 0.80-0.95
+  - Use definitive language: "fails WCAG AA", "insufficient contrast", "does not meet minimum ratio"
+  
+- For borderline/ambiguous cases where contrast is unclear:
+  - Status: "potential" — this is a Potential Risk
+  - Confidence: 0.50-0.70
+  - Use cautious language: "may be insufficient", "potential risk"
 
-**RISK LEVEL TIERS (assign based on visual observation):**
-1. **high**: Very faint/light text that is clearly difficult to read (e.g., very light gray on white)
-   - Confidence: 0.65-0.75
-2. **medium**: Noticeably light text that may have insufficient contrast
-   - Confidence: 0.55-0.65
-3. **low**: Borderline contrast that depends on font size/weight and exact background
-   - Confidence: 0.40-0.50
+**OUTPUT FORMAT FOR CONFIRMED A1 VIOLATIONS:**
+\`\`\`json
+{
+  "ruleId": "A1",
+  "ruleName": "Insufficient text contrast",
+  "category": "accessibility",
+  "status": "confirmed",
+  "riskLevel": "high",
+  "evidence": "Course metadata text in course card uses light gray foreground on white background",
+  "elementDescription": "Metadata text (dates, instructor name, duration)",
+  "foregroundHex": "#9CA3AF",
+  "backgroundHex": "#FFFFFF",
+  "contrastRatio": "2.8",
+  "diagnosis": "Text in course card metadata row fails WCAG AA contrast requirements. Light gray text (#9CA3AF) on white background (#FFFFFF) produces an estimated contrast ratio of 2.8:1, below the 4.5:1 minimum for normal text. Verified via screenshot analysis of rendered UI.",
+  "contextualHint": "Increase text color contrast to meet WCAG AA 4.5:1 minimum.",
+  "confidence": 0.88
+}
+\`\`\`
 
-**UNCERTAINTY FACTORS TO MENTION:**
-- Background color may not be uniform or may differ in actual rendering
-- Contrast sufficiency depends on font size/weight (large/bold text requires only 3:1)
-- This is a heuristic finding with reduced confidence
-
-**OUTPUT FORMAT FOR A1:**
+**OUTPUT FORMAT FOR POTENTIAL A1 RISKS:**
 \`\`\`json
 {
   "ruleId": "A1",
   "ruleName": "Insufficient text contrast",
   "category": "accessibility",
   "status": "potential",
-  "riskLevel": "high" or "medium" or "low",
-  "evidence": "Light gray descriptive text appears against white background in card components",
-  "diagnosis": "Text in [location] may have insufficient contrast. Static analysis cannot determine exact contrast ratio or background color.",
-  "contextualHint": "Review text contrast in [location] for potential WCAG AA compliance issues.",
-  "confidence": 0.65
+  "riskLevel": "medium",
+  "evidence": "Secondary text in card header appears slightly muted",
+  "diagnosis": "Text in card header may have insufficient contrast. The exact contrast ratio is borderline and depends on font size/weight.",
+  "contextualHint": "Review text contrast for WCAG AA compliance.",
+  "confidence": 0.55
 }
 \`\`\`
 
+**REQUIRED FOR CONFIRMED VIOLATIONS:**
+- Include UI region/component where issue was detected (e.g., "course card", "header", "metadata row")
+- Include foregroundHex and backgroundHex when observable
+- Include estimated contrastRatio when determinable
+- Reference that finding was verified via screenshot analysis
+- Use definitive language (fails, insufficient, does not meet)
+
 **DO NOT:**
-- Tell users to verify with browser dev tools or axe-core
-- Provide numeric contrast ratios
-- Use "confirmed" status
-- Claim compliance or non-compliance with certainty
+- Mark clearly insufficient contrast as "potential" — use "confirmed"
+- Use uncertainty language for obvious contrast failures
+- State that contrast "cannot be determined" for screenshot input
+- Reserve "potential" for truly borderline cases only
 ` : ''}
 
 Report violations ONLY if there is strong visual evidence.
@@ -1057,6 +1076,10 @@ serve(async (req) => {
       screenshotIndex?: number; // Which screenshot (1-based)
       location: string; // UI region description
       componentName?: string; // Component if identifiable
+      elementDescription?: string; // What type of text element
+      foregroundHex?: string; // Observed foreground color
+      backgroundHex?: string; // Observed background color
+      contrastRatio?: string; // Computed or estimated contrast ratio
       riskLevel: 'high' | 'medium' | 'low';
       status: 'confirmed' | 'potential'; // Confirmed for obvious issues, potential for borderline
       confidence: number;
@@ -1096,24 +1119,42 @@ serve(async (req) => {
         }
       }
       
-      // Determine status: For screenshots, "high" risk can be confirmed, others are potential
-      // Since we can visually observe obviously low contrast text
-      const status: 'confirmed' | 'potential' = riskLevel === 'high' ? 'confirmed' : 'potential';
+      // Determine status: For screenshots, use explicit status from LLM or infer from risk level
+      // High risk = confirmed (clearly insufficient), medium/low = potential (borderline)
+      let status: 'confirmed' | 'potential' = v.status || (riskLevel === 'high' ? 'confirmed' : 'potential');
       
-      // Calculate confidence based on risk level and status
+      // If LLM provided contrastRatio, this is definitive evidence → always confirmed
+      if (v.contrastRatio) {
+        status = 'confirmed';
+      }
+      
+      // Calculate confidence based on status and available data
       let confidence = v.confidence || 0.55;
       if (status === 'confirmed') {
-        // Higher confidence for confirmed (obvious) contrast issues
-        confidence = Math.min(Math.max(confidence, 0.75), 0.90);
+        // Higher confidence for confirmed violations with color data
+        if (v.contrastRatio && v.foregroundHex && v.backgroundHex) {
+          confidence = Math.min(Math.max(confidence, 0.85), 0.95);
+        } else {
+          confidence = Math.min(Math.max(confidence, 0.75), 0.90);
+        }
       } else if (riskLevel === 'medium') {
         confidence = Math.min(Math.max(confidence, 0.50), 0.70);
       } else {
         confidence = Math.min(confidence, 0.55);
       }
       
-      const rationale = v.diagnosis || (status === 'confirmed' 
-        ? `Text in ${location} appears to have clearly insufficient contrast for WCAG AA compliance (4.5:1 for normal text, 3:1 for large/bold text).`
-        : `Text in ${location} may have insufficient contrast. Visual inspection suggests potential WCAG AA risk.`);
+      // Build rationale based on status and available data
+      let rationale = v.diagnosis || '';
+      if (!rationale) {
+        if (status === 'confirmed') {
+          const colorInfo = v.foregroundHex && v.backgroundHex 
+            ? ` Foreground ${v.foregroundHex} on background ${v.backgroundHex}${v.contrastRatio ? ` (ratio: ${v.contrastRatio}:1)` : ''}.`
+            : '';
+          rationale = `Text in ${location} fails WCAG AA contrast requirements (4.5:1 for normal text, 3:1 for large text).${colorInfo} Verified via screenshot analysis.`;
+        } else {
+          rationale = `Text in ${location} may have insufficient contrast. Visual inspection suggests potential WCAG AA risk.`;
+        }
+      }
       
       // Deduplication key
       const dedupeKey = `${screenshotIndex || 0}|${location}|${riskLevel}`;
@@ -1133,6 +1174,10 @@ serve(async (req) => {
           screenshotIndex,
           location,
           componentName,
+          elementDescription: v.elementDescription,
+          foregroundHex: v.foregroundHex,
+          backgroundHex: v.backgroundHex,
+          contrastRatio: v.contrastRatio,
           riskLevel,
           status,
           confidence: Math.round(confidence * 100) / 100,
@@ -1210,35 +1255,34 @@ serve(async (req) => {
         lowRiskCount > 0 ? `${lowRiskCount} low-risk` : '',
       ].filter(Boolean).join(', ');
       
+      // Build summary based on status - use definitive language for confirmed
       const summary = overallStatus === 'confirmed'
-        ? `WCAG AA contrast issue detected in ${areaCountText}. ` +
-          `Status: ${statusBreakdown}. Risk: ${riskBreakdown}. ` +
-          `Clearly insufficient contrast observed in the provided screenshot(s). ` +
-          `Apply corrective prompt to address confirmed issues.`
-        : `Potential WCAG AA contrast risk detected in ${areaCountText}. ` +
-          `Status: ${statusBreakdown}. Risk: ${riskBreakdown}. ` +
-          `Screenshot analysis cannot determine exact contrast ratios. ` +
-          `Actual contrast may vary based on font size and weight (large/bold text requires only 3:1 ratio).`;
+        ? `Text contrast fails WCAG AA requirements in ${areaCountText}. ` +
+          `${confirmedCount} confirmed violation(s) verified via screenshot analysis. ` +
+          `Insufficient contrast was observed in the rendered UI.`
+        : `Potential contrast risk detected in ${areaCountText}. ` +
+          `${potentialCount} area(s) with borderline contrast that may not meet WCAG AA. ` +
+          `Exact contrast ratio is ambiguous based on visual inspection.`;
       
-      const contextualHint = overallRiskLevel === 'high' || overallRiskLevel === 'medium'
-        ? 'Light text colors (gray-300, gray-400 or similar) may be insufficient for informational text on light backgrounds.'
-        : 'Text color is near-threshold; contrast may be insufficient depending on background and font characteristics.';
+      const contextualHint = overallStatus === 'confirmed'
+        ? 'Increase text color contrast to meet WCAG AA minimum (4.5:1 for normal text, 3:1 for large text).'
+        : 'Review text contrast for potential WCAG AA compliance issues.';
       
       const a1Rule = allRulesForViolations.find(r => r.id === 'A1');
       
-      // Corrective prompt only for confirmed violations
+      // Corrective prompt for confirmed violations - definitive instruction
       const correctivePrompt = overallStatus === 'confirmed'
-        ? 'Replace low-contrast text colors (gray-300/400) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.'
+        ? 'Replace low-contrast text colors with higher-contrast tokens to meet WCAG AA 4.5:1 minimum for normal text.'
         : ''; // No mandatory corrective prompt for potential risks
       
-      // Input limitation note for potential risks
+      // No input limitation for confirmed violations (screenshot is definitive for obvious issues)
       const inputLimitation = overallStatus === 'potential'
-        ? 'Screenshot analysis can observe contrast visually but cannot compute exact contrast ratios. For definitive confirmation, use browser dev tools or automated accessibility testing tools.'
+        ? 'Visual inspection suggests borderline contrast. Use browser dev tools to compute exact ratio.'
         : undefined;
       
-      // Advisory guidance for potential risks
+      // Advisory guidance only for potential risks
       const advisoryGuidance = overallStatus === 'potential'
-        ? 'This issue is reported as a potential risk based on visual analysis. The contrast may be acceptable depending on font size, weight, and exact rendered colors. Consider reviewing these areas with browser developer tools to compute actual contrast ratios.'
+        ? 'This is a potential risk due to borderline contrast. Actual compliance depends on font size and weight.'
         : undefined;
       
       aggregatedA1UI = {
@@ -1257,12 +1301,23 @@ serve(async (req) => {
           screenshotIndex: item.screenshotIndex,
           location: item.location,
           componentName: item.componentName,
+          elementDescription: item.elementDescription,
+          foregroundHex: item.foregroundHex,
+          backgroundHex: item.backgroundHex,
+          contrastRatio: item.contrastRatio,
           riskLevel: item.riskLevel,
           status: item.status,
           confidence: item.confidence,
           rationale: item.rationale,
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
         })),
+        // For confirmed violations, also pass through top-level contrast data for display
+        ...(overallStatus === 'confirmed' && a1AffectedItemsUI[0]?.foregroundHex ? {
+          foregroundHex: a1AffectedItemsUI[0].foregroundHex,
+          backgroundHex: a1AffectedItemsUI[0].backgroundHex,
+          contrastRatio: a1AffectedItemsUI[0].contrastRatio,
+          elementDescription: a1AffectedItemsUI[0].elementDescription,
+        } : {}),
         diagnosis: summary,
         contextualHint,
         correctivePrompt,
