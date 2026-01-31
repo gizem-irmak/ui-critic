@@ -65,7 +65,9 @@ export default function IterationReport() {
   const violationsFixed = violationDiff !== null && violationDiff > 0 ? violationDiff : 0;
   const violationsAdded = violationDiff !== null && violationDiff < 0 ? Math.abs(violationDiff) : 0;
 
-  // Deduplicate prompts
+  // Deduplicate prompts - ONLY for confirmed violations
+  const confirmedViolations = analysis.violations.filter(v => v.status !== 'potential');
+  
   const deduplicatedPrompts = (() => {
     const promptMap = new Map<string, { 
       prompt: string; 
@@ -75,7 +77,7 @@ export default function IterationReport() {
       category: string;
     }>();
     
-    for (const v of analysis.violations) {
+    for (const v of confirmedViolations) {
       const key = v.correctivePrompt;
       if (!promptMap.has(key)) {
         promptMap.set(key, {
@@ -98,7 +100,7 @@ export default function IterationReport() {
   })();
 
   const copyPrompt = async () => {
-    if (!analysis?.violations.length) return;
+    if (!confirmedViolations.length) return;
     
     const grouped: Record<string, typeof deduplicatedPrompts> = {};
     for (const item of deduplicatedPrompts) {
@@ -447,7 +449,7 @@ export default function IterationReport() {
                       </Badge>
                     </div>
                     <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                      {Math.round(violation.confidence * 100)}%
+                      {Math.round(violation.confidence * 100)}% confidence
                     </span>
                   </div>
 
@@ -456,8 +458,23 @@ export default function IterationReport() {
                   )}
 
                   <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
+                  
+                  {/* Input Limitation */}
+                  <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border">
+                    <span className="font-medium">⚠️ Cannot be confirmed:</span> Static/heuristic analysis only. 
+                    Runtime styles or theme settings could not be evaluated.
+                  </div>
                 </div>
               ))}
+            </div>
+            
+            {/* Advisory Guidance */}
+            <div className="p-3 rounded-lg bg-muted/30 border border-border space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">💡 Advisory Guidance (Optional)</p>
+              <p className="text-xs text-muted-foreground">
+                These issues are reported as potential risks due to analysis limitations. 
+                To confirm, consider uploading screenshots of the rendered UI.
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -471,8 +488,8 @@ export default function IterationReport() {
         </Card>
       )}
 
-      {/* Corrective Prompt */}
-      {analysis.violations.length > 0 && (
+      {/* Corrective Prompt - ONLY for confirmed violations */}
+      {confirmedViolations.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-sm">Corrective Prompts</CardTitle>
