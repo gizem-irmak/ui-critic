@@ -9,10 +9,10 @@ interface ConvergedSummaryCardProps {
 }
 
 export function ConvergedSummaryCard({ project, onOpenFinalReport }: ConvergedSummaryCardProps) {
-  const latestIteration = project.iterations[project.iterations.length - 1];
-  const finalIssueCount = latestIteration?.analysis?.totalViolations ?? 0;
-  const convergenceDate = latestIteration?.analysis?.analyzedAt 
-    ? new Date(latestIteration.analysis.analyzedAt).toLocaleDateString('en-US', {
+  // Use immutable convergence data
+  const convergenceIteration = project.convergedAtIteration;
+  const convergenceDate = project.convergedAt 
+    ? new Date(project.convergedAt).toLocaleDateString('en-US', {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -20,13 +20,24 @@ export function ConvergedSummaryCard({ project, onOpenFinalReport }: ConvergedSu
         minute: '2-digit',
       })
     : 'Unknown';
+  
+  // Get the iteration where convergence was reached for final issue count
+  const convergenceIterationData = project.iterations.find(
+    i => i.iterationNumber === convergenceIteration
+  );
+  const finalIssueCount = convergenceIterationData?.analysis?.confirmedViolations ?? 0;
+  
+  // Count post-convergence iterations
+  const postConvergenceCount = convergenceIteration 
+    ? project.iterations.filter(i => i.iterationNumber > convergenceIteration).length 
+    : 0;
 
   return (
     <Card className="border-success/30 bg-success/5">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-lg">
           <CheckCircle className="h-5 w-5 text-success" />
-          Project Converged
+          Project Converged at Iteration #{convergenceIteration}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -34,8 +45,15 @@ export function ConvergedSummaryCard({ project, onOpenFinalReport }: ConvergedSu
           <div className="flex items-center gap-2">
             <Layers className="h-4 w-4 text-muted-foreground" />
             <div>
-              <p className="text-xs text-muted-foreground">Total Iterations</p>
-              <p className="text-lg font-semibold">{project.iterations.length}</p>
+              <p className="text-xs text-muted-foreground">Convergence Iterations</p>
+              <p className="text-lg font-semibold">
+                {convergenceIteration}
+                {postConvergenceCount > 0 && (
+                  <span className="text-xs font-normal text-muted-foreground ml-1">
+                    (+{postConvergenceCount} post)
+                  </span>
+                )}
+              </p>
             </div>
           </div>
           
