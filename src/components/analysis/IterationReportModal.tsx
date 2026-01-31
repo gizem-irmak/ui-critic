@@ -129,9 +129,6 @@ export function IterationReportModal({
     }
   };
 
-  const hasConfirmedA1 = analysis.violations.some(v => v.ruleId === 'A1' && v.status === 'confirmed');
-  const hasPotentialA1 = analysis.violations.some(v => v.ruleId === 'A1' && v.status === 'potential');
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] p-0 gap-0 overflow-hidden">
@@ -184,7 +181,10 @@ export function IterationReportModal({
                   {analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
                 </h3>
                 <p className="text-sm text-muted-foreground">
-                  {analysis.totalViolations} violation{analysis.totalViolations !== 1 ? 's' : ''} detected (threshold: {project.threshold})
+                  {analysis.confirmedViolations} confirmed violation{analysis.confirmedViolations !== 1 ? 's' : ''} detected (threshold: {project.threshold})
+                  {analysis.potentialRisks > 0 && (
+                    <span className="text-warning"> + {analysis.potentialRisks} potential risk{analysis.potentialRisks !== 1 ? 's' : ''}</span>
+                  )}
                 </p>
               </div>
             </div>
@@ -227,15 +227,27 @@ export function IterationReportModal({
             )}
 
             {/* Metrics Grid */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-4 gap-4">
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                    Total Violations
+                    Confirmed Issues
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">{analysis.totalViolations}</div>
+                  <div className="text-2xl font-bold text-destructive">{analysis.confirmedViolations}</div>
+                  <p className="text-xs text-muted-foreground">Affects convergence</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Potential Risks
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold text-warning">{analysis.potentialRisks}</div>
+                  <p className="text-xs text-muted-foreground">Non-blocking</p>
                 </CardContent>
               </Card>
               <Card>
@@ -286,96 +298,128 @@ export function IterationReportModal({
               </CardContent>
             </Card>
 
-            {/* Violation Details */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  <AlertTriangle className="h-4 w-4 text-warning" />
-                  Detected Violations ({analysis.violations.length})
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {analysis.violations.map((violation, idx) => (
-                    <div
-                      key={idx}
-                      className="p-3 rounded-lg bg-muted/50 border border-border space-y-2"
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
-                            {violation.ruleId}
-                          </span>
-                          <span className="font-medium text-sm">{violation.ruleName}</span>
-                          
-                          {violation.ruleId === 'A1' && violation.status && (
-                            <Badge 
-                              variant={violation.status === 'confirmed' ? 'default' : 'secondary'}
-                              className={cn(
-                                'gap-1 text-xs',
-                                violation.status === 'confirmed' 
-                                  ? 'bg-destructive/10 text-destructive border-destructive/30' 
-                                  : 'bg-warning/10 text-warning border-warning/30'
-                              )}
-                            >
-                              {violation.status === 'confirmed' ? (
-                                <>
-                                  <ShieldCheck className="h-3 w-3" />
-                                  Confirmed
-                                </>
-                              ) : (
-                                <>
-                                  <AlertCircle className="h-3 w-3" />
-                                  ⚠️ Potential Risk (Heuristic)
-                                </>
-                              )}
+            {/* Confirmed Issues (Blocking) */}
+            {analysis.confirmedViolations > 0 && (
+              <Card className="border-destructive/30">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    <AlertTriangle className="h-4 w-4 text-destructive" />
+                    Confirmed Issues (Blocking) — {analysis.confirmedViolations}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {analysis.violations.filter(v => v.status !== 'potential').map((violation, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-lg bg-destructive/5 border border-destructive/20 space-y-2"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
+                              {violation.ruleId}
+                            </span>
+                            <span className="font-medium text-sm">{violation.ruleName}</span>
+                            <Badge className="gap-1 text-xs bg-destructive/10 text-destructive border-destructive/30">
+                              <ShieldCheck className="h-3 w-3" />
+                              Confirmed
                             </Badge>
-                          )}
-                        </div>
-                        <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                          {Math.round(violation.confidence * 100)}%
-                        </span>
-                      </div>
-
-                      {/* Contrast Ratio Details */}
-                      {violation.ruleId === 'A1' && violation.status === 'confirmed' && violation.contrastRatio && (
-                        <div className="flex flex-wrap items-center gap-3 p-2 rounded bg-destructive/5 border border-destructive/20 text-xs">
-                          {violation.foregroundHex && (
-                            <div className="flex items-center gap-1">
-                              <span className="text-muted-foreground">FG:</span>
-                              <span className="font-mono">{violation.foregroundHex}</span>
-                              <span className="w-3 h-3 rounded border border-border" style={{ backgroundColor: violation.foregroundHex }} />
-                            </div>
-                          )}
-                          {violation.backgroundHex && (
-                            <div className="flex items-center gap-1">
-                              <span className="text-muted-foreground">BG:</span>
-                              <span className="font-mono">{violation.backgroundHex}</span>
-                              <span className="w-3 h-3 rounded border border-border" style={{ backgroundColor: violation.backgroundHex }} />
-                            </div>
-                          )}
-                          <div className="flex items-center gap-1">
-                            <span className="text-muted-foreground">Ratio:</span>
-                            <span className="font-mono text-destructive">{violation.contrastRatio}:1</span>
                           </div>
+                          <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                            {Math.round(violation.confidence * 100)}%
+                          </span>
                         </div>
-                      )}
 
-                      {violation.evidence && (
-                        <p className="text-xs text-muted-foreground italic">📍 {violation.evidence}</p>
-                      )}
+                        {violation.ruleId === 'A1' && violation.contrastRatio && (
+                          <div className="flex flex-wrap items-center gap-3 p-2 rounded bg-destructive/5 border border-destructive/20 text-xs">
+                            {violation.foregroundHex && (
+                              <div className="flex items-center gap-1">
+                                <span className="text-muted-foreground">FG:</span>
+                                <span className="font-mono">{violation.foregroundHex}</span>
+                                <span className="w-3 h-3 rounded border border-border" style={{ backgroundColor: violation.foregroundHex }} />
+                              </div>
+                            )}
+                            {violation.backgroundHex && (
+                              <div className="flex items-center gap-1">
+                                <span className="text-muted-foreground">BG:</span>
+                                <span className="font-mono">{violation.backgroundHex}</span>
+                                <span className="w-3 h-3 rounded border border-border" style={{ backgroundColor: violation.backgroundHex }} />
+                              </div>
+                            )}
+                            <div className="flex items-center gap-1">
+                              <span className="text-muted-foreground">Ratio:</span>
+                              <span className="font-mono text-destructive">{violation.contrastRatio}:1</span>
+                            </div>
+                          </div>
+                        )}
 
-                      <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
-                    </div>
-                  ))}
-                  {analysis.violations.length === 0 && (
-                    <div className="text-center py-6 text-muted-foreground">
-                      No violations detected in this iteration
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+                        {violation.evidence && (
+                          <p className="text-xs text-muted-foreground italic">📍 {violation.evidence}</p>
+                        )}
+
+                        <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Potential Risks (Non-blocking) */}
+            {analysis.potentialRisks > 0 && (
+              <Card className="border-warning/30">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    <AlertCircle className="h-4 w-4 text-warning" />
+                    Potential Risks (Non-blocking) — {analysis.potentialRisks}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="p-2 rounded-lg bg-warning/10 border border-warning/20 text-xs text-muted-foreground">
+                    <strong>Note:</strong> Potential risks are reported for awareness and do not affect convergence. 
+                    These are heuristic observations that may require runtime verification.
+                  </div>
+                  <div className="space-y-3">
+                    {analysis.violations.filter(v => v.status === 'potential').map((violation, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-lg bg-warning/5 border border-warning/20 space-y-2"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
+                              {violation.ruleId}
+                            </span>
+                            <span className="font-medium text-sm">{violation.ruleName}</span>
+                            <Badge className="gap-1 text-xs bg-warning/10 text-warning border-warning/30">
+                              <AlertCircle className="h-3 w-3" />
+                              Heuristic
+                            </Badge>
+                          </div>
+                          <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                            {Math.round(violation.confidence * 100)}%
+                          </span>
+                        </div>
+
+                        {violation.evidence && (
+                          <p className="text-xs text-muted-foreground italic">📍 {violation.evidence}</p>
+                        )}
+
+                        <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {analysis.violations.length === 0 && (
+              <Card>
+                <CardContent className="py-6 text-center text-muted-foreground">
+                  No violations detected in this iteration
+                </CardContent>
+              </Card>
+            )}
 
             {/* Corrective Prompt */}
             {analysis.violations.length > 0 && (
