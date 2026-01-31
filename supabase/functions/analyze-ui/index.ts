@@ -1049,9 +1049,16 @@ serve(async (req) => {
       });
 
     // ========== A1 AGGREGATION LOGIC (Screenshot Analysis) ==========
+    // For screenshots: A1 is FULLY SUPPORTED - we can observe contrast visually
+    // However, we cannot compute exact contrast ratios from pixels without DOM access
+    // Therefore, screenshot A1 findings can be "confirmed" for obvious contrast issues
+    // but remain "potential" for borderline cases
     interface A1AffectedItemUI {
-      location: string;
+      screenshotIndex?: number; // Which screenshot (1-based)
+      location: string; // UI region description
+      componentName?: string; // Component if identifiable
       riskLevel: 'high' | 'medium' | 'low';
+      status: 'confirmed' | 'potential'; // Confirmed for obvious issues, potential for borderline
       confidence: number;
       rationale: string;
       occurrence_count?: number;
@@ -1064,15 +1071,23 @@ serve(async (req) => {
       const diagnosis = (v.diagnosis || '').toLowerCase();
       const combined = evidence + ' ' + diagnosis;
       
+      // Extract screenshot index if mentioned
+      const screenshotMatch = (v.evidence || '').match(/screenshot\s*#?(\d+)/i);
+      const screenshotIndex = screenshotMatch ? parseInt(screenshotMatch[1], 10) : undefined;
+      
       // Extract location from evidence
-      const locationMatch = (v.evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar|button|navigation|content)?)/i);
+      const locationMatch = (v.evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar|button|navigation|content|page|screen)?)/i);
       const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
+      
+      // Extract component name if mentioned (PascalCase)
+      const componentMatch = (v.evidence || '').match(/\b([A-Z][a-zA-Z0-9]*(?:Card|Button|Dialog|Modal|Form|Header|Footer|Nav|Sidebar|Panel|Badge|Label|Text|Description)?)\b/);
+      const componentName = componentMatch?.[1] && componentMatch[1].length > 3 ? componentMatch[1] : undefined;
       
       // Determine risk level from evidence/diagnosis or explicit riskLevel field
       let riskLevel: 'high' | 'medium' | 'low' = v.riskLevel || 'medium';
       if (!v.riskLevel) {
         // Infer risk level from description
-        if (/very light|very faint|barely visible|hard to read|clearly low|extremely light/.test(combined)) {
+        if (/very light|very faint|barely visible|hard to read|clearly low|extremely light|almost invisible/.test(combined)) {
           riskLevel = 'high';
         } else if (/light gray|faint|low contrast|may have insufficient|potentially low/.test(combined)) {
           riskLevel = 'medium';
@@ -1081,20 +1096,27 @@ serve(async (req) => {
         }
       }
       
-      // Calculate confidence based on risk level
+      // Determine status: For screenshots, "high" risk can be confirmed, others are potential
+      // Since we can visually observe obviously low contrast text
+      const status: 'confirmed' | 'potential' = riskLevel === 'high' ? 'confirmed' : 'potential';
+      
+      // Calculate confidence based on risk level and status
       let confidence = v.confidence || 0.55;
-      if (riskLevel === 'high') {
-        confidence = Math.min(Math.max(confidence, 0.65), 0.75);
+      if (status === 'confirmed') {
+        // Higher confidence for confirmed (obvious) contrast issues
+        confidence = Math.min(Math.max(confidence, 0.75), 0.90);
       } else if (riskLevel === 'medium') {
-        confidence = Math.min(Math.max(confidence, 0.50), 0.65);
+        confidence = Math.min(Math.max(confidence, 0.50), 0.70);
       } else {
-        confidence = Math.min(confidence, 0.50);
+        confidence = Math.min(confidence, 0.55);
       }
       
-      const rationale = v.diagnosis || `Text in ${location} may have insufficient contrast for WCAG AA compliance.`;
+      const rationale = v.diagnosis || (status === 'confirmed' 
+        ? `Text in ${location} appears to have clearly insufficient contrast for WCAG AA compliance (4.5:1 for normal text, 3:1 for large/bold text).`
+        : `Text in ${location} may have insufficient contrast. Visual inspection suggests potential WCAG AA risk.`);
       
       // Deduplication key
-      const dedupeKey = `${location}|${riskLevel}`;
+      const dedupeKey = `${screenshotIndex || 0}|${location}|${riskLevel}`;
       
       if (a1DedupeMapUI.has(dedupeKey)) {
         const existing = a1DedupeMapUI.get(dedupeKey)!;
@@ -1102,10 +1124,17 @@ serve(async (req) => {
         if (confidence > existing.confidence) {
           existing.confidence = confidence;
         }
+        // Upgrade to confirmed if any finding in same location is confirmed
+        if (status === 'confirmed') {
+          existing.status = 'confirmed';
+        }
       } else {
         const item: A1AffectedItemUI = {
+          screenshotIndex,
           location,
+          componentName,
           riskLevel,
+          status,
           confidence: Math.round(confidence * 100) / 100,
           rationale,
           occurrence_count: 1,
@@ -1119,10 +1148,15 @@ serve(async (req) => {
     // Create aggregated A1 result if there are any items
     let aggregatedA1UI: any = null;
     if (a1AffectedItemsUI.length > 0) {
-      // Count by risk level
+      // Count by status and risk level
+      const confirmedCount = a1AffectedItemsUI.filter(i => i.status === 'confirmed').length;
+      const potentialCount = a1AffectedItemsUI.filter(i => i.status === 'potential').length;
       const highRiskCount = a1AffectedItemsUI.filter(i => i.riskLevel === 'high').length;
       const mediumRiskCount = a1AffectedItemsUI.filter(i => i.riskLevel === 'medium').length;
       const lowRiskCount = a1AffectedItemsUI.filter(i => i.riskLevel === 'low').length;
+      
+      // Determine overall status (confirmed if any are confirmed)
+      const overallStatus: 'confirmed' | 'potential' = confirmedCount > 0 ? 'confirmed' : 'potential';
       
       // Determine overall risk level (highest tier present)
       let overallRiskLevel: 'high' | 'medium' | 'low' = 'low';
@@ -1132,9 +1166,13 @@ serve(async (req) => {
       // Calculate overall confidence (max of all findings)
       const overallConfidence = Math.max(...a1AffectedItemsUI.map(i => i.confidence));
       
-      const confidenceReason = `Confidence is based on visual assessment of text contrast. ` +
-        `Screenshot analysis cannot measure exact contrast ratios, and actual contrast depends on ` +
-        `rendered background color and font size/weight. Findings are reported as heuristic risks with reduced confidence.`;
+      const confidenceReason = overallStatus === 'confirmed'
+        ? `Confidence is based on visual assessment of text contrast. ` +
+          `${confirmedCount} finding(s) show clearly insufficient contrast that is visually apparent. ` +
+          `WCAG thresholds: 4.5:1 for normal text, 3:1 for large/bold text.`
+        : `Confidence is based on visual assessment of text contrast. ` +
+          `Screenshot analysis cannot measure exact contrast ratios. ` +
+          `Findings are reported as potential risks with reduced confidence.`;
       
       // Build unique location names list
       const invalidLocations = new Set([
@@ -1143,7 +1181,7 @@ serve(async (req) => {
       
       const uniqueLocations = new Set<string>();
       for (const item of a1AffectedItemsUI) {
-        const loc = item.location || '';
+        const loc = item.componentName || item.location || '';
         if (loc && loc.length > 2 && !invalidLocations.has(loc.toLowerCase())) {
           uniqueLocations.add(loc);
         }
@@ -1160,42 +1198,67 @@ serve(async (req) => {
         ? `${uniqueLocationsArray.length} area(s): ${displayedLocations.join(', ')}${moreText}`
         : `${a1AffectedItemsUI.length} location(s)`;
       
-      // Build risk breakdown text
+      // Build risk/status breakdown text
+      const statusBreakdown = [
+        confirmedCount > 0 ? `${confirmedCount} confirmed` : '',
+        potentialCount > 0 ? `${potentialCount} potential` : '',
+      ].filter(Boolean).join(', ');
+      
       const riskBreakdown = [
         highRiskCount > 0 ? `${highRiskCount} high-risk` : '',
         mediumRiskCount > 0 ? `${mediumRiskCount} medium-risk` : '',
         lowRiskCount > 0 ? `${lowRiskCount} low-risk` : '',
       ].filter(Boolean).join(', ');
       
-      const summary = `Potential WCAG AA contrast risk detected in ${areaCountText}. ` +
-        `Risk breakdown: ${riskBreakdown}. ` +
-        `Screenshot analysis cannot determine exact contrast ratios or background colors. ` +
-        `Actual contrast may vary based on font size and weight (large/bold text requires only 3:1 ratio). ` +
-        `This finding is reported as a heuristic risk with reduced confidence.`;
+      const summary = overallStatus === 'confirmed'
+        ? `WCAG AA contrast issue detected in ${areaCountText}. ` +
+          `Status: ${statusBreakdown}. Risk: ${riskBreakdown}. ` +
+          `Clearly insufficient contrast observed in the provided screenshot(s). ` +
+          `Apply corrective prompt to address confirmed issues.`
+        : `Potential WCAG AA contrast risk detected in ${areaCountText}. ` +
+          `Status: ${statusBreakdown}. Risk: ${riskBreakdown}. ` +
+          `Screenshot analysis cannot determine exact contrast ratios. ` +
+          `Actual contrast may vary based on font size and weight (large/bold text requires only 3:1 ratio).`;
       
-      // For screenshot analysis, we don't have specific Tailwind class names
-      // Use consistent wording that matches code analysis (gray-300/400 as common problematic colors)
       const contextualHint = overallRiskLevel === 'high' || overallRiskLevel === 'medium'
         ? 'Light text colors (gray-300, gray-400 or similar) may be insufficient for informational text on light backgrounds.'
         : 'Text color is near-threshold; contrast may be insufficient depending on background and font characteristics.';
       
       const a1Rule = allRulesForViolations.find(r => r.id === 'A1');
       
-      // Single deterministic corrective prompt - aligned with code analysis output
-      const correctivePrompt = 'Replace low-contrast text colors (gray-300/400) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.';
+      // Corrective prompt only for confirmed violations
+      const correctivePrompt = overallStatus === 'confirmed'
+        ? 'Replace low-contrast text colors (gray-300/400) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.'
+        : ''; // No mandatory corrective prompt for potential risks
+      
+      // Input limitation note for potential risks
+      const inputLimitation = overallStatus === 'potential'
+        ? 'Screenshot analysis can observe contrast visually but cannot compute exact contrast ratios. For definitive confirmation, use browser dev tools or automated accessibility testing tools.'
+        : undefined;
+      
+      // Advisory guidance for potential risks
+      const advisoryGuidance = overallStatus === 'potential'
+        ? 'This issue is reported as a potential risk based on visual analysis. The contrast may be acceptable depending on font size, weight, and exact rendered colors. Consider reviewing these areas with browser developer tools to compute actual contrast ratios.'
+        : undefined;
       
       aggregatedA1UI = {
         ruleId: 'A1',
         ruleName: 'Insufficient text contrast',
         category: 'accessibility',
-        status: 'potential', // Always potential for screenshot analysis
+        status: overallStatus,
+        inputType: 'screenshots', // Explicit input type tracking
         overall_confidence: Math.round(overallConfidence * 100) / 100,
         confidence_reason: confidenceReason,
         summary,
         riskLevel: overallRiskLevel,
+        inputLimitation,
+        advisoryGuidance,
         affected_items: a1AffectedItemsUI.map(item => ({
+          screenshotIndex: item.screenshotIndex,
           location: item.location,
+          componentName: item.componentName,
           riskLevel: item.riskLevel,
+          status: item.status,
           confidence: item.confidence,
           rationale: item.rationale,
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
@@ -1206,7 +1269,7 @@ serve(async (req) => {
         confidence: Math.round(overallConfidence * 100) / 100,
       };
       
-      console.log(`A1 aggregated: ${a1Violations.length} findings → 1 result (${riskBreakdown})`);
+      console.log(`A1 aggregated: ${a1Violations.length} findings → 1 result (${statusBreakdown}, ${riskBreakdown})`);
     }
 
     // ========== A2 AGGREGATION LOGIC (Screenshot Analysis) ==========

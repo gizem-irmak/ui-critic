@@ -460,11 +460,13 @@ function extractTextColors(code: string): Array<{ colorClass: string; context: s
 // Analyze contrast issues in code - HEURISTIC ONLY (no computed DOM styles)
 // Per requirements: Only mark as "confirmed" if using axe-core with element reference 
 // OR actual computed DOM styles. Static Tailwind class mapping is NOT sufficient.
+// ZIP INPUT = HEURISTIC: Cannot confirm contrast without runtime rendering
 interface ContrastViolation {
   ruleId: string;
   ruleName: string;
   category: string;
   status: 'confirmed' | 'potential';
+  inputType: 'zip' | 'github' | 'screenshots';
   contrastRatio?: number;
   thresholdUsed?: 4.5 | 3.0;
   foregroundHex?: string;
@@ -477,10 +479,14 @@ interface ContrastViolation {
   confidence: number;
   // A1-specific tiered fields
   riskLevel?: 'high' | 'medium' | 'low';
+  // Location tracking for ZIP/code analysis
+  inputLimitation?: string;
+  advisoryGuidance?: string;
   affectedComponents?: Array<{
     colorClass: string;
     hexColor?: string;
     filePath: string;
+    componentName?: string;
     elementContext?: string;
     riskLevel: 'high' | 'medium' | 'low';
     occurrence_count: number;
@@ -491,16 +497,16 @@ interface ContrastViolation {
 // Higher risk = lighter colors that are more likely to fail on light backgrounds
 const A1_COLOR_RISK_TIERS: Record<string, { riskLevel: 'high' | 'medium' | 'low'; baseConfidence: number }> = {
   // High risk: very light grays - almost certainly fail on white/light backgrounds
-  'gray-200': { riskLevel: 'high', baseConfidence: 0.75 },
-  'gray-300': { riskLevel: 'high', baseConfidence: 0.75 },
-  'slate-200': { riskLevel: 'high', baseConfidence: 0.75 },
-  'slate-300': { riskLevel: 'high', baseConfidence: 0.75 },
-  'zinc-200': { riskLevel: 'high', baseConfidence: 0.75 },
-  'zinc-300': { riskLevel: 'high', baseConfidence: 0.75 },
+  'gray-200': { riskLevel: 'high', baseConfidence: 0.70 },
+  'gray-300': { riskLevel: 'high', baseConfidence: 0.70 },
+  'slate-200': { riskLevel: 'high', baseConfidence: 0.70 },
+  'slate-300': { riskLevel: 'high', baseConfidence: 0.70 },
+  'zinc-200': { riskLevel: 'high', baseConfidence: 0.70 },
+  'zinc-300': { riskLevel: 'high', baseConfidence: 0.70 },
   // Medium risk: mid-light grays - likely to fail on white, borderline on light grays
-  'gray-400': { riskLevel: 'medium', baseConfidence: 0.65 },
-  'slate-400': { riskLevel: 'medium', baseConfidence: 0.65 },
-  'zinc-400': { riskLevel: 'medium', baseConfidence: 0.65 },
+  'gray-400': { riskLevel: 'medium', baseConfidence: 0.60 },
+  'slate-400': { riskLevel: 'medium', baseConfidence: 0.60 },
+  'zinc-400': { riskLevel: 'medium', baseConfidence: 0.60 },
   // Low risk: darker grays - may fail depending on background and font size
   'gray-500': { riskLevel: 'low', baseConfidence: 0.45 },
   'slate-500': { riskLevel: 'low', baseConfidence: 0.45 },
@@ -514,6 +520,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     colorName: string;
     hexColor?: string;
     filePath: string;
+    componentName?: string;
     elementContext?: string;
     riskLevel: 'high' | 'medium' | 'low';
     confidence: number;
@@ -521,6 +528,13 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   
   for (const [filepath, content] of files) {
     const textColors = extractTextColors(content);
+    
+    // Try to extract component name from file
+    let componentName = filepath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+    else if (exportedConst?.[1]) componentName = exportedConst[1];
     
     for (const { colorClass, context } of textColors) {
       const colorMatch = colorClass.match(/text-(\w+-?\d*)/);
@@ -539,6 +553,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         colorName,
         hexColor,
         filePath: filepath,
+        componentName: componentName || undefined,
         elementContext: elementContext || undefined,
         riskLevel: riskTier.riskLevel,
         confidence: riskTier.baseConfidence,
@@ -556,6 +571,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     colorName: string;
     hexColor?: string;
     filePath: string;
+    componentName?: string;
     elementContext?: string;
     riskLevel: 'high' | 'medium' | 'low';
     confidence: number;
@@ -585,8 +601,9 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   else if (mediumRiskCount > 0) overallRiskLevel = 'medium';
   
   // Calculate overall confidence based on highest-risk findings
+  // REDUCE confidence by 10% for ZIP analysis (no runtime context)
   const maxConfidence = Math.max(...affectedComponents.map(c => c.confidence));
-  const overallConfidence = Math.round(maxConfidence * 100) / 100;
+  const overallConfidence = Math.round((maxConfidence * 0.9) * 100) / 100; // Reduce for static analysis
   
   // Build unique color classes list
   const uniqueColorClasses = [...new Set(affectedComponents.map(c => c.colorClass))];
@@ -595,9 +612,12 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   const moreCount = uniqueColorClasses.length - displayLimit;
   const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
   
-  // Build file list
-  const uniqueFiles = [...new Set(affectedComponents.map(c => c.filePath.split('/').pop() || c.filePath))];
-  const fileDisplayLimit = 3;
+  // Build file list with component names
+  const uniqueFiles = [...new Set(affectedComponents.map(c => {
+    const fileName = c.filePath.split('/').pop() || c.filePath;
+    return c.componentName ? `${c.componentName} (${fileName})` : fileName;
+  }))];
+  const fileDisplayLimit = 4;
   const displayedFiles = uniqueFiles.slice(0, fileDisplayLimit);
   const fileMoreCount = uniqueFiles.length - fileDisplayLimit;
   const fileMoreText = fileMoreCount > 0 ? ` and ${fileMoreCount} more` : '';
@@ -609,13 +629,22 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     lowRiskCount > 0 ? `${lowRiskCount} low-risk` : '',
   ].filter(Boolean).join(', ');
   
-  // Build diagnosis with uncertainty factors explained
-  const diagnosis = `Potential WCAG AA contrast risk: ${affectedComponents.length} text color occurrence(s) detected ` +
-    `using ${displayedColors.join(', ')}${moreText} in ${displayedFiles.join(', ')}${fileMoreText}. ` +
+  // Input limitation explanation for ZIP analysis
+  const inputLimitation = 'Static code analysis cannot determine actual rendered background colors or runtime theme configurations. ' +
+    'Foreground colors are detected from Tailwind classes, but background context is often inherited, theme-dependent, or dynamic. ' +
+    'Contrast ratio cannot be computed without runtime rendering.';
+  
+  // Advisory guidance for heuristic findings
+  const advisoryGuidance = 'This issue is reported as a potential risk based on static analysis. ' +
+    'To confirm and resolve definitively, consider uploading screenshots of the rendered UI for visual verification, ' +
+    'or use browser developer tools to inspect actual contrast ratios at runtime.';
+  
+  // Build diagnosis with location tracking
+  const diagnosis = `Potential WCAG AA contrast risk (static analysis): ${affectedComponents.length} text color occurrence(s) detected ` +
+    `in ${displayedFiles.join(', ')}${fileMoreText} using ${displayedColors.join(', ')}${moreText}. ` +
     `Risk breakdown: ${riskBreakdown}. ` +
     `Static analysis cannot determine the actual rendered background color, so contrast sufficiency cannot be confirmed. ` +
-    `Additionally, actual contrast may vary based on font size and weight (large/bold text requires only 3:1 ratio). ` +
-    `This finding is reported as a heuristic risk with reduced confidence.`;
+    `This finding is labeled as "Potential Risk (Heuristic)" and does not block convergence.`;
   
   // Build contextual hint based on DETECTED colors, not generic tiers
   const detectedColorNames = [...new Set(affectedComponents.map(c => c.colorName))];
@@ -628,7 +657,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   const detectedLightGrays: string[] = [];
   if (hasGray300) detectedLightGrays.push('gray-300');
   if (hasGray400) detectedLightGrays.push('gray-400');
-  if (hasGray200) detectedLightGrays.push('gray-200'); // Only include if actually detected
+  if (hasGray200) detectedLightGrays.push('gray-200');
   
   const contextualHint = overallRiskLevel === 'high' || overallRiskLevel === 'medium'
     ? `Light text colors (${detectedLightGrays.length > 0 ? detectedLightGrays.join(', ') : 'gray-300, gray-400'}) may be insufficient for informational text on light backgrounds.`
@@ -636,10 +665,10 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     ? 'Text color (gray-500) is near-threshold; contrast may be insufficient depending on background and font characteristics.'
     : 'Detected text colors may be insufficient depending on background and font characteristics.';
   
-  // Single deterministic corrective prompt - targets commonly problematic colors
-  // Only mention colors that are commonly problematic (gray-300/400), not gray-200 unless detected
+  // NO corrective prompt for potential/heuristic findings (ZIP analysis)
+  // Only advisory guidance is provided
   const correctivePromptColors = hasGray200 ? 'gray-200/300/400' : 'gray-300/400';
-  const correctivePrompt = `Replace low-contrast text colors (${correctivePromptColors}) with higher-contrast tokens (gray-600/700 or theme foreground) for informational text, while preserving design intent.`;
+  const correctivePrompt = ''; // Empty - no mandatory corrective prompt for heuristic findings
   
   console.log(`Computed ${affectedComponents.length} contrast findings → 1 aggregated A1 result (${riskBreakdown})`);
   
@@ -648,17 +677,21 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     ruleId: 'A1',
     ruleName: 'Insufficient text contrast',
     category: 'accessibility',
-    status: 'potential', // Always potential for static analysis
-    evidence: `Text color classes detected: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
+    status: 'potential', // Always potential for static/ZIP analysis
+    inputType: 'zip', // Explicit input type tracking
+    evidence: `Text color classes detected in ${displayedFiles.join(', ')}${fileMoreText}: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
     diagnosis,
     contextualHint,
     correctivePrompt,
     confidence: overallConfidence,
     riskLevel: overallRiskLevel,
+    inputLimitation,
+    advisoryGuidance,
     affectedComponents: affectedComponents.map(c => ({
       colorClass: c.colorClass,
       hexColor: c.hexColor,
       filePath: c.filePath,
+      componentName: c.componentName,
       elementContext: c.elementContext,
       riskLevel: c.riskLevel,
       occurrence_count: c.occurrence_count,
