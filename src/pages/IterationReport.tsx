@@ -420,17 +420,16 @@ export default function IterationReport() {
       {/* Potential Risks (Non-blocking) */}
       {analysis.potentialRisks > 0 && (
         <Card className="border-warning/30">
-          <CardHeader>
+          <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
               <AlertCircle className="h-4 w-4 text-warning" />
               Potential Risks (Non-blocking) — {analysis.potentialRisks}
             </CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Reported for awareness only. These findings do not affect convergence.
+            </p>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="p-2 rounded-lg bg-warning/10 border border-warning/20 text-xs text-muted-foreground">
-              <strong>Note:</strong> Potential risks are reported for awareness and do not affect convergence. 
-              These are heuristic observations that may require runtime verification.
-            </div>
             <div className="space-y-3">
               {analysis.violations.filter(v => v.status === 'potential').map((violation, idx) => (
                 <div
@@ -443,11 +442,6 @@ export default function IterationReport() {
                         {violation.ruleId}
                       </span>
                       <span className="font-medium text-sm">{violation.ruleName}</span>
-                      <Badge className="gap-1 text-xs bg-warning/10 text-warning border-warning/30">
-                        <AlertCircle className="h-3 w-3" />
-                        Heuristic
-                      </Badge>
-                      {/* Input Type Badge */}
                       {violation.inputType && (
                         <Badge variant="outline" className="text-xs font-normal">
                           {violation.inputType === 'screenshots' ? 'Screenshot' : violation.inputType === 'zip' ? 'ZIP' : 'GitHub'}
@@ -455,7 +449,7 @@ export default function IterationReport() {
                       )}
                     </div>
                     <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                      {Math.round(violation.confidence * 100)}% confidence
+                      {Math.round(violation.confidence * 100)}%
                     </span>
                   </div>
 
@@ -490,22 +484,16 @@ export default function IterationReport() {
                       </div>
                     </div>
                   )}
-                  
-                  {/* Input Limitation - Use dynamic value if available */}
-                  <div className="text-xs text-muted-foreground bg-muted/50 p-2 rounded border border-border">
-                    <span className="font-medium">⚠️ Cannot be confirmed:</span>{' '}
-                    {violation.inputLimitation || 'Static/heuristic analysis only. Runtime styles or theme settings could not be evaluated.'}
-                  </div>
                 </div>
               ))}
             </div>
             
-            {/* Advisory Guidance - Use dynamic value from first potential violation if available */}
+            {/* Advisory Guidance */}
             <div className="p-3 rounded-lg bg-muted/30 border border-border space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">💡 Advisory Guidance (Optional)</p>
+              <p className="text-xs font-medium text-muted-foreground">💡 Advisory Guidance</p>
               <p className="text-xs text-muted-foreground">
                 {analysis.violations.find(v => v.status === 'potential' && v.advisoryGuidance)?.advisoryGuidance || 
-                  'These issues are reported as potential risks due to analysis limitations. To confirm, consider uploading screenshots of the rendered UI.'}
+                  'To confirm these findings, consider uploading screenshots of the rendered UI.'}
               </p>
             </div>
           </CardContent>
