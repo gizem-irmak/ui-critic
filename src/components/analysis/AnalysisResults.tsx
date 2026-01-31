@@ -425,12 +425,17 @@ export function AnalysisResults({
         </Card>
       )}
 
-      {/* Action Button - View Final Report when converged, Start Next Iteration otherwise */}
-      <div className="flex justify-center pt-4">
+      {/* Action Buttons */}
+      <div className="flex justify-center gap-4 pt-4">
         {analysis.isAcceptable ? (
-          <Button size="lg" onClick={onViewFinalReport} className="gap-2">
-            View Final Report
-          </Button>
+          <>
+            <Button size="lg" onClick={onViewFinalReport} className="gap-2">
+              View Final Report
+            </Button>
+            <Button size="lg" variant="outline" onClick={onStartNextIteration} className="gap-2">
+              Re-Iterate
+            </Button>
+          </>
         ) : (
           <Button size="lg" onClick={onStartNextIteration} className="gap-2">
             Start Next Iteration
