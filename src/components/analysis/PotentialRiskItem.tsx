@@ -81,6 +81,12 @@ function extractLocations(violation: Violation): string[] {
       }
     }
   }
+
+  // Fallback: use evidence as a location hint when affected_items are absent.
+  // This is especially important for screenshot-based A1 where we may only have per-element evidence.
+  if (locations.size === 0 && violation.evidence) {
+    locations.add(violation.evidence);
+  }
   
   return Array.from(locations);
 }
@@ -149,6 +155,28 @@ export function PotentialRiskItem({ violation, compact = false }: PotentialRiskI
         )}>
           {cleanedDiagnosis}
         </p>
+      )}
+
+      {/* A1 Contrast details (always show colors; ratio only when reliable/computed) */}
+      {violation.ruleId === 'A1' && (violation.foregroundHex || violation.backgroundHex || violation.contrastRatio !== undefined) && (
+        <div className={cn('space-y-1', compact ? 'text-xs' : 'text-sm')}>
+          {(violation.foregroundHex || violation.backgroundHex) && (
+            <div className="text-muted-foreground">
+              <span className="font-medium">Colors: </span>
+              <span className="font-mono">{violation.foregroundHex || '—'}</span>
+              <span className="text-muted-foreground"> on </span>
+              <span className="font-mono">{violation.backgroundHex || '—'}</span>
+            </div>
+          )}
+          <div className="text-muted-foreground">
+            <span className="font-medium">Contrast: </span>
+            {violation.contrastRatio !== undefined ? (
+              <span className="font-mono">{violation.contrastRatio}:1</span>
+            ) : (
+              <span>ratio not computed (unreliable sampling)</span>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

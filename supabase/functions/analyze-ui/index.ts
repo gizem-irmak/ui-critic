@@ -1,9 +1,413 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { decode as decodeBase64 } from "https://deno.land/std@0.168.0/encoding/base64.ts";
+import { Image } from "https://deno.land/x/imagescript@1.2.15/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// ============================
+// A1 (Contrast) — Screenshot-only pixel sampling helpers
+// ============================
+
+type A1BBoxNorm = { x: number; y: number; w: number; h: number };
+type A1TextElement = {
+  screenshotIndex: number; // 1-based
+  bbox: A1BBoxNorm; // normalized 0..1
+  location?: string;
+  elementRole?: string;
+  elementDescription?: string;
+  isSecondary?: boolean;
+  textSize?: 'normal' | 'large';
+};
+
+type RGB = { r: number; g: number; b: number };
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(Math.max(n, min), max);
+}
+
+function stripDataUrlToBase64(s: string): string {
+  if (!s) return s;
+  const comma = s.indexOf(',');
+  if (s.startsWith('data:') && comma >= 0) return s.slice(comma + 1);
+  // Already raw base64
+  return s;
+}
+
+function rgbToHex({ r, g, b }: RGB): string {
+  const to2 = (x: number) => clamp(Math.round(x), 0, 255).toString(16).padStart(2, '0');
+  return `#${to2(r)}${to2(g)}${to2(b)}`.toUpperCase();
+}
+
+function hexToRgb(hex: string): RGB | null {
+  const m = hex.trim().match(/^#?([0-9a-f]{6})$/i);
+  if (!m) return null;
+  const v = m[1];
+  return {
+    r: parseInt(v.slice(0, 2), 16),
+    g: parseInt(v.slice(2, 4), 16),
+    b: parseInt(v.slice(4, 6), 16),
+  };
+}
+
+function srgbToLinear01(c255: number): number {
+  const c = clamp(c255, 0, 255) / 255;
+  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+function relativeLuminance01(rgb: RGB): number {
+  const r = srgbToLinear01(rgb.r);
+  const g = srgbToLinear01(rgb.g);
+  const b = srgbToLinear01(rgb.b);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatioFromRgb(fg: RGB, bg: RGB): number {
+  const L1 = relativeLuminance01(fg);
+  const L2 = relativeLuminance01(bg);
+  const lighter = Math.max(L1, L2);
+  const darker = Math.min(L1, L2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+function stddev(values: number[]): number {
+  if (values.length <= 1) return 0;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / (values.length - 1);
+  return Math.sqrt(variance);
+}
+
+function toPxBox(img: Image, bbox: A1BBoxNorm, dx = 0, dy = 0) {
+  const x0 = clamp(Math.round(bbox.x * img.width) + dx, 0, img.width - 1);
+  const y0 = clamp(Math.round(bbox.y * img.height) + dy, 0, img.height - 1);
+  const x1 = clamp(Math.round((bbox.x + bbox.w) * img.width) + dx, 0, img.width);
+  const y1 = clamp(Math.round((bbox.y + bbox.h) * img.height) + dy, 0, img.height);
+  const left = Math.min(x0, x1);
+  const top = Math.min(y0, y1);
+  const right = Math.max(x0, x1);
+  const bottom = Math.max(y0, y1);
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top),
+  };
+}
+
+function buildGridPoints(left: number, top: number, right: number, bottom: number, targetCount: number): Array<{ x: number; y: number }> {
+  const w = Math.max(1, right - left);
+  const h = Math.max(1, bottom - top);
+  const aspect = w / h;
+  const cols = clamp(Math.round(Math.sqrt(targetCount * aspect)), 4, 40);
+  const rows = clamp(Math.round(targetCount / cols), 4, 40);
+  const pts: Array<{ x: number; y: number }> = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = Math.floor(left + (c + 0.5) * (w / cols));
+      const y = Math.floor(top + (r + 0.5) * (h / rows));
+      pts.push({ x, y });
+    }
+  }
+  return pts;
+}
+
+function rgbaAt(img: Image, x: number, y: number): RGB & { a: number } {
+  const rgba = img.getRGBAAt(clamp(x, 0, img.width - 1), clamp(y, 0, img.height - 1));
+  return { r: rgba[0], g: rgba[1], b: rgba[2], a: rgba[3] };
+}
+
+type A1Sample = {
+  fg: RGB;
+  bg: RGB;
+  ratio: number;
+  fgPixelCount: number;
+  bgPixelCount: number;
+  fgLumaStd: number;
+  bgLumaStd: number;
+  lumaDistance: number;
+  fgHex: string;
+  bgHex: string;
+  hexRecomputedRatio: number;
+  hexToRatioDelta: number;
+};
+
+function computeA1Sample(img: Image, pxBox: { left: number; top: number; right: number; bottom: number }, ringPx = 3): A1Sample | { error: string } {
+  // Foreground: interior stroke sampling from text region
+  const textPts = buildGridPoints(pxBox.left, pxBox.top, pxBox.right, pxBox.bottom, 160);
+  const textPixels = textPts
+    .map(({ x, y }) => {
+      const { r, g, b, a } = rgbaAt(img, x, y);
+      if (a < 200) return null;
+      const luma255 = relativeLuminance01({ r, g, b }) * 255;
+      return { r, g, b, luma255 };
+    })
+    .filter(Boolean) as Array<{ r: number; g: number; b: number; luma255: number }>;
+
+  if (textPixels.length < 30) {
+    return { error: 'Insufficient text pixels for reliable sampling' };
+  }
+
+  const lumas = textPixels.map(p => p.luma255);
+  const sorted = [...textPixels].sort((a, b) => a.luma255 - b.luma255);
+  const keepCount = Math.max(15, Math.floor(sorted.length * 0.4)); // darkest ~40%
+  const fgPixels = sorted.slice(0, keepCount);
+  if (fgPixels.length < 15) {
+    return { error: 'Insufficient foreground pixels for reliable sampling' };
+  }
+
+  const fg: RGB = {
+    r: median(fgPixels.map(p => p.r)),
+    g: median(fgPixels.map(p => p.g)),
+    b: median(fgPixels.map(p => p.b)),
+  };
+  const fgLumas = fgPixels.map(p => p.luma255);
+  const fgLumaStd = stddev(fgLumas);
+  const fgLumaMax = Math.max(...fgLumas);
+
+  // Background: ring around text box
+  const expanded = {
+    left: clamp(pxBox.left - ringPx, 0, img.width - 1),
+    top: clamp(pxBox.top - ringPx, 0, img.height - 1),
+    right: clamp(pxBox.right + ringPx, 0, img.width),
+    bottom: clamp(pxBox.bottom + ringPx, 0, img.height),
+  };
+  const ringPts = buildGridPoints(expanded.left, expanded.top, expanded.right, expanded.bottom, 220)
+    .filter(({ x, y }) => x < pxBox.left || x >= pxBox.right || y < pxBox.top || y >= pxBox.bottom);
+
+  const bgPixelsAll = ringPts
+    .map(({ x, y }) => {
+      const { r, g, b, a } = rgbaAt(img, x, y);
+      if (a < 200) return null;
+      const luma255 = relativeLuminance01({ r, g, b }) * 255;
+      return { r, g, b, luma255 };
+    })
+    .filter(Boolean) as Array<{ r: number; g: number; b: number; luma255: number }>;
+
+  // Exclude likely text pixels bleeding into ring: anything as-dark-or-darker than the darkest subset max.
+  const bgPixels = bgPixelsAll.filter(p => p.luma255 > fgLumaMax + 2);
+  if (bgPixels.length < 15) {
+    return { error: 'Insufficient background pixels for reliable sampling' };
+  }
+
+  const bg: RGB = {
+    r: median(bgPixels.map(p => p.r)),
+    g: median(bgPixels.map(p => p.g)),
+    b: median(bgPixels.map(p => p.b)),
+  };
+  const bgLumas = bgPixels.map(p => p.luma255);
+  const bgLumaStd = stddev(bgLumas);
+
+  const fgLuma = relativeLuminance01(fg) * 255;
+  const bgLuma = relativeLuminance01(bg) * 255;
+  const lumaDistance = Math.abs(bgLuma - fgLuma);
+
+  const ratio = contrastRatioFromRgb(fg, bg);
+
+  const fgHex = rgbToHex(fg);
+  const bgHex = rgbToHex(bg);
+  const fgRgb2 = hexToRgb(fgHex);
+  const bgRgb2 = hexToRgb(bgHex);
+  const hexRecomputedRatio = fgRgb2 && bgRgb2 ? contrastRatioFromRgb(fgRgb2, bgRgb2) : ratio;
+  const hexToRatioDelta = Math.abs(hexRecomputedRatio - ratio);
+
+  return {
+    fg,
+    bg,
+    ratio,
+    fgPixelCount: fgPixels.length,
+    bgPixelCount: bgPixels.length,
+    fgLumaStd,
+    bgLumaStd,
+    lumaDistance,
+    fgHex,
+    bgHex,
+    hexRecomputedRatio,
+    hexToRatioDelta,
+  };
+}
+
+function assessA1Reliability(samples: Array<A1Sample | { error: string }>): { reliable: boolean; reason?: string } {
+  // If any sample outright failed to measure, treat as unreliable.
+  for (const s of samples) {
+    if ('error' in s) return { reliable: false, reason: s.error };
+  }
+  const okSamples = samples as A1Sample[];
+  // Multi-sample consistency
+  const ratios = okSamples.map(s => s.ratio);
+  const minR = Math.min(...ratios);
+  const maxR = Math.max(...ratios);
+  if (maxR - minR > 0.2) {
+    return { reliable: false, reason: `Multi-sample consistency failed: ratios varied by ${(maxR - minR).toFixed(2)}` };
+  }
+
+  const s0 = okSamples[0];
+  if (s0.hexToRatioDelta > 0.2) {
+    return {
+      reliable: false,
+      reason: `Hex-to-ratio verification failed: measured ${s0.ratio.toFixed(2)} vs recomputed ${s0.hexRecomputedRatio.toFixed(2)}`,
+    };
+  }
+  if (s0.fgPixelCount < 15) return { reliable: false, reason: 'Insufficient foreground pixels for reliable sampling' };
+  if (s0.bgPixelCount < 15) return { reliable: false, reason: 'Insufficient background pixels for reliable sampling' };
+  if (s0.lumaDistance < 20) return { reliable: false, reason: 'Foreground and background too similar for reliable measurement' };
+  if (s0.fgLumaStd > 15) return { reliable: false, reason: 'Foreground variance too high — text rendering unstable' };
+  if (s0.bgLumaStd > 20) return { reliable: false, reason: 'Background variance too high — non-uniform background' };
+  return { reliable: true };
+}
+
+async function computeA1ViolationsFromScreenshots(
+  images: string[],
+  a1TextElements: A1TextElement[],
+  toolUsed: string,
+): Promise<any[]> {
+  const ruleId = 'A1';
+  const ruleName = 'Insufficient text contrast';
+  const advisoryGuidance = 'Upload a PNG at 100% zoom or verify with DevTools/axe for accurate measurement.';
+
+  if (!Array.isArray(a1TextElements) || a1TextElements.length === 0) {
+    // We intentionally do NOT create a confirmed violation if we cannot locate text elements.
+    return [
+      {
+        ruleId,
+        ruleName,
+        category: 'accessibility',
+        status: 'potential',
+        samplingMethod: 'inferred',
+        inputType: 'screenshots',
+        evidence: 'Unable to identify specific text regions for contrast measurement in the provided screenshot(s).',
+        diagnosis: 'Text contrast could not be measured reliably because no per-element text regions were provided for pixel sampling.',
+        contextualHint: 'Provide a screenshot at 100% zoom, or verify contrast with DevTools/axe.',
+        confidence: 0.55,
+        potentialRiskReason: 'No text region bounding boxes provided',
+        inputLimitation: 'Screenshot-only analysis requires per-element text regions to compute contrast.',
+        advisoryGuidance,
+      },
+    ];
+  }
+
+  // Decode screenshots once.
+  const decoded: Image[] = [];
+  for (const imgStr of images) {
+    const raw = stripDataUrlToBase64(imgStr);
+    const bytes = decodeBase64(raw);
+    decoded.push(await Image.decode(bytes));
+  }
+
+  const results: any[] = [];
+
+  // Deterministic offsets for multi-sample consistency
+  const offsets: Array<[number, number]> = [
+    [0, 0],
+    [2, 0],
+    [0, 2],
+  ];
+
+  for (const el of a1TextElements) {
+    const screenshotIdx0 = clamp((el.screenshotIndex || 1) - 1, 0, decoded.length - 1);
+    const img = decoded[screenshotIdx0];
+
+    const thresholdUsed = el.textSize === 'large' ? 3.0 : 4.5;
+    const evidence = `Screenshot #${screenshotIdx0 + 1}${el.location ? ` — ${el.location}` : ''}`;
+
+    const samples = offsets.map(([dx, dy]) => computeA1Sample(img, toPxBox(img, el.bbox, dx, dy), 3));
+    const reliability = assessA1Reliability(samples);
+
+    if (!reliability.reliable) {
+      // Unreliable sampling -> Potential Risk (non-blocking)
+      const s0 = samples[0];
+      const fgHex = 'error' in s0 ? undefined : s0.fgHex;
+      const bgHex = 'error' in s0 ? undefined : s0.bgHex;
+      results.push({
+        ruleId,
+        ruleName,
+        category: 'accessibility',
+        status: 'potential',
+        samplingMethod: 'inferred',
+        inputType: 'screenshots',
+        elementRole: el.elementRole,
+        elementDescription: el.elementDescription,
+        evidence,
+        diagnosis: 'Contrast could not be computed reliably from this screenshot region due to sampling instability (often caused by anti-aliasing, small text, or mixed backgrounds).',
+        contextualHint: 'Increase safety margin for secondary text contrast, then verify with a precise tool.',
+        confidence: 0.6,
+        foregroundHex: fgHex,
+        backgroundHex: bgHex,
+        colorApproximate: true,
+        colorAttributionUnreliable: true,
+        potentialRiskReason: reliability.reason || 'Unreliable pixel sampling',
+        inputLimitation: 'Screenshot pixel sampling can be unstable on anti-aliased text and non-uniform backgrounds.',
+        advisoryGuidance,
+      });
+      continue;
+    }
+
+    const s0 = samples[0] as A1Sample;
+    const ratio = s0.ratio;
+
+    // PASS: Interior stroke contrast meets threshold — do not emit a violation.
+    if (ratio >= thresholdUsed) {
+      continue;
+    }
+
+    // Borderline: near threshold or secondary element
+    const isBorderline = ratio >= 4.0 || !!el.isSecondary;
+    const status = isBorderline ? 'borderline' : 'confirmed';
+
+    // Confirmed Fail: only when clearly below WCAG AA and sampling reliable
+    // (we enforce a stricter cutoff for confirmation on screenshots)
+    const confirmAllowed = ratio < 4.0 && !el.isSecondary;
+    const finalStatus = confirmAllowed ? 'confirmed' : 'borderline';
+
+    const confidence = finalStatus === 'confirmed' ? 0.92 : 0.72;
+
+    results.push({
+      ruleId,
+      ruleName,
+      category: 'accessibility',
+      status: finalStatus,
+      samplingMethod: 'pixel',
+      inputType: 'screenshots',
+      elementRole: el.elementRole,
+      elementDescription: el.elementDescription,
+      evidence,
+      diagnosis:
+        finalStatus === 'confirmed'
+          ? 'Interior-stroke contrast is reliably below WCAG AA for normal text.'
+          : 'Interior-stroke contrast is near the WCAG AA threshold, or the element is secondary; consider increasing contrast for safety margin.',
+      contextualHint: 'Increase text/background contrast for this element and re-check against WCAG AA.',
+      confidence,
+      contrastRatio: Math.round(ratio * 100) / 100,
+      thresholdUsed,
+      foregroundRgb: `rgb(${Math.round(s0.fg.r)}, ${Math.round(s0.fg.g)}, ${Math.round(s0.fg.b)})`,
+      backgroundRgb: `rgb(${Math.round(s0.bg.r)}, ${Math.round(s0.bg.g)}, ${Math.round(s0.bg.b)})`,
+      foregroundHex: s0.fgHex,
+      backgroundHex: s0.bgHex,
+      colorApproximate: true,
+      samplingReliability: {
+        pixelSupport: `adequate (${s0.fgPixelCount} fg pixels, ${s0.bgPixelCount} bg pixels)`,
+        foregroundVariance: `stddev ${Math.round(s0.fgLumaStd)}`,
+        backgroundVariance: `stddev ${Math.round(s0.bgLumaStd)}`,
+        colorDistance: `Δluma ${Math.round(s0.lumaDistance)}`,
+        hexVerification: `passed (measured ${s0.ratio.toFixed(2)}, recomputed ${s0.hexRecomputedRatio.toFixed(2)})`,
+        multiSampleConsistency: 'passed (±0.2)',
+      },
+    });
+  }
+
+  console.log(`A1 pixel-sampled: ${results.length} finding(s) emitted (tool=${toolUsed})`);
+  return results;
+}
 
 // Complete rule registry for the 3-pass analysis
 const rules = {
@@ -732,6 +1136,25 @@ IMPORTANT CONSTRAINTS:
 - Do NOT provide implementation-level fixes
 - Keep contextualHint tool-agnostic and reusable across Bolt, Replit, and Lovable
 
+If A1 is selected, you MUST ALSO include an additional top-level array **a1TextElements** for pixel sampling:
+
+"a1TextElements": [
+  {
+    "screenshotIndex": 1,
+    "bbox": { "x": 0.12, "y": 0.42, "w": 0.25, "h": 0.04 },
+    "location": "Secondary label in a card header",
+    "elementRole": "metadata" | "caption" | "badge" | "label" | "body text" | "heading",
+    "elementDescription": "Short description text",
+    "isSecondary": true,
+    "textSize": "normal" | "large"
+  }
+]
+
+IMPORTANT:
+- For A1, DO NOT guess colors or contrast ratios in the AI output. ONLY identify candidate text regions (bounding boxes) and context.
+- Bounding box coordinates MUST be normalized fractions (0..1) relative to the screenshot size.
+- The backend will compute contrast ratios from screenshot pixels using interior-stroke sampling.
+
 Respond with a JSON object in this exact structure:
 {
   "violations": [
@@ -754,6 +1177,7 @@ Respond with a JSON object in this exact structure:
       "confidence": 0.85
     }
   ],
+  "a1TextElements": [],
   "passNotes": {
     "accessibility": "Summary of accessibility pass findings",
     "usability": "Summary of usability pass findings",
@@ -951,11 +1375,44 @@ serve(async (req) => {
     
     // CRITICAL: Filter violations to ONLY include selected rules
     // This ensures unselected rules are never reported, even if AI returns them
+    const shouldComputeA1FromPixels = inputType === 'screenshots' && selectedRulesSet.has('A1');
+
+    // Compute screenshot-only A1 via pixel sampling (anti-alias resistant)
+    let computedA1Violations: any[] = [];
+    if (shouldComputeA1FromPixels) {
+      const candidates = Array.isArray((analysisResult as any).a1TextElements)
+        ? ((analysisResult as any).a1TextElements as A1TextElement[])
+        : [];
+      try {
+        computedA1Violations = await computeA1ViolationsFromScreenshots(images, candidates, toolUsed);
+      } catch (e) {
+        console.error('A1 pixel sampling failed:', e);
+        computedA1Violations = [
+          {
+            ruleId: 'A1',
+            ruleName: 'Insufficient text contrast',
+            category: 'accessibility',
+            status: 'potential',
+            samplingMethod: 'inferred',
+            inputType: 'screenshots',
+            evidence: 'A1 pixel sampling failed to run for the provided screenshot(s).',
+            diagnosis: 'Contrast could not be computed due to a runtime error in pixel sampling.',
+            contextualHint: 'Retry with PNG screenshots at 100% zoom, or verify with DevTools/axe.',
+            confidence: 0.55,
+            potentialRiskReason: 'Pixel sampling runtime error',
+            advisoryGuidance: 'Upload a PNG at 100% zoom or verify with DevTools/axe for accurate measurement.',
+          },
+        ];
+      }
+    }
+
     const filteredBySelection = (analysisResult.violations || []).filter((v: any) => {
       const isSelected = selectedRulesSet.has(v.ruleId);
       if (!isSelected) {
         console.log(`Filtering out violation for unselected rule: ${v.ruleId}`);
       }
+      // For screenshot-based A1, we ignore any AI-provided A1 and use pixel sampling instead.
+      if (shouldComputeA1FromPixels && v.ruleId === 'A1') return false;
       return isSelected;
     });
     
@@ -981,6 +1438,10 @@ serve(async (req) => {
         otherViolations.push(v);
       }
     });
+
+    if (shouldComputeA1FromPixels) {
+      a1Violations.push(...computedA1Violations);
+    }
     
     // ========== U1 EVIDENCE GATING (Cases A, B, C, D) ==========
     // Filter out speculative U1 violations that lack proper evidence
