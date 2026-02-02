@@ -265,7 +265,7 @@ export function AnalysisResults({
                   </div>
 
                   {/* A1 Contrast Violation - Structured Display */}
-                  {violation.ruleId === 'A1' && violation.contrastRatio ? (
+                  {violation.ruleId === 'A1' && (violation.contrastRatio || violation.foregroundHex) ? (
                     <div className="space-y-3">
                       {/* Location */}
                       {violation.evidence && (
@@ -279,30 +279,34 @@ export function AnalysisResults({
                       <div className="flex items-start gap-2 text-sm">
                         <span className="text-muted-foreground font-medium">Element:</span>
                         <span>
-                          {violation.elementDescription || 'Text element'} — 
-                          foreground <span className="font-mono inline-flex items-center gap-1">
-                            {violation.foregroundHex}
-                            <span className="w-3 h-3 rounded border border-border inline-block" style={{ backgroundColor: violation.foregroundHex }} />
-                          </span> on background <span className="font-mono inline-flex items-center gap-1">
-                            {violation.backgroundHex}
-                            <span className="w-3 h-3 rounded border border-border inline-block" style={{ backgroundColor: violation.backgroundHex }} />
+                          {violation.elementDescription || 'Text element'}
+                          {violation.foregroundHex && violation.backgroundHex && (
+                            <span> — foreground <span className="font-mono inline-flex items-center gap-1">
+                              {violation.foregroundHex}
+                              <span className="w-3 h-3 rounded border border-border inline-block" style={{ backgroundColor: violation.foregroundHex }} />
+                            </span> on background <span className="font-mono inline-flex items-center gap-1">
+                              {violation.backgroundHex}
+                              <span className="w-3 h-3 rounded border border-border inline-block" style={{ backgroundColor: violation.backgroundHex }} />
+                            </span></span>
+                          )}
+                        </span>
+                      </div>
+                      
+                      {/* Why it fails - with measured ratio */}
+                      {violation.contrastRatio && (
+                        <div className="flex items-start gap-2 text-sm">
+                          <span className="text-muted-foreground font-medium">Contrast:</span>
+                          <span>
+                            Measured ratio <span className="font-mono font-medium text-destructive">{violation.contrastRatio}:1</span> — 
+                            fails WCAG AA minimum of {violation.thresholdUsed || 4.5}:1 for {(violation.thresholdUsed || 4.5) === 3 ? 'large' : 'normal'} text
                           </span>
-                        </span>
-                      </div>
+                        </div>
+                      )}
                       
-                      {/* Why it fails */}
-                      <div className="flex items-start gap-2 text-sm">
-                        <span className="text-muted-foreground font-medium">Contrast:</span>
-                        <span>
-                          Measured ratio <span className="font-mono font-medium text-destructive">{violation.contrastRatio}:1</span> — 
-                          below WCAG AA minimum (4.5:1 for normal text, 3:1 for large text)
-                        </span>
-                      </div>
-                      
-                      {/* Confirmation source */}
+                      {/* Confidence */}
                       <div className="flex items-start gap-2 text-sm text-muted-foreground">
-                        <span className="font-medium">Verified via:</span>
-                        <span>Screenshot analysis of rendered UI</span>
+                        <span className="font-medium">Confidence:</span>
+                        <span>{Math.round(violation.confidence * 100)}% — contrast ratio computed from screenshot pixels</span>
                       </div>
                     </div>
                   ) : (
