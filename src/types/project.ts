@@ -75,8 +75,10 @@ export interface Violation {
   inputType?: 'screenshots' | 'zip' | 'github'; // Which input type was used for this finding
   contrastRatio?: number; // Computed contrast ratio (e.g., 2.8)
   thresholdUsed?: 4.5 | 3.0; // WCAG threshold applied
-  foregroundHex?: string;
-  backgroundHex?: string;
+  foregroundRgb?: string; // Sampled median RGB (e.g., "rgb(156, 163, 175)")
+  foregroundHex?: string; // Approximate hex derived from median RGB
+  backgroundRgb?: string; // Sampled median RGB (e.g., "rgb(255, 255, 255)")
+  backgroundHex?: string; // Approximate hex derived from median RGB
   elementDescription?: string;
   evidence?: string;
   riskLevel?: 'high' | 'medium' | 'low';
