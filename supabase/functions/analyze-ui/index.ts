@@ -234,106 +234,150 @@ An element is ONLY considered focusable if:
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
-### SPECIAL HANDLING FOR A1 (Text Contrast) — REFINED EVALUATION LOGIC & REPORTING
+### SPECIAL HANDLING FOR A1 (Text Contrast) — PIXEL-SAMPLED vs INFERRED COLOR LOGIC
 
 **INPUT TYPE CONTEXT: SCREENSHOT**
-Screenshot input is ELIGIBLE for deterministic contrast evaluation, but NOT guaranteed.
+Screenshot input is ELIGIBLE for deterministic contrast evaluation via pixel sampling, but NOT guaranteed.
 
-**CLASSIFICATION DECISION TREE:**
+---
 
-**1. CONFIRMED (Pass or Violation) — ONLY if ALL criteria are met:**
-- Foreground color sampled from INTERIOR GLYPH PIXELS (darkest 30-40% by luminance, excluding anti-aliased edges)
-- Background color sampled from ADJACENT UNIFORM region of the SAME component
-- Contrast ratio computed numerically using WCAG relative luminance formula
-- Recalculated contrast from reported hex differs from measured ratio by ≤0.2
+## 1️⃣ SAMPLING METHOD DETERMINATION (MANDATORY)
 
-**2. POTENTIAL RISK (Non-blocking) — when reliable sampling is NOT possible:**
-- Gradients or image backgrounds (non-uniform sampling region)
-- Overlay or transparency effects
-- Font smoothing artifacts causing high color variance
-- Color ambiguity (cannot isolate foreground from background)
-- When \`colorAttributionUnreliable: true\`
+For every A1 evaluation, you MUST determine and record a \`samplingMethod\`:
 
-**INTERIOR STROKE SAMPLING METHOD:**
+- **"pixel"** → colors sampled directly from screenshot pixels using the interior stroke method
+- **"inferred"** → colors derived from tokens, palettes, class names, approximations, or single-pixel samples
 
-**FOREGROUND COLOR (Text):**
-1. Identify text region bounding box
-2. Collect ALL pixel luminance values within text region
-3. SELECT THE DARKEST 30-40% OF PIXELS BY LUMINANCE — interior glyph strokes
-4. EXCLUDE lighter 60-70% (anti-aliased edges that blend with background)
-5. Compute MEDIAN RGB from darkest subset
-6. Report as: \`foregroundRgb: "rgb(R, G, B)"\` and \`foregroundHex: "#XXXXXX"\` (derived from median)
+This field MUST drive classification and confidence. **Only \`samplingMethod: "pixel"\` can produce a Confirmed status.**
 
-**BACKGROUND COLOR:**
-1. Sample pixels IMMEDIATELY OUTSIDE text boundary
-2. Stay within SAME visual container (avoid adjacent UI components)
-3. Sample 5-10 pixels from uniform background region
-4. Compute MEDIAN RGB from sampled pixels
-5. Report as: \`backgroundRgb: "rgb(R, G, B)"\` and \`backgroundHex: "#XXXXXX"\`
+---
 
-**CONTRAST COMPUTATION (AUTHORITATIVE):**
-1. Convert interior stroke median RGB to relative luminance (L1)
-2. Convert background median RGB to relative luminance (L2)
-3. Compute: ratio = (max(L1, L2) + 0.05) / (min(L1, L2) + 0.05)
-4. This MEASURED RATIO is authoritative for pass/fail decisions
+## 2️⃣ PIXEL-SAMPLED COLORS (Allowed to Confirm)
 
-**CONSISTENCY VALIDATION (MANDATORY):**
+Only treat colors as \`samplingMethod: "pixel"\` if ALL of the following conditions are met:
+
+**FOREGROUND (Text) — Pixel-Sampled Criteria:**
+1. Text region is detected (OCR or visual text detection)
+2. Multiple pixels are sampled from the INTERIOR of glyph strokes
+3. Anti-aliased edge pixels are EXCLUDED (select darkest 30-40% by luminance)
+4. Foreground color is computed as the MEDIAN RGB of sampled interior pixels
+
+**BACKGROUND — Pixel-Sampled Criteria:**
+1. Pixels are sampled from a UNIFORM area ADJACENT to the text (5-10 pixels minimum)
+2. Borders, shadows, gradients, and overlays are EXCLUDED from sampling
+3. Background color is computed as the MEDIAN RGB of sampled pixels
+4. Color variance in the sampled background region is BELOW a threshold (uniform region)
+
+**IF ALL CONDITIONS ARE SATISFIED:**
+- Set \`samplingMethod: "pixel"\`
+- Compute WCAG contrast ratio from median RGB values
+- Report \`foregroundRgb\`, \`backgroundRgb\`, \`foregroundHex\`, \`backgroundHex\`
+- Report \`contrastRatio\` (the measured ratio)
+- Classification: **Confirmed Pass** or **Confirmed Violation** based on measured ratio
+- Confidence: **80–95%**
+- Add verification line: "Contrast ratio computed from sampled screenshot pixels."
+
+---
+
+## 3️⃣ INFERRED COLORS (Must NOT Confirm)
+
+If ANY of the following occurs, treat colors as \`samplingMethod: "inferred"\`:
+
+- Mapping CSS classes or design tokens (e.g., text-gray-500 → #6b7280)
+- Snapping detected colors to the nearest palette value
+- Sampling a single pixel (insufficient sample size)
+- Sampling text edges or anti-aliased/blended pixels
+- Assuming background color without direct pixel verification
+- High variance in background region due to gradients, blur, images, or overlays
+- colorAttributionUnreliable: true (recalculated ratio differs from measured by >0.2)
+
+**IF ANY INFERRED CONDITION IS TRUE:**
+- Set \`samplingMethod: "inferred"\`
+- Do NOT report \`contrastRatio\` (exact ratio not computable)
+- Do NOT report \`foregroundRgb\`, \`backgroundRgb\` (not reliably sampled)
+- Classify as **Potential Risk** (status: "potential")
+- Confidence: **50–70%**
+- Include \`potentialRiskReason\`: explain why pixel sampling failed
+
+---
+
+## 4️⃣ CLASSIFICATION RULES SUMMARY
+
+| Input Type   | Sampling Method | Classification                     | Confidence |
+|--------------|-----------------|------------------------------------|-----------:|
+| Screenshot   | pixel           | Confirmed Pass / Confirmed Violation | 80–95%    |
+| Screenshot   | inferred        | Potential Risk                     | 50–70%    |
+| ZIP          | inferred (always) | Potential Risk                   | 50–70%    |
+| GitHub       | inferred (always) | Potential Risk                   | 50–70%    |
+
+**NEVER claim a confirmed WCAG failure unless \`samplingMethod: "pixel"\`.**
+
+---
+
+## 5️⃣ CLASSIFICATION THRESHOLDS (Pixel-Sampled Only)
+
+When \`samplingMethod: "pixel"\`:
+- **Confirmed Violation**: measured ratio < 4.5:1 for normal text (or < 3.0:1 for large text)
+- **Borderline (Advisory)**: measured ratio 4.3:1–4.5:1 for normal text — status: "borderline", non-blocking
+- **Confirmed Pass**: measured ratio ≥ 4.5:1 → DO NOT INCLUDE IN VIOLATIONS
+
+---
+
+## 6️⃣ CONSISTENCY VALIDATION (For Pixel-Sampled Only)
+
+After computing contrast from sampled pixels:
 1. RECALCULATE contrast from reported hex values
 2. Compare recalculated ratio to measured ratio
-3. If difference > 0.2:
+3. **If difference > 0.2:**
    - Set \`colorAttributionUnreliable: true\`
+   - Demote to \`samplingMethod: "inferred"\`
    - Classify as **Potential Risk** (status: "potential")
-   - Set confidence to 50-70%
-4. If difference ≤ 0.2:
+   - Confidence: 50–70%
+4. **If difference ≤ 0.2:**
    - Set \`colorAttributionUnreliable: false\`
+   - Keep \`samplingMethod: "pixel"\`
    - Classify based on measured ratio
 
-**CLASSIFICATION THRESHOLDS (Based on Measured Ratio):**
-- **Confirmed Violation**: measured ratio < 4.5:1 for normal text AND reliable sampling
-- **Confirmed Violation**: measured ratio < 3.0:1 for large text (≥18px or ≥14px bold) AND reliable sampling
-- **Borderline (Advisory)**: measured ratio 4.3:1–4.5:1 for normal text — non-blocking
-- **Pass**: measured ratio ≥ 4.5:1 — DO NOT INCLUDE IN VIOLATIONS
-- **Potential Risk**: unreliable sampling OR non-uniform background — non-blocking
+---
 
-**CONFIDENCE TIERS:**
-- **Confirmed, reliable sampling**: 80–95%
-- **Confirmed, unreliable attribution**: 65–78% (demote to potential if <70%)
-- **Potential Risk**: 50–70%
-
-**FALSE POSITIVE PREVENTION:**
-- If edge-pixel contrast suggests violation but interior-stroke contrast does NOT → SUPPRESS as artifact
-- Only classify as Confirmed Violation when interior-stroke ratio is CLEARLY below threshold
-- When anti-aliasing artifacts detected → reduce confidence and consider Potential Risk
-
-**REPORTING REQUIREMENTS (MANDATORY for ALL A1 findings):**
+## 7️⃣ REPORTING REQUIREMENTS (Mandatory for ALL A1 Findings)
 
 Every A1 report MUST include:
 
-1. **Location** — Page and component name
-   Example: "CourseCard → Credits badge" or "SettingsDialog → Description text"
-
+1. **Location** — Page and component name (e.g., "CourseCard → Credits badge")
 2. **Issue Description** — Clear statement of what was detected
-   Example: "Low-contrast text on light background"
+3. **Explanation** — Why it passes/fails OR why certainty is reduced
+4. **Sampling Method** — \`samplingMethod: "pixel"\` or \`samplingMethod: "inferred"\`
 
-3. **Explanation** — Why this may or does violate WCAG
-   - For Confirmed: Include measured ratio and threshold (e.g., "Measured 2.8:1 contrast, failing WCAG AA 4.5:1")
-   - For Potential: Include reason for uncertainty (e.g., "Gradient background prevents reliable contrast measurement")
+**For Confirmed (pixel-sampled):**
+- Include verification line: "Contrast ratio computed from sampled screenshot pixels."
+- Include \`contrastRatio\`, \`foregroundRgb\`, \`backgroundRgb\`, \`foregroundHex\`, \`backgroundHex\`
 
-**LANGUAGE RULES:**
-- DO NOT repeat labels like "heuristic" or "non-blocking" in diagnosis text
-- DO NOT use vague phrases like "based on visual inspection" when computation was performed
-- DO NOT omit location details
-- Use precise, factual wording
-- Avoid duplicated explanations
-- Be concise and reproducible
+**For Potential Risk (inferred):**
+- Include \`potentialRiskReason\` explaining why pixel sampling was not possible
+- Do NOT include \`contrastRatio\` or RGB/hex values
 
-**OUTPUT FORMAT FOR CONFIRMED VIOLATION:**
+---
+
+## 8️⃣ FORBIDDEN BEHAVIORS
+
+- Do NOT infer colors from design tokens and present them as measured
+- Do NOT assign high confidence (>70%) to inferred results
+- Do NOT report exact contrast ratios when \`samplingMethod: "inferred"\`
+- Do NOT omit \`samplingMethod\` field — it is MANDATORY for all A1 findings
+- Do NOT snap colors to palette values when pixel sampling was performed
+
+---
+
+## 9️⃣ OUTPUT FORMAT FOR CONFIRMED VIOLATION (Pixel-Sampled)
+
 \`\`\`json
 {
   "ruleId": "A1",
   "ruleName": "Insufficient text contrast",
   "category": "accessibility",
   "status": "confirmed",
+  "samplingMethod": "pixel",
   "inputType": "screenshots",
   "elementRole": "badge",
   "evidence": "CourseCard → Credits badge",
@@ -346,59 +390,63 @@ Every A1 report MUST include:
   "thresholdUsed": 4.5,
   "colorApproximate": true,
   "colorAttributionUnreliable": false,
-  "diagnosis": "Credits badge text has 2.8:1 contrast, failing WCAG AA 4.5:1 threshold.",
+  "diagnosis": "Credits badge text has 2.8:1 contrast, failing WCAG AA 4.5:1 threshold. Contrast ratio computed from sampled screenshot pixels.",
   "contextualHint": "Increase badge text contrast to at least 4.5:1.",
   "confidence": 0.88
 }
 \`\`\`
 
-**OUTPUT FORMAT FOR POTENTIAL RISK (Unreliable Sampling):**
+---
+
+## 🔟 OUTPUT FORMAT FOR POTENTIAL RISK (Inferred)
+
 \`\`\`json
 {
   "ruleId": "A1",
   "ruleName": "Insufficient text contrast",
   "category": "accessibility",
   "status": "potential",
+  "samplingMethod": "inferred",
   "inputType": "screenshots",
   "elementRole": "metadata",
   "evidence": "HeroSection → Overlay text",
   "elementDescription": "Hero overlay description text",
   "colorApproximate": true,
-  "colorAttributionUnreliable": true,
-  "potentialRiskReason": "Gradient background prevents reliable contrast measurement",
-  "diagnosis": "Text appears over gradient background. Contrast cannot be reliably measured from screenshot pixels.",
+  "potentialRiskReason": "Gradient background prevents reliable pixel sampling",
+  "diagnosis": "Text appears over gradient background. Reliable contrast measurement not possible.",
   "advisoryGuidance": "Verify text contrast meets 4.5:1 in source code or use solid background.",
   "confidence": 0.58
 }
 \`\`\`
 
-**PER-ELEMENT ANALYSIS WORKFLOW:**
-For EACH visible text element:
-1. **Identify location** — Component and element role (badge, caption, heading, etc.)
-2. **Sample foreground** — Darkest 30-40% of text region pixels
-3. **Sample background** — Adjacent uniform region
-4. **Assess sampling reliability** — Uniform background? Clear glyph edges? Low color variance?
-5. **Compute measured contrast** — Using interior stroke pixels
-6. **Validate consistency** — Recalculate from hex, check ±0.2 tolerance
-7. **Classify:**
-   - Reliable + ratio < 4.5:1 → **Confirmed Violation** (confidence 80-95%)
-   - Reliable + ratio 4.3:1–4.5:1 → **Borderline** (status: "borderline", confidence 70-80%)
-   - Reliable + ratio ≥ 4.5:1 → **PASS** — exclude from violations
-   - Unreliable → **Potential Risk** (confidence 50-70%)
+---
 
-**MANDATORY:**
-- Always set \`colorApproximate: true\` for screenshot-derived values
-- Always include \`foregroundRgb\` and \`backgroundRgb\` when sampling succeeded
-- Base pass/fail ONLY on measured ratio
-- Include \`inputType: "screenshots"\` in all A1 findings
+## PER-ELEMENT ANALYSIS WORKFLOW
+
+For EACH visible text element:
+1. **Identify location** — Component and element role
+2. **Attempt pixel sampling** — Interior glyph pixels (darkest 30-40%)
+3. **Attempt background sampling** — Adjacent uniform region
+4. **Determine sampling method:**
+   - All criteria met → \`samplingMethod: "pixel"\`
+   - Any criterion failed → \`samplingMethod: "inferred"\`
+5. **Compute or skip ratio** — Only compute if pixel-sampled
+6. **Validate consistency** — If pixel-sampled, check ±0.2 tolerance
+7. **Classify and report**
+
+---
+
+**MANDATORY FIELDS FOR ALL A1 FINDINGS:**
+- \`samplingMethod\`: "pixel" or "inferred"
+- \`inputType\`: "screenshots"
+- \`colorApproximate: true\` (always for screenshots)
+- \`status\`: "confirmed", "borderline", or "potential"
 
 **DO NOT:**
 - Group multiple elements under one finding — each element is separate
 - Include PASS results in violations array
-- Snap colors to design tokens — use actual sampled values
-- Report colors as "verified" — they are estimates
+- Report colors as "verified" — they are pixel-based estimates
 - Include "heuristic" or "non-blocking" labels in diagnosis text
-- Use vague language when specific measurements exist
 ` : ''}
 
 Report violations ONLY if there is strong visual evidence.

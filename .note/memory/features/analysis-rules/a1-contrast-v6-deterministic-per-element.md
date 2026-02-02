@@ -1,52 +1,67 @@
-# Memory: features/analysis-rules/a1-contrast-v6-deterministic-per-element
+# Memory: features/analysis-rules/a1-contrast-v8-sampling-method-enforcement
 Updated: just now
 
-Rule A1 (Contrast) is input-type aware and evaluates text elements individually across the entire application scope.
+Rule A1 (Contrast) explicitly tracks `samplingMethod` to distinguish pixel-sampled vs inferred color evaluations.
 
-## Screenshot Input — Conditional Deterministic Evaluation
+## Sampling Method Field (Mandatory)
 
-Screenshot input is ELIGIBLE for deterministic evaluation, but NOT guaranteed. Classification depends on sampling reliability:
+Every A1 finding MUST include `samplingMethod`:
+- **"pixel"** — Colors sampled directly from screenshot pixels (interior glyph strokes + adjacent background)
+- **"inferred"** — Colors derived from tokens, palette values, class names, or approximations
 
-**Confirmed (Blocking)** — when ALL criteria are met:
-- Foreground sampled from interior glyph pixels (darkest 30-40% by luminance, excluding anti-aliased edges)
-- Background sampled from adjacent uniform region of the same component
-- Contrast ratio computed using WCAG relative luminance formula
-- Recalculated contrast from reported hex differs from measured ratio by ≤0.2
-- Confidence: 80-95%
+## Pixel-Sampled (Can Confirm)
 
-**Potential Risk (Non-blocking)** — when reliable sampling is NOT possible:
-- Gradients, image backgrounds, overlays, transparency
-- Font smoothing artifacts causing high color variance
-- colorAttributionUnreliable: true (recalculated differs >0.2)
-- Do not report exact contrast ratio
-- Confidence: 50-70%
+ONLY `samplingMethod: "pixel"` can produce Confirmed Pass/Violation status.
 
-**Borderline (Advisory, Non-blocking)**: Measured ratio 4.3:1–4.5:1 for normal text. Confidence: 70-80%.
+**Criteria for pixel-sampled:**
+1. Text region detected (OCR/visual)
+2. Multiple interior glyph pixels sampled (darkest 30-40% by luminance)
+3. Anti-aliased edge pixels excluded
+4. Background sampled from uniform adjacent region (5-10+ pixels)
+5. Low color variance in background region
+6. Median RGB computed for both foreground and background
+7. Recalculated contrast from hex differs from measured by ≤0.2
 
-## ZIP / GitHub Input — Always Potential Risk
+**Output fields for pixel-sampled:**
+- `samplingMethod: "pixel"`
+- `status: "confirmed"` or `"borderline"`
+- `contrastRatio` (measured value)
+- `foregroundRgb`, `backgroundRgb`, `foregroundHex`, `backgroundHex`
+- Confidence: 80–95%
+- Verification line: "Contrast ratio computed from sampled screenshot pixels."
 
-Static code analysis ALWAYS classifies A1 as Potential Risk:
-- Detect potentially risky color tokens (e.g., text-gray-400) tiered by Tailwind gray scale
-- Do not infer final contrast ratios (background cannot be determined)
-- Recommend screenshot upload for confirmation
-- Confidence reduced: ZIP 90% of base, GitHub 85% of base
+## Inferred (Cannot Confirm)
 
-## Reporting Requirements (ALL A1 Findings)
+`samplingMethod: "inferred"` when ANY of:
+- Colors mapped from CSS classes/tokens
+- Colors snapped to nearest palette value
+- Single pixel sampled (insufficient)
+- Edge/blended pixels used
+- Background assumed without verification
+- High variance (gradients, overlays, images)
+- `colorAttributionUnreliable: true`
 
-Every A1 report MUST include:
-1. **Location** — Page and component name (e.g., CourseCard → Credits badge)
-2. **Issue Description** — Clear statement of what was detected
-3. **Explanation** — Why this may/does violate WCAG (measured ratio OR reason for uncertainty)
+**Output for inferred:**
+- `samplingMethod: "inferred"`
+- `status: "potential"` (always)
+- NO `contrastRatio` (not reliably computable)
+- NO `foregroundRgb`/`backgroundRgb` (not reliably sampled)
+- `potentialRiskReason`: explains why pixel sampling failed
+- Confidence: 50–70%
 
-## Language Rules
+## Input Type Rules
 
-DO NOT:
-- Repeat labels like "heuristic" or "non-blocking" in diagnosis text
-- Use vague phrases like "based on visual inspection" when computation was performed
-- Omit location details
-- Include "does not block convergence" in explanations (handled by UI layer)
+| Input      | samplingMethod      | Status                | Confidence |
+|------------|---------------------|-----------------------|-----------:|
+| Screenshot | pixel (if criteria met) | Confirmed/Borderline | 80–95%    |
+| Screenshot | inferred            | Potential Risk        | 50–70%    |
+| ZIP        | inferred (always)   | Potential Risk        | 50–70%    |
+| GitHub     | inferred (always)   | Potential Risk        | 50–70%    |
 
-DO:
-- Use precise, factual wording
-- Ensure findings are concise and reproducible
-- Include inputType field for all A1 findings
+## Forbidden Behaviors
+
+- Never claim confirmed WCAG failure unless `samplingMethod: "pixel"`
+- Never assign confidence >70% to inferred results
+- Never report exact contrast ratios when inferred
+- Never omit `samplingMethod` field
+- Never snap colors to design tokens and present as measured

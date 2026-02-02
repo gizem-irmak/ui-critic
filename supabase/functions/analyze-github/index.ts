@@ -545,6 +545,7 @@ interface ContrastViolation {
   ruleName: string;
   category: string;
   status: string;
+  samplingMethod: 'pixel' | 'inferred'; // How colors were obtained
   inputType: 'github' | 'zip' | 'screenshots';
   evidence?: string;
   diagnosis: string;
@@ -552,6 +553,7 @@ interface ContrastViolation {
   correctivePrompt: string;
   confidence: number;
   riskLevel?: string;
+  potentialRiskReason?: string; // Why pixel sampling was not possible
   inputLimitation?: string;
   advisoryGuidance?: string;
   affectedComponents?: any[];
@@ -709,11 +711,13 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   // NO corrective prompt for GitHub heuristic findings
   const correctivePrompt = ''; // Empty - no mandatory corrective prompt for heuristic findings
   
+  // GitHub input = ALWAYS inferred sampling (no pixel access)
   return [{
     ruleId: 'A1',
     ruleName: 'Insufficient text contrast',
     category: 'accessibility',
     status: 'potential', // Always potential for GitHub analysis
+    samplingMethod: 'inferred', // GitHub cannot pixel-sample — colors from tokens/classes
     inputType: 'github', // Explicit input type tracking
     evidence: `Text color classes detected in ${displayedFiles.join(', ')}${fileMoreText}: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
     diagnosis,
@@ -723,6 +727,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     riskLevel: overallRiskLevel,
     inputLimitation,
     advisoryGuidance,
+    potentialRiskReason: 'Repository analysis cannot access rendered pixels; colors inferred from Tailwind classes.',
     affectedComponents: affectedComponents.map(c => ({
       colorClass: c.colorClass,
       hexColor: c.hexColor,

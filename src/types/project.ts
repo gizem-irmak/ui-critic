@@ -71,14 +71,15 @@ export interface Violation {
   confidence: number;
   // A1 contrast-specific fields
   status?: 'confirmed' | 'borderline' | 'potential';
+  samplingMethod?: 'pixel' | 'inferred'; // How colors were obtained: pixel-sampled or inferred from tokens/classes
   elementRole?: string; // Semantic role: caption, badge, metadata, heading, etc.
   inputType?: 'screenshots' | 'zip' | 'github'; // Which input type was used for this finding
-  contrastRatio?: number; // Computed contrast ratio (e.g., 2.8)
+  contrastRatio?: number; // Computed contrast ratio (e.g., 2.8) — only when samplingMethod = "pixel"
   thresholdUsed?: 4.5 | 3.0; // WCAG threshold applied
-  foregroundRgb?: string; // Sampled median RGB (e.g., "rgb(156, 163, 175)")
-  foregroundHex?: string; // Approximate hex derived from median RGB
-  backgroundRgb?: string; // Sampled median RGB (e.g., "rgb(255, 255, 255)")
-  backgroundHex?: string; // Approximate hex derived from median RGB
+  foregroundRgb?: string; // Sampled median RGB (e.g., "rgb(156, 163, 175)") — only when samplingMethod = "pixel"
+  foregroundHex?: string; // Approximate hex derived from median RGB — only when samplingMethod = "pixel"
+  backgroundRgb?: string; // Sampled median RGB (e.g., "rgb(255, 255, 255)") — only when samplingMethod = "pixel"
+  backgroundHex?: string; // Approximate hex derived from median RGB — only when samplingMethod = "pixel"
   elementDescription?: string;
   evidence?: string;
   riskLevel?: 'high' | 'medium' | 'low';
