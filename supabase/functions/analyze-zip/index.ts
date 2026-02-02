@@ -466,6 +466,7 @@ interface ContrastViolation {
   ruleName: string;
   category: string;
   status: 'confirmed' | 'potential';
+  samplingMethod: 'pixel' | 'inferred'; // How colors were obtained
   inputType: 'zip' | 'github' | 'screenshots';
   contrastRatio?: number;
   thresholdUsed?: 4.5 | 3.0;
@@ -479,6 +480,7 @@ interface ContrastViolation {
   confidence: number;
   // A1-specific tiered fields
   riskLevel?: 'high' | 'medium' | 'low';
+  potentialRiskReason?: string; // Why pixel sampling was not possible
   // Location tracking for ZIP/code analysis
   inputLimitation?: string;
   advisoryGuidance?: string;
@@ -671,11 +673,13 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   console.log(`Computed ${affectedComponents.length} contrast findings → 1 aggregated A1 result (${riskBreakdown})`);
   
   // Return ONE aggregated A1 result
+  // ZIP input = ALWAYS inferred sampling (no pixel access)
   return [{
     ruleId: 'A1',
     ruleName: 'Insufficient text contrast',
     category: 'accessibility',
     status: 'potential', // Always potential for static/ZIP analysis
+    samplingMethod: 'inferred', // ZIP cannot pixel-sample — colors from tokens/classes
     inputType: 'zip', // Explicit input type tracking
     evidence: `Text color classes detected in ${displayedFiles.join(', ')}${fileMoreText}: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
     diagnosis,
@@ -685,6 +689,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     riskLevel: overallRiskLevel,
     inputLimitation,
     advisoryGuidance,
+    potentialRiskReason: 'Static code analysis cannot access rendered pixels; colors inferred from Tailwind classes.',
     affectedComponents: affectedComponents.map(c => ({
       colorClass: c.colorClass,
       hexColor: c.hexColor,
