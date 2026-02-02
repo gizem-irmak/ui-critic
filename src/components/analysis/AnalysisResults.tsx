@@ -304,6 +304,21 @@ export function AnalysisResults({
                           </span>
                         </div>
                       )}
+
+                      {/* Color Attribution Warning */}
+                      {violation.colorAttributionUnreliable && (
+                        <div className="flex items-center gap-2 text-xs text-warning bg-warning/10 px-2 py-1 rounded">
+                          <AlertTriangle className="h-3 w-3" />
+                          <span>Color estimate may be affected by anti-aliasing or sampling variance</span>
+                        </div>
+                      )}
+
+                      {/* Color Approximate Note */}
+                      {violation.colorApproximate && !violation.colorAttributionUnreliable && (
+                        <div className="text-xs text-muted-foreground italic">
+                          Color values derived from screenshot pixels are approximations
+                        </div>
+                      )}
                       
                       {/* Confidence */}
                       <div className="flex items-start gap-2 text-sm text-muted-foreground">
