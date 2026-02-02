@@ -817,7 +817,21 @@ serve(async (req) => {
       throw new Error(`AI gateway error: ${response.status}`);
     }
 
-    const aiResponse = await response.json();
+    // Handle potentially truncated or empty AI response body
+    const responseText = await response.text();
+    if (!responseText || responseText.trim().length === 0) {
+      console.error("AI gateway returned empty response body");
+      throw new Error("AI gateway returned empty response - please retry");
+    }
+
+    let aiResponse;
+    try {
+      aiResponse = JSON.parse(responseText);
+    } catch (jsonParseError) {
+      console.error("Failed to parse AI gateway response:", responseText.substring(0, 500));
+      console.error("Parse error:", jsonParseError);
+      throw new Error("AI gateway returned invalid JSON - please retry");
+    }
     const content = aiResponse.choices?.[0]?.message?.content;
     const finishReason = aiResponse.choices?.[0]?.finish_reason;
 
