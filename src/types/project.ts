@@ -70,7 +70,8 @@ export interface Violation {
   contextualHint?: string;
   confidence: number;
   // A1 contrast-specific fields
-  status?: 'confirmed' | 'potential';
+  status?: 'confirmed' | 'borderline' | 'potential';
+  elementRole?: string; // Semantic role: caption, badge, metadata, heading, etc.
   inputType?: 'screenshots' | 'zip' | 'github'; // Which input type was used for this finding
   contrastRatio?: number; // Computed contrast ratio (e.g., 2.8)
   thresholdUsed?: 4.5 | 3.0; // WCAG threshold applied
@@ -92,7 +93,7 @@ export interface Violation {
     colorClass?: string;
     hexColor?: string;
     riskLevel?: 'high' | 'medium' | 'low';
-    status?: 'confirmed' | 'potential';
+    status?: 'confirmed' | 'borderline' | 'potential';
     confidence?: number;
     rationale?: string;
     occurrence_count?: number;

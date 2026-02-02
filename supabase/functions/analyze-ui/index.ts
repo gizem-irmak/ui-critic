@@ -234,85 +234,100 @@ An element is ONLY considered focusable if:
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
-### SPECIAL HANDLING FOR A1 (Text Contrast) — DETERMINISTIC SCREENSHOT ANALYSIS
+### SPECIAL HANDLING FOR A1 (Text Contrast) — PER-ELEMENT DETERMINISTIC ANALYSIS
 
-**CRITICAL: For screenshot input, you MUST compute contrast ratios. Do NOT classify as "Potential Risk" or use phrases like "ambiguous by visual inspection" unless measurement is genuinely impossible.**
+**CRITICAL: Evaluate contrast at the INDIVIDUAL ELEMENT level. Each text element must be assessed independently—do NOT group multiple elements under a single color value.**
 
-**CONTRAST COMPUTATION METHODOLOGY:**
-1. **Detect text regions** — Identify areas with visible text in the screenshot
-2. **Sample foreground color** — Extract pixel color from the interior of text glyphs (avoid anti-aliased edges). If multiple samples, use median RGB values
-3. **Sample background color** — Extract pixel color from a uniform region immediately surrounding the text (inside the same container/component). Exclude borders, shadows, gradients
-4. **Compute WCAG contrast ratio** — Use relative luminance formula: (L1 + 0.05) / (L2 + 0.05) where L = 0.2126*R + 0.7152*G + 0.0722*B (after sRGB linearization)
-5. **Classify result:**
-   - **Confirmed Violation** if ratio < 4.5:1 for normal text (< 18px or < 14px bold)
-   - **Confirmed Violation** if ratio < 3:1 for large text (≥ 18px or ≥ 14px bold)
-   - **Pass** if ratio meets threshold — DO NOT INCLUDE IN VIOLATIONS ARRAY
+**CLASSIFICATION THRESHOLDS:**
+- **WCAG AA Failure**: ratio < 4.5:1 for normal text (< 18px or < 14px bold)
+- **WCAG AA Failure**: ratio < 3:1 for large text (≥ 18px or ≥ 14px bold)
+- **Borderline Contrast**: ratio between 4.3:1 and 4.5:1 for normal text (4.0-4.5:1 zone) — NOT a definitive failure
+- **PASS**: ratio ≥ 4.5:1 for normal text, or ≥ 3:1 for large text — DO NOT INCLUDE IN VIOLATIONS
+
+**PER-ELEMENT ANALYSIS METHODOLOGY:**
+For EACH visible text element in the screenshot:
+1. **Identify element role** — button label, heading, body text, caption, badge, metadata, etc.
+2. **Sample foreground color** — Extract pixel color from glyph interior (avoid anti-aliased edges)
+3. **Sample background color** — Extract pixel color from uniform region behind text (same container)
+4. **Compute WCAG contrast ratio** — Use relative luminance formula
+5. **Classify individually:**
+   - If ratio < 4.3:1 for normal text → **Confirmed Violation** (status: "confirmed")
+   - If ratio 4.3:1 to 4.5:1 for normal text → **Borderline Contrast** (status: "borderline", reduced confidence 0.65-0.75)
+   - If ratio ≥ 4.5:1 for normal text → **PASS** — exclude from violations array entirely
+   - Apply 3:1 threshold equivalently for large/bold text
+
+**BORDERLINE CONTRAST HANDLING:**
+When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal text):
+- Set \`status: "borderline"\` instead of "confirmed" or "potential"
+- Reduce confidence to 0.65-0.75 (acknowledge threshold proximity)
+- Include advisory language: "Borderline contrast near WCAG AA threshold"
+- Do NOT classify as a definitive failure—let user decide on fix priority
 
 **EDGE CASE HANDLING:**
 - **Anti-aliasing**: Sample 3-5 pixels from glyph interior, use median color
-- **Background variance**: If background pixels vary significantly (σ > 15 in any channel), mark as "Potential Risk" with reason "non-uniform background prevents stable sampling"
-- **Gradient/image backgrounds**: Mark as "Potential Risk" with reason "gradient or image background"
-- **Transparent/overlay text**: Mark as "Potential Risk" with reason "transparency prevents color extraction"
+- **Background variance**: If background pixels vary significantly (σ > 15), mark as "potential" with reason
+- **Gradient/image backgrounds**: Mark as "potential" with reason "gradient or image background"
+- **Transparent/overlay text**: Mark as "potential" with reason "transparency prevents color extraction"
 
-**OUTPUT FORMAT FOR CONFIRMED A1 VIOLATIONS (ratio computed):**
+**OUTPUT FORMAT FOR EACH ELEMENT (one entry per element):**
 \`\`\`json
 {
   "ruleId": "A1",
   "ruleName": "Insufficient text contrast",
   "category": "accessibility",
-  "status": "confirmed",
-  "riskLevel": "high",
-  "evidence": "Credits badge text in course card header",
+  "status": "confirmed" | "borderline" | "potential",
+  "elementRole": "caption" | "badge" | "metadata" | "body text" | "button label" | "heading" | etc.,
+  "evidence": "Credits badge in course card header",
   "elementDescription": "Credits badge label text",
   "foregroundHex": "#9CA3AF",
   "backgroundHex": "#FFFFFF",
   "contrastRatio": 2.8,
   "thresholdUsed": 4.5,
-  "diagnosis": "Credits badge text (#9CA3AF) on white background (#FFFFFF) has contrast ratio 2.8:1, failing WCAG AA minimum of 4.5:1 for normal text.",
-  "contextualHint": "Increase text color contrast to meet WCAG AA 4.5:1 minimum.",
+  "diagnosis": "Credits badge text (#9CA3AF on #FFFFFF) has 2.8:1 contrast, failing WCAG AA 4.5:1 minimum.",
+  "contextualHint": "Increase badge text contrast to meet 4.5:1.",
   "confidence": 0.92
 }
 \`\`\`
 
-**OUTPUT FORMAT FOR POTENTIAL A1 RISKS (ratio NOT computable):**
-Only use this when contrast CANNOT be measured due to technical limitations:
+**OUTPUT FORMAT FOR BORDERLINE CONTRAST:**
 \`\`\`json
 {
   "ruleId": "A1",
-  "ruleName": "Insufficient text contrast",
-  "category": "accessibility",
-  "status": "potential",
-  "riskLevel": "medium",
-  "evidence": "Overlay text on gradient background in hero section",
-  "potentialRiskReason": "gradient background prevents stable color sampling",
-  "diagnosis": "Text appears on non-uniform gradient background. Contrast ratio cannot be reliably computed. Manual verification recommended.",
-  "contextualHint": "Review text contrast for WCAG AA compliance with browser dev tools.",
-  "confidence": 0.55
+  "status": "borderline",
+  "elementRole": "metadata",
+  "evidence": "Date text in course card",
+  "elementDescription": "Course date metadata",
+  "foregroundHex": "#6B7280",
+  "backgroundHex": "#FFFFFF",
+  "contrastRatio": 4.4,
+  "thresholdUsed": 4.5,
+  "diagnosis": "Date text (#6B7280 on #FFFFFF) has 4.4:1 contrast—borderline near WCAG AA 4.5:1 threshold.",
+  "contextualHint": "Consider increasing contrast slightly for safety margin.",
+  "confidence": 0.70
 }
 \`\`\`
 
 **CONFIDENCE REQUIREMENTS:**
-- **Confirmed violation with computed ratio**: 0.90–0.95
-- **Confirmed violation without exact ratio but clearly insufficient**: 0.80–0.88
+- **Confirmed violation (ratio < 4.3:1)**: 0.88–0.95
+- **Borderline contrast (ratio 4.3:1–4.5:1)**: 0.65–0.75 (reduced due to threshold proximity)
 - **Potential risk (computation impossible)**: 0.50–0.70
 
-**MANDATORY FIELDS FOR CONFIRMED VIOLATIONS:**
-- \`status\`: MUST be "confirmed"
-- \`foregroundHex\`: Sampled text color as hex (e.g., "#9CA3AF")
-- \`backgroundHex\`: Sampled background color as hex (e.g., "#FFFFFF")
-- \`contrastRatio\`: Computed ratio as number (e.g., 2.8, not "2.8:1")
+**MANDATORY FIELDS:**
+- \`status\`: "confirmed", "borderline", or "potential"
+- \`elementRole\`: Semantic role of the text element
+- \`foregroundHex\`: Sampled text color as hex
+- \`backgroundHex\`: Sampled background color as hex
+- \`contrastRatio\`: Computed ratio as number
 - \`thresholdUsed\`: Which WCAG threshold applies (4.5 or 3.0)
-- \`elementDescription\`: What element is affected (e.g., "Credits badge text", "Metadata row")
-- \`evidence\`: Location in UI (e.g., "Course card header", "Hero section")
-- \`confidence\`: 0.90–0.95 for ratio-based findings
+- \`elementDescription\`: What element is affected
+- \`evidence\`: Location in UI
 
 **ABSOLUTELY DO NOT:**
-- Classify as "Potential Risk" when contrast IS computable
-- Use "ambiguous by visual inspection" — you MUST attempt measurement
-- Use "cannot be determined" unless genuinely true (gradient/image/transparent)
-- Report A1 without foregroundHex + backgroundHex + contrastRatio (unless Potential Risk)
-- Include PASS results in the violations array
-- Use confidence below 0.80 for computed contrast violations
+- Group multiple elements under one color/finding—each element is separate
+- Include PASS results (ratio ≥ threshold) in violations array
+- Classify borderline (4.3-4.5:1) as definitive failure—use "borderline" status
+- Use "ambiguous by visual inspection" when ratio IS computable
+- Report A1 without foregroundHex + backgroundHex + contrastRatio (unless truly potential)
 ` : ''}
 
 Report violations ONLY if there is strong visual evidence.
@@ -1084,15 +1099,17 @@ serve(async (req) => {
         };
       });
 
-    // ========== A1 AGGREGATION LOGIC (Screenshot Analysis - DETERMINISTIC) ==========
-    // For screenshots: A1 MUST be deterministic - compute contrast ratios and classify as:
-    // - Confirmed Violation: ratio < threshold
+    // ========== A1 AGGREGATION LOGIC (Screenshot Analysis - PER-ELEMENT DETERMINISTIC) ==========
+    // For screenshots: A1 evaluates EACH text element INDIVIDUALLY:
+    // - Confirmed Violation: ratio clearly < threshold (< 4.3:1 for normal text)
+    // - Borderline Contrast: ratio near threshold (4.3:1 to 4.5:1) - reduced confidence
     // - Pass: ratio meets threshold (DO NOT include in violations)
-    // - Potential Risk: ONLY when measurement is genuinely impossible (gradient/image/transparent bg)
+    // - Potential Risk: ONLY when measurement is genuinely impossible
     interface A1AffectedItemUI {
       screenshotIndex?: number; // Which screenshot (1-based)
       location: string; // UI region description
       componentName?: string; // Component if identifiable
+      elementRole?: string; // Semantic role: caption, badge, metadata, heading, etc.
       elementDescription?: string; // What type of text element
       foregroundHex?: string; // Sampled foreground color (REQUIRED for confirmed)
       backgroundHex?: string; // Sampled background color (REQUIRED for confirmed)
@@ -1100,7 +1117,7 @@ serve(async (req) => {
       thresholdUsed?: number; // 4.5 or 3.0 based on text size
       potentialRiskReason?: string; // Why ratio couldn't be computed (for potential only)
       riskLevel: 'high' | 'medium' | 'low';
-      status: 'confirmed' | 'potential'; // Confirmed = ratio computed, Potential = ONLY if impossible to compute
+      status: 'confirmed' | 'borderline' | 'potential'; // Per-element classification
       confidence: number;
       rationale: string;
       occurrence_count?: number;
@@ -1125,6 +1142,17 @@ serve(async (req) => {
       const componentMatch = (v.evidence || '').match(/\b([A-Z][a-zA-Z0-9]*(?:Card|Button|Dialog|Modal|Form|Header|Footer|Nav|Sidebar|Panel|Badge|Label|Text|Description)?)\b/);
       const componentName = componentMatch?.[1] && componentMatch[1].length > 3 ? componentMatch[1] : undefined;
       
+      // Extract element role for per-element reporting
+      const elementRole = v.elementRole || 
+        (/badge/i.test(combined) ? 'badge' :
+         /caption/i.test(combined) ? 'caption' :
+         /metadata|date|time|credit/i.test(combined) ? 'metadata' :
+         /heading|title/i.test(combined) ? 'heading' :
+         /button|cta/i.test(combined) ? 'button label' :
+         /body|paragraph/i.test(combined) ? 'body text' :
+         /label/i.test(combined) ? 'label' :
+         'text element');
+      
       // Parse contrastRatio as number if it's a string
       let contrastRatio: number | undefined = undefined;
       if (v.contrastRatio !== undefined) {
@@ -1133,26 +1161,42 @@ serve(async (req) => {
           : v.contrastRatio;
       }
       
-      // DETERMINISTIC STATUS LOGIC FOR SCREENSHOTS:
-      // 1. If we have foreground + background + ratio → CONFIRMED (ratio computed)
-      // 2. If explicit "potential" with potentialRiskReason → POTENTIAL (measurement impossible)
-      // 3. Otherwise → CONFIRMED (default for screenshot - we expect ratio)
-      let status: 'confirmed' | 'potential' = 'confirmed'; // Default: screenshots should compute
+      // Determine threshold based on text size
+      const threshold = v.thresholdUsed || 4.5;
+      const borderlineThreshold = threshold === 4.5 ? 4.3 : 2.7; // ~95% of threshold for borderline zone
+      
+      // PER-ELEMENT STATUS CLASSIFICATION:
+      // 1. If ratio >= threshold → PASS (exclude from violations entirely)
+      // 2. If ratio between borderlineThreshold and threshold → BORDERLINE (near-threshold, reduced confidence)
+      // 3. If ratio < borderlineThreshold → CONFIRMED VIOLATION
+      // 4. If measurement impossible → POTENTIAL
+      let status: 'confirmed' | 'borderline' | 'potential' = 'confirmed';
       let potentialRiskReason: string | undefined = undefined;
       
+      // First check if element PASSES (meets threshold) - EXCLUDE from violations
+      if (contrastRatio !== undefined && contrastRatio >= threshold) {
+        console.log(`A1 PASS: ${v.evidence || 'element'} has ratio ${contrastRatio}:1 >= ${threshold}:1 threshold`);
+        continue; // Skip this element - it passes WCAG AA
+      }
+      
+      // Check for borderline vs confirmed violation
       if (v.status === 'potential' && v.potentialRiskReason) {
         // Legitimate potential risk - measurement genuinely impossible
         status = 'potential';
         potentialRiskReason = v.potentialRiskReason;
+      } else if (v.status === 'borderline' || 
+                 (contrastRatio !== undefined && contrastRatio >= borderlineThreshold && contrastRatio < threshold)) {
+        // Borderline contrast - near threshold (4.3-4.5:1 zone for normal text)
+        status = 'borderline';
       } else if (contrastRatio !== undefined && v.foregroundHex && v.backgroundHex) {
-        // We have computed data → always confirmed
+        // Clear violation with computed data
         status = 'confirmed';
       } else if (/gradient|image|overlay|transparent|non-uniform|cannot sample|cannot compute/.test(combined)) {
         // LLM indicated measurement is impossible
         status = 'potential';
         potentialRiskReason = 'Background complexity prevents stable contrast measurement';
       } else {
-        // Default to confirmed for screenshot input - we expect ratio computation
+        // Default to confirmed for screenshot input
         status = 'confirmed';
       }
       
@@ -1173,19 +1217,23 @@ serve(async (req) => {
         }
       }
       
-      // CONFIDENCE BASED ON DATA QUALITY:
-      // - Confirmed with ratio + colors: 0.90-0.95
+      // CONFIDENCE BASED ON STATUS AND DATA QUALITY:
+      // - Confirmed (ratio < 4.3:1) with full data: 0.88-0.95
       // - Confirmed without full data: 0.80-0.88
+      // - Borderline (ratio 4.3-4.5:1): 0.65-0.75 (reduced due to threshold proximity)
       // - Potential (measurement impossible): 0.50-0.70
       let confidence = v.confidence || 0.55;
       if (status === 'confirmed') {
         if (contrastRatio !== undefined && v.foregroundHex && v.backgroundHex) {
           // Full data available → high confidence
-          confidence = Math.min(Math.max(confidence, 0.90), 0.95);
+          confidence = Math.min(Math.max(confidence, 0.88), 0.95);
         } else {
           // Confirmed but missing some data
           confidence = Math.min(Math.max(confidence, 0.80), 0.88);
         }
+      } else if (status === 'borderline') {
+        // Borderline contrast - reduced confidence due to threshold proximity
+        confidence = Math.min(Math.max(confidence, 0.65), 0.75);
       } else {
         // Potential risk - measurement was impossible
         confidence = Math.min(Math.max(confidence, 0.50), 0.70);
@@ -1194,15 +1242,18 @@ serve(async (req) => {
       // Build rationale based on status and available data
       let rationale = v.diagnosis || '';
       if (!rationale) {
+        const thresholdVal = v.thresholdUsed || 4.5;
+        const colorInfo = v.foregroundHex && v.backgroundHex 
+          ? ` (${v.foregroundHex} on ${v.backgroundHex})`
+          : '';
+        
         if (status === 'confirmed') {
-          const threshold = v.thresholdUsed || 4.5;
-          const colorInfo = v.foregroundHex && v.backgroundHex 
-            ? ` Text color ${v.foregroundHex} on background ${v.backgroundHex}`
-            : '';
           const ratioInfo = contrastRatio !== undefined
-            ? ` has contrast ratio ${contrastRatio}:1, failing WCAG AA minimum of ${threshold}:1.`
+            ? ` has ${contrastRatio}:1 contrast, failing WCAG AA minimum of ${thresholdVal}:1.`
             : ' fails to meet WCAG AA contrast requirements.';
-          rationale = `${v.elementDescription || `Text in ${location}`}${colorInfo}${ratioInfo}`;
+          rationale = `${v.elementDescription || elementRole || `Text in ${location}`}${colorInfo}${ratioInfo}`;
+        } else if (status === 'borderline') {
+          rationale = `${v.elementDescription || elementRole || `Text in ${location}`}${colorInfo} has ${contrastRatio}:1 contrast—borderline near WCAG AA ${thresholdVal}:1 threshold.`;
         } else {
           rationale = `Text in ${location} cannot be measured for contrast due to ${potentialRiskReason || 'background complexity'}. Manual verification recommended.`;
         }
@@ -1226,6 +1277,7 @@ serve(async (req) => {
           screenshotIndex,
           location,
           componentName,
+          elementRole,
           elementDescription: v.elementDescription,
           foregroundHex: v.foregroundHex,
           backgroundHex: v.backgroundHex,
@@ -1249,13 +1301,17 @@ serve(async (req) => {
     if (a1AffectedItemsUI.length > 0) {
       // Count by status and risk level
       const confirmedCount = a1AffectedItemsUI.filter(i => i.status === 'confirmed').length;
+      const borderlineCount = a1AffectedItemsUI.filter(i => i.status === 'borderline').length;
       const potentialCount = a1AffectedItemsUI.filter(i => i.status === 'potential').length;
       const highRiskCount = a1AffectedItemsUI.filter(i => i.riskLevel === 'high').length;
       const mediumRiskCount = a1AffectedItemsUI.filter(i => i.riskLevel === 'medium').length;
       const lowRiskCount = a1AffectedItemsUI.filter(i => i.riskLevel === 'low').length;
       
-      // Determine overall status (confirmed if any are confirmed)
-      const overallStatus: 'confirmed' | 'potential' = confirmedCount > 0 ? 'confirmed' : 'potential';
+      // Determine overall status (confirmed > borderline > potential)
+      // Confirmed violations are blocking; borderline are advisory; potential are unmeasurable
+      let overallStatus: 'confirmed' | 'borderline' | 'potential' = 'potential';
+      if (confirmedCount > 0) overallStatus = 'confirmed';
+      else if (borderlineCount > 0) overallStatus = 'borderline';
       
       // Determine overall risk level (highest tier present)
       let overallRiskLevel: 'high' | 'medium' | 'low' = 'low';
@@ -1265,16 +1321,22 @@ serve(async (req) => {
       // Calculate overall confidence (max of all findings)
       const overallConfidence = Math.max(...a1AffectedItemsUI.map(i => i.confidence));
       
-      // Build confidence reason - deterministic for screenshot input
+      // Build confidence reason - includes borderline items
       const itemsWithRatio = a1AffectedItemsUI.filter(i => i.contrastRatio !== undefined);
-      const confidenceReason = overallStatus === 'confirmed'
-        ? itemsWithRatio.length > 0
+      let confidenceReason = '';
+      if (overallStatus === 'confirmed') {
+        confidenceReason = itemsWithRatio.length > 0
           ? `Contrast ratios computed for ${itemsWithRatio.length} element(s). ` +
-            `${confirmedCount} confirmed violation(s) with measured ratios below WCAG AA thresholds ` +
-            `(4.5:1 for normal text, 3:1 for large/bold text).`
-          : `${confirmedCount} finding(s) with insufficient contrast identified via screenshot analysis.`
-        : `${potentialCount} element(s) could not be measured due to background complexity ` +
-          `(gradient, image, or overlay). Manual verification with browser dev tools recommended.`;
+            `${confirmedCount} confirmed violation(s) with measured ratios below WCAG AA thresholds.` +
+            (borderlineCount > 0 ? ` ${borderlineCount} borderline element(s) near threshold.` : '')
+          : `${confirmedCount} finding(s) with insufficient contrast identified via screenshot analysis.`;
+      } else if (overallStatus === 'borderline') {
+        confidenceReason = `${borderlineCount} element(s) have borderline contrast near WCAG AA threshold (4.3:1–4.5:1 zone). ` +
+          `These are near-threshold findings—consider increasing contrast for safety margin.`;
+      } else {
+        confidenceReason = `${potentialCount} element(s) could not be measured due to background complexity. ` +
+          `Manual verification with browser dev tools recommended.`;
+      }
       
       // Build unique location names list
       const invalidLocations = new Set([
@@ -1300,9 +1362,10 @@ serve(async (req) => {
         ? `${uniqueLocationsArray.length} element(s): ${displayedLocations.join(', ')}${moreText}`
         : `${a1AffectedItemsUI.length} location(s)`;
       
-      // Build risk/status breakdown text
+      // Build risk/status breakdown text - include borderline
       const statusBreakdown = [
         confirmedCount > 0 ? `${confirmedCount} confirmed` : '',
+        borderlineCount > 0 ? `${borderlineCount} borderline` : '',
         potentialCount > 0 ? `${potentialCount} potential` : '',
       ].filter(Boolean).join(', ');
       
@@ -1312,20 +1375,34 @@ serve(async (req) => {
         lowRiskCount > 0 ? `${lowRiskCount} low-risk` : '',
       ].filter(Boolean).join(', ');
       
-      // Build summary based on status - DETERMINISTIC language for confirmed
-      // Include specific ratios for confirmed violations
+      // Build summary based on status - per-element findings
       const confirmedWithRatios = a1AffectedItemsUI.filter(i => i.status === 'confirmed' && i.contrastRatio);
-      const ratioDetails = confirmedWithRatios.length > 0
-        ? ` Measured ratios: ${confirmedWithRatios.slice(0, 3).map(i => `${i.contrastRatio}:1`).join(', ')}${confirmedWithRatios.length > 3 ? ` (+${confirmedWithRatios.length - 3} more)` : ''}.`
+      const borderlineWithRatios = a1AffectedItemsUI.filter(i => i.status === 'borderline' && i.contrastRatio);
+      
+      const confirmedRatioDetails = confirmedWithRatios.length > 0
+        ? ` Measured: ${confirmedWithRatios.slice(0, 3).map(i => `${i.contrastRatio}:1`).join(', ')}${confirmedWithRatios.length > 3 ? ` (+${confirmedWithRatios.length - 3} more)` : ''}.`
+        : '';
+      const borderlineRatioDetails = borderlineWithRatios.length > 0
+        ? ` Borderline: ${borderlineWithRatios.slice(0, 2).map(i => `${i.contrastRatio}:1`).join(', ')}.`
         : '';
       
-      const summary = overallStatus === 'confirmed'
-        ? `${confirmedCount} text contrast violation(s) in ${areaCountText} fail WCAG AA requirements.${ratioDetails}`
-        : `${potentialCount} element(s) could not be measured for contrast (${a1AffectedItemsUI.map(i => i.potentialRiskReason || 'background complexity').filter((v, i, a) => a.indexOf(v) === i).join(', ')}).`;
+      let summary = '';
+      if (overallStatus === 'confirmed') {
+        summary = `${confirmedCount} text contrast violation(s) in ${areaCountText} fail WCAG AA requirements.${confirmedRatioDetails}${borderlineCount > 0 ? ` ${borderlineCount} additional element(s) have borderline contrast.` : ''}`;
+      } else if (overallStatus === 'borderline') {
+        summary = `${borderlineCount} element(s) in ${areaCountText} have borderline contrast near WCAG AA threshold.${borderlineRatioDetails} Consider increasing contrast for safety margin.`;
+      } else {
+        summary = `${potentialCount} element(s) could not be measured for contrast (${a1AffectedItemsUI.map(i => i.potentialRiskReason || 'background complexity').filter((v, i, a) => a.indexOf(v) === i).join(', ')}).`;
+      }
       
-      const contextualHint = overallStatus === 'confirmed'
-        ? 'Increase text color contrast to meet WCAG AA minimum (4.5:1 for normal text, 3:1 for large text).'
-        : 'Use browser dev tools to compute exact contrast ratios for elements with complex backgrounds.';
+      let contextualHint = '';
+      if (overallStatus === 'confirmed') {
+        contextualHint = 'Increase text color contrast to meet WCAG AA minimum (4.5:1 for normal text, 3:1 for large text).';
+      } else if (overallStatus === 'borderline') {
+        contextualHint = 'Consider increasing contrast slightly above 4.5:1 to provide safety margin for borderline elements.';
+      } else {
+        contextualHint = 'Use browser dev tools to compute exact contrast ratios for elements with complex backgrounds.';
+      }
       
       const a1Rule = allRulesForViolations.find(r => r.id === 'A1');
       
@@ -1377,14 +1454,21 @@ serve(async (req) => {
       // No mandatory corrective prompt for potential risks - advisory guidance only
       
       // No input limitation for confirmed violations (screenshot is definitive for obvious issues)
-      const inputLimitation = overallStatus === 'potential'
-        ? 'Visual inspection suggests borderline contrast. Use browser dev tools to compute exact ratio.'
-        : undefined;
+      // Borderline gets advisory about threshold proximity
+      let inputLimitation: string | undefined = undefined;
+      if (overallStatus === 'potential') {
+        inputLimitation = 'Background complexity prevents stable contrast measurement. Use browser dev tools to compute exact ratio.';
+      } else if (overallStatus === 'borderline') {
+        inputLimitation = 'Contrast falls near WCAG AA threshold (4.3:1–4.5:1). Consider increasing for safety margin.';
+      }
       
-      // Advisory guidance only for potential risks
-      const advisoryGuidance = overallStatus === 'potential'
-        ? 'This is a potential risk due to borderline contrast. Actual compliance depends on font size and weight.'
-        : undefined;
+      // Advisory guidance for potential risks and borderline findings
+      let advisoryGuidance: string | undefined = undefined;
+      if (overallStatus === 'potential') {
+        advisoryGuidance = 'This is a potential risk due to unmeasurable contrast. Actual compliance depends on computed ratio.';
+      } else if (overallStatus === 'borderline') {
+        advisoryGuidance = 'Borderline contrast near WCAG AA threshold—technically may pass, but increasing contrast provides safety margin.';
+      }
       
       aggregatedA1UI = {
         ruleId: 'A1',
@@ -1402,10 +1486,12 @@ serve(async (req) => {
           screenshotIndex: item.screenshotIndex,
           location: item.location,
           componentName: item.componentName,
+          elementRole: item.elementRole,
           elementDescription: item.elementDescription,
           foregroundHex: item.foregroundHex,
           backgroundHex: item.backgroundHex,
           contrastRatio: item.contrastRatio,
+          thresholdUsed: item.thresholdUsed,
           riskLevel: item.riskLevel,
           status: item.status,
           confidence: item.confidence,
