@@ -236,52 +236,78 @@ An element is ONLY considered focusable if:
 ${includesA1 ? `
 ### SPECIAL HANDLING FOR A1 (Text Contrast) — PER-ELEMENT DETERMINISTIC ANALYSIS
 
-**CRITICAL: Evaluate contrast at the INDIVIDUAL ELEMENT level. Each text element must be assessed independently—do NOT group multiple elements under a single color value.**
+**CRITICAL: Evaluate contrast at the INDIVIDUAL ELEMENT level using SCREENSHOT PIXELS ONLY. Each text element must be assessed independently—do NOT group multiple elements under a single color value. Do NOT assume access to DOM or source code.**
 
-**ROBUST COLOR SAMPLING METHODOLOGY (MANDATORY FOR SCREENSHOTS):**
+**SCREENSHOT-ONLY PIXEL SAMPLING METHODOLOGY (MANDATORY):**
 
 **FOREGROUND COLOR EXTRACTION (Text Color):**
-1. Identify text glyph pixels by detecting high-contrast edges against the background
-2. Apply inward erosion of 1-2 pixels from glyph edges to exclude anti-aliased/mixed pixels
-3. Sample 5-10 pixels from the INTERIOR of glyph strokes only
-4. Compute the MEDIAN RGB value of sampled pixels—ignore outliers
-5. Convert median RGB to hex for reporting
+1. Detect text glyph regions by identifying high-contrast pixel clusters against the background
+2. EXCLUDE anti-aliased edge pixels and partially transparent pixels (these blend foreground/background)
+3. Apply inward erosion of 1-2 pixels from detected glyph edges to isolate TRUE interior pixels
+4. Sample 5-10 pixels from the INTERIOR of glyph strokes ONLY
+5. Compute the MEDIAN RGB value of sampled interior pixels—this is the estimated foreground color
+6. Convert median RGB to hex for reporting (e.g., "#6B7280")
 
 **BACKGROUND COLOR EXTRACTION:**
 1. Sample pixels from areas IMMEDIATELY ADJACENT to text but OUTSIDE the glyph mask
-2. Stay within the same visual container/component (avoid sampling from adjacent components)
-3. Sample 5-10 pixels from uniform background regions
-4. Compute the MEDIAN RGB value—if variance is high (σ > 15), flag as non-uniform
-5. Convert median RGB to hex for reporting
+2. EXCLUDE pixels that may contain anti-aliased blending from nearby text
+3. Stay within the same visual container/component (avoid sampling from adjacent components)
+4. Sample 5-10 pixels from uniform background regions
+5. Compute the MEDIAN RGB value—if variance is high (σ > 15), flag background as non-uniform
+6. Convert median RGB to hex for reporting
 
 **CRITICAL SAMPLING RULES:**
-- Use sampled RGB values DIRECTLY for contrast computation
-- Do NOT snap sampled colors to predefined design tokens or palette names
-- Do NOT assume colors match known gray-scale values (e.g., "gray-400")
-- Report actual measured hex values (e.g., "#6B7280") not token names
+- Use sampled RGB values DIRECTLY for contrast computation—no intermediate token mapping
+- Report foreground and background as ESTIMATED VALUES derived from screenshot pixels
+- Do NOT report colors as "verified design tokens" or assume they match named palettes
+- Always include note: "Color values derived from screenshot pixels are approximations"
 
-**COLOR ESTIMATE VALIDATION:**
-If the reported hex value would imply WCAG compliance but the computed contrast ratio indicates failure (or vice versa):
-- Flag the color estimate as "approximate"
-- Prioritize the measured contrast ratio over the hex implication
-- Include note: "Color values derived from screenshot pixels are approximations"
+**CONTRAST RATIO COMPUTATION:**
+1. Convert sampled foreground hex to relative luminance (L1)
+2. Convert sampled background hex to relative luminance (L2)
+3. Compute ratio = (max(L1, L2) + 0.05) / (min(L1, L2) + 0.05)
+4. This MEASURED RATIO is the AUTHORITATIVE value for WCAG evaluation
+
+**COLOR ATTRIBUTION RELIABILITY VALIDATION (MANDATORY):**
+After computing the measured contrast ratio from visual pixel sampling:
+1. RECALCULATE contrast from the REPORTED hex values (foregroundHex, backgroundHex)
+2. Compare recalculated ratio to the visually measured ratio
+3. If difference exceeds ±0.2:
+   - Set \`colorAttributionUnreliable: true\`
+   - Add note in diagnosis: "Anti-aliasing or blended pixel sampling detected—color attribution may be approximate"
+   - REDUCE confidence by 10-15%
+4. If difference is within ±0.2:
+   - Set \`colorAttributionUnreliable: false\`
+   - Color attribution is reliable
+
+**CONFIDENCE ADJUSTMENTS FOR BLENDED PIXELS:**
+- Base confidence for clean sampling: 0.88–0.95
+- If colorAttributionUnreliable = true: REDUCE confidence by 10-15% (cap at 0.75-0.85)
+- If background variance high (σ > 15): REDUCE confidence by 5-10%
+
+**PASS/FAIL DECISION:**
+- BASE all compliance decisions on the MEASURED contrast ratio (not recalculated from hex)
+- MEASURED RATIO < 4.5:1 (normal text) or < 3.0:1 (large text) → FAIL (confirmed violation)
+- MEASURED RATIO in borderline zone (4.3–4.5:1) → borderline status with reduced confidence
+- MEASURED RATIO ≥ threshold → PASS (exclude from violations)
 
 **CLASSIFICATION THRESHOLDS:**
-- **WCAG AA Failure**: ratio < 4.5:1 for normal text (< 18px or < 14px bold)
-- **WCAG AA Failure**: ratio < 3:1 for large text (≥ 18px or ≥ 14px bold)
-- **Borderline Contrast**: ratio between 4.3:1 and 4.5:1 for normal text (4.0-4.5:1 zone) — NOT a definitive failure
-- **PASS**: ratio ≥ 4.5:1 for normal text, or ≥ 3:1 for large text — DO NOT INCLUDE IN VIOLATIONS
+- **WCAG AA Failure**: measured ratio < 4.5:1 for normal text (< 18px or < 14px bold)
+- **WCAG AA Failure**: measured ratio < 3:1 for large text (≥ 18px or ≥ 14px bold)
+- **Borderline Contrast**: measured ratio between 4.3:1 and 4.5:1 for normal text — NOT a definitive failure
+- **PASS**: measured ratio ≥ 4.5:1 for normal text, or ≥ 3:1 for large text — DO NOT INCLUDE IN VIOLATIONS
 
 **PER-ELEMENT ANALYSIS METHODOLOGY:**
 For EACH visible text element in the screenshot:
 1. **Identify element role** — button label, heading, body text, caption, badge, metadata, etc.
-2. **Sample foreground color** — Use glyph interior sampling with erosion (exclude anti-aliased edges)
-3. **Sample background color** — Use adjacent uniform region sampling (same container)
-4. **Compute WCAG contrast ratio** — Use relative luminance formula on sampled RGB values
-5. **Classify individually:**
-   - If ratio < 4.3:1 for normal text → **Confirmed Violation** (status: "confirmed")
-   - If ratio 4.3:1 to 4.5:1 for normal text → **Borderline Contrast** (status: "borderline", reduced confidence 0.65-0.75)
-   - If ratio ≥ 4.5:1 for normal text → **PASS** — exclude from violations array entirely
+2. **Sample foreground color** — Use glyph interior sampling with 1-2px erosion (exclude anti-aliased edges and transparent pixels)
+3. **Sample background color** — Use adjacent uniform region sampling (same container, exclude blended pixels)
+4. **Compute MEASURED contrast ratio** — Use relative luminance formula on sampled median RGB values
+5. **Validate color attribution** — Recalculate from reported hex, check if within ±0.2 of measured
+6. **Classify individually:**
+   - If measured ratio < 4.3:1 for normal text → **Confirmed Violation** (status: "confirmed")
+   - If measured ratio 4.3:1 to 4.5:1 for normal text → **Borderline Contrast** (status: "borderline", reduced confidence 0.65-0.75)
+   - If measured ratio ≥ 4.5:1 for normal text → **PASS** — exclude from violations array entirely
    - Apply 3:1 threshold equivalently for large/bold text
 
 **BORDERLINE CONTRAST HANDLING:**
@@ -292,9 +318,9 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
 - Do NOT classify as a definitive failure—let user decide on fix priority
 
 **EDGE CASE HANDLING:**
-- **Anti-aliasing**: Apply 1-2px inward erosion, sample 5-10 interior pixels, use median color
-- **Outlier pixels**: Discard pixels that deviate >20% from median before final calculation
-- **Background variance**: If background pixels vary significantly (σ > 15), mark as "potential" with potentialRiskReason: "non-uniform background prevents stable sampling"
+- **Anti-aliasing detected**: Apply extra erosion, use only central glyph pixels, flag colorAttributionUnreliable if hex recalc differs by >0.2
+- **Blended/transparent pixels detected**: Exclude from sampling, note in potentialRiskReason
+- **Background variance high (σ > 15)**: Mark as "potential" with potentialRiskReason: "non-uniform background prevents stable sampling"
 - **Gradient/image backgrounds**: Mark as "potential" with potentialRiskReason: "gradient or image background"
 - **Transparent/overlay text**: Mark as "potential" with potentialRiskReason: "transparency prevents color extraction"
 
@@ -313,9 +339,30 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
   "contrastRatio": 2.8,
   "thresholdUsed": 4.5,
   "colorApproximate": true,
-  "diagnosis": "Credits badge text (#9CA3AF on #FFFFFF) has 2.8:1 contrast, failing WCAG AA 4.5:1 minimum. Color values derived from screenshot pixels are approximations.",
+  "colorAttributionUnreliable": false,
+  "diagnosis": "Credits badge text has measured 2.8:1 contrast, failing WCAG AA 4.5:1 minimum. Foreground (#9CA3AF) and background (#FFFFFF) are estimated from screenshot pixels.",
   "contextualHint": "Increase badge text contrast to meet 4.5:1.",
   "confidence": 0.92
+}
+\`\`\`
+
+**OUTPUT FORMAT FOR UNRELIABLE COLOR ATTRIBUTION:**
+\`\`\`json
+{
+  "ruleId": "A1",
+  "status": "confirmed",
+  "elementRole": "metadata",
+  "evidence": "Date text in card footer",
+  "elementDescription": "Card date metadata",
+  "foregroundHex": "#9CA3AF",
+  "backgroundHex": "#F3F4F6",
+  "contrastRatio": 2.5,
+  "thresholdUsed": 4.5,
+  "colorApproximate": true,
+  "colorAttributionUnreliable": true,
+  "diagnosis": "Date text has measured 2.5:1 contrast, failing WCAG AA 4.5:1. Anti-aliasing or blended pixel sampling detected—color attribution may be approximate. Measured ratio is authoritative.",
+  "contextualHint": "Increase text contrast. Verify exact colors in source code.",
+  "confidence": 0.78
 }
 \`\`\`
 
@@ -332,27 +379,30 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
   "contrastRatio": 4.4,
   "thresholdUsed": 4.5,
   "colorApproximate": true,
-  "diagnosis": "Date text (#6B7280 on #FFFFFF) has 4.4:1 contrast—borderline near WCAG AA 4.5:1 threshold. Color values are approximations.",
+  "colorAttributionUnreliable": false,
+  "diagnosis": "Date text has measured 4.4:1 contrast—borderline near WCAG AA 4.5:1 threshold. Colors are estimated from screenshot pixels.",
   "contextualHint": "Consider increasing contrast slightly for safety margin.",
   "confidence": 0.70
 }
 \`\`\`
 
 **CONFIDENCE REQUIREMENTS:**
-- **Confirmed violation (ratio < 4.3:1)**: 0.88–0.95
+- **Confirmed violation (ratio < 4.3:1), reliable attribution**: 0.88–0.95
+- **Confirmed violation, unreliable attribution**: 0.75–0.85 (reduced by 10-15%)
 - **Borderline contrast (ratio 4.3:1–4.5:1)**: 0.65–0.75 (reduced due to threshold proximity)
 - **Potential risk (computation impossible)**: 0.50–0.70
 
 **MANDATORY FIELDS:**
 - \`status\`: "confirmed", "borderline", or "potential"
 - \`elementRole\`: Semantic role of the text element
-- \`foregroundHex\`: Sampled text color as hex (from glyph interior pixels)
-- \`backgroundHex\`: Sampled background color as hex (from adjacent uniform region)
-- \`contrastRatio\`: Computed ratio as number
+- \`foregroundHex\`: Estimated text color as hex (from glyph interior pixels, median RGB)
+- \`backgroundHex\`: Estimated background color as hex (from adjacent uniform region, median RGB)
+- \`contrastRatio\`: MEASURED ratio as number (authoritative for WCAG decision)
 - \`thresholdUsed\`: Which WCAG threshold applies (4.5 or 3.0)
 - \`elementDescription\`: What element is affected
 - \`evidence\`: Location in UI
 - \`colorApproximate\`: true (always for screenshot-derived values)
+- \`colorAttributionUnreliable\`: true/false (based on ±0.2 validation)
 
 **ABSOLUTELY DO NOT:**
 - Group multiple elements under one color/finding—each element is separate
@@ -361,7 +411,9 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
 - Use "ambiguous by visual inspection" when ratio IS computable
 - Report A1 without foregroundHex + backgroundHex + contrastRatio (unless truly potential)
 - Snap sampled colors to design tokens—use actual measured hex values
-- Sample anti-aliased edge pixels—always use glyph interior with erosion
+- Sample anti-aliased edge pixels—always use glyph interior with 1-2px erosion
+- Assume access to DOM or source code—screenshots only
+- Report colors as "verified" or "confirmed"—always note they are estimates
 ` : ''}
 
 Report violations ONLY if there is strong visual evidence.
