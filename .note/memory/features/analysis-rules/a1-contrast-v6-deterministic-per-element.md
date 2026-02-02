@@ -1,76 +1,80 @@
-# Memory: features/analysis-rules/a1-contrast-v12-reliability-gate
+# Memory: features/analysis-rules/a1-contrast-v13-interior-stroke-sampling
 
 Updated: just now
 
-Rule A1 (Insufficient Text Contrast) uses a **robust reliability gate** for screenshot inputs to prevent false positives from blocking convergence.
+Rule A1 (Insufficient Text Contrast) uses **interior-stroke sampling** for screenshot inputs to match what a user color-picker would measure on text strokes.
 
 ## Design Principle
 
 **Screenshots are a source of truth for visual properties.**
 Only reliable measurements can block convergence; unreliable measurements become advisory Potential Risks.
 
-## Reliability Gate (All Checks Must Pass)
+## Interior-Stroke Sampling Methodology
 
-| Check | Threshold | Action if Failed |
-|-------|-----------|------------------|
-| Foreground variance | stddev(luminance) > 15 | Mark UNRELIABLE |
-| Background variance | stddev(luminance) > 20 | Mark UNRELIABLE |
-| Cluster separation | gap < 20 luminance units | Mark UNRELIABLE |
-| Cluster overlap | pixels fall between clusters | Mark UNRELIABLE |
-| Multi-sample consistency | ratios differ > ±0.2 | Mark UNRELIABLE |
-| Background is gradient/image | visual check | Mark UNRELIABLE |
-| Foreground ≈ background | clusters too similar | Mark UNRELIABLE |
+### Foreground (Text) Color
+1. Sample 50-200 pixels from text region
+2. Convert pixels to luminance
+3. Select the **darkest 30-40%** of pixels (interior glyph strokes)
+4. This excludes anti-aliased edges and halos
+5. Use **median RGB** of this darkest subset as foreground color
 
-## Multi-Sample Consistency Check (New)
+### Background Color
+1. Sample a small ring/frame around text region (expand bounding box by few pixels)
+2. Exclude pixels that belong to text (dark subset from above)
+3. Use **median RGB** of remaining pixels as background color
 
-1. Sample pixels and compute contrast ratio
-2. Repeat sampling with 2-5px offset, 3 times total
-3. If max ratio difference > 0.2, mark as UNRELIABLE
-4. Example: [3.1, 3.3, 3.2] → diff=0.2 → RELIABLE
-5. Example: [3.1, 3.8, 2.9] → diff=0.9 → UNRELIABLE
+### Contrast Computation
+- Use WCAG 2.1 relative luminance formula on sampled median RGB values
+- Convert to hex for reporting (estimated from pixels, not verified tokens)
+- **Never snap to palette tokens** (no Tailwind color mapping)
 
-## Classification Rules
+## Reliability Checks (All Must Pass for Confirmed)
 
-| Reliability | Status | Blocks Convergence | Confidence |
-|-------------|--------|-------------------|------------|
-| All checks pass | confirmed | YES | 85–95% |
-| Any check fails | potential | NO | 50–70% |
-| Ratio 4.3-4.5:1 | borderline | NO (advisory) | 65–75% |
+| Check | Requirement | Failure Reason |
+|-------|-------------|----------------|
+| Hex-to-Ratio Verification | Recomputed ratio from hex matches measured ±0.2 | "Hex-to-ratio verification failed: measured X.X vs recomputed Y.Y" |
+| Pixel Support | ≥15-20 foreground pixels | "Insufficient foreground pixels for reliable sampling" |
+| Color Distance | ≥20 luminance units apart | "Foreground and background too similar for reliable measurement" |
+| Foreground Variance | stddev(luminance) ≤ 15 | "Foreground variance too high — text rendering unstable" |
+| Background Variance | stddev(luminance) ≤ 20 | "Background variance too high — non-uniform background" |
+| Multi-Sample Consistency | 3 samples with 2-5px offset, ratios differ ≤ ±0.2 | "Multi-sample consistency failed: ratios varied by X.X" |
 
-## Confirmed Violation (Reliable)
+## Tri-State Classification
 
-When ALL reliability checks pass:
+| Classification | Criteria | Status | Blocks Convergence | Confidence |
+|----------------|----------|--------|-------------------|------------|
+| **Confirmed Fail** | All checks pass + ratio < 4.0:1 | confirmed | YES | 85-95% |
+| **Borderline** | Near-threshold (4.0-4.5:1) OR any check fails OR secondary element | borderline | NO | 50-75% |
+| **Potential Risk** | Any reliability check fails + low contrast suspected | potential | NO | 50-75% |
+| **Pass** | All checks pass + ratio ≥ 4.5:1 | - | - | - |
+
+## Output Requirements
+
+### Confirmed Fail (Reliable)
 - `samplingMethod: "pixel"`
 - `status: "confirmed"`
 - Report `contrastRatio`, `foregroundHex`, `backgroundHex` (RAW sampled, not palette-mapped)
-- Verification: "Contrast ratio computed from sampled screenshot pixels."
-- **Blocks convergence if ratio < threshold**
+- Include `samplingReliability` object with all check results
+- **Blocks convergence**
 
-## Potential Risk (Unreliable)
-
-When ANY reliability check fails:
+### Borderline / Potential Risk (Unreliable)
 - `samplingMethod: "inferred"`
-- `status: "potential"`
-- `potentialRiskReason`: Specific failure reason (e.g., "Multi-sample consistency failed: ratios differed by 0.4")
+- `status: "borderline"` or `status: "potential"`
+- `potentialRiskReason`: Specific failure reason
 - `advisoryGuidance`: "Upload a PNG at 100% zoom or verify with DevTools/axe for accurate measurement."
-- NO exact `contrastRatio` or hex values
-- Diagnosis: "Ratio not computed (unreliable sampling)."
+- May include estimated hex but with uncertainty
 - **NEVER blocks convergence**
-
-## Convergence Behavior
-
-- Only `status: "confirmed"` violations count toward threshold
-- `status: "potential"` findings are advisory and never block convergence
-- This prevents infinite iterations where A1 repeats despite UI updates
 
 ## Forbidden Behaviors
 
-- Do NOT map sampled colors to Tailwind tokens or "nearest palette color"
-- Do NOT output Confirmed ratio when ANY reliability check fails
+- Do NOT snap sampled colors to Tailwind tokens or nearest palette color
+- Do NOT output Confirmed when ANY reliability check fails
+- Do NOT mark borderline ratios (4.0-4.5:1) as Confirmed
 - Do NOT say "Exact color values cannot be determined from a screenshot"
-- Do NOT assign high confidence (>70%) to unreliable findings
+- Do NOT assign confidence >75% to unreliable findings
+- Do NOT group multiple unrelated elements under one finding
 
 ## ZIP / GitHub Inputs
 
-Always `samplingMethod: "inferred"`, `status: "potential"`, 50–70% confidence.
+Always `samplingMethod: "inferred"`, `status: "potential"`, 50-70% confidence.
 Static code analysis cannot access rendered pixels.
