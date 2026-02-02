@@ -1270,10 +1270,52 @@ serve(async (req) => {
       
       const a1Rule = allRulesForViolations.find(r => r.id === 'A1');
       
-      // Corrective prompt for confirmed violations - definitive instruction
-      const correctivePrompt = overallStatus === 'confirmed'
-        ? 'Replace low-contrast text colors with higher-contrast tokens to meet WCAG AA 4.5:1 minimum for normal text.'
-        : ''; // No mandatory corrective prompt for potential risks
+      // Build specific, actionable corrective prompt for confirmed violations (screenshot input)
+      // Include: affected element, colors, ratio, fix directive, application-wide scope
+      let correctivePrompt = '';
+      if (overallStatus === 'confirmed') {
+        // Get the first confirmed item with the most specific data
+        const confirmedItems = a1AffectedItemsUI.filter(i => i.status === 'confirmed');
+        const primaryItem = confirmedItems.find(i => i.foregroundHex && i.backgroundHex) || confirmedItems[0];
+        
+        if (primaryItem) {
+          // Build element description (e.g., "course card metadata text", "header subtitle")
+          const elementDesc = primaryItem.elementDescription 
+            ? primaryItem.elementDescription.toLowerCase()
+            : primaryItem.componentName 
+              ? `${primaryItem.componentName} text`
+              : `text in ${primaryItem.location}`;
+          
+          // Build color details if available
+          const colorDetails = primaryItem.foregroundHex && primaryItem.backgroundHex
+            ? ` The foreground color ${primaryItem.foregroundHex} on ${primaryItem.backgroundHex} background`
+            : ' The current text color';
+          
+          // Build ratio details
+          const ratioDetails = primaryItem.contrastRatio
+            ? ` results in insufficient contrast (${primaryItem.contrastRatio}:1).`
+            : ' has insufficient contrast for WCAG AA compliance.';
+          
+          // Determine suggested fix based on detected colors
+          const suggestedFix = primaryItem.foregroundHex?.toLowerCase().includes('9ca3af') ||
+                              primaryItem.foregroundHex?.toLowerCase().includes('d1d5db') ||
+                              /gray-300|gray-400|text-gray/.test(primaryItem.location || '')
+            ? 'Replace low-contrast gray text (e.g., text-gray-300/400) with higher-contrast tokens such as text-gray-700 or theme foreground colors.'
+            : 'Replace low-contrast text colors with higher-contrast tokens (e.g., text-gray-700 or theme foreground) to meet WCAG AA 4.5:1 minimum for normal text.';
+          
+          // List all unique affected locations for application-wide scope
+          const allLocations = Array.from(new Set(confirmedItems.map(i => i.location).filter(Boolean)));
+          const locationScope = allLocations.length > 1
+            ? ` Apply this change to all affected elements: ${allLocations.slice(0, 3).join(', ')}${allLocations.length > 3 ? `, and ${allLocations.length - 3} more` : ''}.`
+            : '';
+          
+          correctivePrompt = `In the ${elementDesc},${colorDetails}${ratioDetails} ${suggestedFix}${locationScope} Ensure contrast fixes are applied consistently across all similar elements throughout the application.`;
+        } else {
+          // Fallback generic prompt if no detailed data
+          correctivePrompt = 'Replace low-contrast text colors with higher-contrast tokens (e.g., text-gray-700 or theme foreground colors) to meet WCAG AA 4.5:1 minimum for normal text. Apply this change consistently across all affected areas throughout the application.';
+        }
+      }
+      // No mandatory corrective prompt for potential risks - advisory guidance only
       
       // No input limitation for confirmed violations (screenshot is definitive for obvious issues)
       const inputLimitation = overallStatus === 'potential'
