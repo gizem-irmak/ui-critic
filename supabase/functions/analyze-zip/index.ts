@@ -634,17 +634,15 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     'Foreground colors are detected from Tailwind classes, but background context is often inherited, theme-dependent, or dynamic. ' +
     'Contrast ratio cannot be computed without runtime rendering.';
   
-  // Advisory guidance for heuristic findings
-  const advisoryGuidance = 'This issue is reported as a potential risk based on static analysis. ' +
-    'To confirm and resolve definitively, consider uploading screenshots of the rendered UI for visual verification, ' +
+  // Advisory guidance for potential risk findings
+  const advisoryGuidance = 'To confirm contrast compliance, upload screenshots of the rendered UI for visual verification, ' +
     'or use browser developer tools to inspect actual contrast ratios at runtime.';
   
-  // Build diagnosis with location tracking
-  const diagnosis = `Potential WCAG AA contrast risk (static analysis): ${affectedComponents.length} text color occurrence(s) detected ` +
+  // Build diagnosis - AVOID repeating "heuristic", "non-blocking", or policy restatements
+  const diagnosis = `${affectedComponents.length} text color occurrence(s) detected ` +
     `in ${displayedFiles.join(', ')}${fileMoreText} using ${displayedColors.join(', ')}${moreText}. ` +
     `Risk breakdown: ${riskBreakdown}. ` +
-    `Static analysis cannot determine the actual rendered background color, so contrast sufficiency cannot be confirmed. ` +
-    `This finding is labeled as "Potential Risk (Heuristic)" and does not block convergence.`;
+    `Background color cannot be determined from code analysis; contrast ratio cannot be computed.`;
   
   // Build contextual hint based on DETECTED colors, not generic tiers
   const detectedColorNames = [...new Set(affectedComponents.map(c => c.colorName))];
