@@ -236,43 +236,39 @@ An element is ONLY considered focusable if:
 ${includesA1 ? `
 ### SPECIAL HANDLING FOR A1 (Text Contrast) — SCREENSHOT-ONLY PIXEL SAMPLING
 
-**CRITICAL: Compute contrast using PIXEL-SAMPLED COLORS ONLY. This analysis has NO access to DOM, source code, or design tokens. All colors must be estimated from screenshot pixels.**
+**CRITICAL: Compute contrast using PIXEL-SAMPLED COLORS ONLY. Do NOT assume DOM or source code access. Do NOT report palette/token hex values unless derived directly from sampled pixels.**
 
-**FOREGROUND COLOR SAMPLING (Text Color) — INTERIOR GLYPH PIXELS ONLY:**
-1. Detect text glyph regions by identifying high-contrast pixel clusters against background
-2. Create a text mask from detected glyph pixels
-3. **ERODE/SHRINK the text mask INWARD by 1-2 pixels** — this EXCLUDES anti-aliased edge pixels
-4. Sample 5-10 pixels from the REMAINING INTERIOR of glyph strokes (the core, not edges)
-5. Compute the **MEDIAN RGB** from sampled interior pixels (not mean — median is robust to outliers)
-6. Report as: \`foregroundRgb: "rgb(R, G, B)"\` — this is the estimated text color
-7. Derive hex: \`foregroundHex: "#XXXXXX"\` — computed from the median RGB values
+**FOREGROUND COLOR SAMPLING (Text Color):**
+1. Detect text glyph regions by identifying high-contrast pixel clusters
+2. SHRINK the text mask INWARD by 1-2 pixels to exclude anti-aliased edges
+3. Sample 5-10 pixels from the INTERIOR of glyph strokes ONLY (exclude edge/blended pixels)
+4. Compute the MEDIAN RGB from sampled interior pixels
+5. Report as: \`foregroundRgb: "rgb(R, G, B)"\` and \`foregroundHex: "#XXXXXX"\` (hex derived from median RGB)
 
-**BACKGROUND COLOR SAMPLING — ADJACENT NON-TEXT PIXELS:**
-1. Identify pixels IMMEDIATELY ADJACENT to text glyphs but OUTSIDE the text mask
-2. Stay within the same visual container (avoid crossing component boundaries)
-3. Sample 5-10 pixels from uniform background regions (avoid gradients if possible)
-4. Compute the **MEDIAN RGB** from sampled background pixels
-5. Report as: \`backgroundRgb: "rgb(R, G, B)"\` — this is the estimated background color
-6. Derive hex: \`backgroundHex: "#XXXXXX"\` — computed from the median RGB values
+**BACKGROUND COLOR SAMPLING:**
+1. Sample pixels from areas IMMEDIATELY ADJACENT to text but OUTSIDE the glyph mask
+2. Stay within the same visual container (avoid sampling adjacent components)
+3. Sample 5-10 pixels from uniform background regions
+4. Compute the MEDIAN RGB from sampled background pixels
+5. Report as: \`backgroundRgb: "rgb(R, G, B)"\` and \`backgroundHex: "#XXXXXX"\` (hex derived from median RGB)
 
-**CONTRAST COMPUTATION (AUTHORITATIVE — PIXEL-SAMPLED VALUES):**
-1. Convert sampled foreground median RGB to relative luminance (L1) using sRGB formula
-2. Convert sampled background median RGB to relative luminance (L2) using sRGB formula
-3. Compute **MEASURED ratio** = (max(L1, L2) + 0.05) / (min(L1, L2) + 0.05)
-4. This **MEASURED RATIO from pixel samples** is the **AUTHORITATIVE** value for WCAG pass/fail
+**CONTRAST COMPUTATION (AUTHORITATIVE):**
+1. Convert sampled foreground median RGB to relative luminance (L1)
+2. Convert sampled background median RGB to relative luminance (L2)
+3. Compute MEASURED ratio = (max(L1, L2) + 0.05) / (min(L1, L2) + 0.05)
+4. This MEASURED RATIO is the AUTHORITATIVE value for WCAG pass/fail
 
-**CONSISTENCY VALIDATION (MANDATORY — DETECT SAMPLING MISMATCH):**
-After computing the measured contrast from pixel samples:
-1. RECALCULATE contrast using the REPORTED hex values (foregroundHex, backgroundHex)
-2. Compare: |recalculated ratio - measured ratio|
-3. **If difference > 0.2 (sampling mismatch detected):**
+**CONSISTENCY VALIDATION (MANDATORY):**
+After computing the measured contrast:
+1. RECALCULATE contrast from the REPORTED hex values (foregroundHex, backgroundHex)
+2. Compare recalculated ratio to measured ratio
+3. If difference > 0.2:
    - Set \`colorAttributionUnreliable: true\`
-   - APPEND to diagnosis: **"Sampling mismatch / anti-aliasing contamination detected; contrast measured from pixel samples."**
-   - REDUCE confidence by 10-15% (e.g., 0.90 → 0.78)
-   - Pass/fail decision remains based on the MEASURED ratio (authoritative)
-4. **If difference ≤ 0.2 (consistent sampling):**
+   - Include in diagnosis: "Color estimate unreliable due to anti-aliasing/blending; contrast computed from pixel samples."
+   - REDUCE confidence by 10-15%
+4. If difference ≤ 0.2:
    - Set \`colorAttributionUnreliable: false\`
-   - Color attribution is reliable
+   - Color attribution is consistent
 
 **CLASSIFICATION THRESHOLDS:**
 - **WCAG AA Failure**: measured ratio < 4.5:1 for normal text (< 18px or < 14px bold)
@@ -322,7 +318,7 @@ For EACH visible text element:
 }
 \`\`\`
 
-**OUTPUT FORMAT FOR UNRELIABLE COLOR ATTRIBUTION (sampling mismatch):**
+**OUTPUT FORMAT FOR UNRELIABLE COLOR ATTRIBUTION:**
 \`\`\`json
 {
   "ruleId": "A1",
@@ -336,7 +332,7 @@ For EACH visible text element:
   "thresholdUsed": 4.5,
   "colorApproximate": true,
   "colorAttributionUnreliable": true,
-  "diagnosis": "Date text has measured 2.5:1 contrast, failing WCAG AA 4.5:1. Sampling mismatch / anti-aliasing contamination detected; contrast measured from pixel samples.",
+  "diagnosis": "Date text has measured 2.5:1 contrast, failing WCAG AA 4.5:1. Color estimate unreliable due to anti-aliasing/blending; contrast computed from pixel samples.",
   "contextualHint": "Increase text contrast. Verify colors in source code.",
   "confidence": 0.78
 }
@@ -344,7 +340,7 @@ For EACH visible text element:
 
 **CONFIDENCE LEVELS:**
 - **Confirmed, reliable attribution**: 0.88–0.95
-- **Confirmed, unreliable attribution (sampling mismatch)**: 0.75–0.85 (reduced 10-15%)
+- **Confirmed, unreliable attribution**: 0.75–0.85 (reduced 10-15%)
 - **Borderline contrast**: 0.65–0.75
 - **Potential risk**: 0.50–0.70
 
@@ -353,13 +349,13 @@ For EACH visible text element:
 - Always include \`foregroundRgb\` and \`backgroundRgb\` with the sampled median values
 - Always include \`foregroundHex\` and \`backgroundHex\` derived from the median RGB
 - Base pass/fail ONLY on measured ratio (not recalculated from hex)
-- If colorAttributionUnreliable, include exact phrase: "Sampling mismatch / anti-aliasing contamination detected; contrast measured from pixel samples."
+- If colorAttributionUnreliable, include exact phrase: "Color estimate unreliable due to anti-aliasing/blending; contrast computed from pixel samples."
 
 **DO NOT:**
 - Group multiple elements under one finding—each element is separate
 - Include PASS results in violations array
 - Snap colors to design tokens—use actual sampled values
-- Sample anti-aliased edge pixels—always use glyph interior (1-2px inward erosion)
+- Sample anti-aliased edge pixels—always use glyph interior
 - Report colors as "verified"—they are estimates from pixels
 - Assume access to DOM or source code
 ` : ''}
