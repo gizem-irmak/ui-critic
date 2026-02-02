@@ -234,152 +234,119 @@ An element is ONLY considered focusable if:
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
-### SPECIAL HANDLING FOR A1 (Text Contrast) — PIXEL SAMPLING FIRST (MANDATORY)
+### SPECIAL HANDLING FOR A1 (Text Contrast) — ROBUST PIXEL CLUSTERING (MANDATORY)
 
-**DESIGN PRINCIPLE: Screenshots are a source of truth for visual properties.**
+**DESIGN PRINCIPLE: Screenshots are the source of truth for visual properties.**
 Pixel-based contrast calculation is the DEFAULT for screenshot inputs.
+Use clustering to avoid false positives from anti-aliasing and palette quantization.
 
 ---
 
-## 1️⃣ PIXEL SAMPLING FIRST (MANDATORY FOR SCREENSHOTS)
+## 1️⃣ ROBUST PIXEL SAMPLING WITH CLUSTERING (MANDATORY FOR SCREENSHOTS)
 
-For screenshot inputs, you MUST ALWAYS ATTEMPT pixel-level sampling FIRST:
+For screenshot inputs, you MUST use this clustering-based methodology:
 
-**STEP 1 — Sample foreground (text) color:**
+**STEP 1 — Detect text region:**
 - Identify text region visually or via OCR
-- Sample multiple pixels from the INTERIOR of glyph strokes
-- Use averaged RGB from representative pixels (exclude anti-aliased edges)
-- Compute median RGB as foreground color
+- Define a bounding box around the text element
 
-**STEP 2 — Sample background color:**
-- Sample pixels from the immediate area behind the text
-- Use uniform adjacent region (avoid borders, shadows)
-- Compute median RGB as background color
+**STEP 2 — Sample many pixels and cluster (k=2):**
+- Sample a large number of pixels from the text region (e.g., 50-200 pixels)
+- Cluster pixels into TWO groups using luminance thresholding or k-means (k=2)
+- The two clusters represent foreground (text) and background
 
-**STEP 3 — Compute contrast ratio:**
-- Apply WCAG 2.1 relative luminance formula to compute contrast ratio
-- Compare against threshold: 4.5:1 for normal text, 3.0:1 for large text
+**STEP 3 — Identify foreground using DARKEST STABLE CLUSTER:**
+- Foreground = the cluster with LOWER median luminance (darker pixels = core glyph strokes)
+- EXCLUDE edge/anti-aliased pixels: ignore pixels with intermediate luminance between the two clusters
+- Anti-aliased edges typically have blended colors — they belong to NEITHER cluster cleanly
+
+**STEP 4 — Compute foreground color:**
+- Use the MEDIAN RGB of the darkest cluster (core glyph interior pixels only)
+- Report the RAW sampled hex — do NOT map to Tailwind tokens or nearest palette color
+
+**STEP 5 — Compute background color:**
+- Use the MEDIAN RGB of the lighter cluster (adjacent uniform region)
+- Verify low variance in background cluster
+- Report the RAW sampled hex — do NOT map to palette
+
+**STEP 6 — Sampling Reliability Check (MANDATORY):**
+Before outputting Confirmed status, verify sampling reliability:
+
+| Check | Threshold | Action if Failed |
+|-------|-----------|------------------|
+| Foreground variance | stddev(luminance) > 15 | Demote to Potential Risk |
+| Background variance | stddev(luminance) > 20 | Demote to Potential Risk |
+| Cluster separation | gap < 20 luminance units | Demote to Potential Risk |
+| Cluster overlap | pixels fall between clusters | Demote to Potential Risk |
+
+**IF reliability check FAILS:**
+- Set \`samplingMethod: "inferred"\`
+- Set \`status: "potential"\`
+- Set \`potentialRiskReason: "Foreground/background separation unstable due to font rendering or anti-aliasing"\`
+- Do NOT report exact \`contrastRatio\`
+- Confidence: 50–70%
+
+**IF reliability check PASSES:**
+- Compute WCAG 2.1 contrast ratio using relative luminance formula
+- Set \`samplingMethod: "pixel"\`
+- Report raw sampled \`foregroundHex\`, \`backgroundHex\` (NOT mapped to tokens)
 
 ---
 
-## 2️⃣ CLASSIFICATION BASED ON SAMPLING SUCCESS
+## 2️⃣ CLASSIFICATION BASED ON SAMPLING RELIABILITY
 
-**IF pixel sampling succeeds (solid/uniform backgrounds):**
+**IF sampling reliability passes (clusters separate cleanly):**
 - Set \`samplingMethod: "pixel"\`
-- Set \`status: "confirmed"\` 
+- Set \`status: "confirmed"\` if ratio < 4.5:1 (violation) or \`status: "borderline"\` if 4.3–4.5:1
 - Report measured \`contrastRatio\` (e.g., 2.8)
-- Report \`foregroundHex\`, \`backgroundHex\`, \`foregroundRgb\`, \`backgroundRgb\`
-- Set high confidence: **85–95%**
-- Add verification: "Pixel-based screenshot analysis."
+- Report \`foregroundHex\`, \`backgroundHex\` — RAW sampled values, NOT nearest palette
+- Set confidence: **85–95%**
+- Add verification: "Contrast ratio computed from sampled screenshot pixels."
 - **Do NOT label as heuristic or potential risk**
 
-**IF contrast ratio < threshold:**
-→ \`status: "confirmed"\` — Confirmed Violation
-
-**IF contrast ratio ≥ threshold:**
+**IF contrast ratio ≥ 4.5:1:**
 → PASS — Do NOT include in violations array
 
 ---
 
-## 3️⃣ FALLBACK TO POTENTIAL RISK (ONLY WHEN SAMPLING TRULY FAILS)
+## 3️⃣ FALLBACK TO POTENTIAL RISK (ONLY WHEN SAMPLING RELIABILITY FAILS)
 
-Report A1 as Potential Risk ONLY if pixel sampling is genuinely impossible:
+Report A1 as Potential Risk ONLY if:
 
-**Conditions that prevent reliable sampling:**
+**Cluster-based reliability failures:**
+- Foreground variance is high (stddev > 15 luminance)
+- Background variance is high (stddev > 20 luminance)
+- Clusters overlap or separation < 20 luminance units
+- Anti-aliased pixels dominate the sample
+
+**Visual complexity failures:**
 - Background is a gradient, image, or complex pattern
 - Text overlays transparent or semi-transparent areas
-- Foreground and background cannot be reliably isolated
 - Text bounding box cannot be detected
 
-**IF sampling fails:**
+**IF sampling reliability fails:**
 - Set \`samplingMethod: "inferred"\`
 - Set \`status: "potential"\`
 - Do NOT report exact \`contrastRatio\`
-- Set \`potentialRiskReason\`: explain why sampling failed
-- Set reduced confidence: **50–70%**
-- Suggest re-upload only if resolution/clarity is insufficient
+- Set \`potentialRiskReason\`: "Foreground/background separation unstable due to font rendering or anti-aliasing"
+- Confidence: **50–70%**
 
 ---
 
-## 4️⃣ FORBIDDEN MESSAGING FOR SCREENSHOT INPUTS
+## 4️⃣ FORBIDDEN BEHAVIORS
 
-**DO NOT SAY:**
-- "Exact color values cannot be determined from a screenshot"
-- "Contrast is ambiguous based on visual inspection"
-- "Cannot measure contrast from visual inspection alone"
-
-These statements are INVALID when pixel data is available.
-Screenshots provide pixel data — use it to compute contrast.
-
----
-
-## 5️⃣ CLASSIFICATION RULES SUMMARY
-
-| Background Type       | Sampling Method | Status    | Confidence |
-|-----------------------|-----------------|-----------|------------|
-| Solid/uniform color   | pixel           | confirmed | 85–95%     |
+**DO NOT:**
+- Map sampled colors to Tailwind tokens or "nearest palette color" in Confirmed mode
+- Report palette-mapped hex values — only RAW sampled hex from pixels
+- Say "Exact color values cannot be determined from a screenshot"
+- Say "Contrast is ambiguous based on visual inspection"
+- Output Confirmed ratio when cluster separation is unstable
+- Assign high confidence (>70%) to findings with high sampling variance
+- Report exact contrast ratios when \`samplingMethod: "inferred"\`
 
 ---
 
-## 6️⃣ CLASSIFICATION THRESHOLDS (Pixel-Sampled Only)
-
-When \`samplingMethod: "pixel"\`:
-- **Confirmed Violation**: measured ratio < 4.5:1 for normal text (or < 3.0:1 for large text)
-- **Borderline (Advisory)**: measured ratio 4.3:1–4.5:1 for normal text — status: "borderline", advisory
-- **Confirmed Pass**: measured ratio ≥ 4.5:1 → DO NOT INCLUDE IN VIOLATIONS
-
----
-
-## 7️⃣ CONSISTENCY VALIDATION (For Pixel-Sampled Only)
-
-After computing contrast from sampled pixels:
-1. RECALCULATE contrast from reported hex values
-2. Compare recalculated ratio to measured ratio
-3. **If difference > 0.2:**
-   - Set \`colorAttributionUnreliable: true\`
-   - Demote to \`samplingMethod: "inferred"\`
-   - Classify as **Potential Risk** (status: "potential")
-   - Confidence: 50–70%
-4. **If difference ≤ 0.2:**
-   - Set \`colorAttributionUnreliable: false\`
-   - Keep \`samplingMethod: "pixel"\`
-   - Classify based on measured ratio
-
----
-
-## 8️⃣ REPORTING REQUIREMENTS (Mandatory for ALL A1 Findings)
-
-Every A1 report MUST include:
-
-1. **Location** — Page and component name (e.g., "CourseCard → Credits badge")
-2. **Issue Description** — Clear statement of what was detected
-3. **Explanation** — Why it passes/fails OR why certainty is reduced
-4. **Sampling Method** — \`samplingMethod: "pixel"\` or \`samplingMethod: "inferred"\`
-5. **Verification Method** — "Pixel-based screenshot analysis" (for confirmed)
-
-**For Confirmed (pixel-sampled):**
-- Include verification line: "Pixel-based screenshot analysis."
-- Include \`contrastRatio\`, \`foregroundRgb\`, \`backgroundRgb\`, \`foregroundHex\`, \`backgroundHex\`
-- Use high confidence: **85–95%**
-
-**For Potential Risk (inferred):**
-- Include \`potentialRiskReason\` explaining why pixel sampling was not possible
-- Do NOT include \`contrastRatio\` or RGB/hex values
-
----
-
-## 9️⃣ FORBIDDEN BEHAVIORS
-
-- Do NOT say "cannot be determined from a screenshot" when pixel data is available
-- Do NOT say "contrast is ambiguous based on visual inspection"
-- Do NOT infer colors from design tokens and present them as measured
-- Do NOT assign high confidence (>70%) to inferred results
-- Do NOT report exact contrast ratios when \`samplingMethod: "inferred"\`
-- Do NOT omit \`samplingMethod\` field — it is MANDATORY for all A1 findings
-
----
-
-## 🔟 OUTPUT FORMAT FOR CONFIRMED VIOLATION (Pixel-Sampled)
+## 5️⃣ OUTPUT FORMAT FOR CONFIRMED VIOLATION (Reliable Pixel Clustering)
 
 \`\`\`json
 {
@@ -392,23 +359,27 @@ Every A1 report MUST include:
   "elementRole": "badge",
   "evidence": "CourseCard → Credits badge",
   "elementDescription": "Credits badge label text",
-  "foregroundRgb": "rgb(156, 163, 175)",
-  "foregroundHex": "#9CA3AF",
+  "foregroundRgb": "rgb(142, 142, 147)",
+  "foregroundHex": "#8E8E93",
   "backgroundRgb": "rgb(255, 255, 255)",
   "backgroundHex": "#FFFFFF",
-  "contrastRatio": 2.8,
+  "contrastRatio": 2.94,
   "thresholdUsed": 4.5,
+  "samplingReliability": {
+    "foregroundVariance": "low",
+    "backgroundVariance": "low",
+    "clusterSeparation": "adequate"
+  },
   "colorApproximate": true,
-  "colorAttributionUnreliable": false,
-  "diagnosis": "Credits badge text has 2.8:1 contrast, failing WCAG AA 4.5:1 threshold. Pixel-based screenshot analysis.",
-  "contextualHint": "Increase badge text contrast to at least 4.5:1.",
+  "diagnosis": "Credits badge text has 2.94:1 contrast, failing WCAG AA 4.5:1 threshold. Contrast ratio computed from sampled screenshot pixels.",
+  "contextualHint": "Increase badge text contrast to at least 4.5:1 by using darker text or lighter background.",
   "confidence": 0.90
 }
 \`\`\`
 
 ---
 
-## 🔟 OUTPUT FORMAT FOR POTENTIAL RISK (Inferred)
+## 6️⃣ OUTPUT FORMAT FOR POTENTIAL RISK (Sampling Unreliable)
 
 \`\`\`json
 {
@@ -418,35 +389,59 @@ Every A1 report MUST include:
   "status": "potential",
   "samplingMethod": "inferred",
   "inputType": "screenshots",
-  "elementRole": "metadata",
-  "evidence": "HeroSection → Overlay text",
-  "elementDescription": "Hero overlay description text",
+  "elementRole": "label",
+  "evidence": "FormField → Helper text",
+  "elementDescription": "Helper text appears low contrast",
+  "potentialRiskReason": "Foreground/background separation unstable due to font rendering or anti-aliasing",
   "colorApproximate": true,
-  "potentialRiskReason": "Gradient background prevents reliable pixel sampling",
-  "diagnosis": "Text appears over gradient background. Reliable contrast measurement not possible.",
-  "advisoryGuidance": "Verify text contrast meets 4.5:1 in source code or use solid background.",
+  "diagnosis": "Helper text may have insufficient contrast. Sampling variance too high for reliable measurement.",
+  "advisoryGuidance": "Manually verify text contrast meets 4.5:1 using a color picker on the text stroke interior.",
   "confidence": 0.58
 }
 \`\`\`
 
 ---
 
-## PER-ELEMENT ANALYSIS WORKFLOW
+## 7️⃣ PER-ELEMENT ANALYSIS WORKFLOW
 
 For EACH visible text element:
 1. **Identify location** — Component and element role
-2. **Attempt pixel sampling** — Interior glyph pixels (darkest 30-40%)
-3. **Attempt background sampling** — Adjacent uniform region
-4. **Determine sampling method:**
-   - All criteria met → \`samplingMethod: "pixel"\`
-   - Any criterion failed → \`samplingMethod: "inferred"\`
-5. **Compute or skip ratio** — Only compute if pixel-sampled
-6. **Validate consistency** — If pixel-sampled, check ±0.2 tolerance
-7. **Classify and report**
+2. **Sample pixels from text region** — Collect 50-200 pixels
+3. **Cluster into fg/bg (k=2)** — Using luminance thresholding
+4. **Select foreground** — Darkest stable cluster (interior glyph pixels)
+5. **Exclude anti-aliased edges** — Pixels with intermediate luminance
+6. **Compute cluster variance** — Check foreground and background stability
+7. **Reliability check:**
+   - If clusters separate cleanly → \`samplingMethod: "pixel"\`
+   - If variance high or overlap → \`samplingMethod: "inferred"\`
+8. **Compute ratio only if reliable** — WCAG 2.1 relative luminance formula
+9. **Report RAW sampled hex** — Never map to Tailwind/palette tokens
+10. **Classify and report**
 
 ---
 
-**MANDATORY FIELDS FOR ALL A1 FINDINGS:**
+## 8️⃣ REPORTING REQUIREMENTS (Mandatory for ALL A1 Findings)
+
+Every A1 report MUST include:
+
+1. **Location** — Page and component name (e.g., "CourseCard → Credits badge")
+2. **Issue Description** — Clear statement of what was detected
+3. **Sampling Method** — \`samplingMethod: "pixel"\` or \`samplingMethod: "inferred"\`
+
+**For Confirmed (pixel-sampled, reliable):**
+- Include verification: "Contrast ratio computed from sampled screenshot pixels."
+- Include \`contrastRatio\`, \`foregroundHex\`, \`backgroundHex\` (RAW sampled, not palette-mapped)
+- Confidence: **85–95%**
+
+**For Potential Risk (inferred, unreliable):**
+- Include \`potentialRiskReason\`: "Foreground/background separation unstable due to font rendering or anti-aliasing"
+- Do NOT include \`contrastRatio\` or exact hex values
+- Confidence: **50–70%**
+
+---
+
+## 9️⃣ MANDATORY FIELDS FOR ALL A1 FINDINGS
+
 - \`samplingMethod\`: "pixel" or "inferred"
 - \`inputType\`: "screenshots"
 - \`colorApproximate: true\` (always for screenshots)
@@ -455,7 +450,7 @@ For EACH visible text element:
 **DO NOT:**
 - Group multiple elements under one finding — each element is separate
 - Include PASS results in violations array
-- Report colors as "verified" — they are pixel-based estimates
+- Map colors to Tailwind tokens in Confirmed mode — report RAW sampled hex only
 - Include "heuristic" or "non-blocking" labels in diagnosis text
 ` : ''}
 
