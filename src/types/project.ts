@@ -82,7 +82,6 @@ export interface Violation {
   riskLevel?: 'high' | 'medium' | 'low';
   potentialRiskReason?: string; // Why contrast couldn't be measured (for potential only)
   colorApproximate?: boolean; // True when colors are derived from screenshot pixel sampling
-  colorAttributionUnreliable?: boolean; // True when measured ratio differs from recalculated ratio by > 0.3
   // Location tracking for A1 findings
   inputLimitation?: string; // Explanation of why this is heuristic
   advisoryGuidance?: string; // Non-mandatory guidance for potential risks

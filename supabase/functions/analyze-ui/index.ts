@@ -260,37 +260,11 @@ ${includesA1 ? `
 - Do NOT assume colors match known gray-scale values (e.g., "gray-400")
 - Report actual measured hex values (e.g., "#6B7280") not token names
 
-**COLOR ESTIMATE VALIDATION & CONSISTENCY CHECK (MANDATORY):**
-After sampling foreground and background colors, you MUST verify consistency:
-
-1. **Compute contrast ratio from sampled RGB values** — Use the WCAG relative luminance formula
-2. **Report the sampled hex values** — e.g., foregroundHex: "#9CA3AF", backgroundHex: "#FFFFFF"
-3. **Recalculate contrast from reported hex** — Verify the reported hex values produce the same ratio
-4. **Flag inconsistency if difference > 0.3:**
-   - If |measured_ratio - recalculated_ratio| > 0.3, set \`colorAttributionUnreliable: true\`
-   - Add to diagnosis: "Color estimate may be affected by anti-aliasing or sampling variance"
-5. **Always set \`colorApproximate: true\`** for all screenshot-derived color values
-
-**CONSISTENCY VALIDATION LOGIC:**
-- measured_ratio: The contrast ratio computed during pixel sampling
-- recalculated_ratio: The contrast ratio derived from the final reported hex values
-- If these differ by more than 0.3, the color attribution is flagged as unreliable
-- The WCAG pass/fail decision is ALWAYS based on the measured_ratio, NOT the recalculated_ratio
-
-**EXAMPLE — Consistent Attribution:**
-Sampled foreground RGB: (156, 163, 175) → Hex: #9CA3AF
-Sampled background RGB: (255, 255, 255) → Hex: #FFFFFF
-Measured contrast: 2.81:1 | Recalculated from hex: 2.81:1 | Difference: 0.0 ✓
-→ colorAttributionUnreliable: false
-
-**EXAMPLE — Unreliable Attribution (flag):**
-Sampled foreground RGB: (148, 155, 168) → Hex: #949BA8 (approximated due to anti-aliasing)
-Sampled background RGB: (252, 253, 254) → Hex: #FCFDFE (near-white sampling)
-Measured contrast: 2.65:1 | Recalculated from reported hex: 3.02:1 | Difference: 0.37 ✗
-→ colorAttributionUnreliable: true
-→ diagnosis includes: "Color estimate may be affected by anti-aliasing or sampling variance"
-
-**PRIORITY RULE:** Base WCAG AA pass/fail on measured_ratio, not inferred or snapped design tokens
+**COLOR ESTIMATE VALIDATION:**
+If the reported hex value would imply WCAG compliance but the computed contrast ratio indicates failure (or vice versa):
+- Flag the color estimate as "approximate"
+- Prioritize the measured contrast ratio over the hex implication
+- Include note: "Color values derived from screenshot pixels are approximations"
 
 **CLASSIFICATION THRESHOLDS:**
 - **WCAG AA Failure**: ratio < 4.5:1 for normal text (< 18px or < 14px bold)
@@ -339,7 +313,6 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
   "contrastRatio": 2.8,
   "thresholdUsed": 4.5,
   "colorApproximate": true,
-  "colorAttributionUnreliable": false,
   "diagnosis": "Credits badge text (#9CA3AF on #FFFFFF) has 2.8:1 contrast, failing WCAG AA 4.5:1 minimum. Color values derived from screenshot pixels are approximations.",
   "contextualHint": "Increase badge text contrast to meet 4.5:1.",
   "confidence": 0.92
@@ -359,30 +332,9 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
   "contrastRatio": 4.4,
   "thresholdUsed": 4.5,
   "colorApproximate": true,
-  "colorAttributionUnreliable": false,
   "diagnosis": "Date text (#6B7280 on #FFFFFF) has 4.4:1 contrast—borderline near WCAG AA 4.5:1 threshold. Color values are approximations.",
   "contextualHint": "Consider increasing contrast slightly for safety margin.",
   "confidence": 0.70
-}
-\`\`\`
-
-**OUTPUT FORMAT FOR UNRELIABLE COLOR ATTRIBUTION:**
-\`\`\`json
-{
-  "ruleId": "A1",
-  "status": "confirmed",
-  "elementRole": "caption",
-  "evidence": "Image caption text",
-  "elementDescription": "Photo caption below image",
-  "foregroundHex": "#949BA8",
-  "backgroundHex": "#FCFDFE",
-  "contrastRatio": 2.65,
-  "thresholdUsed": 4.5,
-  "colorApproximate": true,
-  "colorAttributionUnreliable": true,
-  "diagnosis": "Caption text has 2.65:1 contrast, failing WCAG AA 4.5:1 minimum. Color estimate may be affected by anti-aliasing or sampling variance.",
-  "contextualHint": "Increase caption text contrast to meet 4.5:1.",
-  "confidence": 0.85
 }
 \`\`\`
 
@@ -396,12 +348,11 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
 - \`elementRole\`: Semantic role of the text element
 - \`foregroundHex\`: Sampled text color as hex (from glyph interior pixels)
 - \`backgroundHex\`: Sampled background color as hex (from adjacent uniform region)
-- \`contrastRatio\`: Computed ratio as number (measured from pixel sampling)
+- \`contrastRatio\`: Computed ratio as number
 - \`thresholdUsed\`: Which WCAG threshold applies (4.5 or 3.0)
 - \`elementDescription\`: What element is affected
 - \`evidence\`: Location in UI
 - \`colorApproximate\`: true (always for screenshot-derived values)
-- \`colorAttributionUnreliable\`: true if measured vs recalculated ratio differs by > 0.3
 
 **ABSOLUTELY DO NOT:**
 - Group multiple elements under one color/finding—each element is separate
@@ -411,7 +362,6 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
 - Report A1 without foregroundHex + backgroundHex + contrastRatio (unless truly potential)
 - Snap sampled colors to design tokens—use actual measured hex values
 - Sample anti-aliased edge pixels—always use glyph interior with erosion
-- Report inconsistent color/ratio pairs without flagging colorAttributionUnreliable
 ` : ''}
 
 Report violations ONLY if there is strong visual evidence.
