@@ -1,67 +1,57 @@
-# Memory: features/analysis-rules/a1-contrast-v8-sampling-method-enforcement
+# Memory: features/analysis-rules/a1-contrast-v10-pixel-sampling-first
 Updated: just now
 
-Rule A1 (Contrast) explicitly tracks `samplingMethod` to distinguish pixel-sampled vs inferred color evaluations.
+Rule A1 (Insufficient Text Contrast) prioritizes **pixel-based sampling** for screenshot inputs.
 
-## Sampling Method Field (Mandatory)
+## Design Principle
 
-Every A1 finding MUST include `samplingMethod`:
-- **"pixel"** — Colors sampled directly from screenshot pixels (interior glyph strokes + adjacent background)
-- **"inferred"** — Colors derived from tokens, palette values, class names, or approximations
+**Screenshots are a source of truth for visual properties.**
+Pixel-based contrast calculation is the DEFAULT for screenshot inputs.
 
-## Pixel-Sampled (Can Confirm)
+## Pixel Sampling First (Mandatory for Screenshots)
 
-ONLY `samplingMethod: "pixel"` can produce Confirmed Pass/Violation status.
+For screenshot inputs, ALWAYS attempt pixel-level sampling FIRST:
 
-**Criteria for pixel-sampled:**
-1. Text region detected (OCR/visual)
-2. Multiple interior glyph pixels sampled (darkest 30-40% by luminance)
-3. Anti-aliased edge pixels excluded
-4. Background sampled from uniform adjacent region (5-10+ pixels)
-5. Low color variance in background region
-6. Median RGB computed for both foreground and background
-7. Recalculated contrast from hex differs from measured by ≤0.2
+1. **Sample foreground (text) color**: Interior glyph pixels, averaged RGB (exclude anti-aliased edges)
+2. **Sample background color**: Immediate area behind text, uniform adjacent region
+3. **Compute contrast ratio**: WCAG 2.1 relative luminance formula
 
-**Output fields for pixel-sampled:**
+## Classification Based on Sampling Success
+
+| Background Type        | Sampling Method | Status    | Confidence |
+|------------------------|-----------------|-----------|------------|
+| Solid/uniform color    | pixel           | confirmed | 85–95%     |
+| Gradient/image/overlay | inferred        | potential | 50–70%     |
+
+## Confirmed Violation (Pixel-Sampled)
+
+When pixel sampling succeeds:
 - `samplingMethod: "pixel"`
-- `status: "confirmed"` or `"borderline"`
-- `contrastRatio` (measured value)
-- `foregroundRgb`, `backgroundRgb`, `foregroundHex`, `backgroundHex`
-- Confidence: 80–95%
-- Verification line: "Contrast ratio computed from sampled screenshot pixels."
+- `status: "confirmed"` (if ratio < 4.5:1) or `"borderline"` (if 4.3–4.5:1)
+- Report `contrastRatio`, `foregroundHex`, `backgroundHex`, RGB values
+- Verification: "Pixel-based screenshot analysis."
+- **Do NOT label as heuristic or potential risk**
 
-## Inferred (Cannot Confirm)
+## Potential Risk (Only When Sampling Truly Fails)
 
-`samplingMethod: "inferred"` when ANY of:
-- Colors mapped from CSS classes/tokens
-- Colors snapped to nearest palette value
-- Single pixel sampled (insufficient)
-- Edge/blended pixels used
-- Background assumed without verification
-- High variance (gradients, overlays, images)
-- `colorAttributionUnreliable: true`
+Report as Potential Risk ONLY if:
+- Background is gradient, image, or complex pattern
+- Text overlays transparent/semi-transparent areas
+- Foreground/background cannot be isolated
 
-**Output for inferred:**
+Output:
 - `samplingMethod: "inferred"`
-- `status: "potential"` (always)
-- NO `contrastRatio` (not reliably computable)
-- NO `foregroundRgb`/`backgroundRgb` (not reliably sampled)
-- `potentialRiskReason`: explains why pixel sampling failed
-- Confidence: 50–70%
+- `status: "potential"`
+- `potentialRiskReason`: explain why sampling failed
+- NO exact `contrastRatio`
 
-## Input Type Rules
+## Forbidden Messaging
 
-| Input      | samplingMethod      | Status                | Confidence |
-|------------|---------------------|-----------------------|-----------:|
-| Screenshot | pixel (if criteria met) | Confirmed/Borderline | 80–95%    |
-| Screenshot | inferred            | Potential Risk        | 50–70%    |
-| ZIP        | inferred (always)   | Potential Risk        | 50–70%    |
-| GitHub     | inferred (always)   | Potential Risk        | 50–70%    |
+DO NOT SAY for screenshot inputs:
+- "Exact color values cannot be determined from a screenshot"
+- "Contrast is ambiguous based on visual inspection"
+- "Cannot measure contrast from visual inspection alone"
 
-## Forbidden Behaviors
+## ZIP / GitHub Inputs
 
-- Never claim confirmed WCAG failure unless `samplingMethod: "pixel"`
-- Never assign confidence >70% to inferred results
-- Never report exact contrast ratios when inferred
-- Never omit `samplingMethod` field
-- Never snap colors to design tokens and present as measured
+Always `samplingMethod: "inferred"`, `status: "potential"`, 50–70% confidence.
