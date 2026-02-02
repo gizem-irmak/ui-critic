@@ -72,13 +72,14 @@ export interface Violation {
   // A1 contrast-specific fields
   status?: 'confirmed' | 'potential';
   inputType?: 'screenshots' | 'zip' | 'github'; // Which input type was used for this finding
-  contrastRatio?: number;
-  thresholdUsed?: 4.5 | 3.0;
+  contrastRatio?: number; // Computed contrast ratio (e.g., 2.8)
+  thresholdUsed?: 4.5 | 3.0; // WCAG threshold applied
   foregroundHex?: string;
   backgroundHex?: string;
   elementDescription?: string;
   evidence?: string;
   riskLevel?: 'high' | 'medium' | 'low';
+  potentialRiskReason?: string; // Why contrast couldn't be measured (for potential only)
   // Location tracking for A1 findings
   inputLimitation?: string; // Explanation of why this is heuristic
   advisoryGuidance?: string; // Non-mandatory guidance for potential risks
@@ -96,5 +97,11 @@ export interface Violation {
     rationale?: string;
     occurrence_count?: number;
     elementContext?: string;
+    contrastRatio?: number;
+    thresholdUsed?: number;
+    foregroundHex?: string;
+    backgroundHex?: string;
+    elementDescription?: string;
+    potentialRiskReason?: string;
   }>;
 }
