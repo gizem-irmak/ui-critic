@@ -234,60 +234,76 @@ An element is ONLY considered focusable if:
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
-### SPECIAL HANDLING FOR A1 (Text Contrast) — SCREENSHOT-ONLY PIXEL SAMPLING
+### SPECIAL HANDLING FOR A1 (Text Contrast) — SCREENSHOT-ONLY ROBUST PIXEL SAMPLING
 
-**CRITICAL: Compute contrast using PIXEL-SAMPLED COLORS ONLY. Do NOT assume DOM or source code access. Do NOT report palette/token hex values unless derived directly from sampled pixels.**
+**CRITICAL: Compute contrast using PIXEL-SAMPLED COLORS ONLY. No DOM or source code access. All reported colors are ESTIMATES derived from rendered pixels, NOT verified design tokens.**
+
+**INTERIOR STROKE SAMPLING METHOD (Avoids Anti-Aliasing Artifacts):**
 
 **FOREGROUND COLOR SAMPLING (Text Color):**
-1. Detect text glyph regions by identifying high-contrast pixel clusters
-2. SHRINK the text mask INWARD by 1-2 pixels to exclude anti-aliased edges
-3. Sample 5-10 pixels from the INTERIOR of glyph strokes ONLY (exclude edge/blended pixels)
-4. Compute the MEDIAN RGB from sampled interior pixels
-5. Report as: \`foregroundRgb: "rgb(R, G, B)"\` and \`foregroundHex: "#XXXXXX"\` (hex derived from median RGB)
+1. Identify the text region bounding box
+2. Within the text region, collect ALL pixel luminance values
+3. SELECT THE DARKEST 30-40% OF PIXELS BY LUMINANCE — these represent interior glyph stroke pixels
+4. EXCLUDE anti-aliased edge pixels (the lighter 60-70% that blend with background)
+5. Compute the MEDIAN RGB from the darkest pixel subset
+6. Report as: \`foregroundRgb: "rgb(R, G, B)"\` and \`foregroundHex: "#XXXXXX"\` (hex derived from median RGB)
+7. Mark \`colorApproximate: true\` — these are estimated values from rendered pixels
 
 **BACKGROUND COLOR SAMPLING:**
-1. Sample pixels from areas IMMEDIATELY ADJACENT to text but OUTSIDE the glyph mask
-2. Stay within the same visual container (avoid sampling adjacent components)
+1. Sample pixels from areas IMMEDIATELY OUTSIDE the text region boundary
+2. Stay within the same visual container (avoid sampling adjacent UI components)
 3. Sample 5-10 pixels from uniform background regions
 4. Compute the MEDIAN RGB from sampled background pixels
 5. Report as: \`backgroundRgb: "rgb(R, G, B)"\` and \`backgroundHex: "#XXXXXX"\` (hex derived from median RGB)
 
 **CONTRAST COMPUTATION (AUTHORITATIVE):**
-1. Convert sampled foreground median RGB to relative luminance (L1)
-2. Convert sampled background median RGB to relative luminance (L2)
+1. Convert the INTERIOR STROKE median RGB (darkest 30-40%) to relative luminance (L1)
+2. Convert the background median RGB to relative luminance (L2)
 3. Compute MEASURED ratio = (max(L1, L2) + 0.05) / (min(L1, L2) + 0.05)
-4. This MEASURED RATIO is the AUTHORITATIVE value for WCAG pass/fail
+4. This INTERIOR-STROKE MEASURED RATIO is the AUTHORITATIVE value for WCAG pass/fail
+
+**ANTI-ALIASING ARTIFACT DETECTION & SUPPRESSION:**
+If you detect that contrast computed from edge/blended pixels differs significantly from contrast computed from interior stroke pixels:
+1. PRIORITIZE the interior stroke measurement (darkest 30-40%)
+2. SUPPRESS the edge-based measurement as a sampling artifact
+3. Set \`colorAttributionUnreliable: true\` if sampling uncertainty is detected
+4. Reduce confidence by 10-15%
 
 **CONSISTENCY VALIDATION (MANDATORY):**
-After computing the measured contrast:
+After computing the measured contrast from interior strokes:
 1. RECALCULATE contrast from the REPORTED hex values (foregroundHex, backgroundHex)
-2. Compare recalculated ratio to measured ratio
+2. Compare recalculated ratio to interior-stroke measured ratio
 3. If difference > 0.2:
    - Set \`colorAttributionUnreliable: true\`
-   - Include in diagnosis: "Color estimate unreliable due to anti-aliasing/blending; contrast computed from pixel samples."
+   - Include in diagnosis: "Color estimate unreliable due to anti-aliasing/blending; contrast computed from interior stroke pixels."
    - REDUCE confidence by 10-15%
 4. If difference ≤ 0.2:
    - Set \`colorAttributionUnreliable: false\`
    - Color attribution is consistent
 
-**CLASSIFICATION THRESHOLDS:**
-- **WCAG AA Failure**: measured ratio < 4.5:1 for normal text (< 18px or < 14px bold)
-- **WCAG AA Failure**: measured ratio < 3:1 for large text (≥ 18px or ≥ 14px bold)
-- **Borderline Contrast**: measured ratio 4.3:1 to 4.5:1 for normal text — advisory, not failure
-- **PASS**: measured ratio ≥ 4.5:1 for normal text — DO NOT INCLUDE IN VIOLATIONS
+**CLASSIFICATION THRESHOLDS (Based on Interior Stroke Measurement):**
+- **WCAG AA Failure**: interior-stroke measured ratio < 4.5:1 for normal text (< 18px or < 14px bold)
+- **WCAG AA Failure**: interior-stroke measured ratio < 3.0:1 for large text (≥ 18px or ≥ 14px bold)
+- **Borderline Contrast**: interior-stroke measured ratio 4.3:1 to 4.5:1 for normal text — advisory, non-blocking
+- **PASS**: interior-stroke measured ratio ≥ 4.5:1 for normal text — DO NOT INCLUDE IN VIOLATIONS
 
-**PER-ELEMENT ANALYSIS:**
+**PER-ELEMENT ANALYSIS WORKFLOW:**
 For EACH visible text element:
 1. **Identify element role** — button label, heading, body text, caption, badge, metadata
-2. **Sample foreground** — Glyph interior pixels with 1-2px inward erosion, compute median RGB
-3. **Sample background** — Adjacent non-text pixels, compute median RGB  
-4. **Compute MEASURED contrast ratio** — From sampled RGB values (authoritative)
+2. **Sample foreground** — Darkest 30-40% of pixels within text region (interior stroke pixels)
+3. **Sample background** — Adjacent non-text pixels outside text boundary
+4. **Compute INTERIOR-STROKE MEASURED contrast ratio** — This is the authoritative value
 5. **Report sampled colors** — As rgb() and approximate hex derived from median
 6. **Validate consistency** — Recalculate from hex, check ±0.2 tolerance
 7. **Classify:**
-   - Measured ratio < 4.3:1 → **Confirmed** (status: "confirmed")
-   - Measured ratio 4.3:1–4.5:1 → **Borderline** (status: "borderline", confidence 0.65-0.75)
-   - Measured ratio ≥ 4.5:1 → **PASS** — exclude from violations
+   - Interior-stroke ratio < 4.3:1 → **Confirmed** (status: "confirmed")
+   - Interior-stroke ratio 4.3:1–4.5:1 → **Borderline** (status: "borderline", confidence 0.65-0.75)
+   - Interior-stroke ratio ≥ 4.5:1 → **PASS** — exclude from violations
+
+**FALSE POSITIVE PREVENTION:**
+- If edge-pixel contrast suggests a violation but interior-stroke contrast does NOT → SUPPRESS as sampling artifact
+- Only flag WCAG AA failure when the INTERIOR-STROKE contrast ratio is CLEARLY below threshold
+- Reduce confidence or mark as resolved when anti-aliasing artifacts are detected
 
 **EDGE CASES (Mark as "potential"):**
 - **Non-uniform background (σ > 15)**: potentialRiskReason: "non-uniform background prevents stable sampling"
