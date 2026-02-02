@@ -697,15 +697,14 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     'Foreground colors are detected from Tailwind classes, but background context is often inherited, theme-dependent, or dynamic. ' +
     'External stylesheets, CSS variables, or theme providers may not be available in the analyzed code.';
   
-  // Advisory guidance for heuristic findings
-  const advisoryGuidance = 'This issue is reported as a potential risk based on static analysis of GitHub repository code. ' +
-    'To confirm and resolve definitively, consider uploading screenshots of the rendered UI for visual verification.';
+  // Advisory guidance for potential risk findings - AVOID repeating "heuristic" labels
+  const advisoryGuidance = 'To confirm contrast compliance, upload screenshots of the rendered UI for visual verification.';
   
-  const diagnosis = `Potential WCAG AA contrast risk (GitHub static analysis): ${affectedComponents.length} text color occurrence(s) detected ` +
+  // Build diagnosis - AVOID repeating "heuristic", "non-blocking", or policy restatements
+  const diagnosis = `${affectedComponents.length} text color occurrence(s) detected ` +
     `in ${displayedFiles.join(', ')}${fileMoreText} using ${displayedColors.join(', ')}${moreText}. ` +
     `Risk breakdown: ${riskBreakdown || 'low-risk'}. ` +
-    `GitHub analysis cannot determine actual rendered background colors or runtime configurations. ` +
-    `This finding is labeled as "Potential Risk (Heuristic)" and does not block convergence.`;
+    `Background color cannot be determined from repository analysis; contrast ratio cannot be computed.`;
   
   // NO corrective prompt for GitHub heuristic findings
   const correctivePrompt = ''; // Empty - no mandatory corrective prompt for heuristic findings
