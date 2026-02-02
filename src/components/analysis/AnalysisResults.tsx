@@ -25,8 +25,9 @@ export function AnalysisResults({
   const [copied, setCopied] = useState(false);
 
   // Deduplicate prompts: group by prompt text, collect unique hints
-  // ONLY include confirmed violations - potential risks don't get corrective prompts
-  const confirmedViolations = analysis.violations.filter(v => v.status !== 'potential');
+  // ONLY include confirmed violations - potential risks and borderline items don't get corrective prompts
+  const confirmedViolations = analysis.violations.filter(v => v.status === 'confirmed' || (v.status !== 'potential' && v.status !== 'borderline'));
+  const borderlineViolations = analysis.violations.filter(v => v.status === 'borderline');
   
   const deduplicatedPrompts = (() => {
     const promptMap = new Map<string, { 
@@ -243,7 +244,7 @@ export function AnalysisResults({
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {analysis.violations.filter(v => v.status !== 'potential').map((violation, idx) => (
+              {analysis.violations.filter(v => v.status === 'confirmed' || (v.status !== 'potential' && v.status !== 'borderline')).map((violation, idx) => (
                 <div
                   key={idx}
                   className="p-4 rounded-lg bg-destructive/5 border border-destructive/20 space-y-3"
@@ -275,10 +276,11 @@ export function AnalysisResults({
                         </div>
                       )}
                       
-                      {/* Affected Element */}
+                      {/* Affected Element with Role */}
                       <div className="flex items-start gap-2 text-sm">
                         <span className="text-muted-foreground font-medium">Element:</span>
                         <span>
+                          {violation.elementRole && <span className="text-xs bg-muted px-1.5 py-0.5 rounded mr-2">{violation.elementRole}</span>}
                           {violation.elementDescription || 'Text element'}
                           {violation.foregroundHex && violation.backgroundHex && (
                             <span> — foreground <span className="font-mono inline-flex items-center gap-1">
@@ -317,6 +319,76 @@ export function AnalysisResults({
                       )}
                       <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
                     </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Borderline Contrast (Advisory) */}
+      {borderlineViolations.length > 0 && (
+        <Card className="border-warning/30">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-warning" />
+              Borderline Contrast (Advisory) — {borderlineViolations.length}
+            </CardTitle>
+            <p className="text-sm text-muted-foreground mt-1">
+              Contrast near WCAG AA threshold (4.3:1–4.5:1). Consider increasing for safety margin. Does not affect convergence.
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {borderlineViolations.map((violation, idx) => (
+                <div
+                  key={idx}
+                  className="p-4 rounded-lg bg-warning/5 border border-warning/20 space-y-3"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className={cn('category-badge flex-shrink-0', categoryColors[violation.category])}>
+                        {violation.ruleId}
+                      </span>
+                      <span className="font-medium">{violation.ruleName}</span>
+                      <Badge className="gap-1 text-xs bg-warning/10 text-warning border-warning/30">
+                        Borderline
+                      </Badge>
+                    </div>
+                    <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
+                      {Math.round(violation.confidence * 100)}%
+                    </span>
+                  </div>
+                  
+                  {/* A1 Borderline Display */}
+                  {violation.ruleId === 'A1' && (
+                    <div className="space-y-2">
+                      {violation.evidence && (
+                        <div className="flex items-start gap-2 text-sm">
+                          <span className="text-muted-foreground font-medium">📍 Location:</span>
+                          <span>{violation.evidence}</span>
+                        </div>
+                      )}
+                      <div className="flex items-start gap-2 text-sm">
+                        <span className="text-muted-foreground font-medium">Element:</span>
+                        <span>
+                          {violation.elementRole && <span className="text-xs bg-muted px-1.5 py-0.5 rounded mr-2">{violation.elementRole}</span>}
+                          {violation.elementDescription || 'Text element'}
+                          {violation.foregroundHex && violation.backgroundHex && (
+                            <span> — {violation.foregroundHex} on {violation.backgroundHex}</span>
+                          )}
+                        </span>
+                      </div>
+                      {violation.contrastRatio && (
+                        <div className="flex items-start gap-2 text-sm">
+                          <span className="text-muted-foreground font-medium">Contrast:</span>
+                          <span>
+                            <span className="font-mono font-medium text-warning">{violation.contrastRatio}:1</span> — near WCAG AA threshold of {violation.thresholdUsed || 4.5}:1
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               ))}
