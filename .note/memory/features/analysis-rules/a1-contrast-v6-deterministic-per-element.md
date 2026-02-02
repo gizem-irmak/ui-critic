@@ -1,56 +1,61 @@
-# Memory: features/analysis-rules/a1-contrast-v10-pixel-sampling-first
+# Memory: features/analysis-rules/a1-contrast-v11-robust-clustering
+
 Updated: just now
 
-Rule A1 (Insufficient Text Contrast) prioritizes **pixel-based sampling** for screenshot inputs.
+Rule A1 (Insufficient Text Contrast) uses **robust pixel clustering** for screenshot inputs to avoid false positives from anti-aliasing and palette quantization.
 
 ## Design Principle
 
 **Screenshots are a source of truth for visual properties.**
-Pixel-based contrast calculation is the DEFAULT for screenshot inputs.
+Use clustering-based sampling to match what a user color-picker would measure on the text stroke.
 
-## Pixel Sampling First (Mandatory for Screenshots)
+## Robust Pixel Clustering Methodology (Screenshots)
 
-For screenshot inputs, ALWAYS attempt pixel-level sampling FIRST:
+1. **Sample many pixels**: Collect 50-200 pixels from the text region
+2. **Cluster into fg/bg (k=2)**: Using luminance thresholding or k-means
+3. **Identify foreground**: Darkest stable cluster = core glyph strokes (interior pixels)
+4. **Exclude anti-aliased edges**: Pixels with intermediate luminance between clusters
+5. **Compute median RGB**: From the darkest cluster only
+6. **Report RAW sampled hex**: Never map to Tailwind tokens or nearest palette color
 
-1. **Sample foreground (text) color**: Interior glyph pixels, averaged RGB (exclude anti-aliased edges)
-2. **Sample background color**: Immediate area behind text, uniform adjacent region
-3. **Compute contrast ratio**: WCAG 2.1 relative luminance formula
+## Sampling Reliability Checks (Mandatory)
 
-## Classification Based on Sampling Success
+| Check | Threshold | Action if Failed |
+|-------|-----------|------------------|
+| Foreground variance | stddev(luminance) > 15 | Demote to Potential Risk |
+| Background variance | stddev(luminance) > 20 | Demote to Potential Risk |
+| Cluster separation | gap < 20 luminance units | Demote to Potential Risk |
+| Cluster overlap | pixels fall between clusters | Demote to Potential Risk |
 
-| Background Type        | Sampling Method | Status    | Confidence |
-|------------------------|-----------------|-----------|------------|
-| Solid/uniform color    | pixel           | confirmed | 85–95%     |
-| Gradient/image/overlay | inferred        | potential | 50–70%     |
+## Classification Rules
 
-## Confirmed Violation (Pixel-Sampled)
+| Reliability | Sampling Method | Status | Confidence |
+|-------------|-----------------|--------|------------|
+| Passes all checks | pixel | confirmed | 85–95% |
+| Any check fails | inferred | potential | 50–70% |
 
-When pixel sampling succeeds:
+## Confirmed Violation (Reliable Clustering)
+
+When sampling reliability passes:
 - `samplingMethod: "pixel"`
-- `status: "confirmed"` (if ratio < 4.5:1) or `"borderline"` (if 4.3–4.5:1)
-- Report `contrastRatio`, `foregroundHex`, `backgroundHex`, RGB values
-- Verification: "Pixel-based screenshot analysis."
-- **Do NOT label as heuristic or potential risk**
+- `status: "confirmed"` (if ratio < 4.5:1)
+- Report RAW `foregroundHex`, `backgroundHex` (NOT palette-mapped)
+- Report `contrastRatio`
+- Verification: "Contrast ratio computed from sampled screenshot pixels."
 
-## Potential Risk (Only When Sampling Truly Fails)
+## Potential Risk (Sampling Unreliable)
 
-Report as Potential Risk ONLY if:
-- Background is gradient, image, or complex pattern
-- Text overlays transparent/semi-transparent areas
-- Foreground/background cannot be isolated
-
-Output:
+When reliability check fails:
 - `samplingMethod: "inferred"`
 - `status: "potential"`
-- `potentialRiskReason`: explain why sampling failed
-- NO exact `contrastRatio`
+- `potentialRiskReason`: "Foreground/background separation unstable due to font rendering or anti-aliasing"
+- NO exact `contrastRatio` or hex values
 
-## Forbidden Messaging
+## Forbidden Behaviors
 
-DO NOT SAY for screenshot inputs:
-- "Exact color values cannot be determined from a screenshot"
-- "Contrast is ambiguous based on visual inspection"
-- "Cannot measure contrast from visual inspection alone"
+- Do NOT map sampled colors to Tailwind tokens or "nearest palette color" in Confirmed mode
+- Do NOT output Confirmed ratio when cluster separation is unstable
+- Do NOT say "Exact color values cannot be determined from a screenshot"
 
 ## ZIP / GitHub Inputs
 
