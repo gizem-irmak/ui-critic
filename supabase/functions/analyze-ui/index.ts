@@ -234,96 +234,103 @@ An element is ONLY considered focusable if:
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
-### SPECIAL HANDLING FOR A1 (Text Contrast) — PIXEL-SAMPLED vs INFERRED COLOR LOGIC
+### SPECIAL HANDLING FOR A1 (Text Contrast) — PIXEL SAMPLING FIRST (MANDATORY)
 
-**INPUT TYPE CONTEXT: SCREENSHOT**
-Screenshot input is ELIGIBLE for deterministic contrast evaluation via pixel sampling, but NOT guaranteed.
-
----
-
-## 1️⃣ SAMPLING METHOD DETERMINATION (MANDATORY)
-
-For every A1 evaluation, you MUST determine and record a \`samplingMethod\`:
-
-- **"pixel"** → colors sampled directly from screenshot pixels using the interior stroke method
-- **"inferred"** → colors derived from tokens, palettes, class names, approximations, or single-pixel samples
-
-This field MUST drive classification and confidence. **Only \`samplingMethod: "pixel"\` can produce a Confirmed status.**
+**DESIGN PRINCIPLE: Screenshots are a source of truth for visual properties.**
+Pixel-based contrast calculation is the DEFAULT for screenshot inputs.
 
 ---
 
-## 2️⃣ PIXEL-SAMPLED COLORS (Allowed to Confirm)
+## 1️⃣ PIXEL SAMPLING FIRST (MANDATORY FOR SCREENSHOTS)
 
-Only treat colors as \`samplingMethod: "pixel"\` if ALL of the following conditions are met:
+For screenshot inputs, you MUST ALWAYS ATTEMPT pixel-level sampling FIRST:
 
-**FOREGROUND (Text) — Pixel-Sampled Criteria:**
-1. Text region is detected (OCR or visual text detection)
-2. Multiple pixels are sampled from the INTERIOR of glyph strokes
-3. Anti-aliased edge pixels are EXCLUDED (select darkest 30-40% by luminance)
-4. Foreground color is computed as the MEDIAN RGB of sampled interior pixels
+**STEP 1 — Sample foreground (text) color:**
+- Identify text region visually or via OCR
+- Sample multiple pixels from the INTERIOR of glyph strokes
+- Use averaged RGB from representative pixels (exclude anti-aliased edges)
+- Compute median RGB as foreground color
 
-**BACKGROUND — Pixel-Sampled Criteria:**
-1. Pixels are sampled from a UNIFORM area ADJACENT to the text (5-10 pixels minimum)
-2. Borders, shadows, gradients, and overlays are EXCLUDED from sampling
-3. Background color is computed as the MEDIAN RGB of sampled pixels
-4. Color variance in the sampled background region is BELOW a threshold (uniform region)
+**STEP 2 — Sample background color:**
+- Sample pixels from the immediate area behind the text
+- Use uniform adjacent region (avoid borders, shadows)
+- Compute median RGB as background color
 
-**IF ALL CONDITIONS ARE SATISFIED:**
+**STEP 3 — Compute contrast ratio:**
+- Apply WCAG 2.1 relative luminance formula to compute contrast ratio
+- Compare against threshold: 4.5:1 for normal text, 3.0:1 for large text
+
+---
+
+## 2️⃣ CLASSIFICATION BASED ON SAMPLING SUCCESS
+
+**IF pixel sampling succeeds (solid/uniform backgrounds):**
 - Set \`samplingMethod: "pixel"\`
-- Compute WCAG contrast ratio from median RGB values
-- Report \`foregroundRgb\`, \`backgroundRgb\`, \`foregroundHex\`, \`backgroundHex\`
-- Report \`contrastRatio\` (the measured ratio)
-- Classification: **Confirmed Pass** or **Confirmed Violation** based on measured ratio
-- Confidence: **80–95%**
-- Add verification line: "Contrast ratio computed from sampled screenshot pixels."
+- Set \`status: "confirmed"\` 
+- Report measured \`contrastRatio\` (e.g., 2.8)
+- Report \`foregroundHex\`, \`backgroundHex\`, \`foregroundRgb\`, \`backgroundRgb\`
+- Set high confidence: **85–95%**
+- Add verification: "Pixel-based screenshot analysis."
+- **Do NOT label as heuristic or potential risk**
+
+**IF contrast ratio < threshold:**
+→ \`status: "confirmed"\` — Confirmed Violation
+
+**IF contrast ratio ≥ threshold:**
+→ PASS — Do NOT include in violations array
 
 ---
 
-## 3️⃣ INFERRED COLORS (Must NOT Confirm)
+## 3️⃣ FALLBACK TO POTENTIAL RISK (ONLY WHEN SAMPLING TRULY FAILS)
 
-If ANY of the following occurs, treat colors as \`samplingMethod: "inferred"\`:
+Report A1 as Potential Risk ONLY if pixel sampling is genuinely impossible:
 
-- Mapping CSS classes or design tokens (e.g., text-gray-500 → #6b7280)
-- Snapping detected colors to the nearest palette value
-- Sampling a single pixel (insufficient sample size)
-- Sampling text edges or anti-aliased/blended pixels
-- Assuming background color without direct pixel verification
-- High variance in background region due to gradients, blur, images, or overlays
-- colorAttributionUnreliable: true (recalculated ratio differs from measured by >0.2)
+**Conditions that prevent reliable sampling:**
+- Background is a gradient, image, or complex pattern
+- Text overlays transparent or semi-transparent areas
+- Foreground and background cannot be reliably isolated
+- Text bounding box cannot be detected
 
-**IF ANY INFERRED CONDITION IS TRUE:**
+**IF sampling fails:**
 - Set \`samplingMethod: "inferred"\`
-- Do NOT report \`contrastRatio\` (exact ratio not computable)
-- Do NOT report \`foregroundRgb\`, \`backgroundRgb\` (not reliably sampled)
-- Classify as **Potential Risk** (status: "potential")
-- Confidence: **50–70%**
-- Include \`potentialRiskReason\`: explain why pixel sampling failed
+- Set \`status: "potential"\`
+- Do NOT report exact \`contrastRatio\`
+- Set \`potentialRiskReason\`: explain why sampling failed
+- Set reduced confidence: **50–70%**
+- Suggest re-upload only if resolution/clarity is insufficient
 
 ---
 
-## 4️⃣ CLASSIFICATION RULES SUMMARY
+## 4️⃣ FORBIDDEN MESSAGING FOR SCREENSHOT INPUTS
 
-| Input Type   | Sampling Method | Classification                     | Confidence |
-|--------------|-----------------|------------------------------------|-----------:|
-| Screenshot   | pixel           | Confirmed Pass / Confirmed Violation | 80–95%    |
-| Screenshot   | inferred        | Potential Risk                     | 50–70%    |
-| ZIP          | inferred (always) | Potential Risk                   | 50–70%    |
-| GitHub       | inferred (always) | Potential Risk                   | 50–70%    |
+**DO NOT SAY:**
+- "Exact color values cannot be determined from a screenshot"
+- "Contrast is ambiguous based on visual inspection"
+- "Cannot measure contrast from visual inspection alone"
 
-**NEVER claim a confirmed WCAG failure unless \`samplingMethod: "pixel"\`.**
+These statements are INVALID when pixel data is available.
+Screenshots provide pixel data — use it to compute contrast.
 
 ---
 
-## 5️⃣ CLASSIFICATION THRESHOLDS (Pixel-Sampled Only)
+## 5️⃣ CLASSIFICATION RULES SUMMARY
+
+| Background Type       | Sampling Method | Status    | Confidence |
+|-----------------------|-----------------|-----------|------------|
+| Solid/uniform color   | pixel           | confirmed | 85–95%     |
+
+---
+
+## 6️⃣ CLASSIFICATION THRESHOLDS (Pixel-Sampled Only)
 
 When \`samplingMethod: "pixel"\`:
 - **Confirmed Violation**: measured ratio < 4.5:1 for normal text (or < 3.0:1 for large text)
-- **Borderline (Advisory)**: measured ratio 4.3:1–4.5:1 for normal text — status: "borderline", non-blocking
+- **Borderline (Advisory)**: measured ratio 4.3:1–4.5:1 for normal text — status: "borderline", advisory
 - **Confirmed Pass**: measured ratio ≥ 4.5:1 → DO NOT INCLUDE IN VIOLATIONS
 
 ---
 
-## 6️⃣ CONSISTENCY VALIDATION (For Pixel-Sampled Only)
+## 7️⃣ CONSISTENCY VALIDATION (For Pixel-Sampled Only)
 
 After computing contrast from sampled pixels:
 1. RECALCULATE contrast from reported hex values
@@ -340,7 +347,7 @@ After computing contrast from sampled pixels:
 
 ---
 
-## 7️⃣ REPORTING REQUIREMENTS (Mandatory for ALL A1 Findings)
+## 8️⃣ REPORTING REQUIREMENTS (Mandatory for ALL A1 Findings)
 
 Every A1 report MUST include:
 
@@ -348,10 +355,12 @@ Every A1 report MUST include:
 2. **Issue Description** — Clear statement of what was detected
 3. **Explanation** — Why it passes/fails OR why certainty is reduced
 4. **Sampling Method** — \`samplingMethod: "pixel"\` or \`samplingMethod: "inferred"\`
+5. **Verification Method** — "Pixel-based screenshot analysis" (for confirmed)
 
 **For Confirmed (pixel-sampled):**
-- Include verification line: "Contrast ratio computed from sampled screenshot pixels."
+- Include verification line: "Pixel-based screenshot analysis."
 - Include \`contrastRatio\`, \`foregroundRgb\`, \`backgroundRgb\`, \`foregroundHex\`, \`backgroundHex\`
+- Use high confidence: **85–95%**
 
 **For Potential Risk (inferred):**
 - Include \`potentialRiskReason\` explaining why pixel sampling was not possible
@@ -359,17 +368,18 @@ Every A1 report MUST include:
 
 ---
 
-## 8️⃣ FORBIDDEN BEHAVIORS
+## 9️⃣ FORBIDDEN BEHAVIORS
 
+- Do NOT say "cannot be determined from a screenshot" when pixel data is available
+- Do NOT say "contrast is ambiguous based on visual inspection"
 - Do NOT infer colors from design tokens and present them as measured
 - Do NOT assign high confidence (>70%) to inferred results
 - Do NOT report exact contrast ratios when \`samplingMethod: "inferred"\`
 - Do NOT omit \`samplingMethod\` field — it is MANDATORY for all A1 findings
-- Do NOT snap colors to palette values when pixel sampling was performed
 
 ---
 
-## 9️⃣ OUTPUT FORMAT FOR CONFIRMED VIOLATION (Pixel-Sampled)
+## 🔟 OUTPUT FORMAT FOR CONFIRMED VIOLATION (Pixel-Sampled)
 
 \`\`\`json
 {
@@ -390,9 +400,9 @@ Every A1 report MUST include:
   "thresholdUsed": 4.5,
   "colorApproximate": true,
   "colorAttributionUnreliable": false,
-  "diagnosis": "Credits badge text has 2.8:1 contrast, failing WCAG AA 4.5:1 threshold. Contrast ratio computed from sampled screenshot pixels.",
+  "diagnosis": "Credits badge text has 2.8:1 contrast, failing WCAG AA 4.5:1 threshold. Pixel-based screenshot analysis.",
   "contextualHint": "Increase badge text contrast to at least 4.5:1.",
-  "confidence": 0.88
+  "confidence": 0.90
 }
 \`\`\`
 
@@ -676,13 +686,13 @@ ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.
 - Absence of evidence does NOT imply absence of usability or ethical issues
 - For each category, output triggered rules OR explicitly state "No violations detected after reasoning"
 - Be thorough but avoid false positives - only report violations with clear evidence
-${includesA1 ? '- For A1 (contrast): NEVER claim "confirmed" status - always use "potential" for screenshot analysis' : ''}
+${includesA1 ? '- For A1 (contrast): Use "confirmed" status when pixel sampling succeeds (solid backgrounds, uniform text regions). Use "potential" ONLY when sampling truly fails (gradients, images, overlays).' : ''}
 
 ## OUTPUT FORMAT (JSON)
 For EACH violation, you MUST provide:
 1. **diagnosis**: Detailed, evidence-based explanation of WHY the rule is violated. Reference UI elements conceptually (e.g., "success message", "filter chips", "primary button").
 2. **contextualHint**: A short (1 sentence) high-level hint summarizing WHERE the issue appears and WHAT kind of adjustment is needed. Keep it descriptive, not implementation-level.
-${includesA1 ? `3. For A1 only: Include "status": "potential" and "evidence": describing what you observed visually.` : ''}
+${includesA1 ? `3. For A1 only: Include "status": "confirmed" (pixel-sampled, solid backgrounds) or "potential" (complex backgrounds only), plus "evidence" describing what you observed.` : ''}
 
 IMPORTANT CONSTRAINTS:
 - Do NOT include file paths, class names, or code snippets in diagnosis or contextualHint
