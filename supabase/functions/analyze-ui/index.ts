@@ -238,6 +238,34 @@ ${includesA1 ? `
 
 **CRITICAL: Evaluate contrast at the INDIVIDUAL ELEMENT level. Each text element must be assessed independently—do NOT group multiple elements under a single color value.**
 
+**ROBUST COLOR SAMPLING METHODOLOGY (MANDATORY FOR SCREENSHOTS):**
+
+**FOREGROUND COLOR EXTRACTION (Text Color):**
+1. Identify text glyph pixels by detecting high-contrast edges against the background
+2. Apply inward erosion of 1-2 pixels from glyph edges to exclude anti-aliased/mixed pixels
+3. Sample 5-10 pixels from the INTERIOR of glyph strokes only
+4. Compute the MEDIAN RGB value of sampled pixels—ignore outliers
+5. Convert median RGB to hex for reporting
+
+**BACKGROUND COLOR EXTRACTION:**
+1. Sample pixels from areas IMMEDIATELY ADJACENT to text but OUTSIDE the glyph mask
+2. Stay within the same visual container/component (avoid sampling from adjacent components)
+3. Sample 5-10 pixels from uniform background regions
+4. Compute the MEDIAN RGB value—if variance is high (σ > 15), flag as non-uniform
+5. Convert median RGB to hex for reporting
+
+**CRITICAL SAMPLING RULES:**
+- Use sampled RGB values DIRECTLY for contrast computation
+- Do NOT snap sampled colors to predefined design tokens or palette names
+- Do NOT assume colors match known gray-scale values (e.g., "gray-400")
+- Report actual measured hex values (e.g., "#6B7280") not token names
+
+**COLOR ESTIMATE VALIDATION:**
+If the reported hex value would imply WCAG compliance but the computed contrast ratio indicates failure (or vice versa):
+- Flag the color estimate as "approximate"
+- Prioritize the measured contrast ratio over the hex implication
+- Include note: "Color values derived from screenshot pixels are approximations"
+
 **CLASSIFICATION THRESHOLDS:**
 - **WCAG AA Failure**: ratio < 4.5:1 for normal text (< 18px or < 14px bold)
 - **WCAG AA Failure**: ratio < 3:1 for large text (≥ 18px or ≥ 14px bold)
@@ -247,9 +275,9 @@ ${includesA1 ? `
 **PER-ELEMENT ANALYSIS METHODOLOGY:**
 For EACH visible text element in the screenshot:
 1. **Identify element role** — button label, heading, body text, caption, badge, metadata, etc.
-2. **Sample foreground color** — Extract pixel color from glyph interior (avoid anti-aliased edges)
-3. **Sample background color** — Extract pixel color from uniform region behind text (same container)
-4. **Compute WCAG contrast ratio** — Use relative luminance formula
+2. **Sample foreground color** — Use glyph interior sampling with erosion (exclude anti-aliased edges)
+3. **Sample background color** — Use adjacent uniform region sampling (same container)
+4. **Compute WCAG contrast ratio** — Use relative luminance formula on sampled RGB values
 5. **Classify individually:**
    - If ratio < 4.3:1 for normal text → **Confirmed Violation** (status: "confirmed")
    - If ratio 4.3:1 to 4.5:1 for normal text → **Borderline Contrast** (status: "borderline", reduced confidence 0.65-0.75)
@@ -264,10 +292,11 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
 - Do NOT classify as a definitive failure—let user decide on fix priority
 
 **EDGE CASE HANDLING:**
-- **Anti-aliasing**: Sample 3-5 pixels from glyph interior, use median color
-- **Background variance**: If background pixels vary significantly (σ > 15), mark as "potential" with reason
-- **Gradient/image backgrounds**: Mark as "potential" with reason "gradient or image background"
-- **Transparent/overlay text**: Mark as "potential" with reason "transparency prevents color extraction"
+- **Anti-aliasing**: Apply 1-2px inward erosion, sample 5-10 interior pixels, use median color
+- **Outlier pixels**: Discard pixels that deviate >20% from median before final calculation
+- **Background variance**: If background pixels vary significantly (σ > 15), mark as "potential" with potentialRiskReason: "non-uniform background prevents stable sampling"
+- **Gradient/image backgrounds**: Mark as "potential" with potentialRiskReason: "gradient or image background"
+- **Transparent/overlay text**: Mark as "potential" with potentialRiskReason: "transparency prevents color extraction"
 
 **OUTPUT FORMAT FOR EACH ELEMENT (one entry per element):**
 \`\`\`json
@@ -283,7 +312,8 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
   "backgroundHex": "#FFFFFF",
   "contrastRatio": 2.8,
   "thresholdUsed": 4.5,
-  "diagnosis": "Credits badge text (#9CA3AF on #FFFFFF) has 2.8:1 contrast, failing WCAG AA 4.5:1 minimum.",
+  "colorApproximate": true,
+  "diagnosis": "Credits badge text (#9CA3AF on #FFFFFF) has 2.8:1 contrast, failing WCAG AA 4.5:1 minimum. Color values derived from screenshot pixels are approximations.",
   "contextualHint": "Increase badge text contrast to meet 4.5:1.",
   "confidence": 0.92
 }
@@ -301,7 +331,8 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
   "backgroundHex": "#FFFFFF",
   "contrastRatio": 4.4,
   "thresholdUsed": 4.5,
-  "diagnosis": "Date text (#6B7280 on #FFFFFF) has 4.4:1 contrast—borderline near WCAG AA 4.5:1 threshold.",
+  "colorApproximate": true,
+  "diagnosis": "Date text (#6B7280 on #FFFFFF) has 4.4:1 contrast—borderline near WCAG AA 4.5:1 threshold. Color values are approximations.",
   "contextualHint": "Consider increasing contrast slightly for safety margin.",
   "confidence": 0.70
 }
@@ -315,12 +346,13 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
 **MANDATORY FIELDS:**
 - \`status\`: "confirmed", "borderline", or "potential"
 - \`elementRole\`: Semantic role of the text element
-- \`foregroundHex\`: Sampled text color as hex
-- \`backgroundHex\`: Sampled background color as hex
+- \`foregroundHex\`: Sampled text color as hex (from glyph interior pixels)
+- \`backgroundHex\`: Sampled background color as hex (from adjacent uniform region)
 - \`contrastRatio\`: Computed ratio as number
 - \`thresholdUsed\`: Which WCAG threshold applies (4.5 or 3.0)
 - \`elementDescription\`: What element is affected
 - \`evidence\`: Location in UI
+- \`colorApproximate\`: true (always for screenshot-derived values)
 
 **ABSOLUTELY DO NOT:**
 - Group multiple elements under one color/finding—each element is separate
@@ -328,6 +360,8 @@ When measured contrast falls near the WCAG threshold (4.3:1 to 4.5:1 for normal 
 - Classify borderline (4.3-4.5:1) as definitive failure—use "borderline" status
 - Use "ambiguous by visual inspection" when ratio IS computable
 - Report A1 without foregroundHex + backgroundHex + contrastRatio (unless truly potential)
+- Snap sampled colors to design tokens—use actual measured hex values
+- Sample anti-aliased edge pixels—always use glyph interior with erosion
 ` : ''}
 
 Report violations ONLY if there is strong visual evidence.
