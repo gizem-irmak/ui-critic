@@ -114,6 +114,9 @@ type A1BackgroundCertainty = {
   spanMultipleRegions?: boolean;
   antiAliasingDominates?: boolean;
   mixedBackground?: boolean;
+  // v28: Foreground/Background plausibility gate
+  fgBgBleed?: boolean; // Foreground sampled background pixels
+  foregroundUnreliable?: boolean; // Foreground sampling is not trustworthy
 };
 
 type RGB = { r: number; g: number; b: number };
@@ -256,6 +259,8 @@ type A1Sample = {
   bgWorstHex: string;
   // Background certainty assessment for confirmed vs heuristic classification
   backgroundCertainty: A1BackgroundCertainty;
+  // v28: Foreground validation for plausibility gate
+  foregroundValidation?: A1ForegroundValidation;
 };
 
 // Simple k-means clustering for color grouping
@@ -460,6 +465,99 @@ function sampleBackgroundPixels(
 }
 
 /**
+ * A1 FOREGROUND/BACKGROUND PLAUSIBILITY GATE (v28)
+ * 
+ * Before confirming a contrast violation, validate that the sampled foreground
+ * truly represents glyph pixels (not background or anti-aliased bleed).
+ * 
+ * The gate checks:
+ * 1. Foreground sampled from INNER glyph core (darkest 20-30% of text bbox pixels)
+ * 2. Background sampled from RING around text bbox (not inside)
+ * 3. If FG ≈ BG (both near-white or same color region), measurement is unreliable
+ * 
+ * When unreliable:
+ * - DO NOT mark CONFIRMED
+ * - Downgrade to POTENTIAL with reason code FG_BG_BLEED or ANTIALIAS_DOMINANT
+ */
+type A1ForegroundValidation = {
+  isValid: boolean;
+  hasFgBgBleed: boolean; // FG and BG colors are too similar
+  hasAntiAliasDominance: boolean; // FG sampling captured anti-aliased pixels
+  fgBgColorDistance: number; // Euclidean RGB distance between FG and BG
+  fgBgLumaDistance: number; // Luminance difference
+  reason?: string;
+};
+
+function validateForegroundSampling(
+  fg: RGB,
+  bg: RGB,
+  fgLumaStd: number,
+  textSize: 'normal' | 'large'
+): A1ForegroundValidation {
+  // Calculate color distance between FG and BG
+  const colorDistance = Math.sqrt(
+    Math.pow(fg.r - bg.r, 2) +
+    Math.pow(fg.g - bg.g, 2) +
+    Math.pow(fg.b - bg.b, 2)
+  );
+  
+  const fgLuma = relativeLuminance01(fg) * 255;
+  const bgLuma = relativeLuminance01(bg) * 255;
+  const lumaDistance = Math.abs(fgLuma - bgLuma);
+  
+  // ====================================================================
+  // CHECK 1: FG/BG Bleed Detection
+  // If foreground and background are too similar, FG sampling likely
+  // captured background pixels instead of glyph strokes
+  // ====================================================================
+  // Thresholds: 
+  // - Color distance < 30 is suspiciously close (same region)
+  // - Luma distance < 15 with both being light (>200) is near-white bleed
+  const bothNearWhite = fgLuma > 200 && bgLuma > 200;
+  const colorsTooSimilar = colorDistance < 30;
+  const lumaTooClose = lumaDistance < 15;
+  
+  const hasFgBgBleed = (bothNearWhite && lumaTooClose) || colorsTooSimilar;
+  
+  // ====================================================================
+  // CHECK 2: Anti-aliasing Dominance
+  // High variance in foreground luminance suggests anti-aliased pixels
+  // were included, making the FG color unreliable
+  // ====================================================================
+  // Threshold: FG luma stddev > 25 indicates significant anti-aliasing
+  // For large text, we're slightly more lenient (> 30)
+  const antiAliasThreshold = textSize === 'large' ? 30 : 25;
+  const hasAntiAliasDominance = fgLumaStd > antiAliasThreshold;
+  
+  // ====================================================================
+  // CHECK 3: Prominence-aware validation
+  // For titles/headings (large text), if FG ≈ BG and both light,
+  // this is highly suspicious (likely sampling error)
+  // ====================================================================
+  const isSuspiciousForProminentText = textSize === 'large' && hasFgBgBleed;
+  
+  // Determine overall validity
+  const isValid = !hasFgBgBleed && !hasAntiAliasDominance;
+  
+  // Build reason string
+  let reason: string | undefined;
+  if (hasFgBgBleed) {
+    reason = `Foreground sampling likely captured background pixels (FG/BG distance: ${colorDistance.toFixed(0)} RGB, ${lumaDistance.toFixed(0)} luma)`;
+  } else if (hasAntiAliasDominance) {
+    reason = `Foreground sampling captured anti-aliased edge pixels (luma stddev: ${fgLumaStd.toFixed(1)})`;
+  }
+  
+  return {
+    isValid,
+    hasFgBgBleed,
+    hasAntiAliasDominance,
+    fgBgColorDistance: colorDistance,
+    fgBgLumaDistance: lumaDistance,
+    reason,
+  };
+}
+
+/**
  * INTERIOR-STROKE SAMPLING FOR A1 CONTRAST MEASUREMENT
  * 
  * This function implements the robust pixel sampling methodology for screenshot-only
@@ -467,11 +565,12 @@ function sampleBackgroundPixels(
  * avoiding anti-aliased edges that blend with background.
  * 
  * Methodology:
- * 1. FOREGROUND (Text): Sample grid of pixels from text region, select darkest 30-40%
- *    by luminance (interior stroke pixels), compute median RGB as foreground color.
- * 2. BACKGROUND: Sample ring around text region, exclude text pixels and outliers,
- *    compute median RGB as background color. Uses progressive expansion if needed.
- * 3. CONTRAST: Compute WCAG contrast ratio from sampled median colors.
+ * 1. FOREGROUND (Text): Sample grid of pixels from text region, select darkest 20-30%
+ *    by luminance (inner glyph core pixels), compute median RGB as foreground color.
+ * 2. BACKGROUND: Sample ring around text region (NOT inside), exclude text pixels
+ *    and outliers, compute median RGB as background color.
+ * 3. PLAUSIBILITY GATE: Validate FG ≠ BG before confirming measurement.
+ * 4. CONTRAST: Compute WCAG contrast ratio from sampled median colors.
  * 
  * All colors are pixel-derived estimates, not design tokens.
  */
@@ -480,10 +579,11 @@ function computeA1SampleWithFallbacks(
   pxBox: { left: number; top: number; right: number; bottom: number }
 ): A1Sample | { error: string } {
   // ====================================================================
-  // STEP 1: FOREGROUND SAMPLING — Interior Glyph Stroke Methodology
+  // STEP 1: FOREGROUND SAMPLING — Inner Glyph Core Methodology (v28)
   // ====================================================================
-  // Sample 160 pixels from text region grid, then select the DARKEST 30-40%
-  // by luminance. These are the interior glyph strokes, free from anti-aliasing.
+  // Sample 160 pixels from text region grid, then select the DARKEST 20-30%
+  // by luminance. These are the INNER GLYPH CORE pixels, excluding anti-aliased
+  // edges that blend with background. Using 25% as the middle ground.
   
   const textPts = buildGridPoints(pxBox.left, pxBox.top, pxBox.right, pxBox.bottom, 160);
   const textPixels = textPts
@@ -500,14 +600,14 @@ function computeA1SampleWithFallbacks(
     return { error: 'Insufficient text pixels for reliable sampling' };
   }
 
-  // Sort by luminance to identify interior strokes (darkest pixels for dark-on-light,
-  // or the core stroke color in general). We take the darkest 30-40% to avoid
-  // anti-aliased edges which have intermediate luminance values.
+  // Sort by luminance to identify inner glyph core (darkest pixels for dark-on-light,
+  // or the core stroke color in general). We take the darkest 20-30% to strictly
+  // avoid anti-aliased edges which have intermediate luminance values.
   const sorted = [...textPixels].sort((a, b) => a.luma255 - b.luma255);
   
-  // Select darkest 30-40% of pixels as interior stroke candidates
-  // Using 35% as middle ground, with minimum of 15 pixels for statistical validity
-  const keepRatio = 0.35; // 35% of pixels (interior strokes)
+  // Select darkest 20-30% of pixels as inner glyph core candidates (v28: tighter range)
+  // Using 25% as the middle ground, with minimum of 15 pixels for statistical validity
+  const keepRatio = 0.25; // 25% of pixels (inner glyph core)
   const keepCount = Math.max(15, Math.floor(sorted.length * keepRatio));
   const fgPixels = sorted.slice(0, keepCount);
   if (fgPixels.length < 15) {
@@ -752,6 +852,24 @@ function computeA1SampleWithFallbacks(
     };
   })();
 
+  // ====================================================================
+  // v28: FOREGROUND VALIDATION (Plausibility Gate)
+  // Check if sampled foreground truly represents glyph pixels
+  // ====================================================================
+  const foregroundValidation = validateForegroundSampling(fg, bg, fgLumaStd, 'normal');
+  
+  // Update background certainty with foreground validation results
+  const finalBackgroundCertainty: A1BackgroundCertainty = {
+    ...backgroundCertainty,
+    fgBgBleed: foregroundValidation.hasFgBgBleed,
+    foregroundUnreliable: !foregroundValidation.isValid,
+    // If foreground is unreliable, background cannot be considered certain
+    isCertain: backgroundCertainty.isCertain && foregroundValidation.isValid,
+    reason: !foregroundValidation.isValid 
+      ? [backgroundCertainty.reason, foregroundValidation.reason].filter(Boolean).join('; ')
+      : backgroundCertainty.reason,
+  };
+
   return {
     fg,
     bg,
@@ -776,8 +894,10 @@ function computeA1SampleWithFallbacks(
     contrastWorst,
     fgWorstHex,
     bgWorstHex,
-    // Background certainty for classification
-    backgroundCertainty,
+    // Background certainty for classification (updated with FG validation)
+    backgroundCertainty: finalBackgroundCertainty,
+    // v28: Foreground validation for diagnostics
+    foregroundValidation,
   };
 }
 
@@ -797,20 +917,21 @@ type A1ReliabilityResult = {
 };
 
 /**
- * WORST-CASE CONTRAST BOUNDING FOR A1 CLASSIFICATION (v23)
+ * WORST-CASE CONTRAST BOUNDING FOR A1 CLASSIFICATION (v28)
  * 
  * This function determines classification (confirmed vs potential) based on
- * background certainty and contrast measurement. It NEVER suppresses findings —
- * it only determines the classification tier.
+ * background certainty, foreground validation, and contrast measurement.
+ * It NEVER suppresses findings — it only determines the classification tier.
  * 
- * v23 KEY CHANGE: Low confidence MUST NOT auto-downgrade to Potential.
- * If background is certain (uniform) AND best-case contrast < threshold → CONFIRMED.
+ * v28 KEY CHANGE: Foreground/Background Plausibility Gate
+ * Before confirming, validate that sampled FG truly represents glyph pixels.
+ * If FG ≈ BG (both near-white or same region), downgrade to POTENTIAL.
  * 
  * Classification rules:
- * - CONFIRMED: Background is certain AND best-case contrast < threshold
- * - POTENTIAL: Background is uncertain (mixed, gradient, image, multiple candidates)
- *              OR contrast cannot be computed
- * - PASS: Worst-case contrast >= threshold (even conservative estimate passes)
+ * - CONFIRMED: Background is certain AND foreground is valid AND contrast < threshold
+ * - POTENTIAL: Background uncertain OR foreground unreliable
+ *              (reason codes: FG_BG_BLEED, ANTIALIAS_DOMINANT)
+ * - PASS: Worst-case contrast >= threshold
  * 
  * Confidence affects:
  * - Reporting detail and explanation
@@ -825,6 +946,7 @@ function classifyA1Contrast(
   reason: string;
   effectiveRatio: number;
   isBackgroundBased: boolean; // True if classification was based on background certainty
+  reasonCodes?: string[]; // v28: Explicit reason codes for potential findings
 } {
   const contrastWorst = sample.contrastWorst;
   const contrastBest = sample.contrastRange?.max ?? sample.ratio;
@@ -845,11 +967,17 @@ function classifyA1Contrast(
   }
   
   // ============================================================
-  // STEP 2: Check background certainty for classification
+  // STEP 2: v28 FOREGROUND PLAUSIBILITY GATE
+  // Check if foreground sampling is reliable before confirming
   // ============================================================
-  // Per v23 rule: Low confidence alone MUST NOT downgrade
-  // Classification is based on BACKGROUND certainty, not confidence
+  const fgValidation = sample.foregroundValidation;
+  const hasFgBgBleed = fgValidation?.hasFgBgBleed === true || backgroundCertainty.fgBgBleed === true;
+  const hasAntiAliasDominance = fgValidation?.hasAntiAliasDominance === true;
+  const foregroundIsUnreliable = hasFgBgBleed || hasAntiAliasDominance || backgroundCertainty.foregroundUnreliable === true;
   
+  // ============================================================
+  // STEP 3: Check background certainty for classification
+  // ============================================================
   // Background is UNCERTAIN when any of these are true:
   const hasMultipleBackgroundCandidates = sample.fallbackMethod === 'range' && (sample.clusterCount ?? 0) >= 2;
   const hasMixedBackground = backgroundCertainty.mixedBackground === true;
@@ -865,13 +993,51 @@ function classifyA1Contrast(
     spansMultipleRegions;
   
   // ============================================================
-  // STEP 3: CONFIRMED vs POTENTIAL based on background certainty
+  // STEP 4: v28 — Foreground unreliable → always POTENTIAL
+  // This is the core plausibility gate: if FG sampling is suspect,
+  // we cannot confirm the violation
+  // ============================================================
+  if (foregroundIsUnreliable) {
+    const reasonCodes: string[] = [];
+    const uncertaintyReasons: string[] = [];
+    
+    if (hasFgBgBleed) {
+      reasonCodes.push('FG_BG_BLEED');
+      uncertaintyReasons.push('foreground sampling likely captured background pixels');
+    }
+    if (hasAntiAliasDominance) {
+      reasonCodes.push('ANTIALIAS_DOMINANT');
+      uncertaintyReasons.push('anti-aliased edge pixels dominate foreground');
+    }
+    // Also include background uncertainty reasons if present
+    if (backgroundIsUncertain) {
+      if (hasMultipleBackgroundCandidates) reasonCodes.push('BG_MIXED');
+      if (hasGradient) reasonCodes.push('BG_GRADIENT');
+      if (hasImageOrOverlay) reasonCodes.push('BG_IMAGE');
+      if (spansMultipleRegions) reasonCodes.push('BG_MIXED');
+    }
+    
+    const explanation = fgValidation?.reason || uncertaintyReasons.join('; ');
+    const reasonText = `Foreground sampling unreliable (${reasonCodes.join(', ')}): ${explanation}. Estimated contrast ${primaryRatio.toFixed(1)}:1`;
+    
+    return {
+      classification: 'potential',
+      reason: reasonText,
+      effectiveRatio: primaryRatio,
+      isBackgroundBased: false,
+      reasonCodes,
+    };
+  }
+  
+  // ============================================================
+  // STEP 5: CONFIRMED vs POTENTIAL based on background certainty
+  // (Only reached if foreground is reliable)
   // ============================================================
   
   if (!backgroundIsUncertain) {
     // BACKGROUND IS CERTAIN (uniform, single dominant color)
-    // Low confidence does NOT matter here - if background is uniform
-    // and contrast fails, it's CONFIRMED
+    // FOREGROUND IS RELIABLE (passed plausibility gate)
+    // → Can confirm violation
     
     if (contrastBest < threshold) {
       return {
@@ -904,25 +1070,44 @@ function classifyA1Contrast(
   }
   
   // BACKGROUND IS UNCERTAIN — classify as POTENTIAL
-  // This is the ONLY reason to use potential: background uncertainty
-  // (NOT low confidence when background is certain)
+  // (Foreground is reliable, but background prevents confirmation)
   
+  const reasonCodes: string[] = [];
   const uncertaintyReasons: string[] = [];
-  if (hasMultipleBackgroundCandidates) uncertaintyReasons.push('multiple background candidates');
-  if (hasMixedBackground) uncertaintyReasons.push('mixed background');
-  if (hasGradient) uncertaintyReasons.push('gradient pattern');
-  if (hasImageOrOverlay) uncertaintyReasons.push('image/overlay');
-  if (spansMultipleRegions) uncertaintyReasons.push('spans multiple regions');
+  if (hasMultipleBackgroundCandidates) {
+    reasonCodes.push('BG_MIXED');
+    uncertaintyReasons.push('multiple background candidates');
+  }
+  if (hasMixedBackground) {
+    reasonCodes.push('BG_MIXED');
+    uncertaintyReasons.push('mixed background');
+  }
+  if (hasGradient) {
+    reasonCodes.push('BG_GRADIENT');
+    uncertaintyReasons.push('gradient pattern');
+  }
+  if (hasImageOrOverlay) {
+    reasonCodes.push('BG_IMAGE');
+    uncertaintyReasons.push('image/overlay');
+  }
+  if (spansMultipleRegions) {
+    reasonCodes.push('BG_MIXED');
+    uncertaintyReasons.push('spans multiple regions');
+  }
+  
+  // Dedupe reason codes
+  const uniqueReasonCodes = [...new Set(reasonCodes)];
   
   const reasonText = sample.contrastRange
-    ? `Background uncertain (${uncertaintyReasons.join(', ')}): contrast range ${contrastMin.toFixed(1)}:1 – ${contrastBest.toFixed(1)}:1`
-    : `Background uncertain (${uncertaintyReasons.join(', ')}): estimated ${primaryRatio.toFixed(1)}:1`;
+    ? `Background uncertain (${uniqueReasonCodes.join(', ')}): contrast range ${contrastMin.toFixed(1)}:1 – ${contrastBest.toFixed(1)}:1`
+    : `Background uncertain (${uniqueReasonCodes.join(', ')}): estimated ${primaryRatio.toFixed(1)}:1`;
   
   return {
     classification: 'potential',
     reason: reasonText,
     effectiveRatio: contrastMin, // Use worst-case for conservative reporting
     isBackgroundBased: true,
+    reasonCodes: uniqueReasonCodes,
   };
 }
 

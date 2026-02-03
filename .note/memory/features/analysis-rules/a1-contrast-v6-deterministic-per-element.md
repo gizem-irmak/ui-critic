@@ -1,17 +1,55 @@
-# Memory: features/analysis-rules/a1-contrast-v25-tiered-thresholds
+# Memory: features/analysis-rules/a1-contrast-v28-plausibility-gate
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Tiered Thresholds v25)
+## A1 — Insufficient Text Contrast (Plausibility Gate v28)
 
 This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
 
-### v25 Key Changes
+### v28 Key Changes
 
-1. **Comprehensive Mandatory Detection Scope**
-2. **Local-Priority Background Sampling**
-3. **Background-Based Classification (not confidence-based)**
-4. **Tiered WCAG Thresholds: 4.5:1 (normal) / 3.0:1 (large text)**
+1. **Foreground/Background Plausibility Gate** (NEW)
+2. **Inner Glyph Core Sampling (20-30%)**
+3. **Background-Based + Foreground Validation Classification**
+4. **New Reason Codes: FG_BG_BLEED, ANTIALIAS_DOMINANT**
+
+---
+
+## v28 FOREGROUND/BACKGROUND PLAUSIBILITY GATE
+
+Before classifying a contrast result as CONFIRMED, validate that the sampled foreground truly represents glyph pixels (not background).
+
+### Foreground Sampling (Inner Glyph Core)
+
+For each text element:
+- Sample foreground from the **INNER GLYPH CORE region** (exclude edges)
+- Use only the **darkest 20-30%** of pixels within the text bounding box
+- This avoids anti-aliasing and background bleed into foreground
+
+### Background Sampling (Ring Method)
+
+- Sample background from a **ring around the text bounding box** (NOT inside)
+- Use local-priority sampling (8px margin first)
+- Weight by proximity to text
+
+### Plausibility Validation
+
+If the sampled foreground is within a small distance of the sampled background:
+- **Color distance < 30 RGB** (same color region)
+- **Both colors near-white (luma > 200) AND luma distance < 15**
+- **Foreground luma stddev > 25** (anti-aliasing dominance)
+
+When any of these conditions are met for visually prominent text (titles/headings):
+- **DO NOT mark CONFIRMED**
+- **Downgrade to POTENTIAL** with reason codes
+- Include explanation in diagnosis
+
+### New Reason Codes (v28)
+
+| Code | Meaning |
+|------|---------|
+| `FG_BG_BLEED` | Foreground sampling likely captured background pixels |
+| `ANTIALIAS_DOMINANT` | Anti-aliased edge pixels dominate foreground sampling |
 
 ---
 
@@ -20,13 +58,13 @@ This is the **definitive, immutable** rule specification for A1. All previous lo
 | Text Classification | Minimum Contrast | Criteria |
 |---------------------|------------------|----------|
 | Normal text | 4.5:1 | Default for all text |
-| Large text | 3.0:1 | Dynamic detection (see v26 rules below) |
+| Large text | 3.0:1 | Dynamic detection (see v27 rules below) |
 
 ### Large Text Classification (v27 — UI Role Awareness)
 
 Classify text as "large" if **ANY** of the following conditions are met:
 
-1. **UI Role-Based** (v27 NEW — check first): Text functions as:
+1. **UI Role-Based** (v27 — check first): Text functions as:
    - Top-level navigation item (menu links, primary nav, header navigation)
    - Section or page heading (labels sections, even if subtle)
    - Sidebar or filter group label (organizes filter options or sidebar sections)
@@ -50,40 +88,6 @@ Classify text as "large" if **ANY** of the following conditions are met:
    - None of the above? → "normal"
 
 When uncertain about size/weight, check UI role first. Only default to "normal" when NO conditions are met.
-
----
-
-## Detection Scope — NO EXCLUSIONS
-
-**CRITICAL**: ALL visible text elements MUST be evaluated. Do NOT exclude based on:
-- Visual prominence (secondary, muted, faded, subtle)
-- Semantic role (metadata, captions, badges, labels, tags)
-- Stylistic intent (intentionally low-contrast for aesthetic)
-- Text color (gray, yellow, blue, any colored text)
-- Text size or weight (small text must still be evaluated)
-- Perceived importance or emphasis
-- Font size or bounding box dimensions
-- Color brightness or luminance
-
-### TEXT DETECTION OVERRIDE FOR A1
-
-The text detection pipeline MUST expose ALL visible text to A1 evaluation.
-Filtering rules that apply to other analyses (A2, A4, etc.) MUST NOT apply to A1.
-If users can read it, A1 must evaluate it.
-
-### MUST INCLUDE (comprehensive list):
-- Secondary or muted text
-- Descriptions, summaries, captions
-- Author names, usernames, timestamps
-- Tags, labels, badges, chips, pills
-- Colored text (yellow prices, blue links, gray hints)
-- Placeholder text, helper text
-- Price labels, discount percentages
-- Footer text, copyright notices
-- Small text, light-weight text
-- Any other readable text visible to users
-
-**RULE**: If a user can read the text, it MUST be checked for WCAG contrast compliance.
 
 ---
 
