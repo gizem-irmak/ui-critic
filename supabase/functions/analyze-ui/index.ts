@@ -94,8 +94,31 @@ const corsHeaders = {
 // When in doubt about navigation, check visual context (header position).
 // ============================================================
 //
-// Classification Logic (v24):
+// ============================================================
+// FOREGROUND PLAUSIBILITY GATE (v25.2)
+// ============================================================
+// If the sampled foreground color appears inconsistent with visual
+// prominence (e.g., near-white/near-background for a prominent title),
+// the measurement MUST be treated as unreliable.
+//
+// Plausibility check triggers downgrade to POTENTIAL when:
+//   - Sampled foreground has very high luminance (near-white: L > 0.85)
+//   - OR foreground-background luminance difference is tiny (< 0.08)
+//   - AND the element is visually prominent (title, heading, card title)
+//
+// When triggered:
+//   - DO NOT classify as CONFIRMED
+//   - Downgrade to POTENTIAL with reason code: FG_IMPLAUSIBLE
+//   - Add rationale: "Foreground color sampling inconsistent with
+//     visual prominence (likely background or anti-aliased pixels)."
+//
+// CONFIRMED A1 violations are permitted ONLY when the sampled
+// foreground is visually plausible for the text element.
+// ============================================================
+//
+// Classification Logic (v25.2):
 //   - CONFIRMED: Background is certain AND best-case contrast < threshold
+//       AND foreground is plausible for the element type
 //     * Low confidence DOES NOT downgrade to Potential if background is uniform
 //     * Confidence affects reporting detail, NOT classification
 //   - POTENTIAL: Background cannot be reliably determined:
@@ -103,6 +126,7 @@ const corsHeaders = {
 //     * Gradient/overlay/image backgrounds
 //     * Contrast outcome depends on multiple background candidates
 //     * Contrast cannot be computed at all
+//     * Foreground sampling is implausible (FG_IMPLAUSIBLE gate)
 //
 // Background Detection (v24 LOCAL-PRIORITY):
 //   - Sample LOCAL MARGIN FIRST (8px around text bounding box)
@@ -138,6 +162,50 @@ type A1BackgroundCertainty = {
   antiAliasingDominates?: boolean;
   mixedBackground?: boolean;
 };
+
+// ============================================================
+// FOREGROUND PLAUSIBILITY GATE (v25.2)
+// ============================================================
+// Checks if the sampled foreground color is plausible for the element.
+// If foreground is near-white or too close to background for a prominent
+// element, the measurement is likely corrupted by background/anti-aliasing.
+function checkForegroundPlausibility(
+  fgLuminance: number,
+  bgLuminance: number,
+  elementRole?: string,
+  textSize?: 'normal' | 'large'
+): { isPlausible: boolean; reason?: string } {
+  // Prominent elements that should NOT have near-white foreground
+  const prominentRoles = ['heading', 'title', 'hero', 'card title', 'banner', 'headline', 'h1', 'h2'];
+  const isProminent = textSize === 'large' || 
+    (elementRole && prominentRoles.some(r => elementRole.toLowerCase().includes(r)));
+  
+  // Skip plausibility check for non-prominent elements
+  if (!isProminent) {
+    return { isPlausible: true };
+  }
+  
+  // Check 1: Near-white foreground (luminance > 0.85) for prominent text is implausible
+  const nearWhiteThreshold = 0.85;
+  if (fgLuminance > nearWhiteThreshold) {
+    return {
+      isPlausible: false,
+      reason: `Foreground color sampling inconsistent with visual prominence (near-white luminance ${(fgLuminance * 100).toFixed(0)}%, likely background or anti-aliased pixels).`
+    };
+  }
+  
+  // Check 2: Foreground too close to background (difference < 0.08) is implausible for prominent text
+  const lumaDiffThreshold = 0.08;
+  const lumaDiff = Math.abs(fgLuminance - bgLuminance);
+  if (lumaDiff < lumaDiffThreshold) {
+    return {
+      isPlausible: false,
+      reason: `Foreground color sampling inconsistent with visual prominence (luminance difference only ${(lumaDiff * 100).toFixed(1)}%, likely sampled background or anti-aliased pixels).`
+    };
+  }
+  
+  return { isPlausible: true };
+}
 
 type RGB = { r: number; g: number; b: number };
 
@@ -829,10 +897,16 @@ type A1ReliabilityResult = {
  * v23 KEY CHANGE: Low confidence MUST NOT auto-downgrade to Potential.
  * If background is certain (uniform) AND best-case contrast < threshold → CONFIRMED.
  * 
+ * v25.2 KEY CHANGE: Foreground Plausibility Gate
+ * If foreground is near-white or near-background for a prominent element,
+ * downgrade to POTENTIAL with reason FG_IMPLAUSIBLE.
+ * 
  * Classification rules:
  * - CONFIRMED: Background is certain AND best-case contrast < threshold
+ *              AND foreground is plausible for the element type
  * - POTENTIAL: Background is uncertain (mixed, gradient, image, multiple candidates)
  *              OR contrast cannot be computed
+ *              OR foreground sampling is implausible (FG_IMPLAUSIBLE)
  * - PASS: Worst-case contrast >= threshold (even conservative estimate passes)
  * 
  * Confidence affects:
@@ -842,12 +916,16 @@ type A1ReliabilityResult = {
 function classifyA1Contrast(
   sample: A1Sample, 
   threshold: number,
-  backgroundCertainty: A1BackgroundCertainty
+  backgroundCertainty: A1BackgroundCertainty,
+  elementRole?: string,
+  textSize?: 'normal' | 'large'
 ): { 
   classification: 'confirmed' | 'potential' | 'pass';
   reason: string;
   effectiveRatio: number;
   isBackgroundBased: boolean; // True if classification was based on background certainty
+  isForegroundImplausible?: boolean; // True if downgraded due to FG_IMPLAUSIBLE
+  fgImplausibilityReason?: string;
 } {
   const contrastWorst = sample.contrastWorst;
   const contrastBest = sample.contrastRange?.max ?? sample.ratio;
@@ -888,13 +966,36 @@ function classifyA1Contrast(
     spansMultipleRegions;
   
   // ============================================================
-  // STEP 3: CONFIRMED vs POTENTIAL based on background certainty
+  // STEP 3: FOREGROUND PLAUSIBILITY GATE (v25.2)
+  // ============================================================
+  // If foreground is near-white or near-background for a prominent element,
+  // the measurement is likely corrupted. Downgrade to POTENTIAL.
+  const fgLuminance = relativeLuminance01(sample.fg);
+  const bgLuminance = relativeLuminance01(sample.bg);
+  const plausibility = checkForegroundPlausibility(fgLuminance, bgLuminance, elementRole, textSize);
+  
+  if (!plausibility.isPlausible) {
+    // Foreground sampling is implausible for this element type
+    // Downgrade to POTENTIAL regardless of background certainty
+    return {
+      classification: 'potential',
+      reason: plausibility.reason || 'Foreground color sampling inconsistent with visual prominence.',
+      effectiveRatio: primaryRatio,
+      isBackgroundBased: false,
+      isForegroundImplausible: true,
+      fgImplausibilityReason: plausibility.reason,
+    };
+  }
+  
+  // ============================================================
+  // STEP 4: CONFIRMED vs POTENTIAL based on background certainty
   // ============================================================
   
   if (!backgroundIsUncertain) {
     // BACKGROUND IS CERTAIN (uniform, single dominant color)
     // Low confidence does NOT matter here - if background is uniform
     // and contrast fails, it's CONFIRMED
+    // Foreground has already passed the plausibility gate
     
     if (contrastBest < threshold) {
       return {
@@ -1208,19 +1309,27 @@ async function computeA1ViolationsFromScreenshots(
     const ratio = sample.ratio;
     
     // ====================================================================
-    // AUTHORITATIVE A1 CLASSIFICATION (v23)
+    // AUTHORITATIVE A1 CLASSIFICATION (v25.2)
     // ====================================================================
-    // Per v23 rule:
+    // Per v25.2 rule:
     // - CONFIRMED: Background is CERTAIN (uniform) + contrast < threshold
+    //              + foreground is plausible for the element type
     //   Low confidence does NOT auto-downgrade if background is uniform
     // - POTENTIAL: Background is UNCERTAIN (mixed, gradient, multiple candidates)
+    //              OR foreground sampling is implausible (FG_IMPLAUSIBLE)
     //   This is the ONLY reason to classify as potential
     // ====================================================================
     
     const bgCertainty = sample.backgroundCertainty;
     
-    // Use the new v23 classification function that passes backgroundCertainty
-    const classification = classifyA1Contrast(sample, thresholdUsed, bgCertainty);
+    // Use the v25.2 classification function with foreground plausibility gate
+    const classification = classifyA1Contrast(
+      sample, 
+      thresholdUsed, 
+      bgCertainty,
+      el.elementRole,
+      el.textSize
+    );
     
     // CASE 2: Classification is PASS — contrast is acceptable
     if (classification.classification === 'pass') {
@@ -1233,11 +1342,14 @@ async function computeA1ViolationsFromScreenshots(
     
     // Calculate confidence for REPORTING purposes only (not classification)
     // Per v23: Confidence affects detail level, NOT confirmed/potential status
+    // v25.2: Reduce confidence if foreground was implausible
     const baseConfidence = bgCertainty.isCertain ? 0.92 : 0.65;
-    const confidence = Math.max(0.45, baseConfidence - reliability.confidencePenalty);
+    const implausibilityPenalty = classification.isForegroundImplausible ? 0.2 : 0;
+    const confidence = Math.max(0.45, baseConfidence - reliability.confidencePenalty - implausibilityPenalty);
     
     // Final status comes directly from the classification function
     // v23: Classification is based on background certainty, not confidence
+    // v25.2: Also considers foreground plausibility
     const finalStatus: 'confirmed' | 'potential' = classification.classification === 'confirmed' 
       ? 'confirmed' 
       : 'potential';
@@ -1246,8 +1358,15 @@ async function computeA1ViolationsFromScreenshots(
     // BUILD REASON CODES FOR POTENTIAL FINDINGS (Mandatory per A1 rule)
     // ====================================================================
     // Per v23: Reason codes explain why classification is POTENTIAL
-    // They should ONLY relate to background uncertainty, NOT low confidence
+    // Per v25.2: Include FG_IMPLAUSIBLE when foreground sampling is unreliable
     const reasonCodes: string[] = [];
+    
+    // v25.2: Add FG_IMPLAUSIBLE first if it triggered the downgrade
+    if (classification.isForegroundImplausible) {
+      reasonCodes.push('FG_IMPLAUSIBLE');
+    }
+    
+    // Background uncertainty reason codes
     if (!bgCertainty.isCertain) {
       if (bgCertainty.mixedBackground) reasonCodes.push('BG_MIXED');
       if (bgCertainty.hasGradient) reasonCodes.push('BG_GRADIENT');
