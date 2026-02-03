@@ -22,24 +22,34 @@ This is the **definitive, immutable** rule specification for A1. All previous lo
 | Normal text | 4.5:1 | Default for all text |
 | Large text | 3.0:1 | Dynamic detection (see v26 rules below) |
 
-### Large Text Classification (v26 — Dynamic Detection)
+### Large Text Classification (v27 — UI Role Awareness)
 
 Classify text as "large" if **ANY** of the following conditions are met:
 
-1. **Relative Size**: Text height ≥ 1.2× the median body text height in the same screenshot
-2. **Bold + Size**: Text height ≥ 14pt (~18.7px) AND text appears bold (heavier stroke weight)
-3. **Semantic + Visual Weight**: Text functions as a UI label, section heading, filter label, navigation item, or control label AND is visually larger or heavier than surrounding body text
+1. **UI Role-Based** (v27 NEW — check first): Text functions as:
+   - Top-level navigation item (menu links, primary nav, header navigation)
+   - Section or page heading (labels sections, even if subtle)
+   - Sidebar or filter group label (organizes filter options or sidebar sections)
+   - Uppercase category or grouping label (ALL-CAPS categorization labels)
+   
+   These roles receive 3:1 threshold even if not bold or only slightly larger than body text.
+   Do NOT apply 4.5:1 unless visually comparable to paragraph text.
+
+2. **Relative Size**: Text height ≥ 1.2× the median body text height in the same screenshot
+3. **Bold + Size**: Text height ≥ 14pt (~18.7px) AND text appears bold (heavier stroke weight)
+4. **Semantic + Visual Weight**: Text functions as a UI label, section heading, filter label, navigation item, or control label AND is visually larger or heavier than surrounding body text
 
 ### Dynamic Estimation Process
 
 1. Scan all text elements to determine the median body text height
-2. For each element, check:
+2. For each element, check in order:
+   - Does it serve a UI ROLE (nav item, heading, group label, uppercase category)? → "large"
    - Is height ≥ 1.2× median? → "large"
    - Is height ≥ ~18.7px AND bold? → "large"
    - Is it a prominent UI label/heading visually larger than body text? → "large"
    - None of the above? → "normal"
 
-When uncertain, classify as "normal" (conservative approach).
+When uncertain about size/weight, check UI role first. Only default to "normal" when NO conditions are met.
 
 ---
 
