@@ -467,24 +467,26 @@ interface ContrastViolation {
   ruleName: string;
   category: string;
   status: 'confirmed' | 'potential';
-  samplingMethod: 'pixel' | 'inferred'; // How colors were obtained
+  samplingMethod: 'pixel' | 'inferred';
   inputType: 'zip' | 'github' | 'screenshots';
   contrastRatio?: number;
   thresholdUsed?: 4.5 | 3.0;
   foregroundHex?: string;
   backgroundHex?: string;
   elementDescription?: string;
+  elementIdentifier?: string;
   evidence: string;
   diagnosis: string;
   contextualHint: string;
   correctivePrompt: string;
   confidence: number;
-  // A1-specific tiered fields
   riskLevel?: 'high' | 'medium' | 'low';
-  potentialRiskReason?: string; // Why pixel sampling was not possible
-  // Location tracking for ZIP/code analysis
+  potentialRiskReason?: string;
   inputLimitation?: string;
   advisoryGuidance?: string;
+  reasonCodes?: string[];
+  backgroundStatus?: 'certain' | 'uncertain' | 'unmeasurable';
+  blocksConvergence?: boolean;
   affectedComponents?: Array<{
     colorClass: string;
     hexColor?: string;
@@ -494,8 +496,6 @@ interface ContrastViolation {
     riskLevel: 'high' | 'medium' | 'low';
     occurrence_count: number;
   }>;
-  // Convergence constraint: Heuristic A1 findings NEVER block convergence
-  blocksConvergence?: boolean;
 }
 
 // A1 Color risk tiers for Tailwind gray scale classes
@@ -570,7 +570,11 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     return [];
   }
   
-  // Aggregate and deduplicate by color class + file
+  // ========== A1 ELEMENT-LEVEL REPORTING (NO AGGREGATION) ==========
+  // Per authoritative A1 rule: NEVER aggregate A1 findings into a single message.
+  // For ZIP input, ALL findings are Heuristic Potential Risk with STATIC_ANALYSIS reason code.
+  
+  // Deduplicate by color class + file (but still report per unique occurrence)
   const dedupeMap = new Map<string, {
     colorClass: string;
     colorName: string;
@@ -595,118 +599,69 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   
   const affectedComponents = Array.from(dedupeMap.values());
   
-  // Count by risk level
-  const highRiskCount = affectedComponents.filter(c => c.riskLevel === 'high').length;
-  const mediumRiskCount = affectedComponents.filter(c => c.riskLevel === 'medium').length;
-  const lowRiskCount = affectedComponents.filter(c => c.riskLevel === 'low').length;
+  // Return PER-ELEMENT A1 findings (no aggregation)
+  const perElementResults: ContrastViolation[] = [];
   
-  // Determine overall risk level (highest tier present)
-  let overallRiskLevel: 'high' | 'medium' | 'low' = 'low';
-  if (highRiskCount > 0) overallRiskLevel = 'high';
-  else if (mediumRiskCount > 0) overallRiskLevel = 'medium';
+  for (const component of affectedComponents) {
+    const fileName = component.filePath.split('/').pop() || component.filePath;
+    const elementIdentifier = component.componentName 
+      ? `${component.componentName} (${fileName})`
+      : fileName;
+    
+    // Reason codes for ZIP input - ALWAYS include STATIC_ANALYSIS
+    const reasonCodes = ['STATIC_ANALYSIS'];
+    
+    // Build per-element diagnosis
+    const diagnosis = `Text color ${component.colorClass} (${component.hexColor || 'unknown hex'}) detected in ${elementIdentifier}. ` +
+      `Background color cannot be determined from static code analysis; contrast ratio cannot be computed.`;
+    
+    // Actionable guidance
+    const actionableGuidance = 'Verify contrast with browser DevTools after rendering. ' +
+      `If ratio < 4.5:1 on your background, replace ${component.colorClass} with a higher-contrast token.`;
+    
+    perElementResults.push({
+      ruleId: 'A1',
+      ruleName: 'Insufficient text contrast',
+      category: 'accessibility',
+      status: 'potential', // ALWAYS potential for ZIP (per authoritative rule)
+      samplingMethod: 'inferred',
+      inputType: 'zip',
+      // Element identification
+      elementIdentifier,
+      elementDescription: component.elementContext,
+      evidence: `${component.colorClass} in ${component.filePath}`,
+      diagnosis,
+      contextualHint: `Light text color (${component.colorClass}) may be insufficient on light backgrounds.`,
+      correctivePrompt: '', // No mandatory corrective prompt for heuristic findings
+      confidence: Math.round(component.confidence * 0.9 * 100) / 100, // Reduce 10% for static analysis
+      riskLevel: component.riskLevel,
+      // Reason codes (MANDATORY for potential findings)
+      reasonCodes,
+      potentialRiskReason: 'Static code analysis cannot access rendered pixels; colors inferred from Tailwind classes.',
+      // Background status
+      backgroundStatus: 'unmeasurable',
+      foregroundHex: component.hexColor,
+      // Input limitation
+      inputLimitation: 'Static code analysis cannot determine rendered background colors.',
+      advisoryGuidance: actionableGuidance,
+      // Per authoritative A1 rule: Heuristic findings NEVER block convergence
+      blocksConvergence: false,
+      // Legacy affected_items for backwards compatibility
+      affectedComponents: [{
+        colorClass: component.colorClass,
+        hexColor: component.hexColor,
+        filePath: component.filePath,
+        componentName: component.componentName,
+        elementContext: component.elementContext,
+        riskLevel: component.riskLevel,
+        occurrence_count: component.occurrence_count,
+      }],
+    });
+  }
   
-  // Calculate overall confidence based on highest-risk findings
-  // REDUCE confidence by 10% for ZIP analysis (no runtime context)
-  const maxConfidence = Math.max(...affectedComponents.map(c => c.confidence));
-  const overallConfidence = Math.round((maxConfidence * 0.9) * 100) / 100; // Reduce for static analysis
+  console.log(`A1 per-element (ZIP): ${perElementResults.length} individual findings (all potential/heuristic)`);
   
-  // Build unique color classes list
-  const uniqueColorClasses = [...new Set(affectedComponents.map(c => c.colorClass))];
-  const displayLimit = 4;
-  const displayedColors = uniqueColorClasses.slice(0, displayLimit);
-  const moreCount = uniqueColorClasses.length - displayLimit;
-  const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
-  
-  // Build file list with component names
-  const uniqueFiles = [...new Set(affectedComponents.map(c => {
-    const fileName = c.filePath.split('/').pop() || c.filePath;
-    return c.componentName ? `${c.componentName} (${fileName})` : fileName;
-  }))];
-  const fileDisplayLimit = 4;
-  const displayedFiles = uniqueFiles.slice(0, fileDisplayLimit);
-  const fileMoreCount = uniqueFiles.length - fileDisplayLimit;
-  const fileMoreText = fileMoreCount > 0 ? ` and ${fileMoreCount} more` : '';
-  
-  // Build risk breakdown text
-  const riskBreakdown = [
-    highRiskCount > 0 ? `${highRiskCount} high-risk` : '',
-    mediumRiskCount > 0 ? `${mediumRiskCount} medium-risk` : '',
-    lowRiskCount > 0 ? `${lowRiskCount} low-risk` : '',
-  ].filter(Boolean).join(', ');
-  
-  // Input limitation explanation for ZIP analysis
-  const inputLimitation = 'Static code analysis cannot determine actual rendered background colors or runtime theme configurations. ' +
-    'Foreground colors are detected from Tailwind classes, but background context is often inherited, theme-dependent, or dynamic. ' +
-    'Contrast ratio cannot be computed without runtime rendering.';
-  
-  // Advisory guidance for potential risk findings
-  const advisoryGuidance = 'To confirm contrast compliance, upload screenshots of the rendered UI for visual verification, ' +
-    'or use browser developer tools to inspect actual contrast ratios at runtime.';
-  
-  // Build diagnosis - AVOID repeating "heuristic", "non-blocking", or policy restatements
-  const diagnosis = `${affectedComponents.length} text color occurrence(s) detected ` +
-    `in ${displayedFiles.join(', ')}${fileMoreText} using ${displayedColors.join(', ')}${moreText}. ` +
-    `Risk breakdown: ${riskBreakdown}. ` +
-    `Background color cannot be determined from code analysis; contrast ratio cannot be computed.`;
-  
-  // Build contextual hint based on DETECTED colors, not generic tiers
-  const detectedColorNames = [...new Set(affectedComponents.map(c => c.colorName))];
-  const hasGray200 = detectedColorNames.some(c => c.includes('200'));
-  const hasGray300 = detectedColorNames.some(c => c.includes('300'));
-  const hasGray400 = detectedColorNames.some(c => c.includes('400'));
-  const hasGray500 = detectedColorNames.some(c => c.includes('500'));
-  
-  // Build hint based on what was actually detected
-  const detectedLightGrays: string[] = [];
-  if (hasGray300) detectedLightGrays.push('gray-300');
-  if (hasGray400) detectedLightGrays.push('gray-400');
-  if (hasGray200) detectedLightGrays.push('gray-200');
-  
-  const contextualHint = overallRiskLevel === 'high' || overallRiskLevel === 'medium'
-    ? `Light text colors (${detectedLightGrays.length > 0 ? detectedLightGrays.join(', ') : 'gray-300, gray-400'}) may be insufficient for informational text on light backgrounds.`
-    : hasGray500
-    ? 'Text color (gray-500) is near-threshold; contrast may be insufficient depending on background and font characteristics.'
-    : 'Detected text colors may be insufficient depending on background and font characteristics.';
-  
-  // NO corrective prompt for potential/heuristic findings (ZIP analysis)
-  // Only advisory guidance is provided
-  const correctivePromptColors = hasGray200 ? 'gray-200/300/400' : 'gray-300/400';
-  const correctivePrompt = ''; // Empty - no mandatory corrective prompt for heuristic findings
-  
-  console.log(`Computed ${affectedComponents.length} contrast findings → 1 aggregated A1 result (${riskBreakdown})`);
-  
-  // Return ONE aggregated A1 result
-  // ZIP input = ALWAYS inferred sampling (no pixel access)
-  // Per authoritative A1 rule: ZIP analysis = ALWAYS "Heuristic Potential Risk"
-  // Heuristic A1 findings NEVER block convergence
-  return [{
-    ruleId: 'A1',
-    ruleName: 'Insufficient text contrast',
-    category: 'accessibility',
-    status: 'potential', // ALWAYS potential for static/ZIP analysis (per authoritative rule)
-    samplingMethod: 'inferred', // ZIP cannot pixel-sample — colors from tokens/classes
-    inputType: 'zip', // Explicit input type tracking
-    evidence: `Text color classes detected in ${displayedFiles.join(', ')}${fileMoreText}: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
-    diagnosis,
-    contextualHint,
-    correctivePrompt,
-    confidence: overallConfidence,
-    riskLevel: overallRiskLevel,
-    inputLimitation,
-    advisoryGuidance,
-    potentialRiskReason: 'Static code analysis cannot access rendered pixels; colors inferred from Tailwind classes.',
-    // Per authoritative A1 rule: Heuristic findings NEVER block convergence
-    blocksConvergence: false,
-    affectedComponents: affectedComponents.map(c => ({
-      colorClass: c.colorClass,
-      hexColor: c.hexColor,
-      filePath: c.filePath,
-      componentName: c.componentName,
-      elementContext: c.elementContext,
-      riskLevel: c.riskLevel,
-      occurrence_count: c.occurrence_count,
-    })),
-  }];
+  return perElementResults;
 }
 
 // Try to infer what kind of UI element the text is in based on context
