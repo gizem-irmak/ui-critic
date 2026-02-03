@@ -23,6 +23,14 @@ This is the **definitive, immutable** rule specification for A1. All previous lo
 - Text color (gray, yellow, blue, any colored text)
 - Text size or weight (small text must still be evaluated)
 - Perceived importance or emphasis
+- Font size or bounding box dimensions
+- Color brightness or luminance
+
+### TEXT DETECTION OVERRIDE FOR A1
+
+The text detection pipeline MUST expose ALL visible text to A1 evaluation.
+Filtering rules that apply to other analyses (A2, A4, etc.) MUST NOT apply to A1.
+If users can read it, A1 must evaluate it.
 
 ### MUST INCLUDE (comprehensive list):
 - Secondary or muted text
@@ -33,6 +41,7 @@ This is the **definitive, immutable** rule specification for A1. All previous lo
 - Placeholder text, helper text
 - Price labels, discount percentages
 - Footer text, copyright notices
+- Small text, light-weight text
 - Any other readable text visible to users
 
 **RULE**: If a user can read the text, it MUST be checked for WCAG contrast compliance.
