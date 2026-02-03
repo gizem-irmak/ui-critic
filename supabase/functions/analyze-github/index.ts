@@ -546,19 +546,22 @@ interface ContrastViolation {
   ruleName: string;
   category: string;
   status: string;
-  samplingMethod: 'pixel' | 'inferred'; // How colors were obtained
+  samplingMethod: 'pixel' | 'inferred';
   inputType: 'github' | 'zip' | 'screenshots';
+  elementIdentifier?: string;
+  elementDescription?: string;
   evidence?: string;
   diagnosis: string;
   contextualHint: string;
   correctivePrompt: string;
   confidence: number;
   riskLevel?: string;
-  potentialRiskReason?: string; // Why pixel sampling was not possible
+  potentialRiskReason?: string;
   inputLimitation?: string;
   advisoryGuidance?: string;
+  reasonCodes?: string[];
+  backgroundStatus?: 'certain' | 'uncertain' | 'unmeasurable';
   affectedComponents?: any[];
-  // Convergence constraint: Heuristic A1 findings NEVER block convergence
   blocksConvergence?: boolean;
 }
 

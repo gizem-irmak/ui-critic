@@ -940,23 +940,73 @@ async function computeA1ViolationsFromScreenshots(
       canBeConfirmed ? 'confirmed' : 
       (effectiveRatio >= 4.0 || bgCertainty.isCertain === false) ? 'potential' : 'borderline';
 
-    // Diagnosis based on classification
+    // ====================================================================
+    // BUILD REASON CODES FOR POTENTIAL FINDINGS (Mandatory per A1 rule)
+    // ====================================================================
+    const reasonCodes: string[] = [];
+    if (!bgCertainty.isCertain) {
+      if (bgCertainty.mixedBackground) reasonCodes.push('BG_MIXED');
+      if (bgCertainty.hasGradient) reasonCodes.push('BG_GRADIENT');
+      if (bgCertainty.hasImage) reasonCodes.push('BG_IMAGE');
+      if (bgCertainty.hasOverlay) reasonCodes.push('BG_OVERLAY');
+      if (bgCertainty.antiAliasingDominates) reasonCodes.push('FG_ANTIALIASING');
+      if (sample.bgPixelCount < 15) reasonCodes.push('BG_TOO_SMALL_REGION');
+    }
+    if (confidence < confidenceThreshold) reasonCodes.push('LOW_CONFIDENCE');
+    
+    // Determine background status
+    const backgroundStatus: 'certain' | 'uncertain' | 'unmeasurable' = 
+      bgCertainty.isCertain ? 'certain' :
+      sample.bgPixelCount >= 8 ? 'uncertain' : 'unmeasurable';
+    
+    // Build background candidates if uncertain
+    const backgroundCandidates = sample.bgCandidates?.map(c => ({
+      hex: rgbToHex(c),
+      confidence: 0.6, // Reduced confidence for candidates
+    }));
+    
+    // Calculate foreground confidence based on sampling quality
+    const foregroundConfidence = Math.max(0.5, 1 - (sample.fgLumaStd / 30) - reliability.confidencePenalty);
+
+    // Diagnosis based on classification - element-specific
+    const elementIdentifier = `Screenshot #${screenshotIdx0 + 1}${el.location ? ` — ${el.location}` : ''}${el.elementDescription ? ` (${el.elementDescription})` : ''}`;
+    
     const diagnosis = (() => {
       if (finalStatus === 'confirmed') {
-        return 'Text contrast is reliably below WCAG AA minimum (4.5:1 for normal text). ' +
-               'Foreground and background colors were clearly identified from rendered pixels.';
+        return `Text contrast ${ratio.toFixed(1)}:1 is below WCAG AA minimum ${thresholdUsed}:1. ` +
+               `Foreground ${sample.fgHex} on background ${sample.bgHex} measured reliably.`;
       }
       if (finalStatus === 'potential') {
-        const uncertaintyReason = bgCertainty.reason || 'background could not be reliably isolated';
-        return `Potential contrast issue detected but cannot be confirmed: ${uncertaintyReason}. ` +
-               'This is a heuristic finding that requires manual verification.';
+        const reasons = reasonCodes.map(code => {
+          switch (code) {
+            case 'BG_MIXED': return 'multiple background colors detected';
+            case 'BG_GRADIENT': return 'gradient background';
+            case 'BG_IMAGE': return 'image or textured background';
+            case 'BG_OVERLAY': return 'transparency or overlay suspected';
+            case 'BG_TOO_SMALL_REGION': return 'insufficient background pixels';
+            case 'FG_ANTIALIASING': return 'glyph sampling unstable';
+            case 'LOW_CONFIDENCE': return 'combined confidence below threshold';
+            default: return code;
+          }
+        }).join(', ');
+        return `Potential contrast issue: ${reasons}. ` +
+               (sample.contrastRange 
+                 ? `Contrast range ${sample.contrastRange.min.toFixed(1)}:1 – ${sample.contrastRange.max.toFixed(1)}:1.`
+                 : `Estimated ratio ${ratio.toFixed(1)}:1 requires verification.`);
       }
       // borderline
-      return `Contrast ratio (${effectiveRatio.toFixed(1)}:1) is near the WCAG AA threshold. ` +
+      return `Contrast ratio ${ratio.toFixed(1)}:1 is near WCAG AA threshold ${thresholdUsed}:1. ` +
              'Consider increasing contrast for safety margin.';
     })();
+    
+    // Actionable guidance per element
+    const actionableGuidance = finalStatus === 'confirmed'
+      ? `Increase contrast to at least ${thresholdUsed}:1 by darkening text or lightening background.`
+      : finalStatus === 'potential'
+        ? `Verify contrast with browser DevTools. If ratio < ${thresholdUsed}:1, adjust colors.`
+        : `Consider increasing contrast slightly above ${thresholdUsed}:1 for safety margin.`;
 
-    // Build result with classification metadata
+    // Build per-element result with all required fields
     results.push({
       ruleId,
       ruleName,
@@ -964,27 +1014,41 @@ async function computeA1ViolationsFromScreenshots(
       status: finalStatus,
       samplingMethod: 'pixel',
       inputType: 'screenshots',
+      // Element identification
+      elementIdentifier,
       elementRole: el.elementRole,
       elementDescription: el.elementDescription,
       evidence,
+      // Diagnosis and guidance
       diagnosis,
       contextualHint: finalStatus === 'potential' 
         ? 'Verify contrast with browser DevTools or accessibility testing tools.'
         : 'Increase text/background contrast for this element and re-check against WCAG AA.',
+      actionableGuidance,
       confidence,
+      // Foreground color data
+      foregroundRgb: `rgb(${Math.round(sample.fg.r)}, ${Math.round(sample.fg.g)}, ${Math.round(sample.fg.b)})`,
+      foregroundHex: sample.fgHex,
+      foregroundConfidence: Math.round(foregroundConfidence * 100) / 100,
+      // Background color data
+      backgroundRgb: `rgb(${Math.round(sample.bg.r)}, ${Math.round(sample.bg.g)}, ${Math.round(sample.bg.b)})`,
+      backgroundHex: sample.bgHex,
+      backgroundStatus,
+      backgroundCandidates,
+      // Contrast data
       contrastRatio: Math.round(ratio * 100) / 100,
       contrastRange: sample.contrastRange ? { min: Math.round(sample.contrastRange.min * 100) / 100, max: Math.round(sample.contrastRange.max * 100) / 100 } : undefined,
       thresholdUsed,
-      foregroundRgb: `rgb(${Math.round(sample.fg.r)}, ${Math.round(sample.fg.g)}, ${Math.round(sample.fg.b)})`,
-      backgroundRgb: `rgb(${Math.round(sample.bg.r)}, ${Math.round(sample.bg.g)}, ${Math.round(sample.bg.b)})`,
-      foregroundHex: sample.fgHex,
-      backgroundHex: sample.bgHex,
       colorApproximate: true,
-      // Include background certainty metadata for transparency
+      // Reason codes for potential findings (MANDATORY per A1 rule)
+      reasonCodes: finalStatus === 'potential' || finalStatus === 'borderline' ? reasonCodes : undefined,
+      potentialRiskReason: reasonCodes.length > 0 ? reasonCodes.join(', ') : undefined,
+      // Background certainty metadata
       backgroundCertainty: {
         isCertain: bgCertainty.isCertain,
         reason: bgCertainty.reason,
       },
+      // Sampling reliability data
       samplingReliability: {
         pixelSupport: `adequate (${sample.fgPixelCount} fg pixels, ${sample.bgPixelCount} bg pixels)`,
         foregroundVariance: `stddev ${Math.round(sample.fgLumaStd)}`,
@@ -1000,12 +1064,12 @@ async function computeA1ViolationsFromScreenshots(
         clusterCount: sample.clusterCount,
         rangeSpansThreshold: sample.contrastRange ? (sample.contrastRange.min < 4.5 && sample.contrastRange.max >= 4.5) : false,
       } : undefined,
-      // Heuristic findings should NOT block convergence
+      // Convergence: Confirmed blocks, potential/borderline does not
       blocksConvergence: finalStatus === 'confirmed',
     });
   }
 
-  // Log classification breakdown
+  // Log per-element classification breakdown
   const confirmed = results.filter(r => r.status === 'confirmed').length;
   const potential = results.filter(r => r.status === 'potential').length;
   const borderline = results.filter(r => r.status === 'borderline').length;
@@ -2537,224 +2601,122 @@ serve(async (req) => {
     
     const a1AffectedItemsUI = Array.from(a1DedupeMapUI.values());
     
-    // Create aggregated A1 result if there are any items
-    let aggregatedA1UI: any = null;
-    if (a1AffectedItemsUI.length > 0) {
-      // Count by status and risk level
-      const confirmedCount = a1AffectedItemsUI.filter(i => i.status === 'confirmed').length;
-      const borderlineCount = a1AffectedItemsUI.filter(i => i.status === 'borderline').length;
-      const potentialCount = a1AffectedItemsUI.filter(i => i.status === 'potential').length;
-      const highRiskCount = a1AffectedItemsUI.filter(i => i.riskLevel === 'high').length;
-      const mediumRiskCount = a1AffectedItemsUI.filter(i => i.riskLevel === 'medium').length;
-      const lowRiskCount = a1AffectedItemsUI.filter(i => i.riskLevel === 'low').length;
+    // ========== A1 ELEMENT-LEVEL REPORTING (NO AGGREGATION) ==========
+    // Per authoritative A1 rule: NEVER aggregate A1 findings into a single message.
+    // Always report per element with explicit reason codes for potential findings.
+    
+    const perElementA1Violations: any[] = [];
+    
+    for (const item of a1AffectedItemsUI) {
+      // Build element identifier
+      const elementIdentifier = `Screenshot #${item.screenshotIndex || 1}${item.location ? ` — ${item.location}` : ''}${item.elementDescription ? ` (${item.elementDescription})` : ''}`;
       
-      // Determine overall status (confirmed > borderline > potential)
-      // Confirmed violations are blocking; borderline are advisory; potential are unmeasurable
-      let overallStatus: 'confirmed' | 'borderline' | 'potential' = 'potential';
-      if (confirmedCount > 0) overallStatus = 'confirmed';
-      else if (borderlineCount > 0) overallStatus = 'borderline';
-      
-      // Determine overall risk level (highest tier present)
-      let overallRiskLevel: 'high' | 'medium' | 'low' = 'low';
-      if (highRiskCount > 0) overallRiskLevel = 'high';
-      else if (mediumRiskCount > 0) overallRiskLevel = 'medium';
-      
-      // Calculate overall confidence (max of all findings)
-      const overallConfidence = Math.max(...a1AffectedItemsUI.map(i => i.confidence));
-      
-      // Build confidence reason - includes borderline items
-      const itemsWithRatio = a1AffectedItemsUI.filter(i => i.contrastRatio !== undefined);
-      let confidenceReason = '';
-      if (overallStatus === 'confirmed') {
-        confidenceReason = itemsWithRatio.length > 0
-          ? `Contrast ratios computed for ${itemsWithRatio.length} element(s). ` +
-            `${confirmedCount} confirmed violation(s) with measured ratios below WCAG AA thresholds.` +
-            (borderlineCount > 0 ? ` ${borderlineCount} borderline element(s) near threshold.` : '')
-          : `${confirmedCount} finding(s) with insufficient contrast identified via screenshot analysis.`;
-      } else if (overallStatus === 'borderline') {
-        confidenceReason = `${borderlineCount} element(s) have borderline contrast near WCAG AA threshold (4.3:1–4.5:1 zone). ` +
-          `These are near-threshold findings—consider increasing contrast for safety margin.`;
-      } else {
-        confidenceReason = `${potentialCount} element(s) could not be measured due to background complexity. ` +
-          `Manual verification with browser dev tools recommended.`;
-      }
-      
-      // Build unique location names list
-      const invalidLocations = new Set([
-        'ui area', 'area', 'component', 'element', 'item', 'text', 'the', 'unknown', 'ui element'
-      ]);
-      
-      const uniqueLocations = new Set<string>();
-      for (const item of a1AffectedItemsUI) {
-        const loc = item.elementDescription || item.componentName || item.location || '';
-        if (loc && loc.length > 2 && !invalidLocations.has(loc.toLowerCase())) {
-          uniqueLocations.add(loc);
+      // Build reason codes for potential findings (MANDATORY per A1 rule)
+      const reasonCodes: string[] = [];
+      if (item.status === 'potential' || item.status === 'borderline') {
+        if (item.potentialRiskReason) {
+          // Parse reason from potentialRiskReason
+          const reason = item.potentialRiskReason.toLowerCase();
+          if (reason.includes('mixed') || reason.includes('multiple')) reasonCodes.push('BG_MIXED');
+          if (reason.includes('gradient')) reasonCodes.push('BG_GRADIENT');
+          if (reason.includes('image') || reason.includes('texture')) reasonCodes.push('BG_IMAGE');
+          if (reason.includes('overlay') || reason.includes('transparent')) reasonCodes.push('BG_OVERLAY');
+          if (reason.includes('insufficient') || reason.includes('small region')) reasonCodes.push('BG_TOO_SMALL_REGION');
+          if (reason.includes('anti-alias') || reason.includes('unstable')) reasonCodes.push('FG_ANTIALIASING');
         }
+        if (item.confidence < 0.75) reasonCodes.push('LOW_CONFIDENCE');
+        // Ensure at least one reason code
+        if (reasonCodes.length === 0) reasonCodes.push('LOW_CONFIDENCE');
       }
       
-      // Build deduplicated list (max 4, with "and N more")
-      const uniqueLocationsArray = Array.from(uniqueLocations);
-      const displayLimit = 4;
-      const displayedLocations = uniqueLocationsArray.slice(0, displayLimit);
-      const moreCount = uniqueLocationsArray.length - displayLimit;
-      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
+      // Determine background status
+      const backgroundStatus: 'certain' | 'uncertain' | 'unmeasurable' = 
+        item.status === 'confirmed' ? 'certain' :
+        item.contrastRatio !== undefined ? 'uncertain' : 'unmeasurable';
       
-      const areaCountText = uniqueLocationsArray.length > 0 
-        ? `${uniqueLocationsArray.length} element(s): ${displayedLocations.join(', ')}${moreText}`
-        : `${a1AffectedItemsUI.length} location(s)`;
-      
-      // Build risk/status breakdown text - include borderline
-      const statusBreakdown = [
-        confirmedCount > 0 ? `${confirmedCount} confirmed` : '',
-        borderlineCount > 0 ? `${borderlineCount} borderline` : '',
-        potentialCount > 0 ? `${potentialCount} potential` : '',
-      ].filter(Boolean).join(', ');
-      
-      const riskBreakdown = [
-        highRiskCount > 0 ? `${highRiskCount} high-risk` : '',
-        mediumRiskCount > 0 ? `${mediumRiskCount} medium-risk` : '',
-        lowRiskCount > 0 ? `${lowRiskCount} low-risk` : '',
-      ].filter(Boolean).join(', ');
-      
-      // Build summary based on status - per-element findings
-      const confirmedWithRatios = a1AffectedItemsUI.filter(i => i.status === 'confirmed' && i.contrastRatio);
-      const borderlineWithRatios = a1AffectedItemsUI.filter(i => i.status === 'borderline' && i.contrastRatio);
-      
-      const confirmedRatioDetails = confirmedWithRatios.length > 0
-        ? ` Measured: ${confirmedWithRatios.slice(0, 3).map(i => `${i.contrastRatio}:1`).join(', ')}${confirmedWithRatios.length > 3 ? ` (+${confirmedWithRatios.length - 3} more)` : ''}.`
-        : '';
-      const borderlineRatioDetails = borderlineWithRatios.length > 0
-        ? ` Borderline: ${borderlineWithRatios.slice(0, 2).map(i => `${i.contrastRatio}:1`).join(', ')}.`
-        : '';
-      
-      let summary = '';
-      if (overallStatus === 'confirmed') {
-        summary = `${confirmedCount} text contrast violation(s) in ${areaCountText} fail WCAG AA requirements.${confirmedRatioDetails}${borderlineCount > 0 ? ` ${borderlineCount} additional element(s) have borderline contrast.` : ''}`;
-      } else if (overallStatus === 'borderline') {
-        summary = `${borderlineCount} element(s) in ${areaCountText} have borderline contrast near WCAG AA threshold.${borderlineRatioDetails} Consider increasing contrast for safety margin.`;
-      } else {
-        summary = `${potentialCount} element(s) could not be measured for contrast (${a1AffectedItemsUI.map(i => i.potentialRiskReason || 'background complexity').filter((v, i, a) => a.indexOf(v) === i).join(', ')}).`;
-      }
-      
-      let contextualHint = '';
-      if (overallStatus === 'confirmed') {
-        contextualHint = 'Increase text color contrast to meet WCAG AA minimum (4.5:1 for normal text, 3:1 for large text).';
-      } else if (overallStatus === 'borderline') {
-        contextualHint = 'Consider increasing contrast slightly above 4.5:1 to provide safety margin for borderline elements.';
-      } else {
-        contextualHint = 'Use browser dev tools to compute exact contrast ratios for elements with complex backgrounds.';
-      }
-      
-      const a1Rule = allRulesForViolations.find(r => r.id === 'A1');
-      
-      // Build specific, actionable corrective prompt for confirmed violations (screenshot input)
-      // Include: affected element, colors, ratio, fix directive, application-wide scope
-      let correctivePrompt = '';
-      if (overallStatus === 'confirmed') {
-        // Get the first confirmed item with the most specific data
-        const confirmedItems = a1AffectedItemsUI.filter(i => i.status === 'confirmed');
-        const primaryItem = confirmedItems.find(i => i.foregroundHex && i.backgroundHex) || confirmedItems[0];
-        
-        if (primaryItem) {
-          // Build element description (e.g., "course card metadata text", "header subtitle")
-          const elementDesc = primaryItem.elementDescription 
-            ? primaryItem.elementDescription.toLowerCase()
-            : primaryItem.componentName 
-              ? `${primaryItem.componentName} text`
-              : `text in ${primaryItem.location}`;
-          
-          // Build color details if available
-          const colorDetails = primaryItem.foregroundHex && primaryItem.backgroundHex
-            ? ` The foreground color ${primaryItem.foregroundHex} on ${primaryItem.backgroundHex} background`
-            : ' The current text color';
-          
-          // Build ratio details
-          const ratioDetails = primaryItem.contrastRatio
-            ? ` results in insufficient contrast (${primaryItem.contrastRatio}:1).`
-            : ' has insufficient contrast for WCAG AA compliance.';
-          
-          // Determine suggested fix based on detected colors
-          const suggestedFix = primaryItem.foregroundHex?.toLowerCase().includes('9ca3af') ||
-                              primaryItem.foregroundHex?.toLowerCase().includes('d1d5db') ||
-                              /gray-300|gray-400|text-gray/.test(primaryItem.location || '')
-            ? 'Replace low-contrast gray text (e.g., text-gray-300/400) with higher-contrast tokens such as text-gray-700 or theme foreground colors.'
-            : 'Replace low-contrast text colors with higher-contrast tokens (e.g., text-gray-700 or theme foreground) to meet WCAG AA 4.5:1 minimum for normal text.';
-          
-          // List all unique affected locations for application-wide scope
-          const allLocations = Array.from(new Set(confirmedItems.map(i => i.location).filter(Boolean)));
-          const locationScope = allLocations.length > 1
-            ? ` Apply this change to all affected elements: ${allLocations.slice(0, 3).join(', ')}${allLocations.length > 3 ? `, and ${allLocations.length - 3} more` : ''}.`
-            : '';
-          
-          correctivePrompt = `In the ${elementDesc},${colorDetails}${ratioDetails} ${suggestedFix}${locationScope} Ensure contrast fixes are applied consistently across all similar elements throughout the application.`;
-        } else {
-          // Fallback generic prompt if no detailed data
-          correctivePrompt = 'Replace low-contrast text colors with higher-contrast tokens (e.g., text-gray-700 or theme foreground colors) to meet WCAG AA 4.5:1 minimum for normal text. Apply this change consistently across all affected areas throughout the application.';
+      // Build diagnosis per element
+      const diagnosis = (() => {
+        if (item.status === 'confirmed') {
+          return `Text contrast ${item.contrastRatio}:1 is below WCAG AA minimum ${item.thresholdUsed || 4.5}:1. ` +
+                 `Foreground ${item.foregroundHex || 'unknown'} on background ${item.backgroundHex || 'unknown'}.`;
         }
-      }
-      // No mandatory corrective prompt for potential risks - advisory guidance only
+        if (item.status === 'potential') {
+          const reasons = reasonCodes.map(code => {
+            switch (code) {
+              case 'BG_MIXED': return 'multiple background colors detected';
+              case 'BG_GRADIENT': return 'gradient background';
+              case 'BG_IMAGE': return 'image or textured background';
+              case 'BG_OVERLAY': return 'transparency or overlay suspected';
+              case 'BG_TOO_SMALL_REGION': return 'insufficient background pixels';
+              case 'FG_ANTIALIASING': return 'glyph sampling unstable';
+              case 'LOW_CONFIDENCE': return 'combined confidence below threshold';
+              default: return code;
+            }
+          }).join(', ');
+          return `Potential contrast issue: ${reasons}. ` +
+                 (item.contrastRatio !== undefined 
+                   ? `Estimated ratio ${item.contrastRatio}:1 requires verification.`
+                   : 'Contrast could not be measured.');
+        }
+        // borderline
+        return `Contrast ratio ${item.contrastRatio}:1 is near WCAG AA threshold ${item.thresholdUsed || 4.5}:1.`;
+      })();
       
-      // No input limitation for confirmed violations (screenshot is definitive for obvious issues)
-      // Borderline gets advisory about threshold proximity
-      let inputLimitation: string | undefined = undefined;
-      if (overallStatus === 'potential') {
-        inputLimitation = 'Background complexity prevents stable contrast measurement. Use browser dev tools to compute exact ratio.';
-      } else if (overallStatus === 'borderline') {
-        inputLimitation = 'Contrast falls near WCAG AA threshold (4.3:1–4.5:1). Consider increasing for safety margin.';
-      }
+      // Actionable guidance per element
+      const actionableGuidance = item.status === 'confirmed'
+        ? `Increase contrast to at least ${item.thresholdUsed || 4.5}:1 by darkening text or lightening background.`
+        : item.status === 'potential'
+          ? `Verify contrast with browser DevTools. If ratio < ${item.thresholdUsed || 4.5}:1, adjust colors.`
+          : `Consider increasing contrast slightly above ${item.thresholdUsed || 4.5}:1 for safety margin.`;
       
-      // Advisory guidance for potential risks and borderline findings
-      let advisoryGuidance: string | undefined = undefined;
-      if (overallStatus === 'potential') {
-        advisoryGuidance = 'This is a potential risk due to unmeasurable contrast. Actual compliance depends on computed ratio.';
-      } else if (overallStatus === 'borderline') {
-        advisoryGuidance = 'Borderline contrast near WCAG AA threshold—technically may pass, but increasing contrast provides safety margin.';
-      }
+      // Corrective prompt only for confirmed violations
+      const correctivePrompt = item.status === 'confirmed'
+        ? `Replace ${item.foregroundHex || 'low-contrast text color'} with a higher-contrast alternative (e.g., text-gray-700 or theme foreground) to meet WCAG AA ${item.thresholdUsed || 4.5}:1 minimum.`
+        : ''; // No mandatory corrective prompt for potential/borderline
       
-      aggregatedA1UI = {
+      // Build per-element violation
+      perElementA1Violations.push({
         ruleId: 'A1',
         ruleName: 'Insufficient text contrast',
         category: 'accessibility',
-        status: overallStatus,
-        inputType: 'screenshots', // Explicit input type tracking
-        overall_confidence: Math.round(overallConfidence * 100) / 100,
-        confidence_reason: confidenceReason,
-        summary,
-        riskLevel: overallRiskLevel,
-        inputLimitation,
-        advisoryGuidance,
-        affected_items: a1AffectedItemsUI.map(item => ({
-          screenshotIndex: item.screenshotIndex,
-          location: item.location,
-          componentName: item.componentName,
-          elementRole: item.elementRole,
-          elementDescription: item.elementDescription,
-          foregroundHex: item.foregroundHex,
-          backgroundHex: item.backgroundHex,
-          contrastRatio: item.contrastRatio,
-          thresholdUsed: item.thresholdUsed,
-          riskLevel: item.riskLevel,
-          status: item.status,
-          confidence: item.confidence,
-          rationale: item.rationale,
-          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
-        })),
-        // For confirmed violations, also pass through top-level contrast data for display
-        ...(overallStatus === 'confirmed' && a1AffectedItemsUI[0]?.foregroundHex ? {
-          foregroundHex: a1AffectedItemsUI[0].foregroundHex,
-          backgroundHex: a1AffectedItemsUI[0].backgroundHex,
-          contrastRatio: a1AffectedItemsUI[0].contrastRatio,
-          elementDescription: a1AffectedItemsUI[0].elementDescription,
-        } : {}),
-        diagnosis: summary,
-        contextualHint,
+        status: item.status,
+        inputType: 'screenshots',
+        samplingMethod: 'pixel',
+        // Element identification (required per A1 rule)
+        elementIdentifier,
+        elementDescription: item.elementDescription,
+        elementRole: item.elementRole,
+        componentName: item.componentName,
+        screenshotIndex: item.screenshotIndex,
+        location: item.location,
+        // Foreground color data
+        foregroundHex: item.foregroundHex,
+        foregroundConfidence: item.confidence, // Use overall confidence as foreground confidence
+        // Background color data
+        backgroundHex: item.backgroundHex,
+        backgroundStatus,
+        // Contrast data
+        contrastRatio: item.contrastRatio,
+        thresholdUsed: item.thresholdUsed || 4.5,
+        // Reason codes for potential findings (MANDATORY per A1 rule)
+        reasonCodes: reasonCodes.length > 0 ? reasonCodes : undefined,
+        potentialRiskReason: item.potentialRiskReason,
+        // Diagnosis and guidance
+        diagnosis,
+        contextualHint: item.status === 'potential' 
+          ? 'Verify contrast with browser DevTools or accessibility testing tools.'
+          : 'Increase text/background contrast for this element.',
+        actionableGuidance,
         correctivePrompt,
-        confidence: Math.round(overallConfidence * 100) / 100,
-      };
-      
-      console.log(`A1 aggregated: ${a1Violations.length} findings → 1 result (${statusBreakdown}, ${riskBreakdown})`);
+        // Confidence and risk
+        confidence: item.confidence,
+        riskLevel: item.riskLevel,
+        // Convergence: Confirmed blocks, potential/borderline does not
+        blocksConvergence: item.status === 'confirmed',
+      });
     }
-
+    
+    console.log(`A1 per-element: ${perElementA1Violations.length} individual violations (${perElementA1Violations.filter(v => v.status === 'confirmed').length} confirmed, ${perElementA1Violations.filter(v => v.status === 'potential').length} potential, ${perElementA1Violations.filter(v => v.status === 'borderline').length} borderline)`);
     // ========== A2 AGGREGATION LOGIC (Screenshot Analysis) ==========
     interface A2AffectedItemUI {
       component_name: string;
@@ -3361,10 +3323,10 @@ serve(async (req) => {
       console.log(`A5: No valid violations found (${a5Violations.length} filtered out as PASS or NOT APPLICABLE)`);
     }
     
-    // Combine all violations
+    // Combine all violations - A1 is per-element (no aggregation)
     const enhancedViolations = [
       ...filteredOtherViolations,
-      ...(aggregatedA1UI ? [aggregatedA1UI] : []),
+      ...perElementA1Violations, // Per-element A1 findings (never aggregated)
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),
       ...(aggregatedA5UI ? [aggregatedA5UI] : []),
