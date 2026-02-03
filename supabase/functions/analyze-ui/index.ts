@@ -79,6 +79,13 @@ function median(values: number[]): number {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.floor((p / 100) * (sorted.length - 1));
+  return sorted[clamp(idx, 0, sorted.length - 1)];
+}
+
 function stddev(values: number[]): number {
   if (values.length <= 1) return 0;
   const mean = values.reduce((a, b) => a + b, 0) / values.length;
@@ -147,6 +154,12 @@ type A1Sample = {
   // Range-based measurement for mixed backgrounds
   contrastRange?: { min: number; max: number };
   bgCandidates?: RGB[];
+  // Worst-case bounding for suppression decisions
+  fgWorst: RGB; // Lightest plausible stroke color (80-85th percentile)
+  bgWorst: RGB; // Lightest plausible background (80-90th percentile)
+  contrastWorst: number; // Contrast using worst-case colors
+  fgWorstHex: string;
+  bgWorstHex: string;
 };
 
 // Simple k-means clustering for color grouping
@@ -297,6 +310,17 @@ function computeA1SampleWithFallbacks(
   const fgLumaStd = stddev(fgLumas);
   const fgLumaMax = Math.max(...fgLumas);
 
+  // ====================================================================
+  // WORST-CASE FOREGROUND (FG_worst): 80-85th percentile luminance
+  // This is the LIGHTEST plausible stroke color, for conservative bounding
+  // ====================================================================
+  const fgWorstPercentile = 82.5; // midpoint of 80-85%
+  const fgWorstLuma = percentile(fgLumas, fgWorstPercentile);
+  // Find the pixel closest to this luminance to use its actual RGB
+  const fgWorstIdx = fgPixels.findIndex(p => Math.abs(p.luma255 - fgWorstLuma) < 3) ?? Math.floor(fgPixels.length * 0.82);
+  const fgWorstPixel = fgPixels[clamp(fgWorstIdx, 0, fgPixels.length - 1)];
+  const fgWorst: RGB = { r: fgWorstPixel.r, g: fgWorstPixel.g, b: fgWorstPixel.b };
+
   // === FALLBACK HIERARCHY FOR BACKGROUND SAMPLING ===
   const expansionLevels = [3, 8, 16, 32]; // pixels to expand
   let bgPixels: typeof textPixels = [];
@@ -325,6 +349,17 @@ function computeA1SampleWithFallbacks(
   // Check background stability
   const bgLumas = bgPixels.map(p => p.luma255);
   const bgLumaStd = stddev(bgLumas);
+
+  // ====================================================================
+  // WORST-CASE BACKGROUND (BG_worst): 80-90th percentile luminance
+  // This is the LIGHTEST plausible background near the text, for conservative bounding
+  // ====================================================================
+  const bgWorstPercentile = 85; // midpoint of 80-90%
+  const bgWorstLuma = percentile(bgLumas, bgWorstPercentile);
+  // Find the pixel closest to this luminance
+  const bgWorstIdx = bgPixels.findIndex(p => Math.abs(p.luma255 - bgWorstLuma) < 3) ?? Math.floor(bgPixels.length * 0.85);
+  const bgWorstPixel = bgPixels[clamp(bgWorstIdx, 0, bgPixels.length - 1)];
+  const bgWorst: RGB = { r: bgWorstPixel.r, g: bgWorstPixel.g, b: bgWorstPixel.b };
 
   // If background variance is high (>20), use clustering
   let bg: RGB;
@@ -377,9 +412,14 @@ function computeA1SampleWithFallbacks(
   const lumaDistance = Math.abs(bgLuma - fgLuma);
 
   const ratio = contrastRatioFromRgb(fg, bg);
+  
+  // Compute worst-case contrast using lightest plausible colors
+  const contrastWorst = contrastRatioFromRgb(fgWorst, bgWorst);
 
   const fgHex = rgbToHex(fg);
   const bgHex = rgbToHex(bg);
+  const fgWorstHex = rgbToHex(fgWorst);
+  const bgWorstHex = rgbToHex(bgWorst);
   const fgRgb2 = hexToRgb(fgHex);
   const bgRgb2 = hexToRgb(bgHex);
   const hexRecomputedRatio = fgRgb2 && bgRgb2 ? contrastRatioFromRgb(fgRgb2, bgRgb2) : ratio;
@@ -403,6 +443,12 @@ function computeA1SampleWithFallbacks(
     clusterCount,
     contrastRange,
     bgCandidates,
+    // Worst-case bounding fields
+    fgWorst,
+    bgWorst,
+    contrastWorst,
+    fgWorstHex,
+    bgWorstHex,
   };
 }
 
@@ -428,149 +474,92 @@ type A1ReliabilityResult = {
  * evidence indicates the text is clearly readable.
  */
 /**
- * STRICT SUPPRESSION POLICY FOR A1 FINDINGS:
+ * WORST-CASE CONTRAST BOUNDING FOR A1 SUPPRESSION
  * 
- * When contrast measurement fails due to technical limitations (insufficient pixels,
- * unstable sampling, anti-aliasing, shadows, gradients, mixed backgrounds), suppress
- * the A1 finding ENTIRELY unless low contrast is visually plausible.
+ * This function determines whether to suppress an A1 finding based on a conservative
+ * worst-case contrast bound. Instead of suppressing solely based on measurement
+ * instability, we compute the contrast using the lightest plausible colors.
  * 
- * Key principle: Algorithmic uncertainty = PASS (no report), not accessibility risk.
+ * Methodology:
+ * 1. FG_worst: 80-85th percentile luminance among stroke pixels (lightest plausible stroke)
+ * 2. BG_worst: 80-90th percentile luminance among background pixels (lightest plausible background)
+ * 3. contrast_worst = contrast(FG_worst, BG_worst)
  * 
- * Suppress when:
- * 1. Clear luminance separation exists (foreground visually distinct from background)
- * 2. Contrast ratio is not extremely low (≥2.5:1 with good separation)
- * 3. High variance is due to background complexity, not actual color overlap
- * 4. Range-based measurements show worst-case passes threshold
+ * Decision rules:
+ * - If contrast_worst < 4.5:1, DO NOT suppress — report as failure
+ *   - Confirmed Fail if contrast_worst < 4.0:1
+ *   - Fail if 4.0 ≤ contrast_worst < 4.5
+ * - ONLY suppress (PASS/no report) when contrast_worst ≥ 4.5:1
  * 
- * NEVER suppress (Obvious-Failure Safeguard):
- * - When foreground/background luminance distributions strongly overlap
- * - When measured contrast is clearly below WCAG AA (< 3.0:1) with low separation
- * - Light gray on white, pastel on pastel, or similar obviously-failing combinations
- * 
- * Only report when:
- * - Contrast failure is confidently measured (reliable sampling + ratio < threshold)
- * - Low contrast is visually plausible (foreground/background lumas overlap significantly)
+ * This prevents false passes when measurement is unstable but worst-case still fails.
  */
-function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?: string } {
+function shouldSuppressA1Finding(sample: A1Sample): { 
+  suppress: boolean; 
+  reason?: string;
+  worstCaseStatus?: 'confirmed_fail' | 'fail' | 'pass';
+} {
+  const contrastWorst = sample.contrastWorst;
+  
+  // ============================================================
+  // PRIMARY DECISION: Worst-case contrast bounding
+  // ============================================================
+  
+  // If worst-case contrast fails threshold, DO NOT SUPPRESS
+  if (contrastWorst < 4.5) {
+    const status = contrastWorst < 4.0 ? 'confirmed_fail' : 'fail';
+    return {
+      suppress: false,
+      worstCaseStatus: status,
+      // reason: not needed for non-suppression
+    };
+  }
+  
+  // ============================================================
+  // ADDITIONAL SAFEGUARDS — Never suppress obvious failures
+  // ============================================================
+  // These are belt-and-suspenders checks for edge cases
+  
   const fgLuma = relativeLuminance01(sample.fg) * 255;
   const bgLuma = relativeLuminance01(sample.bg) * 255;
   const lumaSeparation = Math.abs(bgLuma - fgLuma);
   
-  // ============================================================
-  // OBVIOUS-FAILURE SAFEGUARD — NEVER SUPPRESS THESE CASES
-  // ============================================================
-  // Even if sampling has minor noise, obvious low-contrast must be reported.
-  
-  // SAFEGUARD 1: Very low measured ratio with small separation = obvious failure
-  // Light gray on white, pastel on pastel, low-contrast color pairs
-  if (sample.ratio < 3.0 && lumaSeparation < 35) {
-    return {
-      suppress: false,
-      // reason not needed for non-suppression
-    };
-  }
-  
-  // SAFEGUARD 2: Strong luminance overlap — foreground/background distributions overlap
-  // If stddev is high on BOTH sides AND separation is small, colors overlap
-  if (lumaSeparation < 20 && sample.fgLumaStd > 5 && sample.bgLumaStd > 5) {
-    return { suppress: false };
-  }
-  
-  // SAFEGUARD 3: Both colors are "light" (high luma) with low separation
-  // This catches light gray on white, pastel combinations
-  const bothLight = fgLuma > 150 && bgLuma > 150;
-  if (bothLight && lumaSeparation < 40 && sample.ratio < 4.0) {
-    return { suppress: false };
-  }
-  
-  // SAFEGUARD 4: Both colors are "dark" (low luma) with low separation
-  // This catches dark gray on dark gray, dark blue on black, etc.
-  const bothDark = fgLuma < 100 && bgLuma < 100;
-  if (bothDark && lumaSeparation < 40 && sample.ratio < 4.0) {
-    return { suppress: false };
-  }
-  
-  // SAFEGUARD 5: Range-based measurement where best-case ALSO fails
+  // SAFEGUARD 1: Range-based measurement where best-case ALSO fails
   // If even the most favorable interpretation fails, this is obvious
   if (sample.contrastRange && sample.contrastRange.max < 4.5) {
-    return { suppress: false };
-  }
-  
-  // ============================================================
-  // SUPPRESSION CASES — When uncertainty should NOT be reported
-  // ============================================================
-  
-  // SUPPRESSION CASE 1: Very high luminance separation
-  // If lumas are very far apart, text is clearly distinguishable regardless of sampling issues
-  if (lumaSeparation >= 60) {
-    return {
-      suppress: true,
-      reason: `High luminance separation (Δluma=${Math.round(lumaSeparation)}) indicates clearly readable text`,
+    return { 
+      suppress: false, 
+      worstCaseStatus: sample.contrastRange.max < 4.0 ? 'confirmed_fail' : 'fail',
     };
   }
   
-  // SUPPRESSION CASE 2: Good separation with decent ratio
-  // Moderate separation (≥40) with ratio ≥2.5 suggests readable text
-  if (lumaSeparation >= 40 && sample.ratio >= 2.5) {
-    return {
-      suppress: true,
-      reason: `Adequate luminance separation (Δluma=${Math.round(lumaSeparation)}) with ratio ${sample.ratio.toFixed(1)}:1 indicates text is distinguishable`,
+  // SAFEGUARD 2: Both colors are "light" (high luma) with measured low contrast
+  // Extra safety for light gray on white, pastel combinations
+  const bothLight = fgLuma > 150 && bgLuma > 150;
+  if (bothLight && sample.ratio < 3.5 && lumaSeparation < 50) {
+    return { 
+      suppress: false, 
+      worstCaseStatus: sample.ratio < 4.0 ? 'confirmed_fail' : 'fail',
     };
   }
   
-  // SUPPRESSION CASE 3: Range-based measurement where worst-case passes
-  if (sample.contrastRange) {
-    const worstCase = sample.contrastRange.min;
-    if (worstCase >= 4.5) {
-      return {
-        suppress: true,
-        reason: `Worst-case contrast (${worstCase.toFixed(1)}:1) meets WCAG AA threshold`,
-      };
-    }
-  }
-  
-  // SUPPRESSION CASE 4: Background variance is the issue, not actual low contrast
-  // If background has high variance (complex background) but foreground is stable
-  // and there's reasonable separation, suppress
-  if (sample.bgLumaStd > 15 && sample.fgLumaStd < 12 && lumaSeparation >= 30) {
-    return {
-      suppress: true,
-      reason: `Background complexity (stddev=${Math.round(sample.bgLumaStd)}) with stable foreground and separation (Δluma=${Math.round(lumaSeparation)})`,
-    };
-  }
-  
-  // SUPPRESSION CASE 5: Moderate separation with ratio above "clearly failing"
-  // Ratio ≥ 3.0 with meaningful separation (≥25) suggests acceptable visibility
-  if (lumaSeparation >= 25 && sample.ratio >= 3.0) {
-    return {
-      suppress: true,
-      reason: `Ratio ${sample.ratio.toFixed(1)}:1 with separation (Δluma=${Math.round(lumaSeparation)}) is not a plausible accessibility failure`,
+  // SAFEGUARD 3: Both colors are "dark" (low luma) with measured low contrast
+  const bothDark = fgLuma < 100 && bgLuma < 100;
+  if (bothDark && sample.ratio < 3.5 && lumaSeparation < 50) {
+    return { 
+      suppress: false, 
+      worstCaseStatus: sample.ratio < 4.0 ? 'confirmed_fail' : 'fail',
     };
   }
   
   // ============================================================
-  // MARGINAL CASES — Default behavior
+  // SUPPRESSION — Only when worst-case passes threshold
   // ============================================================
   
-  // Close lumas with high variance on both sides = actual overlap risk
-  if (lumaSeparation < 25 && (sample.fgLumaStd > 8 || sample.bgLumaStd > 8)) {
-    return { suppress: false };
-  }
-  
-  // Very low separation suggests possible low contrast — do not suppress
-  if (lumaSeparation < 20) {
-    return { suppress: false };
-  }
-  
-  // Default: If ratio itself suggests near-failure and separation is questionable
-  if (sample.ratio < 3.5 && lumaSeparation < 35) {
-    return { suppress: false };
-  }
-  
-  // Otherwise, sampling uncertainty without plausible low-contrast evidence = suppress
+  // At this point, contrastWorst >= 4.5 and no safeguards triggered
   return {
     suppress: true,
-    reason: `Sampling uncertainty without plausible low-contrast evidence (ratio=${sample.ratio.toFixed(1)}:1, Δluma=${Math.round(lumaSeparation)})`,
+    worstCaseStatus: 'pass',
+    reason: `Worst-case contrast (${contrastWorst.toFixed(1)}:1 using ${sample.fgWorstHex} on ${sample.bgWorstHex}) meets WCAG AA threshold`,
   };
 }
 
