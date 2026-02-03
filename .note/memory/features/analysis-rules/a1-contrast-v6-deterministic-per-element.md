@@ -1,14 +1,25 @@
-# Memory: features/analysis-rules/a1-contrast-v20-authoritative-rule
+# Memory: features/analysis-rules/a1-contrast-v21-mandatory-coverage
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Authoritative Rule Definition v20)
+## A1 — Insufficient Text Contrast (Mandatory Coverage Rule v21)
 
-This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and legacy handling are superseded.
+This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
+
+### Critical Enforcement Rule
+
+**MANDATORY COVERAGE**: For every detected text element, ALWAYS emit an A1 evaluation record.
+- Uncertainty DOWNGRADES classification, it NEVER eliminates reporting.
+- Silence is NOT an allowed outcome for A1.
+- Do not return early. Do not suppress findings.
 
 ### Rule Objective
 
-Detect cases where text does not meet WCAG 2.1 AA minimum contrast requirements and classify the finding as either a **Confirmed Violation** or a **Heuristic Potential Risk**, based strictly on input certainty.
+Detect text elements that may not meet WCAG 2.1 AA contrast requirements and report findings per element, explicitly stating:
+- Where the issue occurs
+- What contrast was calculated
+- Whether the issue is confirmed or potential
+- Why it is classified as potential when uncertainty exists
 
 ### WCAG Thresholds (Immutable)
 
@@ -17,125 +28,131 @@ Detect cases where text does not meet WCAG 2.1 AA minimum contrast requirements 
 | Normal text | 4.5:1 |
 | Large text (≥18pt or ≥14pt bold) | 3.0:1 |
 
-### Supported Input Types
+---
 
-1. Rendered UI screenshots
-2. Exported source code (ZIP)
-3. GitHub repository link
+## Detection Scope
+
+Apply this rule to EVERY detected text element:
+- Small text, secondary/muted text
+- Badges, labels, metadata, helper text
+- Do NOT exclude based on size, prominence, or visual importance
 
 ---
 
-## Classification Logic by Input Type
+## Step-by-Step Processing (Mandatory)
 
-### 1. Screenshot-Based Detection
+### Step 1 — Foreground Color Extraction (Always Required)
 
-When rendered UI screenshots are provided:
+For each text element:
+- Attempt to extract foreground from glyph pixels (darkest 30-40% by luminance)
+- Record foreground color (hex) and confidence
+- **If confidence is low: Still emit the A1 record with explicit reason**
 
-**Extraction:**
-- Sample foreground color from interior glyph stroke pixels (darkest 30-40%)
-- Sample background color from immediate surrounding ring pixels
-- Use progressive ring expansion (3→32px) if needed
+### Step 2 — Background Sampling (Best-Effort, Never Blocking)
 
-**Background Certainty Rules:**
-The background is **certain** ONLY if:
-- A single dominant background color is detected
-- No gradients, images, or overlays are present
-- Text does not overlap multiple background regions
-- Anti-aliasing does not dominate color sampling
+Classify background as:
+- **Certain** → one dominant color, low variance
+- **Uncertain** → multiple colors, gradient, image, overlay
+- **Unmeasurable** → insufficient valid pixels
 
-**Screenshot Classification Decision:**
+**Critical**: Background uncertainty must NEVER stop evaluation.
 
-| Condition | Classification |
-|-----------|----------------|
-| FG and BG clearly identifiable, single dominant BG | **Confirmed Violation** |
-| Background is mixed, gradient, image-based, or ambiguous | **Heuristic Potential Risk** |
-| Anti-aliasing dominates color sampling | **Heuristic Potential Risk** |
-| Text spans multiple background regions | **Heuristic Potential Risk** |
+### Step 3 — Contrast Estimation (Must Always Be Attempted)
 
-**Confidence Assignment:**
-- Confirmed: confidence ≥ 0.75, background certainty met
-- Heuristic: confidence < 0.75 or background uncertain
+| Background Status | Action |
+|-------------------|--------|
+| Certain | Compute single WCAG ratio |
+| Uncertain | Compute worst-case (min) and best-case (max) from candidates |
+| Unmeasurable | Mark "not measurable", do NOT fabricate |
 
-### 2. Source Code / ZIP Input
+### Step 4 — Classification Logic (Strict, Non-Silent)
 
-When analysis is based only on static source code:
+**Confirmed Violation**:
+- Best-case contrast < threshold (even uncertain backgrounds)
+- Background certain AND ratio clearly below threshold
+- ➡️ Emit Confirmed (Blocking)
 
-- **Do NOT** attempt to confirm contrast failures
-- **Do NOT** treat inferred color pairs as deterministic
-- **➡️ ALL A1 findings from source code = Heuristic Potential Risk**
+**Potential Risk**:
+- Background uncertain OR unmeasurable
+- Foreground confidence reduced
+- Contrast range spans threshold
+- ➡️ Emit Potential (Non-blocking)
 
-### 3. GitHub Repository Input
+**PASS (only case with no emission)**:
+- Worst-case contrast ≥ threshold
+- Even the most conservative estimate passes
 
-- Treat identically to ZIP input
-- Static analysis only
-- **➡️ ALL A1 findings from GitHub = Heuristic Potential Risk**
+### Step 5 — Worst-Case Rule (Prevents Missed Obvious Issues)
 
-### 4. Hybrid Input (Screenshot + Code)
+| Condition | Result |
+|-----------|--------|
+| Best-case < threshold | Confirmed violation |
+| Worst-case ≥ threshold | PASS |
+| Otherwise (range spans threshold) | Potential risk |
 
-- Screenshot analysis takes precedence
-- Code may be used only for reference or traceability
-- **➡️ Confirmed classification ONLY if screenshot certainty conditions are met**
+### Step 6 — Mandatory Reason Codes
+
+Every Potential finding MUST include at least one reason code:
+- `BG_MIXED` — multiple background colors detected
+- `BG_GRADIENT` — gradient background
+- `BG_IMAGE` — image or textured background
+- `BG_OVERLAY` — transparency or overlay suspected
+- `BG_TOO_SMALL_REGION` — insufficient background pixels
+- `FG_ANTIALIASING` — glyph sampling unstable
+- `LOW_CONFIDENCE` — combined confidence below threshold
+- `STATIC_ANALYSIS` — colors inferred from code (ZIP/GitHub only)
 
 ---
 
-## Convergence Constraint (Strict)
+## Required Output (Per Element)
+
+Each A1 entry MUST include:
+- Element identifier (screen + component or bounding box)
+- Text snippet (if available)
+- Foreground color + confidence
+- Background: dominant color OR candidate list OR "unmeasurable"
+- Contrast: exact ratio OR min–max range OR "not measurable"
+- WCAG threshold applied
+- Classification: Confirmed—Blocking OR Potential—Non-blocking
+- Explicit uncertainty reason(s)
+- Short, actionable guidance
+
+---
+
+## Convergence Constraint
 
 | Finding Type | Convergence Impact |
 |--------------|-------------------|
-| **Confirmed A1 violations** | Count toward threshold; MAY block convergence |
-| **Heuristic A1 findings** | Tracked and reported; NEVER block convergence |
-
-The `blocksConvergence` field explicitly indicates whether each finding affects convergence:
-- `blocksConvergence: true` — Confirmed violations (screenshot with certain background)
-- `blocksConvergence: false` — Heuristic findings (ZIP, GitHub, or uncertain screenshots)
-
----
-
-## Enforcement Clause
-
-- If input certainty is insufficient at any stage, **default to heuristic classification**
-- **Never escalate heuristic A1 findings to confirmed** without rendered visual evidence
-- Do NOT report aggregate or anonymous counts (e.g., "7 elements could not be measured")
-- Every reported finding must identify a specific element with location
+| Confirmed violations | COUNT toward threshold; MAY block convergence |
+| Potential findings | Tracked and reported; NEVER block convergence |
 
 ---
 
 ## Technical Implementation
 
-### A1Sample Type Extensions
+### Classification Function
 
 ```typescript
-type A1BackgroundCertainty = {
-  isCertain: boolean;
-  reason?: string;
-  hasGradient?: boolean;
-  hasImage?: boolean;
-  hasOverlay?: boolean;
-  spanMultipleRegions?: boolean;
-  antiAliasingDominates?: boolean;
-  mixedBackground?: boolean;
-};
-
-// Added to A1Sample
-backgroundCertainty: A1BackgroundCertainty;
+function classifyA1Contrast(sample: A1Sample, threshold: number): {
+  classification: 'confirmed' | 'potential' | 'pass';
+  reason: string;
+  effectiveRatio: number;
+}
 ```
 
-### Classification Decision Tree (Screenshot)
+### Decision Tree
 
 ```
-1. Compute effectiveRatio (use worst-case if range-based)
-2. If effectiveRatio >= threshold → PASS (no report)
-3. Check backgroundCertainty.isCertain:
-   - If TRUE and effectiveRatio < 4.0 and confidence >= 0.75:
-     → status: "confirmed", blocksConvergence: true
-   - Otherwise:
-     → status: "potential", blocksConvergence: false
+1. Compute contrastBest and contrastWorst from sample
+2. If contrastBest < threshold → CONFIRMED (blocking)
+3. If contrastWorst >= threshold → PASS (no report)
+4. Otherwise → POTENTIAL (non-blocking, with reason codes)
 ```
 
 ### Edge Function Behavior
 
-| Edge Function | A1 Status | blocksConvergence |
-|--------------|-----------|-------------------|
-| analyze-ui (screenshots) | "confirmed" or "potential" | Based on background certainty |
-| analyze-zip | Always "potential" | Always `false` |
-| analyze-github | Always "potential" | Always `false` |
+| Edge Function | Unmeasurable Elements | Uncertain Elements |
+|--------------|----------------------|-------------------|
+| analyze-ui | Emit as Potential (BG_TOO_SMALL_REGION) | Emit as Potential with reason codes |
+| analyze-zip | Always Potential (STATIC_ANALYSIS) | N/A |
+| analyze-github | Always Potential (STATIC_ANALYSIS) | N/A |

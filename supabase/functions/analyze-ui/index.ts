@@ -8,23 +8,28 @@ const corsHeaders = {
 };
 
 // ============================
-// A1 (Contrast) — AUTHORITATIVE RULE DEFINITION v20
+// A1 (Contrast) — MANDATORY COVERAGE RULE v21
 // ============================
 // 
-// Rule Objective: Detect cases where text does not meet WCAG 2.1 AA minimum
-// contrast requirements. Classification depends strictly on input certainty.
+// Rule Objective: Detect text elements that may not meet WCAG 2.1 AA contrast
+// requirements. Report per element — uncertainty DOWNGRADES classification,
+// it NEVER eliminates reporting.
+//
+// CRITICAL: For every detected text element, ALWAYS emit an A1 evaluation record.
+// Silence is NOT an allowed outcome.
 //
 // WCAG Thresholds (immutable):
 //   - Normal text: minimum contrast 4.5:1
 //   - Large text (≥18pt or ≥14pt bold): minimum contrast 3.0:1
 //
 // Classification Logic:
-//   - SCREENSHOTS: Can produce "Confirmed Violation" if background is certain
-//   - ZIP/GITHUB: Always "Heuristic Potential Risk" (static analysis only)
+//   - CONFIRMED: Background certain + ratio clearly below threshold
+//   - POTENTIAL: Any uncertainty present (mixed bg, low confidence, etc.)
+//   - Worst-case rule: If best-case ratio < threshold → CONFIRMED
 //
 // Convergence:
 //   - Confirmed A1 violations COUNT toward convergence (can block)
-//   - Heuristic A1 findings are tracked but NEVER block convergence
+//   - Potential A1 findings are tracked but NEVER block convergence
 // ============================
 
 type A1BBoxNorm = { x: number; y: number; w: number; h: number };
@@ -560,92 +565,81 @@ type A1ReliabilityResult = {
  * evidence indicates the text is clearly readable.
  */
 /**
- * WORST-CASE CONTRAST BOUNDING FOR A1 SUPPRESSION
+ * WORST-CASE CONTRAST BOUNDING FOR A1 CLASSIFICATION (v21)
  * 
- * This function determines whether to suppress an A1 finding based on a conservative
- * worst-case contrast bound. Instead of suppressing solely based on measurement
- * instability, we compute the contrast using the lightest plausible colors.
+ * This function determines classification (confirmed vs potential) based on
+ * worst-case and best-case contrast bounds. It NEVER suppresses findings —
+ * it only determines the classification tier.
+ * 
+ * Per Mandatory Coverage Rule: Uncertainty downgrades classification, not reporting.
  * 
  * Methodology:
  * 1. FG_worst: 80-85th percentile luminance among stroke pixels (lightest plausible stroke)
  * 2. BG_worst: 80-90th percentile luminance among background pixels (lightest plausible background)
  * 3. contrast_worst = contrast(FG_worst, BG_worst)
  * 
- * Decision rules:
- * - If contrast_worst < 4.5:1, DO NOT suppress — report as failure
- *   - Confirmed Fail if contrast_worst < 4.0:1
- *   - Fail if 4.0 ≤ contrast_worst < 4.5
- * - ONLY suppress (PASS/no report) when contrast_worst ≥ 4.5:1
- * 
- * This prevents false passes when measurement is unstable but worst-case still fails.
+ * Classification rules:
+ * - If best-case contrast < threshold → CONFIRMED violation (even in uncertainty)
+ * - If worst-case contrast >= threshold → PASS (no issue)
+ * - Otherwise → POTENTIAL risk (range spans threshold)
  */
+function classifyA1Contrast(sample: A1Sample, threshold: number): { 
+  classification: 'confirmed' | 'potential' | 'pass';
+  reason: string;
+  effectiveRatio: number;
+} {
+  const contrastWorst = sample.contrastWorst;
+  const contrastBest = sample.contrastRange?.max ?? sample.ratio;
+  const contrastMin = sample.contrastRange?.min ?? sample.ratio;
+  
+  // ============================================================
+  // WORST-CASE RULE (Step 6 from specification)
+  // ============================================================
+  
+  // If BEST-CASE contrast < threshold → Confirmed violation
+  // (Even the most favorable interpretation fails WCAG)
+  if (contrastBest < threshold) {
+    return {
+      classification: 'confirmed',
+      reason: `Best-case contrast ${contrastBest.toFixed(1)}:1 is below threshold ${threshold}:1`,
+      effectiveRatio: contrastMin, // Use worst-case for reporting
+    };
+  }
+  
+  // If WORST-CASE contrast >= threshold → PASS
+  // (Even the least favorable interpretation passes WCAG)
+  if (contrastWorst >= threshold) {
+    return {
+      classification: 'pass',
+      reason: `Worst-case contrast ${contrastWorst.toFixed(1)}:1 meets threshold ${threshold}:1`,
+      effectiveRatio: sample.ratio,
+    };
+  }
+  
+  // ============================================================
+  // RANGE SPANS THRESHOLD → Potential risk
+  // ============================================================
+  // Worst-case fails but best-case passes — classification is uncertain
+  
+  return {
+    classification: 'potential',
+    reason: `Contrast range spans threshold (${contrastMin.toFixed(1)}:1 – ${contrastBest.toFixed(1)}:1 vs ${threshold}:1)`,
+    effectiveRatio: contrastMin, // Report conservative estimate
+  };
+}
+
+// DEPRECATED: This function is kept for backwards compatibility but
+// should not be used. Per v21 rule, findings are NEVER suppressed.
 function shouldSuppressA1Finding(sample: A1Sample): { 
   suppress: boolean; 
   reason?: string;
   worstCaseStatus?: 'confirmed_fail' | 'fail' | 'pass';
 } {
-  const contrastWorst = sample.contrastWorst;
-  
-  // ============================================================
-  // PRIMARY DECISION: Worst-case contrast bounding
-  // ============================================================
-  
-  // If worst-case contrast fails threshold, DO NOT SUPPRESS
-  if (contrastWorst < 4.5) {
-    const status = contrastWorst < 4.0 ? 'confirmed_fail' : 'fail';
-    return {
-      suppress: false,
-      worstCaseStatus: status,
-      // reason: not needed for non-suppression
-    };
-  }
-  
-  // ============================================================
-  // ADDITIONAL SAFEGUARDS — Never suppress obvious failures
-  // ============================================================
-  // These are belt-and-suspenders checks for edge cases
-  
-  const fgLuma = relativeLuminance01(sample.fg) * 255;
-  const bgLuma = relativeLuminance01(sample.bg) * 255;
-  const lumaSeparation = Math.abs(bgLuma - fgLuma);
-  
-  // SAFEGUARD 1: Range-based measurement where best-case ALSO fails
-  // If even the most favorable interpretation fails, this is obvious
-  if (sample.contrastRange && sample.contrastRange.max < 4.5) {
-    return { 
-      suppress: false, 
-      worstCaseStatus: sample.contrastRange.max < 4.0 ? 'confirmed_fail' : 'fail',
-    };
-  }
-  
-  // SAFEGUARD 2: Both colors are "light" (high luma) with measured low contrast
-  // Extra safety for light gray on white, pastel combinations
-  const bothLight = fgLuma > 150 && bgLuma > 150;
-  if (bothLight && sample.ratio < 3.5 && lumaSeparation < 50) {
-    return { 
-      suppress: false, 
-      worstCaseStatus: sample.ratio < 4.0 ? 'confirmed_fail' : 'fail',
-    };
-  }
-  
-  // SAFEGUARD 3: Both colors are "dark" (low luma) with measured low contrast
-  const bothDark = fgLuma < 100 && bgLuma < 100;
-  if (bothDark && sample.ratio < 3.5 && lumaSeparation < 50) {
-    return { 
-      suppress: false, 
-      worstCaseStatus: sample.ratio < 4.0 ? 'confirmed_fail' : 'fail',
-    };
-  }
-  
-  // ============================================================
-  // SUPPRESSION — Only when worst-case passes threshold
-  // ============================================================
-  
-  // At this point, contrastWorst >= 4.5 and no safeguards triggered
+  // v21: NEVER suppress A1 findings
+  // Classification is handled by classifyA1Contrast instead
   return {
-    suppress: true,
-    worstCaseStatus: 'pass',
-    reason: `Worst-case contrast (${contrastWorst.toFixed(1)}:1 using ${sample.fgWorstHex} on ${sample.bgWorstHex}) meets WCAG AA threshold`,
+    suppress: false,
+    worstCaseStatus: sample.contrastWorst < 4.0 ? 'confirmed_fail' : sample.contrastWorst < 4.5 ? 'fail' : 'pass',
   };
 }
 
@@ -827,82 +821,84 @@ async function computeA1ViolationsFromScreenshots(
 
     const thresholdUsed = el.textSize === 'large' ? 3.0 : 4.5;
     const evidence = `Screenshot #${screenshotIdx0 + 1}${el.location ? ` — ${el.location}` : ''}`;
+    const elementIdentifier = `Screenshot #${screenshotIdx0 + 1}${el.location ? ` — ${el.location}` : ''}${el.elementDescription ? ` (${el.elementDescription})` : ''}`;
 
     const samples = offsets.map(([dx, dy]) => computeA1Sample(img, toPxBox(img, el.bbox, dx, dy), 3));
     const reliability = assessA1Reliability(samples);
 
     const s0 = samples[0];
-    const fgHex = 'error' in s0 ? undefined : s0.fgHex;
-    const bgHex = 'error' in s0 ? undefined : s0.bgHex;
-    const fallbackMethod = 'error' in s0 ? undefined : s0.fallbackMethod;
-    const expansionPx = 'error' in s0 ? undefined : s0.expansionPx;
-    const clusterCount = 'error' in s0 ? undefined : s0.clusterCount;
-    const contrastRange = 'error' in s0 ? undefined : s0.contrastRange;
-
+    
     // Build fallback method description for UI
-    const buildFallbackDescription = () => {
-      if (!fallbackMethod || fallbackMethod === 'direct') return 'direct ring sampling';
-      if (fallbackMethod === 'expanded') return `expanded region (+${expansionPx}px)`;
-      if (fallbackMethod === 'clustered') return `color clustering (${clusterCount || 1} cluster${clusterCount !== 1 ? 's' : ''})`;
-      if (fallbackMethod === 'range') return `range-based (${clusterCount || 2} background candidates)`;
+    const buildFallbackDescription = (fm?: string, ep?: number, cc?: number) => {
+      if (!fm || fm === 'direct') return 'direct ring sampling';
+      if (fm === 'expanded') return `expanded region (+${ep}px)`;
+      if (fm === 'clustered') return `color clustering (${cc || 1} cluster${cc !== 1 ? 's' : ''})`;
+      if (fm === 'range') return `range-based (${cc || 2} background candidates)`;
       return 'unknown';
     };
 
-    if (!reliability.reliable) {
-      // STRICT SUPPRESSION POLICY:
-      // When contrast measurement is unreliable, suppress ENTIRELY unless low contrast
-      // is visually plausible. Do NOT report as "Potential Risk" — treat as PASS.
-      //
-      // Rationale: Algorithmic uncertainty ≠ accessibility risk.
-      // Only surface A1 when there is concrete, reliable evidence of insufficient contrast.
+    // ========================================================================
+    // MANDATORY COVERAGE (v21): NEVER skip an element
+    // Every text element MUST emit an A1 evaluation record
+    // ========================================================================
+    
+    // CASE 1: Measurement error — emit as Potential with explicit reason
+    if ('error' in s0) {
+      const reasonCodes: string[] = ['BG_TOO_SMALL_REGION'];
+      if (s0.error.includes('foreground')) reasonCodes.push('FG_ANTIALIASING');
       
-      // Check if finding should be suppressed due to clear luminance separation
-      // or lack of plausible low-contrast evidence
-      if (reliability.suppressFinding) {
-        console.log(`A1 suppressed (unreliable + no plausible risk): ${evidence} — ${reliability.suppressReason}`);
-        continue; // Suppress — treat as PASS
-      }
-      
-      // Even if suppressFinding wasn't explicitly set, unreliable measurements
-      // should be suppressed unless we have strong reason to believe low contrast exists
-      const s0Sample = samples[0];
-      if (!('error' in s0Sample)) {
-        // Additional suppression check: if we got a sample but it's "unreliable",
-        // run the suppression logic directly
-        const directSuppressCheck = shouldSuppressA1Finding(s0Sample);
-        if (directSuppressCheck.suppress) {
-          console.log(`A1 suppressed (unreliable sampling, clear visibility): ${evidence} — ${directSuppressCheck.reason}`);
-          continue; // Suppress — treat as PASS
-        }
-      }
-      
-      // If measurement failed entirely (error), suppress without emitting Potential Risk
-      if ('error' in s0) {
-        console.log(`A1 suppressed (measurement error): ${evidence} — ${s0.error}`);
-        continue; // Suppress — treat as PASS (no aggregate counts, no anonymous findings)
-      }
-      
-      // At this point, measurement was unreliable AND low contrast IS plausible.
-      // However, per policy: Do NOT report as "Potential Risk".
-      // Treat algorithmic uncertainty as PASS.
-      console.log(`A1 suppressed (unreliable but marginal): ${evidence} — treating uncertainty as PASS per policy`);
+      results.push({
+        ruleId,
+        ruleName,
+        category: 'accessibility',
+        status: 'potential' as const,
+        samplingMethod: 'pixel',
+        inputType: 'screenshots',
+        elementIdentifier,
+        elementRole: el.elementRole,
+        elementDescription: el.elementDescription,
+        evidence,
+        diagnosis: `Contrast measurement could not be completed: ${s0.error}. Manual verification required.`,
+        contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools.',
+        actionableGuidance: `Verify this element meets ${thresholdUsed}:1 contrast using DevTools.`,
+        confidence: 0.35,
+        foregroundHex: undefined,
+        backgroundHex: undefined,
+        backgroundStatus: 'unmeasurable' as const,
+        contrastRatio: undefined,
+        thresholdUsed,
+        reasonCodes,
+        potentialRiskReason: reasonCodes.join(', '),
+        inputLimitation: s0.error,
+        advisoryGuidance,
+        blocksConvergence: false,
+      });
+      console.log(`A1 emitted (unmeasurable): ${evidence} — ${s0.error}`);
       continue;
     }
-
+    
     const sample = s0 as A1Sample;
+    const fgHex = sample.fgHex;
+    const bgHex = sample.bgHex;
+    const fallbackMethod = sample.fallbackMethod;
+    const expansionPx = sample.expansionPx;
+    const clusterCount = sample.clusterCount;
+    const contrastRange = sample.contrastRange;
     const ratio = sample.ratio;
     
-    // For range-based measurements, use worst-case for FAIL determination
-    let effectiveRatio = ratio;
-    if (sample.fallbackMethod === 'range' && sample.contrastRange) {
-      // Use worst-case (min) for pass/fail classification
-      effectiveRatio = sample.contrastRange.min;
-    }
-
-    // PASS: Interior stroke contrast meets threshold — do not emit a violation.
-    if (effectiveRatio >= thresholdUsed) {
+    // Use the new classification function for worst-case rule
+    const classification = classifyA1Contrast(sample, thresholdUsed);
+    
+    // CASE 2: Classification is PASS — contrast is acceptable
+    if (classification.classification === 'pass') {
+      // Per v21: PASS is the ONLY case where we don't emit a finding
+      // This is when worst-case contrast >= threshold (clearly passes)
+      console.log(`A1 passed: ${evidence} — ${classification.reason}`);
       continue;
     }
+    
+    // CASE 3: Emit finding (confirmed or potential)
+    const effectiveRatio = classification.effectiveRatio;
 
     // ====================================================================
     // AUTHORITATIVE A1 CLASSIFICATION (Screenshot Input)
@@ -968,8 +964,7 @@ async function computeA1ViolationsFromScreenshots(
     // Calculate foreground confidence based on sampling quality
     const foregroundConfidence = Math.max(0.5, 1 - (sample.fgLumaStd / 30) - reliability.confidencePenalty);
 
-    // Diagnosis based on classification - element-specific
-    const elementIdentifier = `Screenshot #${screenshotIdx0 + 1}${el.location ? ` — ${el.location}` : ''}${el.elementDescription ? ` (${el.elementDescription})` : ''}`;
+    // elementIdentifier already defined earlier in loop
     
     const diagnosis = (() => {
       if (finalStatus === 'confirmed') {
