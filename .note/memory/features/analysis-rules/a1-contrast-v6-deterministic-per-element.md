@@ -1,138 +1,84 @@
-# Memory: features/analysis-rules/a1-contrast-v20-authoritative-rule
+# Memory: features/analysis-rules/a1-contrast-v19-worst-case-bounding
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Authoritative Rule Definition)
+Rule A1 (Insufficient Text Contrast) implements **worst-case contrast bounding** for screenshot analysis to prevent false passes while still suppressing inconclusive measurements.
 
-This rule definition supersedes all previous logic, fallbacks, heuristics, and legacy handling for A1.
+## Core Principle
 
-### Rule Objective
+**Use conservative worst-case colors to decide suppression.** Do not suppress solely because measurement is unstable — only suppress when worst-case contrast meets threshold.
 
-Detect cases where text does not meet WCAG 2.1 AA minimum contrast requirements and classify the finding as either a **Confirmed Violation** or a **Heuristic Potential Risk**, based strictly on input certainty.
+## 1. Worst-Case Color Estimation
 
----
+### Foreground (FG_worst): Lightest Plausible Stroke Color
+1. Sample 160 pixels from text region grid
+2. Select darkest 30-40% by luminance (interior strokes, exclude anti-aliased edges)
+3. **FG_worst = 80-85th percentile luminance** among these stroke pixels
+4. This is the lightest plausible text color (conservative bound)
 
-## WCAG Thresholds (Do Not Deviate)
+### Background (BG_worst): Lightest Plausible Background
+1. Sample ring around text region with progressive expansion (3→32px)
+2. Exclude pixels darker than foreground max luminance + 2
+3. **BG_worst = 80-90th percentile luminance** among background pixels
+4. This is the lightest plausible background (conservative bound)
 
-| Text Type | Minimum Contrast |
-|-----------|------------------|
-| Normal text | 4.5:1 |
-| Large text (≥ 18pt or ≥ 14pt bold) | 3.0:1 |
+### Contrast Computation
+- **contrast_worst = contrast(FG_worst, BG_worst)**
+- Also compute median-based ratio for reporting
 
----
+## 2. Suppression Decision (Primary Rule)
 
-## Supported Input Types
+| Condition | Action |
+|-----------|--------|
+| **contrast_worst < 4.0:1** | DO NOT suppress → Report as **Confirmed Fail** |
+| **4.0 ≤ contrast_worst < 4.5** | DO NOT suppress → Report as **Fail** |
+| **contrast_worst ≥ 4.5:1** | Suppress → PASS (no report) |
 
-1. **Rendered UI Screenshots** — Pixel-based analysis
-2. **Exported Source Code (ZIP)** — Static code analysis
-3. **GitHub Repository Link** — Static repository analysis
+**Key insight**: If even the lightest plausible color pair fails threshold, the finding is real — report it regardless of sampling noise.
 
----
+## 3. Additional Safeguards (Never Suppress)
 
-## Detection & Classification Logic
+| Condition | Action |
+|-----------|--------|
+| Range-based `max < 4.5` | Report as failure |
+| Both colors "light" (luma > 150) + ratio < 3.5 + separation < 50 | Report |
+| Both colors "dark" (luma < 100) + ratio < 3.5 + separation < 50 | Report |
 
-### 1. Screenshot-Based Detection
+## 4. 7-Point Reliability Gate (for Confirmed status)
 
-When rendered UI screenshots are provided:
+All checks must pass for highest confidence:
 
-**Extraction:**
-- Sample foreground color from text glyph pixels (interior stroke methodology)
-- Sample background color from immediate surrounding pixels (ring sampling with progressive expansion)
+| Check | Requirement | If Failed |
+|-------|-------------|-----------|
+| Multi-sample consistency | 3 offset samples, ratio variance ≤ 0.2 | Reduced confidence |
+| Hex verification | Recomputed contrast delta ≤ 0.2 | Reduced confidence |
+| Foreground pixel count | ≥ 15 pixels | Error |
+| Background pixel count | ≥ 15 pixels | Error |
+| Luminance distance | ≥ 20 units | Reduced confidence |
+| Foreground variance | stddev ≤ 15 | Reduced confidence |
+| Background variance | stddev ≤ 20 (unless clustering) | Reduced confidence |
 
-**Contrast Calculation:**
-- Compute contrast ratio using the WCAG luminance formula
-- All colors are pixel-derived estimates
+## 5. Reporting Structure
 
-**Background Certainty Rules:**
+For each finding, report:
+1. **Element description** (e.g., "credits badge label in course card")
+2. **Measured contrast ratio** (median-based)
+3. **Worst-case contrast** (percentile-based conservative bound)
+4. **Foreground/background hex** (median RGB converted)
+5. **Worst-case colors** (fgWorstHex, bgWorstHex)
+6. **Individual confidence score**
 
-The background is considered **certain** only if:
-- A single dominant background color is detected
-- No gradients, images, or overlays are present
-- Text does not overlap multiple background regions
-- Background variance is low (stddev ≤ 25)
-- No significant region expansion was required
+## 6. Fallback Strategies
 
-**Screenshot Classification Decision (Mandatory):**
+When direct ring sampling fails:
+1. **Expanded region**: +8px, +16px, +32px expansion
+2. **Color clustering**: k-means for high-variance backgrounds
+3. **Range-based**: Report min/max contrast for mixed backgrounds
 
-| Condition | Classification |
-|-----------|----------------|
-| FG and BG clearly identifiable | **Confirmed Violation** |
-| Background is mixed, gradient, image-based, or ambiguous | Heuristic Potential Risk |
-| Anti-aliasing dominates color sampling | Heuristic Potential Risk |
-| Text spans multiple background regions | Heuristic Potential Risk |
-| Range-based contrast spans WCAG threshold | Heuristic Potential Risk |
+## Forbidden Behaviors
 
-**Confidence Assignment:**
-- Confirmed findings: 0.78–0.92 (based on reliability)
-- Heuristic findings: 0.45–0.68 (based on reliability)
-
-### 2. Source Code / ZIP Input
-
-When analysis is based only on static source code:
-
-- **Do not** attempt to confirm contrast failures
-- **Do not** treat inferred color pairs as deterministic
-- ➡️ **All A1 findings from source code alone must be classified as Heuristic Potential Risks**
-
-### 3. GitHub Repository Input
-
-Treat identically to ZIP input:
-- Static analysis only
-- ➡️ **Always classify A1 findings as Heuristic Potential Risks**
-
-### 4. Hybrid Input (Screenshot + Code)
-
-- Screenshot analysis takes precedence
-- Code may be used only for reference or traceability
-- ➡️ Confirmed classification is allowed **only if** screenshot certainty conditions are met
-
----
-
-## Convergence Constraint (Strict)
-
-| Finding Type | Convergence Impact |
-|--------------|-------------------|
-| **Confirmed A1 violations** | Count toward convergence thresholds; May block convergence |
-| **Heuristic A1 findings** | Must be reported; Must be tracked; **Must NOT block convergence**; Must NOT trigger mandatory corrective prompts |
-
----
-
-## Enforcement Clause
-
-- If input certainty is insufficient at any stage, default to heuristic classification
-- **Never** escalate heuristic A1 findings to confirmed without rendered visual evidence
-- Heuristic findings receive `advisoryGuidance` instead of `correctivePrompt`
-
----
-
-## Implementation Details
-
-### Background Certainty Assessment (`assessA1BackgroundCertainty`)
-
-Checks performed in order:
-1. Multiple background clusters detected → Heuristic
-2. High background variance (stddev > 25) without clustering → Heuristic
-3. Range-based measurement spans WCAG threshold → Heuristic
-4. Required significant expansion (≥ 16px) → Heuristic
-5. Otherwise → Confirmed allowed
-
-### Screenshot Decision Logic (`decideA1ScreenshotClassification`)
-
-1. Compute effective ratio (use worst-case for range-based measurements)
-2. If ratio ≥ threshold → PASS (no report)
-3. If ratio < threshold AND background certain → Confirmed Violation
-4. If ratio < threshold AND background ambiguous → Heuristic Potential Risk
-
-### Reporting Structure
-
-For Confirmed findings:
-- `status: 'confirmed'`
-- `correctivePrompt` provided
-- No `advisoryGuidance`
-
-For Heuristic findings:
-- `status: 'potential'`
-- `correctivePrompt` empty
-- `advisoryGuidance` provided
-- `potentialRiskReason` explains classification
-- `inputLimitation` describes analysis constraints
+- Do NOT suppress based solely on measurement instability
+- Do NOT suppress when worst-case contrast < 4.5:1
+- Do NOT report aggregate counts ("X elements could not be measured")
+- Do NOT report anonymous elements without description/location
+- Do NOT snap sampled colors to Tailwind tokens

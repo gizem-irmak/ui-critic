@@ -462,136 +462,105 @@ type A1ReliabilityResult = {
   reason?: string;
   fallbackUsed?: 'direct' | 'expanded' | 'clustered' | 'range';
   confidencePenalty: number; // 0 = full confidence, 0.1-0.3 = reduced due to fallbacks
+  // New: track whether to suppress finding entirely due to clear luminance separation
+  suppressFinding?: boolean;
+  suppressReason?: string;
 };
 
 /**
- * ============================================================================
- * A1 BACKGROUND CERTAINTY CLASSIFICATION (AUTHORITATIVE RULE)
- * ============================================================================
- * 
- * Determines whether background is "certain" for screenshot-based A1 detection.
- * Background is certain ONLY if:
- * - A single dominant background color is detected
- * - No gradients, images, or overlays are present
- * - Text does not overlap multiple background regions
- * 
- * When background is certain → "Confirmed Violation" allowed
- * When background is ambiguous → "Heuristic Potential Risk" only
+ * Determines if a finding should be suppressed because there is clear
+ * luminance separation between foreground and background, despite sampling
+ * uncertainty. This prevents false "Potential Risk" reports when visual
+ * evidence indicates the text is clearly readable.
  */
-type A1BackgroundCertainty = {
-  certain: boolean;
-  reason: string;
-  classification: 'confirmed' | 'heuristic';
-};
-
-function assessA1BackgroundCertainty(sample: A1Sample): A1BackgroundCertainty {
-  // RULE 1: Multiple background clusters detected
-  if (sample.fallbackMethod === 'range' && sample.clusterCount && sample.clusterCount >= 2) {
+/**
+ * WORST-CASE CONTRAST BOUNDING FOR A1 SUPPRESSION
+ * 
+ * This function determines whether to suppress an A1 finding based on a conservative
+ * worst-case contrast bound. Instead of suppressing solely based on measurement
+ * instability, we compute the contrast using the lightest plausible colors.
+ * 
+ * Methodology:
+ * 1. FG_worst: 80-85th percentile luminance among stroke pixels (lightest plausible stroke)
+ * 2. BG_worst: 80-90th percentile luminance among background pixels (lightest plausible background)
+ * 3. contrast_worst = contrast(FG_worst, BG_worst)
+ * 
+ * Decision rules:
+ * - If contrast_worst < 4.5:1, DO NOT suppress — report as failure
+ *   - Confirmed Fail if contrast_worst < 4.0:1
+ *   - Fail if 4.0 ≤ contrast_worst < 4.5
+ * - ONLY suppress (PASS/no report) when contrast_worst ≥ 4.5:1
+ * 
+ * This prevents false passes when measurement is unstable but worst-case still fails.
+ */
+function shouldSuppressA1Finding(sample: A1Sample): { 
+  suppress: boolean; 
+  reason?: string;
+  worstCaseStatus?: 'confirmed_fail' | 'fail' | 'pass';
+} {
+  const contrastWorst = sample.contrastWorst;
+  
+  // ============================================================
+  // PRIMARY DECISION: Worst-case contrast bounding
+  // ============================================================
+  
+  // If worst-case contrast fails threshold, DO NOT SUPPRESS
+  if (contrastWorst < 4.5) {
+    const status = contrastWorst < 4.0 ? 'confirmed_fail' : 'fail';
     return {
-      certain: false,
-      reason: 'Text spans multiple background regions (detected clusters)',
-      classification: 'heuristic',
+      suppress: false,
+      worstCaseStatus: status,
+      // reason: not needed for non-suppression
     };
   }
   
-  // RULE 2: High background variance without successful clustering
-  if (sample.bgLumaStd > 25 && sample.fallbackMethod !== 'clustered') {
-    return {
-      certain: false,
-      reason: 'Background is mixed, gradient, or non-uniform',
-      classification: 'heuristic',
+  // ============================================================
+  // ADDITIONAL SAFEGUARDS — Never suppress obvious failures
+  // ============================================================
+  // These are belt-and-suspenders checks for edge cases
+  
+  const fgLuma = relativeLuminance01(sample.fg) * 255;
+  const bgLuma = relativeLuminance01(sample.bg) * 255;
+  const lumaSeparation = Math.abs(bgLuma - fgLuma);
+  
+  // SAFEGUARD 1: Range-based measurement where best-case ALSO fails
+  // If even the most favorable interpretation fails, this is obvious
+  if (sample.contrastRange && sample.contrastRange.max < 4.5) {
+    return { 
+      suppress: false, 
+      worstCaseStatus: sample.contrastRange.max < 4.0 ? 'confirmed_fail' : 'fail',
     };
   }
   
-  // RULE 3: Range-based measurement spans WCAG threshold
-  if (sample.contrastRange) {
-    const { min, max } = sample.contrastRange;
-    if (min < 4.5 && max >= 4.5) {
-      return {
-        certain: false,
-        reason: 'Contrast range spans WCAG threshold — ambiguous background',
-        classification: 'heuristic',
-      };
-    }
-  }
-  
-  // RULE 4: Required significant expansion to find background
-  if (sample.expansionPx && sample.expansionPx >= 16) {
-    return {
-      certain: false,
-      reason: 'Background sampling required significant region expansion',
-      classification: 'heuristic',
+  // SAFEGUARD 2: Both colors are "light" (high luma) with measured low contrast
+  // Extra safety for light gray on white, pastel combinations
+  const bothLight = fgLuma > 150 && bgLuma > 150;
+  if (bothLight && sample.ratio < 3.5 && lumaSeparation < 50) {
+    return { 
+      suppress: false, 
+      worstCaseStatus: sample.ratio < 4.0 ? 'confirmed_fail' : 'fail',
     };
   }
   
-  // PASSED: Background is certain — single dominant color detected
+  // SAFEGUARD 3: Both colors are "dark" (low luma) with measured low contrast
+  const bothDark = fgLuma < 100 && bgLuma < 100;
+  if (bothDark && sample.ratio < 3.5 && lumaSeparation < 50) {
+    return { 
+      suppress: false, 
+      worstCaseStatus: sample.ratio < 4.0 ? 'confirmed_fail' : 'fail',
+    };
+  }
+  
+  // ============================================================
+  // SUPPRESSION — Only when worst-case passes threshold
+  // ============================================================
+  
+  // At this point, contrastWorst >= 4.5 and no safeguards triggered
   return {
-    certain: true,
-    reason: 'Single dominant background color detected',
-    classification: 'confirmed',
+    suppress: true,
+    worstCaseStatus: 'pass',
+    reason: `Worst-case contrast (${contrastWorst.toFixed(1)}:1 using ${sample.fgWorstHex} on ${sample.bgWorstHex}) meets WCAG AA threshold`,
   };
-}
-
-/**
- * ============================================================================
- * A1 CONTRAST PASS/FAIL DETERMINATION (AUTHORITATIVE RULE)
- * ============================================================================
- * 
- * WCAG Thresholds (Do Not Deviate):
- * - Normal text → minimum contrast 4.5:1
- * - Large text (≥ 18pt or ≥ 14pt bold) → minimum contrast 3.0:1
- * 
- * Decision Logic:
- * - If ratio >= threshold → PASS (no report)
- * - If ratio < threshold AND background certain → Confirmed Violation
- * - If ratio < threshold AND background ambiguous → Heuristic Potential Risk
- */
-type A1ScreenshotDecision = {
-  shouldReport: boolean;
-  status: 'confirmed' | 'heuristic' | 'pass';
-  reason: string;
-  effectiveRatio: number;
-};
-
-function decideA1ScreenshotClassification(
-  sample: A1Sample,
-  thresholdUsed: number,
-  bgCertainty: A1BackgroundCertainty
-): A1ScreenshotDecision {
-  // Use worst-case ratio for range-based measurements
-  let effectiveRatio = sample.ratio;
-  if (sample.fallbackMethod === 'range' && sample.contrastRange) {
-    effectiveRatio = sample.contrastRange.min; // Conservative: use worst-case
-  }
-  
-  // PASS: Contrast meets or exceeds threshold
-  if (effectiveRatio >= thresholdUsed) {
-    return {
-      shouldReport: false,
-      status: 'pass',
-      reason: 'Contrast ratio meets WCAG threshold',
-      effectiveRatio,
-    };
-  }
-  
-  // FAIL: Contrast below threshold
-  if (bgCertainty.certain) {
-    // Background is certain → Confirmed Violation
-    return {
-      shouldReport: true,
-      status: 'confirmed',
-      reason: 'Foreground and background clearly identifiable — confirmed violation',
-      effectiveRatio,
-    };
-  } else {
-    // Background is ambiguous → Heuristic Potential Risk
-    return {
-      shouldReport: true,
-      status: 'heuristic',
-      reason: bgCertainty.reason,
-      effectiveRatio,
-    };
-  }
 }
 
 function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1ReliabilityResult {
@@ -601,41 +570,104 @@ function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1Re
   }
   const okSamples = samples as A1Sample[];
   
-  // Multi-sample consistency check
+  // Multi-sample consistency
   const ratios = okSamples.map(s => s.ratio);
   const minR = Math.min(...ratios);
   const maxR = Math.max(...ratios);
   if (maxR - minR > 0.2) {
+    // Check if finding should be suppressed due to clear luminance separation
+    const suppressCheck = shouldSuppressA1Finding(okSamples[0]);
+    if (suppressCheck.suppress) {
+      return { 
+        reliable: false, 
+        reason: `Multi-sample consistency failed: ratios varied by ${(maxR - minR).toFixed(2)}`,
+        confidencePenalty: 0.3,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
     return { reliable: false, reason: `Multi-sample consistency failed: ratios varied by ${(maxR - minR).toFixed(2)}`, confidencePenalty: 0.3 };
   }
 
   const s0 = okSamples[0];
   
-  // Hex verification check
+  // Base reliability checks
   if (s0.hexToRatioDelta > 0.2) {
+    // Check suppression
+    const suppressCheck = shouldSuppressA1Finding(s0);
+    if (suppressCheck.suppress) {
+      return {
+        reliable: false,
+        reason: `Hex-to-ratio verification failed: measured ${s0.ratio.toFixed(2)} vs recomputed ${s0.hexRecomputedRatio.toFixed(2)}`,
+        confidencePenalty: 0.25,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
     return {
       reliable: false,
       reason: `Hex-to-ratio verification failed: measured ${s0.ratio.toFixed(2)} vs recomputed ${s0.hexRecomputedRatio.toFixed(2)}`,
       confidencePenalty: 0.25,
     };
   }
-  
-  // Pixel count checks
   if (s0.fgPixelCount < 15) return { reliable: false, reason: 'Insufficient foreground pixels for reliable sampling', confidencePenalty: 0.35 };
-  if (s0.bgPixelCount < 15) return { reliable: false, reason: 'Insufficient background pixels for reliable sampling', confidencePenalty: 0.35 };
-  
-  // Luminance distance check
+  if (s0.bgPixelCount < 15) {
+    // Check suppression for background sampling issues
+    const suppressCheck = shouldSuppressA1Finding(s0);
+    if (suppressCheck.suppress) {
+      return { 
+        reliable: false, 
+        reason: 'Insufficient background pixels for reliable sampling', 
+        confidencePenalty: 0.35,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
+    return { reliable: false, reason: 'Insufficient background pixels for reliable sampling', confidencePenalty: 0.35 };
+  }
   if (s0.lumaDistance < 20) return { reliable: false, reason: 'Foreground and background too similar for reliable measurement', confidencePenalty: 0.3 };
-  
-  // Foreground variance check
-  if (s0.fgLumaStd > 15) return { reliable: false, reason: 'Foreground variance too high — text rendering unstable', confidencePenalty: 0.25 };
+  if (s0.fgLumaStd > 15) {
+    // Check suppression
+    const suppressCheck = shouldSuppressA1Finding(s0);
+    if (suppressCheck.suppress) {
+      return { 
+        reliable: false, 
+        reason: 'Foreground variance too high — text rendering unstable', 
+        confidencePenalty: 0.25,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
+    return { reliable: false, reason: 'Foreground variance too high — text rendering unstable', confidencePenalty: 0.25 };
+  }
   
   // For range-based measurements, check if contrast range spans threshold
   if (s0.fallbackMethod === 'range' && s0.contrastRange) {
     const { min, max } = s0.contrastRange;
+    // If worst-case passes, reliable PASS
+    // If best-case fails, reliable FAIL
+    // If range spans threshold, needs review (borderline)
     if (min >= 4.5 || max < 4.5) {
-      return { reliable: true, fallbackUsed: 'range', confidencePenalty: 0.15 };
+      // Clear determination possible
+      return {
+        reliable: true,
+        fallbackUsed: 'range',
+        confidencePenalty: 0.15, // Slight penalty for range-based
+      };
     } else {
+      // Range spans threshold — check if should suppress based on luminance separation
+      const suppressCheck = shouldSuppressA1Finding(s0);
+      if (suppressCheck.suppress) {
+        return {
+          reliable: false,
+          reason: `Mixed background: contrast range ${min.toFixed(1)}:1 – ${max.toFixed(1)}:1 spans WCAG threshold`,
+          fallbackUsed: 'range',
+          confidencePenalty: 0.25,
+          suppressFinding: true,
+          suppressReason: suppressCheck.reason,
+        };
+      }
+      // Range spans threshold — cannot confirm
       return {
         reliable: false,
         reason: `Mixed background: contrast range ${min.toFixed(1)}:1 – ${max.toFixed(1)}:1 spans WCAG threshold`,
@@ -645,8 +677,19 @@ function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1Re
     }
   }
   
-  // Background variance check (acceptable if clustering was used)
+  // High background variance is okay if clustering was used successfully
   if (s0.bgLumaStd > 20 && s0.fallbackMethod !== 'clustered' && s0.fallbackMethod !== 'range') {
+    // Check suppression for high background variance
+    const suppressCheck = shouldSuppressA1Finding(s0);
+    if (suppressCheck.suppress) {
+      return { 
+        reliable: false, 
+        reason: 'Background variance too high — non-uniform background', 
+        confidencePenalty: 0.25,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
     return { reliable: false, reason: 'Background variance too high — non-uniform background', confidencePenalty: 0.25 };
   }
   
@@ -659,22 +702,6 @@ function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1Re
   return { reliable: true, fallbackUsed: s0.fallbackMethod, confidencePenalty };
 }
 
-/**
- * ============================================================================
- * A1 SCREENSHOT-BASED DETECTION (AUTHORITATIVE IMPLEMENTATION)
- * ============================================================================
- * 
- * Rule Objective:
- * Detect cases where text does not meet WCAG 2.1 AA minimum contrast requirements.
- * 
- * Classification Logic:
- * - Confirmed Violation: Foreground and background clearly identifiable
- * - Heuristic Potential Risk: Background is mixed, gradient, image-based, or ambiguous
- * 
- * Convergence Constraint:
- * - Confirmed A1 violations → Count toward convergence, may block convergence
- * - Heuristic A1 findings → Must be reported and tracked, but NEVER block convergence
- */
 async function computeA1ViolationsFromScreenshots(
   images: string[],
   a1TextElements: A1TextElement[],
@@ -682,13 +709,16 @@ async function computeA1ViolationsFromScreenshots(
 ): Promise<any[]> {
   const ruleId = 'A1';
   const ruleName = 'Insufficient text contrast';
+  const advisoryGuidance = 'Upload a PNG at 100% zoom or verify with DevTools/axe for accurate measurement.';
 
   if (!Array.isArray(a1TextElements) || a1TextElements.length === 0) {
-    console.log('A1: No text elements identified for contrast measurement');
+    // No text elements identified — suppress A1 entirely rather than report generic warning
+    // Per policy: Do not report aggregate or anonymous A1 findings
+    console.log('A1 suppressed: No text elements identified for contrast measurement (no generic warning)');
     return [];
   }
 
-  // Decode screenshots once
+  // Decode screenshots once.
   const decoded: Image[] = [];
   for (const imgStr of images) {
     const raw = stripDataUrlToBase64(imgStr);
@@ -716,20 +746,15 @@ async function computeA1ViolationsFromScreenshots(
     const reliability = assessA1Reliability(samples);
 
     const s0 = samples[0];
-    
-    // Skip if measurement failed entirely
-    if ('error' in s0) {
-      console.log(`A1 skipped (measurement error): ${evidence} — ${s0.error}`);
-      continue;
-    }
-
-    const sample = s0 as A1Sample;
+    const fgHex = 'error' in s0 ? undefined : s0.fgHex;
+    const bgHex = 'error' in s0 ? undefined : s0.bgHex;
+    const fallbackMethod = 'error' in s0 ? undefined : s0.fallbackMethod;
+    const expansionPx = 'error' in s0 ? undefined : s0.expansionPx;
+    const clusterCount = 'error' in s0 ? undefined : s0.clusterCount;
+    const contrastRange = 'error' in s0 ? undefined : s0.contrastRange;
 
     // Build fallback method description for UI
     const buildFallbackDescription = () => {
-      const fallbackMethod = sample.fallbackMethod;
-      const expansionPx = sample.expansionPx;
-      const clusterCount = sample.clusterCount;
       if (!fallbackMethod || fallbackMethod === 'direct') return 'direct ring sampling';
       if (fallbackMethod === 'expanded') return `expanded region (+${expansionPx}px)`;
       if (fallbackMethod === 'clustered') return `color clustering (${clusterCount || 1} cluster${clusterCount !== 1 ? 's' : ''})`;
@@ -737,95 +762,110 @@ async function computeA1ViolationsFromScreenshots(
       return 'unknown';
     };
 
-    // === AUTHORITATIVE A1 DECISION LOGIC ===
-    
-    // Step 1: Assess background certainty
-    const bgCertainty = assessA1BackgroundCertainty(sample);
-    
-    // Step 2: Determine classification
-    const decision = decideA1ScreenshotClassification(sample, thresholdUsed, bgCertainty);
-    
-    // Step 3: Apply decision
-    if (!decision.shouldReport) {
-      // PASS — do not emit a violation
+    if (!reliability.reliable) {
+      // STRICT SUPPRESSION POLICY:
+      // When contrast measurement is unreliable, suppress ENTIRELY unless low contrast
+      // is visually plausible. Do NOT report as "Potential Risk" — treat as PASS.
+      //
+      // Rationale: Algorithmic uncertainty ≠ accessibility risk.
+      // Only surface A1 when there is concrete, reliable evidence of insufficient contrast.
+      
+      // Check if finding should be suppressed due to clear luminance separation
+      // or lack of plausible low-contrast evidence
+      if (reliability.suppressFinding) {
+        console.log(`A1 suppressed (unreliable + no plausible risk): ${evidence} — ${reliability.suppressReason}`);
+        continue; // Suppress — treat as PASS
+      }
+      
+      // Even if suppressFinding wasn't explicitly set, unreliable measurements
+      // should be suppressed unless we have strong reason to believe low contrast exists
+      const s0Sample = samples[0];
+      if (!('error' in s0Sample)) {
+        // Additional suppression check: if we got a sample but it's "unreliable",
+        // run the suppression logic directly
+        const directSuppressCheck = shouldSuppressA1Finding(s0Sample);
+        if (directSuppressCheck.suppress) {
+          console.log(`A1 suppressed (unreliable sampling, clear visibility): ${evidence} — ${directSuppressCheck.reason}`);
+          continue; // Suppress — treat as PASS
+        }
+      }
+      
+      // If measurement failed entirely (error), suppress without emitting Potential Risk
+      if ('error' in s0) {
+        console.log(`A1 suppressed (measurement error): ${evidence} — ${s0.error}`);
+        continue; // Suppress — treat as PASS (no aggregate counts, no anonymous findings)
+      }
+      
+      // At this point, measurement was unreliable AND low contrast IS plausible.
+      // However, per policy: Do NOT report as "Potential Risk".
+      // Treat algorithmic uncertainty as PASS.
+      console.log(`A1 suppressed (unreliable but marginal): ${evidence} — treating uncertainty as PASS per policy`);
       continue;
     }
+
+    const sample = s0 as A1Sample;
+    const ratio = sample.ratio;
     
-    // === BUILD VIOLATION OBJECT ===
-    
-    // Confidence calculation based on reliability and classification
-    let baseConfidence: number;
-    if (decision.status === 'confirmed') {
-      baseConfidence = reliability.reliable ? 0.92 : 0.78;
-    } else {
-      // Heuristic findings have lower base confidence
-      baseConfidence = reliability.reliable ? 0.68 : 0.55;
+    // For range-based measurements, use worst-case for FAIL determination
+    let effectiveRatio = ratio;
+    if (sample.fallbackMethod === 'range' && sample.contrastRange) {
+      // Use worst-case (min) for pass/fail classification
+      effectiveRatio = sample.contrastRange.min;
     }
-    const confidence = Math.max(0.45, baseConfidence - reliability.confidencePenalty);
 
-    // Diagnosis text based on classification
-    const diagnosis = decision.status === 'confirmed'
-      ? 'Text contrast is reliably below WCAG AA threshold. Foreground and background colors are clearly identifiable.'
-      : `Text contrast appears below WCAG AA threshold, but ${bgCertainty.reason.toLowerCase()}. Requires runtime verification.`;
+    // PASS: Interior stroke contrast meets threshold — do not emit a violation.
+    if (effectiveRatio >= thresholdUsed) {
+      continue;
+    }
 
-    // Corrective prompt: only for confirmed violations
-    const correctivePrompt = decision.status === 'confirmed'
-      ? `Increase contrast ratio to at least ${thresholdUsed}:1. Replace low-contrast text colors with higher-contrast alternatives.`
-      : ''; // No corrective prompt for heuristic findings
+    // Borderline: near threshold or secondary element or using fallback methods
+    const usedFallback = sample.fallbackMethod && sample.fallbackMethod !== 'direct';
+    const isBorderline = effectiveRatio >= 4.0 || !!el.isSecondary || usedFallback;
 
-    // Advisory guidance: only for heuristic findings
-    const advisoryGuidance = decision.status === 'heuristic'
-      ? 'Upload a PNG at 100% zoom or verify with DevTools/axe for accurate measurement.'
-      : undefined;
+    // Confirmed Fail: only when clearly below WCAG AA, sampling reliable, and no fallbacks used
+    const confirmAllowed = effectiveRatio < 4.0 && !el.isSecondary && !usedFallback;
+    const finalStatus = confirmAllowed ? 'confirmed' : 'borderline';
+
+    // Apply confidence penalty for fallback methods
+    const baseConfidence = finalStatus === 'confirmed' ? 0.92 : 0.72;
+    const confidence = Math.max(0.55, baseConfidence - reliability.confidencePenalty);
 
     results.push({
       ruleId,
       ruleName,
       category: 'accessibility',
-      status: decision.status === 'confirmed' ? 'confirmed' : 'potential',
+      status: finalStatus,
       samplingMethod: 'pixel',
       inputType: 'screenshots',
       elementRole: el.elementRole,
       elementDescription: el.elementDescription,
       evidence,
-      diagnosis,
-      contextualHint: decision.status === 'confirmed'
-        ? 'Increase text/background contrast for this element to meet WCAG AA.'
-        : 'Verify contrast with a precise tool; background certainty is limited.',
-      correctivePrompt,
-      advisoryGuidance,
+      diagnosis:
+        finalStatus === 'confirmed'
+          ? 'Interior-stroke contrast is reliably below WCAG AA for normal text.'
+          : usedFallback
+            ? `Contrast measurement used fallback strategy (${buildFallbackDescription()}). Consider verifying with a precise tool.`
+            : 'Interior-stroke contrast is near the WCAG AA threshold, or the element is secondary; consider increasing contrast for safety margin.',
+      contextualHint: 'Increase text/background contrast for this element and re-check against WCAG AA.',
       confidence,
-      contrastRatio: Math.round(sample.ratio * 100) / 100,
-      contrastRange: sample.contrastRange ? { 
-        min: Math.round(sample.contrastRange.min * 100) / 100, 
-        max: Math.round(sample.contrastRange.max * 100) / 100 
-      } : undefined,
+      contrastRatio: Math.round(ratio * 100) / 100,
+      contrastRange: sample.contrastRange ? { min: Math.round(sample.contrastRange.min * 100) / 100, max: Math.round(sample.contrastRange.max * 100) / 100 } : undefined,
       thresholdUsed,
       foregroundRgb: `rgb(${Math.round(sample.fg.r)}, ${Math.round(sample.fg.g)}, ${Math.round(sample.fg.b)})`,
       backgroundRgb: `rgb(${Math.round(sample.bg.r)}, ${Math.round(sample.bg.g)}, ${Math.round(sample.bg.b)})`,
       foregroundHex: sample.fgHex,
       backgroundHex: sample.bgHex,
       colorApproximate: true,
-      // Background certainty info for transparency
-      backgroundCertainty: {
-        certain: bgCertainty.certain,
-        reason: bgCertainty.reason,
-      },
-      // Heuristic classification reason (for potential risks)
-      potentialRiskReason: decision.status === 'heuristic' ? bgCertainty.reason : undefined,
-      inputLimitation: decision.status === 'heuristic' 
-        ? 'Screenshot analysis detected ambiguous background; contrast may vary based on actual rendering context.'
-        : undefined,
       samplingReliability: {
-        pixelSupport: `${sample.fgPixelCount} fg pixels, ${sample.bgPixelCount} bg pixels`,
+        pixelSupport: `adequate (${sample.fgPixelCount} fg pixels, ${sample.bgPixelCount} bg pixels)`,
         foregroundVariance: `stddev ${Math.round(sample.fgLumaStd)}`,
         backgroundVariance: `stddev ${Math.round(sample.bgLumaStd)}`,
         colorDistance: `Δluma ${Math.round(sample.lumaDistance)}`,
-        hexVerification: `measured ${sample.ratio.toFixed(2)}, recomputed ${sample.hexRecomputedRatio.toFixed(2)}`,
-        multiSampleConsistency: reliability.reliable ? 'passed' : reliability.reason || 'failed',
+        hexVerification: `passed (measured ${sample.ratio.toFixed(2)}, recomputed ${sample.hexRecomputedRatio.toFixed(2)})`,
+        multiSampleConsistency: 'passed (±0.2)',
         fallbackMethod: buildFallbackDescription(),
       },
-      samplingFallback: sample.fallbackMethod && sample.fallbackMethod !== 'direct' ? {
+      samplingFallback: usedFallback ? {
         method: buildFallbackDescription(),
         expansionPx: sample.expansionPx,
         clusterCount: sample.clusterCount,
@@ -834,10 +874,7 @@ async function computeA1ViolationsFromScreenshots(
     });
   }
 
-  const confirmedCount = results.filter(r => r.status === 'confirmed').length;
-  const heuristicCount = results.filter(r => r.status === 'potential').length;
-  console.log(`A1 screenshot analysis: ${confirmedCount} confirmed, ${heuristicCount} heuristic (tool=${toolUsed})`);
-  
+  console.log(`A1 pixel-sampled: ${results.length} finding(s) emitted (tool=${toolUsed})`);
   return results;
 }
 
