@@ -66,23 +66,19 @@ function cleanDiagnosisText(diagnosis?: string): string {
 function extractLocations(violation: Violation): string[] {
   const locations = new Set<string>();
   
-  // From affected_items array
-  if (violation.affected_items && violation.affected_items.length > 0) {
-    for (const item of violation.affected_items) {
-      const parts: string[] = [];
-      if (item.componentName) parts.push(item.componentName);
-      if (item.filePath && !parts.some(p => p.includes(item.filePath!))) {
-        parts.push(`(${item.filePath})`);
-      }
-      if (parts.length > 0) {
-        locations.add(parts.join(' '));
-      } else if (item.location) {
-        locations.add(item.location);
-      }
+  // From a1Elements array (new aggregated A1 format)
+  if (violation.a1Elements && violation.a1Elements.length > 0) {
+    for (const el of violation.a1Elements) {
+      if (el.location) locations.add(el.location);
     }
   }
+  
+  // From elementIdentifier
+  if (violation.elementIdentifier) {
+    locations.add(violation.elementIdentifier);
+  }
 
-  // Fallback: use evidence as a location hint when affected_items are absent.
+  // Fallback: use evidence as a location hint when no other location is available.
   // This is especially important for screenshot-based A1 where we may only have per-element evidence.
   if (locations.size === 0 && violation.evidence) {
     locations.add(violation.evidence);
