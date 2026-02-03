@@ -233,15 +233,37 @@ function sampleBackgroundPixels(
   return bgPixelsAll.filter(p => p.luma255 > fgLumaMax + 2);
 }
 
+/**
+ * INTERIOR-STROKE SAMPLING FOR A1 CONTRAST MEASUREMENT
+ * 
+ * This function implements the robust pixel sampling methodology for screenshot-only
+ * contrast evaluation. It uses interior glyph stroke pixels to estimate true text color,
+ * avoiding anti-aliased edges that blend with background.
+ * 
+ * Methodology:
+ * 1. FOREGROUND (Text): Sample grid of pixels from text region, select darkest 30-40%
+ *    by luminance (interior stroke pixels), compute median RGB as foreground color.
+ * 2. BACKGROUND: Sample ring around text region, exclude text pixels and outliers,
+ *    compute median RGB as background color. Uses progressive expansion if needed.
+ * 3. CONTRAST: Compute WCAG contrast ratio from sampled median colors.
+ * 
+ * All colors are pixel-derived estimates, not design tokens.
+ */
 function computeA1SampleWithFallbacks(
   img: Image,
   pxBox: { left: number; top: number; right: number; bottom: number }
 ): A1Sample | { error: string } {
-  // Foreground: interior stroke sampling from text region (consistent across fallbacks)
+  // ====================================================================
+  // STEP 1: FOREGROUND SAMPLING — Interior Glyph Stroke Methodology
+  // ====================================================================
+  // Sample 160 pixels from text region grid, then select the DARKEST 30-40%
+  // by luminance. These are the interior glyph strokes, free from anti-aliasing.
+  
   const textPts = buildGridPoints(pxBox.left, pxBox.top, pxBox.right, pxBox.bottom, 160);
   const textPixels = textPts
     .map(({ x, y }) => {
       const { r, g, b, a } = rgbaAt(img, x, y);
+      // Skip transparent or semi-transparent pixels
       if (a < 200) return null;
       const luma255 = relativeLuminance01({ r, g, b }) * 255;
       return { r, g, b, luma255 };
@@ -252,8 +274,15 @@ function computeA1SampleWithFallbacks(
     return { error: 'Insufficient text pixels for reliable sampling' };
   }
 
+  // Sort by luminance to identify interior strokes (darkest pixels for dark-on-light,
+  // or the core stroke color in general). We take the darkest 30-40% to avoid
+  // anti-aliased edges which have intermediate luminance values.
   const sorted = [...textPixels].sort((a, b) => a.luma255 - b.luma255);
-  const keepCount = Math.max(15, Math.floor(sorted.length * 0.4)); // darkest ~40%
+  
+  // Select darkest 30-40% of pixels as interior stroke candidates
+  // Using 35% as middle ground, with minimum of 15 pixels for statistical validity
+  const keepRatio = 0.35; // 35% of pixels (interior strokes)
+  const keepCount = Math.max(15, Math.floor(sorted.length * keepRatio));
   const fgPixels = sorted.slice(0, keepCount);
   if (fgPixels.length < 15) {
     return { error: 'Insufficient foreground pixels for reliable sampling' };
@@ -413,6 +442,11 @@ type A1ReliabilityResult = {
  * 3. High variance is due to background complexity, not actual color overlap
  * 4. Range-based measurements show worst-case passes threshold
  * 
+ * NEVER suppress (Obvious-Failure Safeguard):
+ * - When foreground/background luminance distributions strongly overlap
+ * - When measured contrast is clearly below WCAG AA (< 3.0:1) with low separation
+ * - Light gray on white, pastel on pastel, or similar obviously-failing combinations
+ * 
  * Only report when:
  * - Contrast failure is confidently measured (reliable sampling + ratio < threshold)
  * - Low contrast is visually plausible (foreground/background lumas overlap significantly)
@@ -422,7 +456,51 @@ function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?
   const bgLuma = relativeLuminance01(sample.bg) * 255;
   const lumaSeparation = Math.abs(bgLuma - fgLuma);
   
-  // === SUPPRESSION CASE 1: Very high luminance separation ===
+  // ============================================================
+  // OBVIOUS-FAILURE SAFEGUARD — NEVER SUPPRESS THESE CASES
+  // ============================================================
+  // Even if sampling has minor noise, obvious low-contrast must be reported.
+  
+  // SAFEGUARD 1: Very low measured ratio with small separation = obvious failure
+  // Light gray on white, pastel on pastel, low-contrast color pairs
+  if (sample.ratio < 3.0 && lumaSeparation < 35) {
+    return {
+      suppress: false,
+      // reason not needed for non-suppression
+    };
+  }
+  
+  // SAFEGUARD 2: Strong luminance overlap — foreground/background distributions overlap
+  // If stddev is high on BOTH sides AND separation is small, colors overlap
+  if (lumaSeparation < 20 && sample.fgLumaStd > 5 && sample.bgLumaStd > 5) {
+    return { suppress: false };
+  }
+  
+  // SAFEGUARD 3: Both colors are "light" (high luma) with low separation
+  // This catches light gray on white, pastel combinations
+  const bothLight = fgLuma > 150 && bgLuma > 150;
+  if (bothLight && lumaSeparation < 40 && sample.ratio < 4.0) {
+    return { suppress: false };
+  }
+  
+  // SAFEGUARD 4: Both colors are "dark" (low luma) with low separation
+  // This catches dark gray on dark gray, dark blue on black, etc.
+  const bothDark = fgLuma < 100 && bgLuma < 100;
+  if (bothDark && lumaSeparation < 40 && sample.ratio < 4.0) {
+    return { suppress: false };
+  }
+  
+  // SAFEGUARD 5: Range-based measurement where best-case ALSO fails
+  // If even the most favorable interpretation fails, this is obvious
+  if (sample.contrastRange && sample.contrastRange.max < 4.5) {
+    return { suppress: false };
+  }
+  
+  // ============================================================
+  // SUPPRESSION CASES — When uncertainty should NOT be reported
+  // ============================================================
+  
+  // SUPPRESSION CASE 1: Very high luminance separation
   // If lumas are very far apart, text is clearly distinguishable regardless of sampling issues
   if (lumaSeparation >= 60) {
     return {
@@ -431,8 +509,8 @@ function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?
     };
   }
   
-  // === SUPPRESSION CASE 2: Good separation with decent ratio ===
-  // Even moderate separation (≥40) with ratio ≥2.5 suggests readable text
+  // SUPPRESSION CASE 2: Good separation with decent ratio
+  // Moderate separation (≥40) with ratio ≥2.5 suggests readable text
   if (lumaSeparation >= 40 && sample.ratio >= 2.5) {
     return {
       suppress: true,
@@ -440,7 +518,7 @@ function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?
     };
   }
   
-  // === SUPPRESSION CASE 3: Range-based measurement where worst-case passes ===
+  // SUPPRESSION CASE 3: Range-based measurement where worst-case passes
   if (sample.contrastRange) {
     const worstCase = sample.contrastRange.min;
     if (worstCase >= 4.5) {
@@ -449,13 +527,9 @@ function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?
         reason: `Worst-case contrast (${worstCase.toFixed(1)}:1) meets WCAG AA threshold`,
       };
     }
-    // If best-case fails threshold, low contrast IS plausible — don't suppress
-    if (sample.contrastRange.max < 4.5) {
-      return { suppress: false };
-    }
   }
   
-  // === SUPPRESSION CASE 4: Background variance is the issue, not actual low contrast ===
+  // SUPPRESSION CASE 4: Background variance is the issue, not actual low contrast
   // If background has high variance (complex background) but foreground is stable
   // and there's reasonable separation, suppress
   if (sample.bgLumaStd > 15 && sample.fgLumaStd < 12 && lumaSeparation >= 30) {
@@ -465,8 +539,8 @@ function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?
     };
   }
   
-  // === SUPPRESSION CASE 5: Moderate separation with ratio above "clearly failing" ===
-  // Ratio ≥ 3.0 with any meaningful separation (≥25) suggests acceptable visibility
+  // SUPPRESSION CASE 5: Moderate separation with ratio above "clearly failing"
+  // Ratio ≥ 3.0 with meaningful separation (≥25) suggests acceptable visibility
   if (lumaSeparation >= 25 && sample.ratio >= 3.0) {
     return {
       suppress: true,
@@ -474,7 +548,10 @@ function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?
     };
   }
   
-  // === DO NOT SUPPRESS: Low contrast is visually plausible ===
+  // ============================================================
+  // MARGINAL CASES — Default behavior
+  // ============================================================
+  
   // Close lumas with high variance on both sides = actual overlap risk
   if (lumaSeparation < 25 && (sample.fgLumaStd > 8 || sample.bgLumaStd > 8)) {
     return { suppress: false };
