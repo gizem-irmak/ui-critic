@@ -191,7 +191,7 @@ type A1Sample = {
   hexRecomputedRatio: number;
   hexToRatioDelta: number;
   // Fallback tracking
-  fallbackMethod?: 'direct' | 'expanded' | 'clustered' | 'range';
+  fallbackMethod?: 'direct' | 'local_uniform' | 'expanded' | 'clustered' | 'range';
   expansionPx?: number;
   clusterCount?: number;
   // Range-based measurement for mixed backgrounds
@@ -263,6 +263,123 @@ function kMeansCluster(pixels: Array<{ r: number; g: number; b: number; luma255:
   return clusters.filter(c => c.members.length > 0).sort((a, b) => b.members.length - a.members.length);
 }
 
+/**
+ * LOCAL-PRIORITY BACKGROUND SAMPLING FOR A1 CONTRAST MEASUREMENT
+ * 
+ * This function implements proximity-weighted background sampling that prioritizes
+ * the immediate local region around text over distant container colors.
+ * 
+ * Key behaviors:
+ * 1. Sample from LOCAL MARGIN FIRST (6-10px around text bounding box)
+ * 2. Weight pixels by proximity to text — nearer pixels dominate
+ * 3. Detect uniform local backgrounds (badges, pills, chips) even if they differ
+ *    from the wider container color
+ * 4. Mark background as "certain" if local sampling region shows single dominant color
+ * 
+ * This correctly handles pill-shaped components like badges, chips, and tags
+ * where the text sits on a colored background different from the page/card background.
+ */
+function sampleLocalBackgroundPixels(
+  img: Image,
+  pxBox: { left: number; top: number; right: number; bottom: number },
+  localMarginPx: number,
+  fgLumaMax: number
+): {
+  pixels: Array<{ r: number; g: number; b: number; luma255: number; weight: number }>;
+  localUniformColor: RGB | null; // Single dominant color if local region is uniform
+  isLocalUniform: boolean;
+} {
+  // ====================================================================
+  // STEP 1: Define local sampling region (small margin around text)
+  // For badges/pills, this should capture the pill background, not container
+  // ====================================================================
+  const localExpanded = {
+    left: clamp(pxBox.left - localMarginPx, 0, img.width - 1),
+    top: clamp(pxBox.top - localMarginPx, 0, img.height - 1),
+    right: clamp(pxBox.right + localMarginPx, 0, img.width),
+    bottom: clamp(pxBox.bottom + localMarginPx, 0, img.height),
+  };
+  
+  // Sample densely in local region (inside the margin but outside text bbox)
+  const localPts = buildGridPoints(localExpanded.left, localExpanded.top, localExpanded.right, localExpanded.bottom, 200)
+    .filter(({ x, y }) => x < pxBox.left || x >= pxBox.right || y < pxBox.top || y >= pxBox.bottom);
+  
+  // Calculate center of text bbox for proximity weighting
+  const textCenterX = (pxBox.left + pxBox.right) / 2;
+  const textCenterY = (pxBox.top + pxBox.bottom) / 2;
+  const maxDistance = Math.sqrt(
+    Math.pow(localExpanded.right - localExpanded.left, 2) + 
+    Math.pow(localExpanded.bottom - localExpanded.top, 2)
+  );
+  
+  // ====================================================================
+  // STEP 2: Sample pixels with proximity weighting
+  // Pixels closer to text get higher weight (inverse distance)
+  // ====================================================================
+  const localPixels = localPts
+    .map(({ x, y }) => {
+      const { r, g, b, a } = rgbaAt(img, x, y);
+      if (a < 200) return null;
+      const luma255 = relativeLuminance01({ r, g, b }) * 255;
+      
+      // Skip likely text pixels (prevent bleeding)
+      if (luma255 <= fgLumaMax + 2) return null;
+      
+      // Calculate proximity weight: closer pixels get higher weight
+      const distToCenter = Math.sqrt(Math.pow(x - textCenterX, 2) + Math.pow(y - textCenterY, 2));
+      // Weight formula: 1.0 for closest, decays toward 0.3 for furthest
+      const weight = 0.3 + 0.7 * (1 - Math.min(distToCenter / maxDistance, 1));
+      
+      return { r, g, b, luma255, weight };
+    })
+    .filter(Boolean) as Array<{ r: number; g: number; b: number; luma255: number; weight: number }>;
+  
+  // ====================================================================
+  // STEP 3: Check if local region has a uniform background color
+  // This detects badges/pills with solid colored backgrounds
+  // ====================================================================
+  if (localPixels.length >= 10) {
+    // Calculate weighted average and variance
+    const totalWeight = localPixels.reduce((sum, p) => sum + p.weight, 0);
+    const weightedR = localPixels.reduce((sum, p) => sum + p.r * p.weight, 0) / totalWeight;
+    const weightedG = localPixels.reduce((sum, p) => sum + p.g * p.weight, 0) / totalWeight;
+    const weightedB = localPixels.reduce((sum, p) => sum + p.b * p.weight, 0) / totalWeight;
+    
+    // Calculate color variance (weighted standard deviation per channel)
+    const varianceR = Math.sqrt(localPixels.reduce((sum, p) => sum + p.weight * Math.pow(p.r - weightedR, 2), 0) / totalWeight);
+    const varianceG = Math.sqrt(localPixels.reduce((sum, p) => sum + p.weight * Math.pow(p.g - weightedG, 2), 0) / totalWeight);
+    const varianceB = Math.sqrt(localPixels.reduce((sum, p) => sum + p.weight * Math.pow(p.b - weightedB, 2), 0) / totalWeight);
+    const avgVariance = (varianceR + varianceG + varianceB) / 3;
+    
+    // Uniform background threshold: low color variance (<15 per channel on average)
+    // This correctly identifies solid-color badges, pills, and chips
+    const isUniform = avgVariance < 15;
+    
+    if (isUniform) {
+      const uniformColor: RGB = {
+        r: Math.round(weightedR),
+        g: Math.round(weightedG),
+        b: Math.round(weightedB),
+      };
+      return {
+        pixels: localPixels,
+        localUniformColor: uniformColor,
+        isLocalUniform: true,
+      };
+    }
+  }
+  
+  return {
+    pixels: localPixels,
+    localUniformColor: null,
+    isLocalUniform: false,
+  };
+}
+
+/**
+ * Legacy ring-based background sampling (fallback for non-local cases)
+ * Used when local sampling fails or for wider region analysis
+ */
 function sampleBackgroundPixels(
   img: Image,
   pxBox: { left: number; top: number; right: number; bottom: number },
@@ -366,23 +483,60 @@ function computeA1SampleWithFallbacks(
   const fgWorstPixel = fgPixels[clamp(fgWorstIdx, 0, fgPixels.length - 1)];
   const fgWorst: RGB = { r: fgWorstPixel.r, g: fgWorstPixel.g, b: fgWorstPixel.b };
 
-  // === FALLBACK HIERARCHY FOR BACKGROUND SAMPLING ===
-  const expansionLevels = [3, 8, 16, 32]; // pixels to expand
-  let bgPixels: typeof textPixels = [];
-  let usedExpansion = 3;
-  let fallbackMethod: 'direct' | 'expanded' | 'clustered' | 'range' = 'direct';
+  // ====================================================================
+  // LOCAL-PRIORITY BACKGROUND SAMPLING (v24 Enhancement)
+  // 
+  // Priority order for background detection:
+  // 1. LOCAL MARGIN FIRST (6-10px around text) — captures badges, pills, chips
+  // 2. If local is uniform → use local color directly (CERTAIN background)
+  // 3. If local is mixed/insufficient → fall back to expanded ring sampling
+  // 
+  // This ensures text on colored badges/pills is measured against the badge
+  // background, NOT the distant container/page background.
+  // ====================================================================
+  
+  const LOCAL_MARGIN_PX = 8; // Primary local sampling margin (6-10px range)
+  const FALLBACK_RING_LEVELS = [12, 20, 32]; // Fallback expansion if local fails
+  
+  let bgPixels: Array<{ r: number; g: number; b: number; luma255: number }> = [];
+  let usedExpansion = LOCAL_MARGIN_PX;
+  let fallbackMethod: 'direct' | 'local_uniform' | 'expanded' | 'clustered' | 'range' = 'direct';
   let clusterCount: number | undefined;
   let bgCandidates: RGB[] | undefined;
   let contrastRange: { min: number; max: number } | undefined;
-
-  // Try progressively larger expansion until we get enough background pixels
-  for (const ringPx of expansionLevels) {
-    bgPixels = sampleBackgroundPixels(img, pxBox, ringPx, fgLumaMax);
-    usedExpansion = ringPx;
-    
-    if (bgPixels.length >= 15) {
-      if (ringPx > 3) fallbackMethod = 'expanded';
-      break;
+  let localUniformDetected = false;
+  let localBg: RGB | null = null;
+  
+  // ====================================================================
+  // STEP 1: Try LOCAL proximity-weighted sampling first
+  // ====================================================================
+  const localResult = sampleLocalBackgroundPixels(img, pxBox, LOCAL_MARGIN_PX, fgLumaMax);
+  
+  if (localResult.isLocalUniform && localResult.localUniformColor) {
+    // SUCCESS: Local region has uniform background (badge/pill detected)
+    // Use this color directly — do NOT sample wider container
+    localUniformDetected = true;
+    localBg = localResult.localUniformColor;
+    bgPixels = localResult.pixels.map(p => ({ r: p.r, g: p.g, b: p.b, luma255: p.luma255 }));
+    fallbackMethod = 'local_uniform';
+  } else if (localResult.pixels.length >= 15) {
+    // Local region sampled but not uniform — use proximity-weighted pixels
+    bgPixels = localResult.pixels.map(p => ({ r: p.r, g: p.g, b: p.b, luma255: p.luma255 }));
+    fallbackMethod = 'direct';
+  }
+  
+  // ====================================================================
+  // STEP 2: Fall back to expanded ring sampling if local insufficient
+  // ====================================================================
+  if (bgPixels.length < 15 && !localUniformDetected) {
+    for (const ringPx of FALLBACK_RING_LEVELS) {
+      bgPixels = sampleBackgroundPixels(img, pxBox, ringPx, fgLumaMax);
+      usedExpansion = ringPx;
+      
+      if (bgPixels.length >= 15) {
+        fallbackMethod = 'expanded';
+        break;
+      }
     }
   }
 
@@ -406,10 +560,16 @@ function computeA1SampleWithFallbacks(
   const bgWorstPixel = bgPixels[clamp(bgWorstIdx, 0, bgPixels.length - 1)];
   const bgWorst: RGB = { r: bgWorstPixel.r, g: bgWorstPixel.g, b: bgWorstPixel.b };
 
-  // If background variance is high (>20), use clustering
+  // ====================================================================
+  // STEP 3: Determine final background color
+  // ====================================================================
   let bg: RGB;
-  if (bgLumaStd > 20 && bgPixels.length >= 10) {
-    // Use k-means clustering to find dominant background color
+  
+  if (localUniformDetected && localBg) {
+    // Use the uniform local background directly (badge/pill case)
+    bg = localBg;
+  } else if (bgLumaStd > 20 && bgPixels.length >= 10) {
+    // Background variance is high — use clustering to find dominant color
     const clusters = kMeansCluster(bgPixels, 3, 12);
     
     if (clusters.length > 0) {
@@ -478,6 +638,23 @@ function computeA1SampleWithFallbacks(
   // - Text does not overlap multiple background regions
   // ====================================================================
   const backgroundCertainty: A1BackgroundCertainty = (() => {
+    // ====================================================================
+    // LOCAL UNIFORM DETECTION (v24): If local sampling found a uniform
+    // background color (badge/pill case), background is CERTAIN
+    // ====================================================================
+    if (fallbackMethod === 'local_uniform' && localUniformDetected) {
+      return {
+        isCertain: true,
+        reason: undefined,
+        hasGradient: false,
+        hasImage: false,
+        hasOverlay: false,
+        spanMultipleRegions: false,
+        antiAliasingDominates: false,
+        mixedBackground: false,
+      };
+    }
+    
     const reasons: string[] = [];
     
     // Check for mixed background (multiple significant clusters)
@@ -488,7 +665,7 @@ function computeA1SampleWithFallbacks(
     
     // Check for gradient-like patterns (high variance with gradual transitions)
     // Gradient signature: high stddev but relatively uniform color distances
-    const hasGradientPattern = bgLumaStd > 25 && fallbackMethod !== 'clustered';
+    const hasGradientPattern = bgLumaStd > 25 && fallbackMethod !== 'clustered' && fallbackMethod !== 'local_uniform';
     if (hasGradientPattern) {
       reasons.push('gradient-like background pattern');
     }
@@ -499,8 +676,9 @@ function computeA1SampleWithFallbacks(
       reasons.push('anti-aliasing dominates color sampling');
     }
     
-    // Check for ambiguous background (used fallback expansion beyond 8px)
-    const ambiguousBackground = (usedExpansion || 3) > 8;
+    // Check for ambiguous background (used fallback expansion beyond local margin)
+    // Note: local_uniform and direct methods use LOCAL_MARGIN_PX (8px) and are NOT ambiguous
+    const ambiguousBackground = fallbackMethod === 'expanded' && (usedExpansion || 8) > 12;
     if (ambiguousBackground) {
       reasons.push('required significant region expansion for background');
     }
@@ -560,7 +738,7 @@ function computeA1Sample(img: Image, pxBox: { left: number; top: number; right: 
 type A1ReliabilityResult = {
   reliable: boolean;
   reason?: string;
-  fallbackUsed?: 'direct' | 'expanded' | 'clustered' | 'range';
+  fallbackUsed?: 'direct' | 'local_uniform' | 'expanded' | 'clustered' | 'range';
   confidencePenalty: number; // 0 = full confidence, 0.1-0.3 = reduced due to fallbacks
   // New: track whether to suppress finding entirely due to clear luminance separation
   suppressFinding?: boolean;

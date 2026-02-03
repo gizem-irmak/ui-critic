@@ -1,10 +1,31 @@
-# Memory: features/analysis-rules/a1-contrast-v23-background-based-classification
+# Memory: features/analysis-rules/a1-contrast-v24-local-priority-background
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Background-Based Classification Rule v23)
+## A1 — Insufficient Text Contrast (Local-Priority Background Detection v24)
 
 This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
+
+### v24 Key Change: Local-Priority Background Sampling
+
+**CRITICAL**: Background detection must prioritize the LOCAL region around text over global/container colors.
+
+For pill-shaped components (badges, chips, tags):
+- Sample background pixels within a **small local margin (6-10px)** around the text bounding box
+- **Weight pixels by proximity** to text — nearer pixels dominate over distant ones
+- If local region shows a **uniform color**, use that color directly (CERTAIN background)
+- Do NOT classify background as white/global if a uniform local background exists
+
+### Background Sampling Priority Order
+
+1. **LOCAL MARGIN FIRST** (8px around text bbox)
+   - Captures badge/pill/chip backgrounds correctly
+   - Uses proximity weighting (closer pixels get higher weight)
+   - If uniform color detected → `local_uniform` method → CERTAIN
+
+2. **FALLBACK EXPANSION** (12px, 20px, 32px rings)
+   - Only used if local sampling insufficient
+   - Standard ring sampling without proximity weighting
 
 ### v23 Key Change: Low Confidence MUST NOT Auto-Downgrade
 
@@ -14,32 +35,6 @@ Classification is based on **BACKGROUND CERTAINTY**, not sampling confidence:
 - If background is visually uniform (certain) AND contrast < threshold → **CONFIRMED**
 - Confidence affects **reporting detail** (e.g., "sampling confidence reduced"), NOT classification
 - Potential is ONLY used when **background cannot be reliably determined**
-
-### When to Use POTENTIAL (Exhaustive List)
-
-A1 should be classified as Potential **ONLY** when:
-1. Background has **multiple dominant colors** (BG_MIXED)
-2. Background has **gradient pattern** (BG_GRADIENT)
-3. Background has **image/texture overlay** (BG_IMAGE, BG_OVERLAY)
-4. Text **spans multiple background regions** (spanMultipleRegions)
-5. Contrast **cannot be computed at all** (unmeasurable)
-
-Do NOT downgrade obvious WCAG failures to Potential due to low confidence alone.
-
-### Rule Objective
-
-Detect text elements that may not meet WCAG 2.1 AA contrast requirements and report findings per element, explicitly stating:
-- Where the issue occurs
-- What contrast was calculated
-- Whether the issue is confirmed or potential
-- Why it is classified as potential when background is uncertain
-
-### WCAG Thresholds (Immutable)
-
-| Text Type | Minimum Contrast |
-|-----------|------------------|
-| Normal text | 4.5:1 |
-| Large text (≥18pt or ≥14pt bold) | 3.0:1 |
 
 ---
 
