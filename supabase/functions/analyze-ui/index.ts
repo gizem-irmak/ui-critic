@@ -387,7 +387,79 @@ type A1ReliabilityResult = {
   reason?: string;
   fallbackUsed?: 'direct' | 'expanded' | 'clustered' | 'range';
   confidencePenalty: number; // 0 = full confidence, 0.1-0.3 = reduced due to fallbacks
+  // New: track whether to suppress finding entirely due to clear luminance separation
+  suppressFinding?: boolean;
+  suppressReason?: string;
 };
+
+/**
+ * Determines if a finding should be suppressed because there is clear
+ * luminance separation between foreground and background, despite sampling
+ * uncertainty. This prevents false "Potential Risk" reports when visual
+ * evidence indicates the text is clearly readable.
+ */
+function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?: string } {
+  // Clear luminance separation: if foreground is substantially darker than background
+  // AND sampling issues are due to instability (not actual low contrast),
+  // suppress the finding as PASS.
+  
+  // Get foreground and background luminance
+  const fgLuma = relativeLuminance01(sample.fg) * 255;
+  const bgLuma = relativeLuminance01(sample.bg) * 255;
+  
+  // Clear separation threshold: foreground should be at least 40 luma units darker
+  // than background (or vice versa for light-on-dark text)
+  const lumaSeparation = Math.abs(bgLuma - fgLuma);
+  
+  // Check if foreground is predominantly darker (normal dark-on-light text)
+  const fgIsDarker = fgLuma < bgLuma;
+  // Or lighter (light-on-dark text)
+  const fgIsLighter = fgLuma > bgLuma;
+  
+  // Strong separation criteria:
+  // 1. At least 50 luma units apart (clear visual distinction)
+  // 2. The ratio is above 3.0 (not extremely low contrast)
+  // 3. Background variance is the issue (not actual color overlap)
+  
+  if (lumaSeparation >= 50 && sample.ratio >= 3.0) {
+    // Clear luminance separation — even if sampling is "unreliable" due to
+    // background complexity (shadows, gradients, pills), the text is clearly visible
+    return {
+      suppress: true,
+      reason: `Clear luminance separation (Δluma=${Math.round(lumaSeparation)}) with ratio ${sample.ratio.toFixed(1)}:1 indicates readable text despite sampling complexity`,
+    };
+  }
+  
+  // Even stronger case: very high separation with moderate ratio
+  if (lumaSeparation >= 70) {
+    return {
+      suppress: true,
+      reason: `Very high luminance separation (Δluma=${Math.round(lumaSeparation)}) indicates clearly distinguishable text`,
+    };
+  }
+  
+  // Check for plausible low-contrast scenario: foreground and background lumas overlap
+  // If the distribution of sampled lumas shows overlap, low contrast IS plausible
+  // Note: High fgLumaStd or bgLumaStd with low separation = overlap risk
+  if (lumaSeparation < 30 && sample.fgLumaStd > 10 && sample.bgLumaStd > 10) {
+    // Lumas are close AND both have high variance — overlap is plausible
+    // Do NOT suppress
+    return { suppress: false };
+  }
+  
+  // For range-based measurements: check if the range worst-case passes
+  if (sample.contrastRange) {
+    const worstCase = sample.contrastRange.min;
+    if (worstCase >= 4.5) {
+      return {
+        suppress: true,
+        reason: `Worst-case contrast (${worstCase.toFixed(1)}:1) meets WCAG AA threshold`,
+      };
+    }
+  }
+  
+  return { suppress: false };
+}
 
 function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1ReliabilityResult {
   // If any sample outright failed to measure, treat as unreliable.
@@ -401,6 +473,17 @@ function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1Re
   const minR = Math.min(...ratios);
   const maxR = Math.max(...ratios);
   if (maxR - minR > 0.2) {
+    // Check if finding should be suppressed due to clear luminance separation
+    const suppressCheck = shouldSuppressA1Finding(okSamples[0]);
+    if (suppressCheck.suppress) {
+      return { 
+        reliable: false, 
+        reason: `Multi-sample consistency failed: ratios varied by ${(maxR - minR).toFixed(2)}`,
+        confidencePenalty: 0.3,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
     return { reliable: false, reason: `Multi-sample consistency failed: ratios varied by ${(maxR - minR).toFixed(2)}`, confidencePenalty: 0.3 };
   }
 
@@ -408,6 +491,17 @@ function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1Re
   
   // Base reliability checks
   if (s0.hexToRatioDelta > 0.2) {
+    // Check suppression
+    const suppressCheck = shouldSuppressA1Finding(s0);
+    if (suppressCheck.suppress) {
+      return {
+        reliable: false,
+        reason: `Hex-to-ratio verification failed: measured ${s0.ratio.toFixed(2)} vs recomputed ${s0.hexRecomputedRatio.toFixed(2)}`,
+        confidencePenalty: 0.25,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
     return {
       reliable: false,
       reason: `Hex-to-ratio verification failed: measured ${s0.ratio.toFixed(2)} vs recomputed ${s0.hexRecomputedRatio.toFixed(2)}`,
@@ -415,9 +509,35 @@ function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1Re
     };
   }
   if (s0.fgPixelCount < 15) return { reliable: false, reason: 'Insufficient foreground pixels for reliable sampling', confidencePenalty: 0.35 };
-  if (s0.bgPixelCount < 15) return { reliable: false, reason: 'Insufficient background pixels for reliable sampling', confidencePenalty: 0.35 };
+  if (s0.bgPixelCount < 15) {
+    // Check suppression for background sampling issues
+    const suppressCheck = shouldSuppressA1Finding(s0);
+    if (suppressCheck.suppress) {
+      return { 
+        reliable: false, 
+        reason: 'Insufficient background pixels for reliable sampling', 
+        confidencePenalty: 0.35,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
+    return { reliable: false, reason: 'Insufficient background pixels for reliable sampling', confidencePenalty: 0.35 };
+  }
   if (s0.lumaDistance < 20) return { reliable: false, reason: 'Foreground and background too similar for reliable measurement', confidencePenalty: 0.3 };
-  if (s0.fgLumaStd > 15) return { reliable: false, reason: 'Foreground variance too high — text rendering unstable', confidencePenalty: 0.25 };
+  if (s0.fgLumaStd > 15) {
+    // Check suppression
+    const suppressCheck = shouldSuppressA1Finding(s0);
+    if (suppressCheck.suppress) {
+      return { 
+        reliable: false, 
+        reason: 'Foreground variance too high — text rendering unstable', 
+        confidencePenalty: 0.25,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
+    return { reliable: false, reason: 'Foreground variance too high — text rendering unstable', confidencePenalty: 0.25 };
+  }
   
   // For range-based measurements, check if contrast range spans threshold
   if (s0.fallbackMethod === 'range' && s0.contrastRange) {
@@ -433,6 +553,18 @@ function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1Re
         confidencePenalty: 0.15, // Slight penalty for range-based
       };
     } else {
+      // Range spans threshold — check if should suppress based on luminance separation
+      const suppressCheck = shouldSuppressA1Finding(s0);
+      if (suppressCheck.suppress) {
+        return {
+          reliable: false,
+          reason: `Mixed background: contrast range ${min.toFixed(1)}:1 – ${max.toFixed(1)}:1 spans WCAG threshold`,
+          fallbackUsed: 'range',
+          confidencePenalty: 0.25,
+          suppressFinding: true,
+          suppressReason: suppressCheck.reason,
+        };
+      }
       // Range spans threshold — cannot confirm
       return {
         reliable: false,
@@ -445,6 +577,17 @@ function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1Re
   
   // High background variance is okay if clustering was used successfully
   if (s0.bgLumaStd > 20 && s0.fallbackMethod !== 'clustered' && s0.fallbackMethod !== 'range') {
+    // Check suppression for high background variance
+    const suppressCheck = shouldSuppressA1Finding(s0);
+    if (suppressCheck.suppress) {
+      return { 
+        reliable: false, 
+        reason: 'Background variance too high — non-uniform background', 
+        confidencePenalty: 0.25,
+        suppressFinding: true,
+        suppressReason: suppressCheck.reason,
+      };
+    }
     return { reliable: false, reason: 'Background variance too high — non-uniform background', confidencePenalty: 0.25 };
   }
   
@@ -532,6 +675,13 @@ async function computeA1ViolationsFromScreenshots(
     };
 
     if (!reliability.reliable) {
+      // NEW: If finding should be suppressed due to clear luminance separation,
+      // treat as PASS and do not emit any violation
+      if (reliability.suppressFinding) {
+        console.log(`A1 suppressed for element at ${evidence}: ${reliability.suppressReason}`);
+        continue; // Suppress — treat as PASS
+      }
+      
       // Unreliable sampling -> Potential Risk (non-blocking)
       const rangeNote = contrastRange 
         ? ` Contrast range: ${contrastRange.min.toFixed(1)}:1 – ${contrastRange.max.toFixed(1)}:1.`
