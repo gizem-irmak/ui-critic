@@ -2145,32 +2145,49 @@ Any text visible to users that conveys information MUST be passed to A1 evaluati
 Filtering rules that apply to other analyses (A2, A4, etc.) MUST NOT apply to A1.
 If you can read it, it MUST be in a1TextElements.
 
-## TEXT SIZE CLASSIFICATION FOR WCAG THRESHOLDS (CRITICAL)
+## TEXT SIZE CLASSIFICATION FOR WCAG THRESHOLDS (CRITICAL — DYNAMIC v26)
 
-You MUST classify each text element as "normal" or "large" to apply the correct WCAG threshold:
+You MUST classify each text element as "normal" or "large" to apply the correct WCAG threshold.
+Use DYNAMIC, CONTEXT-AWARE detection — not fixed pixel thresholds alone.
 
-**LARGE TEXT (textSize: "large")** — uses 3:1 minimum contrast:
-- Text height ≥ 18pt (~24px at 96dpi) for normal-weight text
-- Text height ≥ 14pt (~18.7px at 96dpi) AND appears bold (heavier stroke weight)
-- Visual indicators of large text:
-  - Main headings (h1, h2, large titles)
-  - Hero text, banner headlines
-  - Bold section headers with significant height
-  - Text that visually dominates as a major element
+**LARGE TEXT (textSize: "large")** — uses 3:1 minimum contrast.
+Classify as "large" if ANY of the following conditions are met:
+
+1) **RELATIVE SIZE CONDITION**:
+   Text height is ≥ 1.2× the median body text height detected in the same screenshot.
+   - First, identify the typical body text size (most common paragraph/description text height)
+   - If this element's bounding box height is at least 20% taller → classify as "large"
+   - This captures headings, titles, and emphasized text dynamically
+
+2) **BOLD + SIZE CONDITION**:
+   Text height corresponds to ≥ 14pt (~18.7px) AND the text appears bold.
+   - Bold detection: thicker stroke width, heavier pixel density, visually emphasized weight
+   - Applies to bold section headers, emphasized labels, strong navigation items
+
+3) **SEMANTIC ROLE + VISUAL WEIGHT CONDITION**:
+   The text functions as a UI label, section heading, filter label, navigation item,
+   or control label AND is visually larger or heavier than surrounding body text.
+   - Section headings that organize content
+   - Filter/tab labels that are visually prominent
+   - Navigation items with increased weight
+   - Form section labels that stand out from field content
 
 **NORMAL TEXT (textSize: "normal")** — uses 4.5:1 minimum contrast:
-- All other text elements
-- Body text, descriptions, paragraphs
-- Labels, metadata, captions, badges
-- Small headings (h3-h6) unless visually large
-- Navigation links, button text
-- Muted or secondary text of standard size
+- All text that does NOT meet any of the above conditions
+- Standard body text, descriptions, paragraphs
+- Metadata, timestamps, small labels
+- Text that matches or is smaller than median body text height
+- Muted or secondary text without visual emphasis
 
-**How to estimate from bounding box:**
-- Compare bbox.h (normalized height) to the screenshot height
-- If bbox.h * screenshotHeight >= ~24px → consider "large" if normal weight
-- If bbox.h * screenshotHeight >= ~18.7px AND text appears bold → "large"
-- When uncertain, default to "normal" (conservative approach)
+**DYNAMIC ESTIMATION PROCESS:**
+1. Scan all text elements to determine the median body text height
+2. For each element, check:
+   a) Is height ≥ 1.2× median? → "large"
+   b) Is height ≥ ~18.7px AND bold? → "large"
+   c) Is it a prominent UI label/heading visually larger than body text? → "large"
+   d) None of the above? → "normal"
+
+When uncertain, default to "normal" (conservative approach).
 
 "a1TextElements": [
   {

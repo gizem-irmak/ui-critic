@@ -20,18 +20,24 @@ This is the **definitive, immutable** rule specification for A1. All previous lo
 | Text Classification | Minimum Contrast | Criteria |
 |---------------------|------------------|----------|
 | Normal text | 4.5:1 | Default for all text |
-| Large text | 3.0:1 | ≥ 18pt normal OR ≥ 14pt bold |
+| Large text | 3.0:1 | Dynamic detection (see v26 rules below) |
 
-### Large Text Classification
+### Large Text Classification (v26 — Dynamic Detection)
 
-Classify text as "large" when:
-- Estimated text height ≥ 18pt (~24px) for normal-weight text, OR
-- Estimated text height ≥ 14pt (~18.7px) AND text appears bold (heavier stroke weight)
+Classify text as "large" if **ANY** of the following conditions are met:
 
-Visual indicators for large text:
-- Main headings (h1, h2, hero titles)
-- Bold section headers with significant height
-- Banner headlines, feature titles
+1. **Relative Size**: Text height ≥ 1.2× the median body text height in the same screenshot
+2. **Bold + Size**: Text height ≥ 14pt (~18.7px) AND text appears bold (heavier stroke weight)
+3. **Semantic + Visual Weight**: Text functions as a UI label, section heading, filter label, navigation item, or control label AND is visually larger or heavier than surrounding body text
+
+### Dynamic Estimation Process
+
+1. Scan all text elements to determine the median body text height
+2. For each element, check:
+   - Is height ≥ 1.2× median? → "large"
+   - Is height ≥ ~18.7px AND bold? → "large"
+   - Is it a prominent UI label/heading visually larger than body text? → "large"
+   - None of the above? → "normal"
 
 When uncertain, classify as "normal" (conservative approach).
 
