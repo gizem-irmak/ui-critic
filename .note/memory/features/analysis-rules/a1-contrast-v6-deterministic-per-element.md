@@ -1,122 +1,84 @@
-# Memory: features/analysis-rules/a1-contrast-v18-robust-screenshot-detection
+# Memory: features/analysis-rules/a1-contrast-v19-worst-case-bounding
 
 Updated: just now
 
-Rule A1 (Insufficient Text Contrast) implements **robust pixel-based detection** for screenshot-only UI evaluation. The methodology uses interior-stroke sampling to reliably measure contrast without DOM or CSS access.
+Rule A1 (Insufficient Text Contrast) implements **worst-case contrast bounding** for screenshot analysis to prevent false passes while still suppressing inconclusive measurements.
 
 ## Core Principle
 
-**Report A1 only when a contrast failure can be reliably measured and attributed to a specific UI element.** Suppress findings when measurement is unreliable AND failure is not visually plausible. However, **NEVER suppress obvious low-contrast failures** even with minor sampling noise.
+**Use conservative worst-case colors to decide suppression.** Do not suppress solely because measurement is unstable — only suppress when worst-case contrast meets threshold.
 
-## 1. Interior-Stroke Sampling Methodology
+## 1. Worst-Case Color Estimation
 
-### Foreground (Text) Color
+### Foreground (FG_worst): Lightest Plausible Stroke Color
 1. Sample 160 pixels from text region grid
-2. Convert all pixels to luminance
-3. **Select the DARKEST 30–40%** of pixels by luminance (interior glyph strokes)
-4. This excludes anti-aliased edges which have intermediate luminance values
-5. Use **median RGB** of this darkest subset as foreground color
-6. Report RAW sampled hex — never snap to design tokens
+2. Select darkest 30-40% by luminance (interior strokes, exclude anti-aliased edges)
+3. **FG_worst = 80-85th percentile luminance** among these stroke pixels
+4. This is the lightest plausible text color (conservative bound)
 
-### Background Color
-1. Sample pixels from narrow ring surrounding text region
-2. Start with 3px ring, progressively expand: 3→8→16→32px if needed
-3. Exclude pixels darker than foreground max luminance + 2
-4. Apply k-means clustering for high-variance backgrounds
-5. Use **median RGB** of remaining pixels as background
+### Background (BG_worst): Lightest Plausible Background
+1. Sample ring around text region with progressive expansion (3→32px)
+2. Exclude pixels darker than foreground max luminance + 2
+3. **BG_worst = 80-90th percentile luminance** among background pixels
+4. This is the lightest plausible background (conservative bound)
 
-## 2. Contrast Computation
+### Contrast Computation
+- **contrast_worst = contrast(FG_worst, BG_worst)**
+- Also compute median-based ratio for reporting
 
-- Use WCAG 2.1 relative luminance formula on sampled median RGB
-- Treat all reported colors as pixel-derived estimates
-- Threshold: 4.5:1 for normal text, 3.0:1 for large text (≥18px or ≥14px bold)
-- Do NOT normalize or snap colors to design tokens
+## 2. Suppression Decision (Primary Rule)
 
-## 3. 7-Point Reliability Gate
+| Condition | Action |
+|-----------|--------|
+| **contrast_worst < 4.0:1** | DO NOT suppress → Report as **Confirmed Fail** |
+| **4.0 ≤ contrast_worst < 4.5** | DO NOT suppress → Report as **Fail** |
+| **contrast_worst ≥ 4.5:1** | Suppress → PASS (no report) |
 
-All checks must pass for "reliable" (Confirmed) classification:
+**Key insight**: If even the lightest plausible color pair fails threshold, the finding is real — report it regardless of sampling noise.
+
+## 3. Additional Safeguards (Never Suppress)
+
+| Condition | Action |
+|-----------|--------|
+| Range-based `max < 4.5` | Report as failure |
+| Both colors "light" (luma > 150) + ratio < 3.5 + separation < 50 | Report |
+| Both colors "dark" (luma < 100) + ratio < 3.5 + separation < 50 | Report |
+
+## 4. 7-Point Reliability Gate (for Confirmed status)
+
+All checks must pass for highest confidence:
 
 | Check | Requirement | If Failed |
 |-------|-------------|-----------|
-| Multi-sample consistency | 3 offset samples, ratio variance ≤ 0.2 | Unreliable |
-| Hex verification | Recomputed contrast delta ≤ 0.2 | Unreliable |
-| Foreground pixel count | ≥ 15 pixels | Unreliable |
-| Background pixel count | ≥ 15 pixels | Unreliable |
-| Luminance distance | ≥ 20 units | Unreliable |
-| Foreground variance | stddev ≤ 15 | Unreliable |
-| Background variance | stddev ≤ 20 (unless clustering used) | Unreliable |
+| Multi-sample consistency | 3 offset samples, ratio variance ≤ 0.2 | Reduced confidence |
+| Hex verification | Recomputed contrast delta ≤ 0.2 | Reduced confidence |
+| Foreground pixel count | ≥ 15 pixels | Error |
+| Background pixel count | ≥ 15 pixels | Error |
+| Luminance distance | ≥ 20 units | Reduced confidence |
+| Foreground variance | stddev ≤ 15 | Reduced confidence |
+| Background variance | stddev ≤ 20 (unless clustering) | Reduced confidence |
 
-## 4. Decision Rules (Strict)
+## 5. Reporting Structure
 
-### Classification
-
-| Status | Criteria | Blocks Convergence |
-|--------|----------|-------------------|
-| **Confirmed Fail** | All reliability checks pass + ratio < 4.0:1 + no fallbacks | YES |
-| **Borderline** | Near threshold (4.0–4.5) OR secondary element OR fallback used | NO |
-| **Pass (No Report)** | ratio ≥ 4.5:1 OR sampling uncertain but failure implausible | — |
-
-### Suppression Policy
-
-Suppress A1 finding entirely (treat as PASS) when:
-
-| Condition | Action |
-|-----------|--------|
-| Luminance separation ≥ 60 | Always suppress (clearly readable) |
-| Luminance separation ≥ 40 AND ratio ≥ 2.5 | Suppress (distinguishable text) |
-| Luminance separation ≥ 25 AND ratio ≥ 3.0 | Suppress (not plausible failure) |
-| Background variance high, foreground stable, separation ≥ 30 | Suppress (complexity issue) |
-| Range-based worst-case ≥ 4.5:1 | Suppress (passes threshold) |
-| Measurement error (insufficient pixels) | Suppress (no aggregate counts) |
-
-### Obvious-Failure Safeguard — NEVER Suppress
-
-| Condition | Action |
-|-----------|--------|
-| Ratio < 3.0 AND separation < 35 | DO NOT suppress (obvious failure) |
-| Both colors "light" (luma > 150), separation < 40, ratio < 4.0 | DO NOT suppress |
-| Both colors "dark" (luma < 100), separation < 40, ratio < 4.0 | DO NOT suppress |
-| Luminance separation < 20 AND high variance on fg/bg | DO NOT suppress |
-| Range-based best-case < 4.5:1 | DO NOT suppress (clear failure) |
-
-**Examples of obvious failures that MUST be reported:**
-- Light gray text (#9CA3AF) on white background (#FFFFFF)
-- Pastel text on pastel background
-- Dark gray text on dark gray background
-- Any case where measured ratio is clearly below threshold
-
-## 5. Reporting Discipline
-
-### What IS Reported
-For each Confirmed or Borderline finding:
-1. **Descriptive label** (e.g., "credits badge label", "page subtitle")
-2. **Approximate location** (e.g., "course card", "header section")
-3. **Measured contrast ratio** (pixel-sampled value)
-4. **Foreground/background hex** (sampled, not tokenized)
-5. **Individual confidence score**
-6. **Sampling reliability details**
-
-### What is NOT Reported
-- **Aggregate counts**: No "7 elements could not be measured"
-- **Anonymous findings**: No findings without element-level specificity
-- **Potential Risks for uncertain measurement**: When uncertain AND failure implausible, suppress entirely
-- **Technical limitation disclaimers**: Do not surface sampling uncertainty to users
+For each finding, report:
+1. **Element description** (e.g., "credits badge label in course card")
+2. **Measured contrast ratio** (median-based)
+3. **Worst-case contrast** (percentile-based conservative bound)
+4. **Foreground/background hex** (median RGB converted)
+5. **Worst-case colors** (fgWorstHex, bgWorstHex)
+6. **Individual confidence score**
 
 ## 6. Fallback Strategies
 
-When direct ring sampling fails, use progressive fallbacks:
-
+When direct ring sampling fails:
 1. **Expanded region**: +8px, +16px, +32px expansion
-2. **Color clustering**: k-means to find dominant background color
-3. **Range-based**: Report min/max contrast when multiple background candidates exist
-
-Fallback usage automatically demotes findings to "Borderline" (non-blocking).
+2. **Color clustering**: k-means for high-variance backgrounds
+3. **Range-based**: Report min/max contrast for mixed backgrounds
 
 ## Forbidden Behaviors
 
-- Do NOT report A1 "Potential Risks" when measurement fails and failure is implausible
+- Do NOT suppress based solely on measurement instability
+- Do NOT suppress when worst-case contrast < 4.5:1
 - Do NOT report aggregate counts ("X elements could not be measured")
 - Do NOT report anonymous elements without description/location
-- Do NOT equate algorithmic uncertainty with accessibility risk
-- Do NOT snap sampled colors to Tailwind tokens or palette names
-- Do NOT suppress obvious low-contrast failures (light gray on white, etc.)
+- Do NOT snap sampled colors to Tailwind tokens
