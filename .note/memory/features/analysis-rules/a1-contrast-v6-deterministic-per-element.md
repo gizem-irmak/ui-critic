@@ -1,16 +1,39 @@
-# Memory: features/analysis-rules/a1-contrast-v24-comprehensive-coverage
+# Memory: features/analysis-rules/a1-contrast-v25-tiered-thresholds
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Comprehensive Coverage v24)
+## A1 — Insufficient Text Contrast (Tiered Thresholds v25)
 
 This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
 
-### v24 Key Changes
+### v25 Key Changes
 
 1. **Comprehensive Mandatory Detection Scope**
 2. **Local-Priority Background Sampling**
 3. **Background-Based Classification (not confidence-based)**
+4. **Tiered WCAG Thresholds: 4.5:1 (normal) / 3.0:1 (large text)**
+
+---
+
+## WCAG Tiered Thresholds (v25)
+
+| Text Classification | Minimum Contrast | Criteria |
+|---------------------|------------------|----------|
+| Normal text | 4.5:1 | Default for all text |
+| Large text | 3.0:1 | ≥ 18pt normal OR ≥ 14pt bold |
+
+### Large Text Classification
+
+Classify text as "large" when:
+- Estimated text height ≥ 18pt (~24px) for normal-weight text, OR
+- Estimated text height ≥ 14pt (~18.7px) AND text appears bold (heavier stroke weight)
+
+Visual indicators for large text:
+- Main headings (h1, h2, hero titles)
+- Bold section headers with significant height
+- Banner headlines, feature titles
+
+When uncertain, classify as "normal" (conservative approach).
 
 ---
 
