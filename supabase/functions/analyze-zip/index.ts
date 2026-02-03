@@ -2518,10 +2518,100 @@ ${codeContent}`,
       }
     }
 
-    // Merge contrast violations with AI violations
-    const allViolations = [...contrastViolations, ...aiViolations];
+    // ========== A1 AGGREGATION LOGIC (v22) ==========
+    // Aggregate per-element A1 findings into at most 2 cards:
+    // - One for Confirmed (Blocking) findings - N/A for ZIP, all are potential
+    // - One for Potential (Non-blocking) findings
+    // Each card contains element sub-items with full details.
+    // Deduplication by (filePath + colorClass)
+    
+    const confirmedA1Elements = contrastViolations.filter((v: any) => v.status === 'confirmed');
+    const potentialA1Elements = contrastViolations.filter((v: any) => v.status === 'potential');
+    
+    // Helper to build A1ElementSubItem from raw violation
+    const buildA1SubItem = (v: any): any => {
+      const dedupeKey = `${v.evidence || ''}-${v.foregroundHex || ''}`.toLowerCase().replace(/\s+/g, '');
+      
+      return {
+        elementLabel: v.elementDescription || v.elementIdentifier || 'Text element',
+        textSnippet: undefined,
+        location: v.evidence || v.elementIdentifier || 'Unknown location',
+        foregroundHex: v.foregroundHex,
+        foregroundConfidence: v.confidence,
+        backgroundStatus: v.backgroundStatus || 'unmeasurable',
+        backgroundHex: v.backgroundHex,
+        backgroundCandidates: undefined,
+        contrastRatio: v.contrastRatio,
+        contrastRange: undefined,
+        contrastNotMeasurable: v.backgroundStatus === 'unmeasurable',
+        thresholdUsed: v.thresholdUsed || 4.5,
+        explanation: v.diagnosis,
+        reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
+        nearThreshold: false,
+        deduplicationKey: dedupeKey,
+      };
+    };
+    
+    // Deduplicate elements by key
+    const deduplicateElements = (elements: any[]): any[] => {
+      const seen = new Map<string, any>();
+      for (const el of elements) {
+        const key = el.deduplicationKey;
+        if (seen.has(key)) {
+          const existing = seen.get(key);
+          if (el.reasonCodes) {
+            existing.reasonCodes = [...new Set([...(existing.reasonCodes || []), ...el.reasonCodes])];
+          }
+        } else {
+          seen.set(key, el);
+        }
+      }
+      return Array.from(seen.values());
+    };
+    
+    const aggregatedA1Violations: any[] = [];
+    
+    // For ZIP: All findings are potential (no confirmed)
+    if (potentialA1Elements.length > 0) {
+      const elements = deduplicateElements(potentialA1Elements.map(buildA1SubItem));
+      const avgConfidence = potentialA1Elements.reduce((sum: number, v: any) => sum + (v.confidence || 0.55), 0) / potentialA1Elements.length;
+      
+      // Collect all unique reason codes across elements
+      const allReasonCodes = new Set<string>(['STATIC_ANALYSIS']);
+      for (const el of elements) {
+        if (el.reasonCodes) {
+          for (const code of el.reasonCodes) {
+            allReasonCodes.add(code);
+          }
+        }
+      }
+      
+      aggregatedA1Violations.push({
+        ruleId: 'A1',
+        ruleName: 'Insufficient text contrast',
+        category: 'accessibility',
+        status: 'potential',
+        isA1Aggregated: true,
+        a1Elements: elements,
+        diagnosis: `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast issues detected via static code analysis. Background colors cannot be determined without runtime rendering.`,
+        correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools after rendering.',
+        contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools after rendering.',
+        confidence: Math.round(avgConfidence * 100) / 100,
+        reasonCodes: Array.from(allReasonCodes),
+        potentialRiskReason: Array.from(allReasonCodes).join(', '),
+        advisoryGuidance: 'Upload screenshots of the rendered UI for higher-confidence verification.',
+        blocksConvergence: false,
+        inputType: 'zip',
+        samplingMethod: 'inferred',
+      });
+      
+      console.log(`A1 aggregated (ZIP): ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
+    }
+    
+    // Merge aggregated A1 with AI violations (no raw contrast violations)
+    const allViolations = [...aggregatedA1Violations, ...aiViolations];
 
-    console.log(`Code analysis complete: ${allViolations.length} violations found (${contrastViolations.length} contrast + ${aiViolations.length} AI-detected)`);
+    console.log(`Code analysis complete: ${allViolations.length} violations found`);
 
     return new Response(
       JSON.stringify({

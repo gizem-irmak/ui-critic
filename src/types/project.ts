@@ -70,7 +70,7 @@ export interface Violation {
   contextualHint?: string;
   confidence: number;
   // A1 contrast-specific fields
-  status?: 'confirmed' | 'borderline' | 'potential';
+  status?: 'confirmed' | 'potential'; // Strictly two buckets: confirmed (blocking) or potential (non-blocking)
   samplingMethod?: 'pixel' | 'inferred'; // How colors were obtained: pixel-sampled or inferred from tokens/classes
   elementRole?: string; // Semantic role: caption, badge, metadata, heading, etc.
   inputType?: 'screenshots' | 'zip' | 'github'; // Which input type was used for this finding
@@ -115,27 +115,6 @@ export interface Violation {
     multiSampleConsistency?: string;
     fallbackMethod?: string;
   };
-  // A1 affected items for aggregated display (DEPRECATED - use individual violations)
-  affected_items?: Array<{
-    location?: string;
-    screenshotIndex?: number;
-    componentName?: string;
-    filePath?: string;
-    colorClass?: string;
-    hexColor?: string;
-    riskLevel?: 'high' | 'medium' | 'low';
-    status?: 'confirmed' | 'borderline' | 'potential';
-    confidence?: number;
-    rationale?: string;
-    occurrence_count?: number;
-    elementContext?: string;
-    contrastRatio?: number;
-    thresholdUsed?: number;
-    foregroundHex?: string;
-    backgroundHex?: string;
-    elementDescription?: string;
-    potentialRiskReason?: string;
-  }>;
   // Background certainty assessment (screenshot analysis only)
   backgroundCertainty?: {
     isCertain: boolean;
@@ -146,6 +125,54 @@ export interface Violation {
   //   - Confirmed violations: block convergence (true)
   //   - Heuristic/potential findings: never block convergence (false)
   blocksConvergence?: boolean;
+  
+  // ============================================================
+  // A1 AGGREGATED ELEMENT REPORTING (v22)
+  // ============================================================
+  // When isA1Aggregated = true, this violation represents an aggregated
+  // A1 report with multiple element sub-items stored in a1Elements.
+  // At most two A1 violations per iteration: one for confirmed, one for potential.
+  isA1Aggregated?: boolean;
+  a1Elements?: A1ElementSubItem[];
+  // "near-threshold" tag for elements within small margin of threshold
+  nearThreshold?: boolean;
+}
+
+// A1 Element sub-item for aggregated reporting
+export interface A1ElementSubItem {
+  // Element identification
+  elementLabel: string; // e.g., "Header subtitle", "Credits badge"
+  textSnippet?: string; // Sample text if available
+  location: string; // screen + bbox or component path
+  screenshotIndex?: number;
+  bbox?: { x: number; y: number; w: number; h: number };
+  
+  // Foreground color data
+  foregroundHex?: string;
+  foregroundConfidence?: number;
+  
+  // Background data
+  backgroundStatus: 'certain' | 'uncertain' | 'unmeasurable';
+  backgroundHex?: string; // Single dominant if certain
+  backgroundCandidates?: Array<{ hex: string; confidence: number }>; // List if uncertain
+  
+  // Contrast data
+  contrastRatio?: number; // Single ratio if certain
+  contrastRange?: { min: number; max: number }; // Min-max if uncertain
+  contrastNotMeasurable?: boolean; // True if truly unmeasurable
+  
+  // WCAG threshold
+  thresholdUsed: 4.5 | 3.0;
+  
+  // Classification explanation
+  explanation: string; // Why this element is confirmed or potential
+  reasonCodes?: A1ReasonCode[]; // Mandatory for potential
+  
+  // Optional "near-threshold" tag (within small margin of threshold, NOT for far-below values)
+  nearThreshold?: boolean;
+  
+  // Deduplication key
+  deduplicationKey: string; // screenId + bbox + textSnippet
 }
 
 // A1 Reason codes explaining why a finding is classified as "potential"

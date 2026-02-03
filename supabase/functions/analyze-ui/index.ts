@@ -3318,10 +3318,139 @@ serve(async (req) => {
       console.log(`A5: No valid violations found (${a5Violations.length} filtered out as PASS or NOT APPLICABLE)`);
     }
     
-    // Combine all violations - A1 is per-element (no aggregation)
+    // ========== A1 AGGREGATION LOGIC (v22) ==========
+    // Aggregate per-element A1 findings into at most 2 cards:
+    // - One for Confirmed (Blocking) findings
+    // - One for Potential (Non-blocking) findings
+    // Each card contains element sub-items with full details.
+    // Deduplication by (screenId + bbox + textSnippet)
+    
+    const confirmedA1Elements = perElementA1Violations.filter((v: any) => v.status === 'confirmed');
+    const potentialA1Elements = perElementA1Violations.filter((v: any) => v.status === 'potential');
+    
+    // Helper to build deduplication key
+    const buildDedupeKey = (v: any): string => {
+      const screenPart = v.evidence?.match(/Screenshot #(\d+)/)?.[1] || '0';
+      const textPart = v.textSnippet || v.elementDescription || '';
+      return `${screenPart}-${textPart}`.toLowerCase().replace(/\s+/g, '');
+    };
+    
+    // Helper to build A1ElementSubItem from raw violation
+    const buildA1SubItem = (v: any): any => {
+      const dedupeKey = buildDedupeKey(v);
+      
+      // Determine if near-threshold (within small margin, NOT for values far below)
+      // Near threshold: ratio between (threshold - 0.3) and threshold
+      const ratio = v.contrastRatio || v.contrastRange?.min;
+      const threshold = v.thresholdUsed || 4.5;
+      const isNearThreshold = ratio !== undefined && ratio >= (threshold - 0.3) && ratio < threshold;
+      
+      return {
+        elementLabel: v.elementDescription || v.elementRole || 'Text element',
+        textSnippet: v.textSnippet,
+        location: v.evidence || v.elementIdentifier || 'Unknown location',
+        screenshotIndex: parseInt(v.evidence?.match(/Screenshot #(\d+)/)?.[1] || '1'),
+        foregroundHex: v.foregroundHex,
+        foregroundConfidence: v.foregroundConfidence,
+        backgroundStatus: v.backgroundStatus || 'uncertain',
+        backgroundHex: v.backgroundHex,
+        backgroundCandidates: v.backgroundCandidates,
+        contrastRatio: v.contrastRatio,
+        contrastRange: v.contrastRange,
+        contrastNotMeasurable: v.backgroundStatus === 'unmeasurable',
+        thresholdUsed: v.thresholdUsed || 4.5,
+        explanation: v.diagnosis,
+        reasonCodes: v.reasonCodes,
+        nearThreshold: isNearThreshold,
+        deduplicationKey: dedupeKey,
+      };
+    };
+    
+    // Deduplicate elements by key
+    const deduplicateElements = (elements: any[]): any[] => {
+      const seen = new Map<string, any>();
+      for (const el of elements) {
+        const key = el.deduplicationKey;
+        if (seen.has(key)) {
+          // Merge reason codes
+          const existing = seen.get(key);
+          if (el.reasonCodes) {
+            existing.reasonCodes = [...new Set([...(existing.reasonCodes || []), ...el.reasonCodes])];
+          }
+        } else {
+          seen.set(key, el);
+        }
+      }
+      return Array.from(seen.values());
+    };
+    
+    const aggregatedA1Violations: any[] = [];
+    
+    // Build aggregated Confirmed A1 card (if any confirmed elements exist)
+    if (confirmedA1Elements.length > 0) {
+      const elements = deduplicateElements(confirmedA1Elements.map(buildA1SubItem));
+      const avgConfidence = confirmedA1Elements.reduce((sum: number, v: any) => sum + (v.confidence || 0.8), 0) / confirmedA1Elements.length;
+      
+      aggregatedA1Violations.push({
+        ruleId: 'A1',
+        ruleName: 'Insufficient text contrast',
+        category: 'accessibility',
+        status: 'confirmed',
+        isA1Aggregated: true,
+        a1Elements: elements,
+        diagnosis: `${elements.length} text element${elements.length !== 1 ? 's' : ''} with confirmed insufficient contrast detected. These elements have measured contrast ratios below WCAG AA thresholds.`,
+        correctivePrompt: 'Increase text contrast to meet WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) by darkening text or lightening background.',
+        contextualHint: 'Adjust foreground/background colors to meet WCAG AA contrast thresholds.',
+        confidence: Math.round(avgConfidence * 100) / 100,
+        blocksConvergence: true,
+        inputType: 'screenshots',
+        samplingMethod: 'pixel',
+      });
+      
+      console.log(`A1 aggregated: ${confirmedA1Elements.length} confirmed elements → 1 Confirmed card (${elements.length} unique)`);
+    }
+    
+    // Build aggregated Potential A1 card (if any potential elements exist)
+    if (potentialA1Elements.length > 0) {
+      const elements = deduplicateElements(potentialA1Elements.map(buildA1SubItem));
+      const avgConfidence = potentialA1Elements.reduce((sum: number, v: any) => sum + (v.confidence || 0.55), 0) / potentialA1Elements.length;
+      
+      // Collect all unique reason codes across elements
+      const allReasonCodes = new Set<string>();
+      for (const el of elements) {
+        if (el.reasonCodes) {
+          for (const code of el.reasonCodes) {
+            allReasonCodes.add(code);
+          }
+        }
+      }
+      
+      aggregatedA1Violations.push({
+        ruleId: 'A1',
+        ruleName: 'Insufficient text contrast',
+        category: 'accessibility',
+        status: 'potential',
+        isA1Aggregated: true,
+        a1Elements: elements,
+        diagnosis: `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast issues detected. These require manual verification due to measurement uncertainty.`,
+        correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools or accessibility testing tools.',
+        contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools.',
+        confidence: Math.round(avgConfidence * 100) / 100,
+        reasonCodes: Array.from(allReasonCodes),
+        potentialRiskReason: Array.from(allReasonCodes).join(', '),
+        advisoryGuidance: 'Upload screenshots at 100% zoom or verify with DevTools/axe for accurate measurement.',
+        blocksConvergence: false,
+        inputType: 'screenshots',
+        samplingMethod: 'pixel',
+      });
+      
+      console.log(`A1 aggregated: ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
+    }
+    
+    // Combine all violations - A1 uses aggregated cards (max 2)
     const enhancedViolations = [
       ...filteredOtherViolations,
-      ...perElementA1Violations, // Per-element A1 findings (never aggregated)
+      ...aggregatedA1Violations, // Aggregated A1 findings (max 2 cards: confirmed + potential)
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),
       ...(aggregatedA5UI ? [aggregatedA5UI] : []),

@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 import { useProjectStore } from '@/stores/projectStore';
 import type { Iteration, Project } from '@/types/project';
 import { PotentialRisksSection } from '@/components/analysis/PotentialRiskItem';
+import { A1AggregatedCard } from '@/components/analysis/A1AggregatedCard';
 
 const categoryColors: Record<string, string> = {
   accessibility: 'category-accessibility',
@@ -351,90 +352,95 @@ export default function IterationReport() {
         </CardContent>
       </Card>
 
-      {/* Confirmed Issues (Blocking) */}
-      {analysis.confirmedViolations > 0 && (
-        <Card className="border-destructive/30">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <AlertTriangle className="h-4 w-4 text-destructive" />
-              Confirmed Issues (Blocking) — {analysis.confirmedViolations}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {analysis.violations.filter(v => v.status !== 'potential').map((violation, idx) => (
-                <div
-                  key={idx}
-                  className="p-3 rounded-lg bg-destructive/5 border border-destructive/20 space-y-2"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
-                        {violation.ruleId}
-                      </span>
-                      <span className="font-medium text-sm">{violation.ruleName}</span>
-                      <Badge className="gap-1 text-xs bg-destructive/10 text-destructive border-destructive/30">
-                        <ShieldCheck className="h-3 w-3" />
-                        Confirmed
-                      </Badge>
-                    </div>
-                    <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                      {Math.round(violation.confidence * 100)}%
-                    </span>
-                  </div>
+      {/* Aggregated A1 Confirmed Card (if exists) */}
+      {analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'confirmed') && (
+        <A1AggregatedCard 
+          violation={analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'confirmed')!} 
+          compact 
+        />
+      )}
 
-                  {violation.ruleId === 'A1' && violation.contrastRatio && (
-                    <div className="flex flex-wrap items-center gap-3 p-2 rounded bg-destructive/5 border border-destructive/20 text-xs">
-                      {violation.foregroundHex && (
-                        <div className="flex items-center gap-1">
-                          <span className="text-muted-foreground">FG:</span>
-                          <span className="font-mono">{violation.foregroundHex}</span>
-                          <span className="w-3 h-3 rounded border border-border" style={{ backgroundColor: violation.foregroundHex }} />
-                        </div>
-                      )}
-                      {violation.backgroundHex && (
-                        <div className="flex items-center gap-1">
-                          <span className="text-muted-foreground">BG:</span>
-                          <span className="font-mono">{violation.backgroundHex}</span>
-                          <span className="w-3 h-3 rounded border border-border" style={{ backgroundColor: violation.backgroundHex }} />
-                        </div>
-                      )}
-                      <div className="flex items-center gap-1">
-                        <span className="text-muted-foreground">Ratio:</span>
-                        <span className="font-mono text-destructive">{violation.contrastRatio}:1</span>
+      {/* Confirmed Issues (Blocking) - excluding A1 aggregated */}
+      {(() => {
+        const nonA1Confirmed = analysis.violations.filter(v => 
+          v.status !== 'potential' && 
+          !(v.ruleId === 'A1' && v.isA1Aggregated)
+        );
+        return nonA1Confirmed.length > 0 && (
+          <Card className="border-destructive/30">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <AlertTriangle className="h-4 w-4 text-destructive" />
+                Other Confirmed Issues (Blocking) — {nonA1Confirmed.length}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {nonA1Confirmed.map((violation, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3 rounded-lg bg-destructive/5 border border-destructive/20 space-y-2"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
+                          {violation.ruleId}
+                        </span>
+                        <span className="font-medium text-sm">{violation.ruleName}</span>
+                        <Badge className="gap-1 text-xs bg-destructive/10 text-destructive border-destructive/30">
+                          <ShieldCheck className="h-3 w-3" />
+                          Confirmed
+                        </Badge>
                       </div>
+                      <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                        {Math.round(violation.confidence * 100)}%
+                      </span>
                     </div>
-                  )}
 
-                  {violation.evidence && (
-                    <p className="text-xs text-muted-foreground italic">📍 {violation.evidence}</p>
-                  )}
+                    {violation.evidence && (
+                      <p className="text-xs text-muted-foreground italic">📍 {violation.evidence}</p>
+                    )}
 
-                  <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+                    <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
+
+      {/* Aggregated A1 Potential Card (if exists) */}
+      {analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential') && (
+        <A1AggregatedCard 
+          violation={analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential')!} 
+          compact 
+        />
       )}
 
-      {/* Potential Risks (Non-blocking) */}
-      {analysis.potentialRisks > 0 && (
-        <Card className="border-warning/30">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <AlertCircle className="h-4 w-4 text-warning" />
-              Potential Risks (Non-blocking) — {analysis.potentialRisks}
-            </CardTitle>
-            <p className="text-xs text-muted-foreground mt-1">
-              Reported for awareness only. These findings do not affect convergence.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <PotentialRisksSection violations={analysis.violations} compact />
-          </CardContent>
-        </Card>
-      )}
+      {/* Potential Risks (Non-blocking) - excluding A1 aggregated */}
+      {(() => {
+        const nonA1Potential = analysis.violations.filter(v => 
+          v.status === 'potential' && 
+          !(v.ruleId === 'A1' && v.isA1Aggregated)
+        );
+        return nonA1Potential.length > 0 && (
+          <Card className="border-warning/30">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <AlertCircle className="h-4 w-4 text-warning" />
+                Other Potential Risks (Non-blocking) — {nonA1Potential.length}
+              </CardTitle>
+              <p className="text-xs text-muted-foreground mt-1">
+                Reported for awareness only. These findings do not affect convergence.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <PotentialRisksSection violations={nonA1Potential} compact />
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {analysis.violations.length === 0 && (
         <Card>
