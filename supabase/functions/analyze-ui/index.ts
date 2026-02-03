@@ -27,6 +27,11 @@ const corsHeaders = {
 //   - Stylistic intent (intentionally low-contrast for aesthetic reasons)
 //   - Text size, weight, or brightness
 //   - Perceived importance or emphasis
+//   - Font size or bounding box dimensions
+//   - Color brightness or luminance
+//
+// TEXT DETECTION OVERRIDE: For A1, the text detection pipeline MUST NOT
+// apply any filtering. Filters for other rules (A2, A4) do NOT apply to A1.
 //
 // MUST INCLUDE (not exhaustive):
 //   - Secondary or muted text
@@ -37,6 +42,7 @@ const corsHeaders = {
 //   - Placeholder text, helper text
 //   - Price labels, discount text
 //   - Footer text, copyright notices
+//   - Small text, light-weight text
 //
 // If text is visible and readable by users, it MUST be checked.
 // ============================================================
@@ -2093,8 +2099,31 @@ IMPORTANT CONSTRAINTS:
 If A1 is selected, you MUST ALSO include an additional top-level array **a1TextElements** for pixel sampling.
 
 **CRITICAL: a1TextElements MUST include ALL visible text elements. NO EXCLUSIONS.**
-Do NOT skip text based on prominence, color, size, or semantic role.
-If a user can read it, include it.
+
+## TEXT DETECTION OVERRIDE FOR A1 (MANDATORY)
+
+The text detection pipeline MUST expose ALL visible text elements to A1 evaluation.
+Do NOT filter out text based on:
+- Font size (small text MUST be included)
+- Font weight (light/thin text MUST be included)
+- Bounding box size (tiny elements MUST be included)
+- Visual prominence (muted/faded text MUST be included)
+- Semantic role (metadata, labels, secondary text MUST be included)
+- Color brightness or luminance (light-colored text MUST be included)
+- Perceived importance (low-priority text MUST be included)
+
+Any text visible to users that conveys information MUST be passed to A1 evaluation:
+- Descriptions, summaries, body text
+- Author names, usernames, handles
+- Metadata, timestamps, dates
+- Tags, labels, badges, chips
+- Colored text (yellow, gray, blue, light colors)
+- Small or muted text
+- Placeholder text, helper text
+- Footer text, copyright notices
+
+Filtering rules that apply to other analyses (A2, A4, etc.) MUST NOT apply to A1.
+If you can read it, it MUST be in a1TextElements.
 
 "a1TextElements": [
   {
