@@ -540,6 +540,7 @@ const TAILWIND_COLORS: Record<string, string> = {
   'zinc-500': '#71717a',
 };
 
+// Per authoritative A1 rule: GitHub analysis = ALWAYS "Heuristic Potential Risk"
 interface ContrastViolation {
   ruleId: string;
   ruleName: string;
@@ -557,6 +558,8 @@ interface ContrastViolation {
   inputLimitation?: string;
   advisoryGuidance?: string;
   affectedComponents?: any[];
+  // Convergence constraint: Heuristic A1 findings NEVER block convergence
+  blocksConvergence?: boolean;
 }
 
 function extractTextColors(content: string): Array<{ colorClass: string; context: string }> {
@@ -712,11 +715,13 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   const correctivePrompt = ''; // Empty - no mandatory corrective prompt for heuristic findings
   
   // GitHub input = ALWAYS inferred sampling (no pixel access)
+  // Per authoritative A1 rule: GitHub analysis = ALWAYS "Heuristic Potential Risk"
+  // Heuristic A1 findings NEVER block convergence
   return [{
     ruleId: 'A1',
     ruleName: 'Insufficient text contrast',
     category: 'accessibility',
-    status: 'potential', // Always potential for GitHub analysis
+    status: 'potential', // ALWAYS potential for GitHub analysis (per authoritative rule)
     samplingMethod: 'inferred', // GitHub cannot pixel-sample — colors from tokens/classes
     inputType: 'github', // Explicit input type tracking
     evidence: `Text color classes detected in ${displayedFiles.join(', ')}${fileMoreText}: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
@@ -728,6 +733,8 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     inputLimitation,
     advisoryGuidance,
     potentialRiskReason: 'Repository analysis cannot access rendered pixels; colors inferred from Tailwind classes.',
+    // Per authoritative A1 rule: Heuristic findings NEVER block convergence
+    blocksConvergence: false,
     affectedComponents: affectedComponents.map(c => ({
       colorClass: c.colorClass,
       hexColor: c.hexColor,

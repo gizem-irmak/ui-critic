@@ -8,7 +8,23 @@ const corsHeaders = {
 };
 
 // ============================
-// A1 (Contrast) — Screenshot-only pixel sampling helpers
+// A1 (Contrast) — AUTHORITATIVE RULE DEFINITION v20
+// ============================
+// 
+// Rule Objective: Detect cases where text does not meet WCAG 2.1 AA minimum
+// contrast requirements. Classification depends strictly on input certainty.
+//
+// WCAG Thresholds (immutable):
+//   - Normal text: minimum contrast 4.5:1
+//   - Large text (≥18pt or ≥14pt bold): minimum contrast 3.0:1
+//
+// Classification Logic:
+//   - SCREENSHOTS: Can produce "Confirmed Violation" if background is certain
+//   - ZIP/GITHUB: Always "Heuristic Potential Risk" (static analysis only)
+//
+// Convergence:
+//   - Confirmed A1 violations COUNT toward convergence (can block)
+//   - Heuristic A1 findings are tracked but NEVER block convergence
 // ============================
 
 type A1BBoxNorm = { x: number; y: number; w: number; h: number };
@@ -20,6 +36,19 @@ type A1TextElement = {
   elementDescription?: string;
   isSecondary?: boolean;
   textSize?: 'normal' | 'large';
+};
+
+// A1 Screenshot Background Certainty Factors
+type A1BackgroundCertainty = {
+  isCertain: boolean;
+  reason?: string;
+  // Factors that reduce certainty
+  hasGradient?: boolean;
+  hasImage?: boolean;
+  hasOverlay?: boolean;
+  spanMultipleRegions?: boolean;
+  antiAliasingDominates?: boolean;
+  mixedBackground?: boolean;
 };
 
 type RGB = { r: number; g: number; b: number };
@@ -160,6 +189,8 @@ type A1Sample = {
   contrastWorst: number; // Contrast using worst-case colors
   fgWorstHex: string;
   bgWorstHex: string;
+  // Background certainty assessment for confirmed vs heuristic classification
+  backgroundCertainty: A1BackgroundCertainty;
 };
 
 // Simple k-means clustering for color grouping
@@ -425,6 +456,59 @@ function computeA1SampleWithFallbacks(
   const hexRecomputedRatio = fgRgb2 && bgRgb2 ? contrastRatioFromRgb(fgRgb2, bgRgb2) : ratio;
   const hexToRatioDelta = Math.abs(hexRecomputedRatio - ratio);
 
+  // ====================================================================
+  // BACKGROUND CERTAINTY ASSESSMENT (for Confirmed vs Heuristic classification)
+  // Per authoritative A1 rule: background is certain ONLY if:
+  // - Single dominant background color detected
+  // - No gradients, images, or overlays
+  // - Text does not overlap multiple background regions
+  // ====================================================================
+  const backgroundCertainty: A1BackgroundCertainty = (() => {
+    const reasons: string[] = [];
+    
+    // Check for mixed background (multiple significant clusters)
+    const hasMixedBackground = fallbackMethod === 'range' && (clusterCount || 0) >= 2;
+    if (hasMixedBackground) {
+      reasons.push('mixed background detected');
+    }
+    
+    // Check for gradient-like patterns (high variance with gradual transitions)
+    // Gradient signature: high stddev but relatively uniform color distances
+    const hasGradientPattern = bgLumaStd > 25 && fallbackMethod !== 'clustered';
+    if (hasGradientPattern) {
+      reasons.push('gradient-like background pattern');
+    }
+    
+    // Check if anti-aliasing dominates foreground sampling
+    const antiAliasingDominates = fgLumaStd > 20;
+    if (antiAliasingDominates) {
+      reasons.push('anti-aliasing dominates color sampling');
+    }
+    
+    // Check for ambiguous background (used fallback expansion beyond 8px)
+    const ambiguousBackground = (usedExpansion || 3) > 8;
+    if (ambiguousBackground) {
+      reasons.push('required significant region expansion for background');
+    }
+    
+    // Certainty decision
+    const isCertain = reasons.length === 0 && 
+                      fallbackMethod !== 'range' && 
+                      bgLumaStd <= 20 &&
+                      fgLumaStd <= 15;
+    
+    return {
+      isCertain,
+      reason: reasons.length > 0 ? reasons.join('; ') : undefined,
+      hasGradient: hasGradientPattern,
+      hasImage: false, // Cannot detect from pixel analysis alone
+      hasOverlay: false, // Cannot detect from pixel analysis alone
+      spanMultipleRegions: hasMixedBackground,
+      antiAliasingDominates,
+      mixedBackground: hasMixedBackground,
+    };
+  })();
+
   return {
     fg,
     bg,
@@ -449,6 +533,8 @@ function computeA1SampleWithFallbacks(
     contrastWorst,
     fgWorstHex,
     bgWorstHex,
+    // Background certainty for classification
+    backgroundCertainty,
   };
 }
 
@@ -818,18 +904,59 @@ async function computeA1ViolationsFromScreenshots(
       continue;
     }
 
-    // Borderline: near threshold or secondary element or using fallback methods
+    // ====================================================================
+    // AUTHORITATIVE A1 CLASSIFICATION (Screenshot Input)
+    // ====================================================================
+    // Per the authoritative rule:
+    // - CONFIRMED VIOLATION: Background is certain (single dominant color,
+    //   no gradients/images/overlays, text doesn't span multiple regions)
+    // - HEURISTIC POTENTIAL RISK: Background is uncertain (gradients, mixed,
+    //   anti-aliasing dominates, or any uncertainty factor present)
+    // ====================================================================
+    
+    const bgCertainty = sample.backgroundCertainty;
     const usedFallback = sample.fallbackMethod && sample.fallbackMethod !== 'direct';
-    const isBorderline = effectiveRatio >= 4.0 || !!el.isSecondary || usedFallback;
+    
+    // Confirmed status requires:
+    // 1. Background is certain (no gradients, overlays, mixed regions)
+    // 2. Ratio clearly below WCAG threshold (not borderline)
+    // 3. Element is not secondary/decorative
+    // 4. No fallback methods were used
+    // 5. Confidence meets minimum threshold
+    const confidenceThreshold = 0.75;
+    const baseConfidence = bgCertainty.isCertain ? 0.92 : 0.65;
+    const confidence = Math.max(0.45, baseConfidence - reliability.confidencePenalty);
+    
+    const canBeConfirmed = 
+      bgCertainty.isCertain &&           // Background certainty is met
+      effectiveRatio < 4.0 &&            // Clearly below threshold (not borderline)
+      !el.isSecondary &&                 // Not a secondary element
+      !usedFallback &&                   // No fallback methods
+      confidence >= confidenceThreshold; // Confidence threshold met
+    
+    // Classification decision: Confirmed Violation vs Heuristic Potential Risk
+    // Note: For screenshots, borderline cases (4.0-4.5) are always heuristic
+    const finalStatus: 'confirmed' | 'potential' | 'borderline' = 
+      canBeConfirmed ? 'confirmed' : 
+      (effectiveRatio >= 4.0 || bgCertainty.isCertain === false) ? 'potential' : 'borderline';
 
-    // Confirmed Fail: only when clearly below WCAG AA, sampling reliable, and no fallbacks used
-    const confirmAllowed = effectiveRatio < 4.0 && !el.isSecondary && !usedFallback;
-    const finalStatus = confirmAllowed ? 'confirmed' : 'borderline';
+    // Diagnosis based on classification
+    const diagnosis = (() => {
+      if (finalStatus === 'confirmed') {
+        return 'Text contrast is reliably below WCAG AA minimum (4.5:1 for normal text). ' +
+               'Foreground and background colors were clearly identified from rendered pixels.';
+      }
+      if (finalStatus === 'potential') {
+        const uncertaintyReason = bgCertainty.reason || 'background could not be reliably isolated';
+        return `Potential contrast issue detected but cannot be confirmed: ${uncertaintyReason}. ` +
+               'This is a heuristic finding that requires manual verification.';
+      }
+      // borderline
+      return `Contrast ratio (${effectiveRatio.toFixed(1)}:1) is near the WCAG AA threshold. ` +
+             'Consider increasing contrast for safety margin.';
+    })();
 
-    // Apply confidence penalty for fallback methods
-    const baseConfidence = finalStatus === 'confirmed' ? 0.92 : 0.72;
-    const confidence = Math.max(0.55, baseConfidence - reliability.confidencePenalty);
-
+    // Build result with classification metadata
     results.push({
       ruleId,
       ruleName,
@@ -840,13 +967,10 @@ async function computeA1ViolationsFromScreenshots(
       elementRole: el.elementRole,
       elementDescription: el.elementDescription,
       evidence,
-      diagnosis:
-        finalStatus === 'confirmed'
-          ? 'Interior-stroke contrast is reliably below WCAG AA for normal text.'
-          : usedFallback
-            ? `Contrast measurement used fallback strategy (${buildFallbackDescription()}). Consider verifying with a precise tool.`
-            : 'Interior-stroke contrast is near the WCAG AA threshold, or the element is secondary; consider increasing contrast for safety margin.',
-      contextualHint: 'Increase text/background contrast for this element and re-check against WCAG AA.',
+      diagnosis,
+      contextualHint: finalStatus === 'potential' 
+        ? 'Verify contrast with browser DevTools or accessibility testing tools.'
+        : 'Increase text/background contrast for this element and re-check against WCAG AA.',
       confidence,
       contrastRatio: Math.round(ratio * 100) / 100,
       contrastRange: sample.contrastRange ? { min: Math.round(sample.contrastRange.min * 100) / 100, max: Math.round(sample.contrastRange.max * 100) / 100 } : undefined,
@@ -856,6 +980,11 @@ async function computeA1ViolationsFromScreenshots(
       foregroundHex: sample.fgHex,
       backgroundHex: sample.bgHex,
       colorApproximate: true,
+      // Include background certainty metadata for transparency
+      backgroundCertainty: {
+        isCertain: bgCertainty.isCertain,
+        reason: bgCertainty.reason,
+      },
       samplingReliability: {
         pixelSupport: `adequate (${sample.fgPixelCount} fg pixels, ${sample.bgPixelCount} bg pixels)`,
         foregroundVariance: `stddev ${Math.round(sample.fgLumaStd)}`,
@@ -871,10 +1000,16 @@ async function computeA1ViolationsFromScreenshots(
         clusterCount: sample.clusterCount,
         rangeSpansThreshold: sample.contrastRange ? (sample.contrastRange.min < 4.5 && sample.contrastRange.max >= 4.5) : false,
       } : undefined,
+      // Heuristic findings should NOT block convergence
+      blocksConvergence: finalStatus === 'confirmed',
     });
   }
 
-  console.log(`A1 pixel-sampled: ${results.length} finding(s) emitted (tool=${toolUsed})`);
+  // Log classification breakdown
+  const confirmed = results.filter(r => r.status === 'confirmed').length;
+  const potential = results.filter(r => r.status === 'potential').length;
+  const borderline = results.filter(r => r.status === 'borderline').length;
+  console.log(`A1 pixel-sampled: ${results.length} finding(s) — ${confirmed} confirmed, ${potential} potential (heuristic), ${borderline} borderline`);
   return results;
 }
 

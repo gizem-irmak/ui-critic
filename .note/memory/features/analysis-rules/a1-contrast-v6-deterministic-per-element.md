@@ -1,84 +1,141 @@
-# Memory: features/analysis-rules/a1-contrast-v19-worst-case-bounding
+# Memory: features/analysis-rules/a1-contrast-v20-authoritative-rule
 
 Updated: just now
 
-Rule A1 (Insufficient Text Contrast) implements **worst-case contrast bounding** for screenshot analysis to prevent false passes while still suppressing inconclusive measurements.
+## A1 — Insufficient Text Contrast (Authoritative Rule Definition v20)
 
-## Core Principle
+This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and legacy handling are superseded.
 
-**Use conservative worst-case colors to decide suppression.** Do not suppress solely because measurement is unstable — only suppress when worst-case contrast meets threshold.
+### Rule Objective
 
-## 1. Worst-Case Color Estimation
+Detect cases where text does not meet WCAG 2.1 AA minimum contrast requirements and classify the finding as either a **Confirmed Violation** or a **Heuristic Potential Risk**, based strictly on input certainty.
 
-### Foreground (FG_worst): Lightest Plausible Stroke Color
-1. Sample 160 pixels from text region grid
-2. Select darkest 30-40% by luminance (interior strokes, exclude anti-aliased edges)
-3. **FG_worst = 80-85th percentile luminance** among these stroke pixels
-4. This is the lightest plausible text color (conservative bound)
+### WCAG Thresholds (Immutable)
 
-### Background (BG_worst): Lightest Plausible Background
-1. Sample ring around text region with progressive expansion (3→32px)
-2. Exclude pixels darker than foreground max luminance + 2
-3. **BG_worst = 80-90th percentile luminance** among background pixels
-4. This is the lightest plausible background (conservative bound)
+| Text Type | Minimum Contrast |
+|-----------|------------------|
+| Normal text | 4.5:1 |
+| Large text (≥18pt or ≥14pt bold) | 3.0:1 |
 
-### Contrast Computation
-- **contrast_worst = contrast(FG_worst, BG_worst)**
-- Also compute median-based ratio for reporting
+### Supported Input Types
 
-## 2. Suppression Decision (Primary Rule)
+1. Rendered UI screenshots
+2. Exported source code (ZIP)
+3. GitHub repository link
 
-| Condition | Action |
-|-----------|--------|
-| **contrast_worst < 4.0:1** | DO NOT suppress → Report as **Confirmed Fail** |
-| **4.0 ≤ contrast_worst < 4.5** | DO NOT suppress → Report as **Fail** |
-| **contrast_worst ≥ 4.5:1** | Suppress → PASS (no report) |
+---
 
-**Key insight**: If even the lightest plausible color pair fails threshold, the finding is real — report it regardless of sampling noise.
+## Classification Logic by Input Type
 
-## 3. Additional Safeguards (Never Suppress)
+### 1. Screenshot-Based Detection
 
-| Condition | Action |
-|-----------|--------|
-| Range-based `max < 4.5` | Report as failure |
-| Both colors "light" (luma > 150) + ratio < 3.5 + separation < 50 | Report |
-| Both colors "dark" (luma < 100) + ratio < 3.5 + separation < 50 | Report |
+When rendered UI screenshots are provided:
 
-## 4. 7-Point Reliability Gate (for Confirmed status)
+**Extraction:**
+- Sample foreground color from interior glyph stroke pixels (darkest 30-40%)
+- Sample background color from immediate surrounding ring pixels
+- Use progressive ring expansion (3→32px) if needed
 
-All checks must pass for highest confidence:
+**Background Certainty Rules:**
+The background is **certain** ONLY if:
+- A single dominant background color is detected
+- No gradients, images, or overlays are present
+- Text does not overlap multiple background regions
+- Anti-aliasing does not dominate color sampling
 
-| Check | Requirement | If Failed |
-|-------|-------------|-----------|
-| Multi-sample consistency | 3 offset samples, ratio variance ≤ 0.2 | Reduced confidence |
-| Hex verification | Recomputed contrast delta ≤ 0.2 | Reduced confidence |
-| Foreground pixel count | ≥ 15 pixels | Error |
-| Background pixel count | ≥ 15 pixels | Error |
-| Luminance distance | ≥ 20 units | Reduced confidence |
-| Foreground variance | stddev ≤ 15 | Reduced confidence |
-| Background variance | stddev ≤ 20 (unless clustering) | Reduced confidence |
+**Screenshot Classification Decision:**
 
-## 5. Reporting Structure
+| Condition | Classification |
+|-----------|----------------|
+| FG and BG clearly identifiable, single dominant BG | **Confirmed Violation** |
+| Background is mixed, gradient, image-based, or ambiguous | **Heuristic Potential Risk** |
+| Anti-aliasing dominates color sampling | **Heuristic Potential Risk** |
+| Text spans multiple background regions | **Heuristic Potential Risk** |
 
-For each finding, report:
-1. **Element description** (e.g., "credits badge label in course card")
-2. **Measured contrast ratio** (median-based)
-3. **Worst-case contrast** (percentile-based conservative bound)
-4. **Foreground/background hex** (median RGB converted)
-5. **Worst-case colors** (fgWorstHex, bgWorstHex)
-6. **Individual confidence score**
+**Confidence Assignment:**
+- Confirmed: confidence ≥ 0.75, background certainty met
+- Heuristic: confidence < 0.75 or background uncertain
 
-## 6. Fallback Strategies
+### 2. Source Code / ZIP Input
 
-When direct ring sampling fails:
-1. **Expanded region**: +8px, +16px, +32px expansion
-2. **Color clustering**: k-means for high-variance backgrounds
-3. **Range-based**: Report min/max contrast for mixed backgrounds
+When analysis is based only on static source code:
 
-## Forbidden Behaviors
+- **Do NOT** attempt to confirm contrast failures
+- **Do NOT** treat inferred color pairs as deterministic
+- **➡️ ALL A1 findings from source code = Heuristic Potential Risk**
 
-- Do NOT suppress based solely on measurement instability
-- Do NOT suppress when worst-case contrast < 4.5:1
-- Do NOT report aggregate counts ("X elements could not be measured")
-- Do NOT report anonymous elements without description/location
-- Do NOT snap sampled colors to Tailwind tokens
+### 3. GitHub Repository Input
+
+- Treat identically to ZIP input
+- Static analysis only
+- **➡️ ALL A1 findings from GitHub = Heuristic Potential Risk**
+
+### 4. Hybrid Input (Screenshot + Code)
+
+- Screenshot analysis takes precedence
+- Code may be used only for reference or traceability
+- **➡️ Confirmed classification ONLY if screenshot certainty conditions are met**
+
+---
+
+## Convergence Constraint (Strict)
+
+| Finding Type | Convergence Impact |
+|--------------|-------------------|
+| **Confirmed A1 violations** | Count toward threshold; MAY block convergence |
+| **Heuristic A1 findings** | Tracked and reported; NEVER block convergence |
+
+The `blocksConvergence` field explicitly indicates whether each finding affects convergence:
+- `blocksConvergence: true` — Confirmed violations (screenshot with certain background)
+- `blocksConvergence: false` — Heuristic findings (ZIP, GitHub, or uncertain screenshots)
+
+---
+
+## Enforcement Clause
+
+- If input certainty is insufficient at any stage, **default to heuristic classification**
+- **Never escalate heuristic A1 findings to confirmed** without rendered visual evidence
+- Do NOT report aggregate or anonymous counts (e.g., "7 elements could not be measured")
+- Every reported finding must identify a specific element with location
+
+---
+
+## Technical Implementation
+
+### A1Sample Type Extensions
+
+```typescript
+type A1BackgroundCertainty = {
+  isCertain: boolean;
+  reason?: string;
+  hasGradient?: boolean;
+  hasImage?: boolean;
+  hasOverlay?: boolean;
+  spanMultipleRegions?: boolean;
+  antiAliasingDominates?: boolean;
+  mixedBackground?: boolean;
+};
+
+// Added to A1Sample
+backgroundCertainty: A1BackgroundCertainty;
+```
+
+### Classification Decision Tree (Screenshot)
+
+```
+1. Compute effectiveRatio (use worst-case if range-based)
+2. If effectiveRatio >= threshold → PASS (no report)
+3. Check backgroundCertainty.isCertain:
+   - If TRUE and effectiveRatio < 4.0 and confidence >= 0.75:
+     → status: "confirmed", blocksConvergence: true
+   - Otherwise:
+     → status: "potential", blocksConvergence: false
+```
+
+### Edge Function Behavior
+
+| Edge Function | A1 Status | blocksConvergence |
+|--------------|-----------|-------------------|
+| analyze-ui (screenshots) | "confirmed" or "potential" | Based on background certainty |
+| analyze-zip | Always "potential" | Always `false` |
+| analyze-github | Always "potential" | Always `false` |

@@ -461,6 +461,7 @@ function extractTextColors(code: string): Array<{ colorClass: string; context: s
 // Per requirements: Only mark as "confirmed" if using axe-core with element reference 
 // OR actual computed DOM styles. Static Tailwind class mapping is NOT sufficient.
 // ZIP INPUT = HEURISTIC: Cannot confirm contrast without runtime rendering
+// Per authoritative A1 rule: ZIP analysis = ALWAYS "Heuristic Potential Risk"
 interface ContrastViolation {
   ruleId: string;
   ruleName: string;
@@ -493,6 +494,8 @@ interface ContrastViolation {
     riskLevel: 'high' | 'medium' | 'low';
     occurrence_count: number;
   }>;
+  // Convergence constraint: Heuristic A1 findings NEVER block convergence
+  blocksConvergence?: boolean;
 }
 
 // A1 Color risk tiers for Tailwind gray scale classes
@@ -674,11 +677,13 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   
   // Return ONE aggregated A1 result
   // ZIP input = ALWAYS inferred sampling (no pixel access)
+  // Per authoritative A1 rule: ZIP analysis = ALWAYS "Heuristic Potential Risk"
+  // Heuristic A1 findings NEVER block convergence
   return [{
     ruleId: 'A1',
     ruleName: 'Insufficient text contrast',
     category: 'accessibility',
-    status: 'potential', // Always potential for static/ZIP analysis
+    status: 'potential', // ALWAYS potential for static/ZIP analysis (per authoritative rule)
     samplingMethod: 'inferred', // ZIP cannot pixel-sample — colors from tokens/classes
     inputType: 'zip', // Explicit input type tracking
     evidence: `Text color classes detected in ${displayedFiles.join(', ')}${fileMoreText}: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
@@ -690,6 +695,8 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     inputLimitation,
     advisoryGuidance,
     potentialRiskReason: 'Static code analysis cannot access rendered pixels; colors inferred from Tailwind classes.',
+    // Per authoritative A1 rule: Heuristic findings NEVER block convergence
+    blocksConvergence: false,
     affectedComponents: affectedComponents.map(c => ({
       colorClass: c.colorClass,
       hexColor: c.hexColor,
