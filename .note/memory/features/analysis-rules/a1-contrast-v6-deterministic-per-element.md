@@ -1,14 +1,45 @@
-# Memory: features/analysis-rules/a1-contrast-v24-local-priority-background
+# Memory: features/analysis-rules/a1-contrast-v24-comprehensive-coverage
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Local-Priority Background Detection v24)
+## A1 — Insufficient Text Contrast (Comprehensive Coverage v24)
 
 This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
 
-### v24 Key Change: Local-Priority Background Sampling
+### v24 Key Changes
 
-**CRITICAL**: Background detection must prioritize the LOCAL region around text over global/container colors.
+1. **Comprehensive Mandatory Detection Scope**
+2. **Local-Priority Background Sampling**
+3. **Background-Based Classification (not confidence-based)**
+
+---
+
+## Detection Scope — NO EXCLUSIONS
+
+**CRITICAL**: ALL visible text elements MUST be evaluated. Do NOT exclude based on:
+- Visual prominence (secondary, muted, faded, subtle)
+- Semantic role (metadata, captions, badges, labels, tags)
+- Stylistic intent (intentionally low-contrast for aesthetic)
+- Text color (gray, yellow, blue, any colored text)
+- Text size or weight (small text must still be evaluated)
+- Perceived importance or emphasis
+
+### MUST INCLUDE (comprehensive list):
+- Secondary or muted text
+- Descriptions, summaries, captions
+- Author names, usernames, timestamps
+- Tags, labels, badges, chips, pills
+- Colored text (yellow prices, blue links, gray hints)
+- Placeholder text, helper text
+- Price labels, discount percentages
+- Footer text, copyright notices
+- Any other readable text visible to users
+
+**RULE**: If a user can read the text, it MUST be checked for WCAG contrast compliance.
+
+---
+
+## Local-Priority Background Sampling (v24)
 
 For pill-shaped components (badges, chips, tags):
 - Sample background pixels within a **small local margin (6-10px)** around the text bounding box
@@ -22,28 +53,6 @@ For pill-shaped components (badges, chips, tags):
    - Captures badge/pill/chip backgrounds correctly
    - Uses proximity weighting (closer pixels get higher weight)
    - If uniform color detected → `local_uniform` method → CERTAIN
-
-2. **FALLBACK EXPANSION** (12px, 20px, 32px rings)
-   - Only used if local sampling insufficient
-   - Standard ring sampling without proximity weighting
-
-### v23 Key Change: Low Confidence MUST NOT Auto-Downgrade
-
-**CRITICAL**: Low confidence alone MUST NOT automatically downgrade A1 to Potential.
-
-Classification is based on **BACKGROUND CERTAINTY**, not sampling confidence:
-- If background is visually uniform (certain) AND contrast < threshold → **CONFIRMED**
-- Confidence affects **reporting detail** (e.g., "sampling confidence reduced"), NOT classification
-- Potential is ONLY used when **background cannot be reliably determined**
-
----
-
-## Detection Scope
-
-Apply this rule to EVERY detected text element:
-- Small text, secondary/muted text
-- Badges, labels, metadata, helper text
-- Do NOT exclude based on size, prominence, or visual importance
 
 ---
 

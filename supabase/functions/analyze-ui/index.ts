@@ -8,7 +8,7 @@ const corsHeaders = {
 };
 
 // ============================
-// A1 (Contrast) — MANDATORY COVERAGE RULE v23
+// A1 (Contrast) — MANDATORY COMPREHENSIVE COVERAGE RULE v24
 // ============================
 // 
 // Rule Objective: Detect text elements that may not meet WCAG 2.1 AA contrast
@@ -18,11 +18,34 @@ const corsHeaders = {
 // CRITICAL: For every detected text element, ALWAYS emit an A1 evaluation record.
 // Silence is NOT an allowed outcome.
 //
+// ============================================================
+// MANDATORY COMPREHENSIVE DETECTION SCOPE (v24 UPDATE)
+// ============================================================
+// ALL visible text elements MUST be evaluated. Do NOT exclude based on:
+//   - Visual prominence (secondary, muted, faded)
+//   - Semantic role (metadata, captions, badges, labels)
+//   - Stylistic intent (intentionally low-contrast for aesthetic reasons)
+//   - Text size, weight, or brightness
+//   - Perceived importance or emphasis
+//
+// MUST INCLUDE (not exhaustive):
+//   - Secondary or muted text
+//   - Descriptions, summaries, captions
+//   - Author names, timestamps, metadata
+//   - Tags, labels, badges, chips
+//   - Colored text (yellow, blue, gray, etc.)
+//   - Placeholder text, helper text
+//   - Price labels, discount text
+//   - Footer text, copyright notices
+//
+// If text is visible and readable by users, it MUST be checked.
+// ============================================================
+//
 // WCAG Thresholds (immutable):
 //   - Normal text: minimum contrast 4.5:1
 //   - Large text (≥18pt or ≥14pt bold): minimum contrast 3.0:1
 //
-// Classification Logic (v23 UPDATE):
+// Classification Logic (v24):
 //   - CONFIRMED: Background is certain AND best-case contrast < threshold
 //     * Low confidence DOES NOT downgrade to Potential if background is uniform
 //     * Confidence affects reporting detail, NOT classification
@@ -32,9 +55,11 @@ const corsHeaders = {
 //     * Contrast outcome depends on multiple background candidates
 //     * Contrast cannot be computed at all
 //
-// KEY CHANGE v23: Low confidence alone MUST NOT auto-downgrade.
-// If the background is visually uniform (e.g., solid white) and the 
-// best-case contrast ratio is below threshold, it is CONFIRMED.
+// Background Detection (v24 LOCAL-PRIORITY):
+//   - Sample LOCAL MARGIN FIRST (8px around text bounding box)
+//   - Weight pixels by proximity — nearer pixels dominate
+//   - If local region is uniform → use that color (CERTAIN background)
+//   - This correctly detects badges, pills, chips with colored backgrounds
 //
 // Convergence:
 //   - Confirmed A1 violations COUNT toward convergence (can block)
@@ -1531,13 +1556,45 @@ An element is ONLY considered focusable if:
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
-### SPECIAL HANDLING FOR A1 (Text Contrast) — INTERIOR-STROKE SAMPLING (MANDATORY)
+### SPECIAL HANDLING FOR A1 (Text Contrast) — COMPREHENSIVE MANDATORY COVERAGE
 
 **DESIGN PRINCIPLE: Screenshots are the source of truth for visual properties.**
 Input constraint: Only screenshots are available (no DOM, no CSS tokens, no source code).
 Use interior-stroke sampling to measure what a user color-picker would measure on text.
 
 **CRITICAL: Only reliable measurements block convergence. Unreliable A1 findings MUST be classified as Potential Risk (non-blocking).**
+
+---
+
+## 0️⃣ MANDATORY DETECTION SCOPE — NO EXCLUSIONS (v24)
+
+**CRITICAL: You MUST identify ALL visible text elements for A1 evaluation. NO EXCLUSIONS.**
+
+Do NOT skip text based on:
+- Visual prominence (secondary, muted, faded, subtle)
+- Semantic role (metadata, captions, badges, labels, tags)
+- Stylistic intent (intentionally low-contrast for aesthetic)
+- Text color (gray, yellow, blue, colored text)
+- Text size or weight (small text must still be evaluated)
+- Perceived importance or emphasis
+
+**MUST INCLUDE (comprehensive list — not exhaustive):**
+- Secondary or muted text (even if intentionally styled that way)
+- Descriptions and summaries
+- Author names, usernames, handles
+- Timestamps, dates, metadata
+- Tags, labels, badges, chips, pills
+- Colored text (yellow prices, blue links, gray hints)
+- Placeholder text in inputs
+- Helper text, hint text, caption text
+- Price labels, discount percentages
+- Footer text, copyright notices
+- Breadcrumb text, navigation labels
+- Status indicators, state labels
+- Counter text, quantity labels
+- Any other readable text visible to users
+
+**RULE: If a user can read the text, it MUST be in a1TextElements for evaluation.**
 
 ---
 
@@ -1548,6 +1605,7 @@ For each detected text element, estimate colors as follows:
 **STEP 1 — Detect text region:**
 - Identify text region visually or via OCR
 - Define a bounding box around the text element
+- INCLUDE ALL VISIBLE TEXT — do not skip based on prominence
 
 **STEP 2 — Sample foreground (text) color using INTERIOR GLYPH STROKES:**
 - Sample many pixels from the text region (e.g., 50-200 pixels)
@@ -1557,9 +1615,12 @@ For each detected text element, estimate colors as follows:
 - Compute the **median RGB** of this darkest subset as the foreground color
 - Report the RAW sampled hex — do NOT map to Tailwind tokens or nearest palette color
 
-**STEP 3 — Estimate background color using RING SAMPLING:**
-- Sample a small ring/frame around the text region (expand bounding box by a few pixels)
-- Exclude pixels that belong to text (the dark subset identified in Step 2)
+**STEP 3 — Estimate background color using LOCAL-PRIORITY RING SAMPLING (v24):**
+- Sample a LOCAL margin (6-10px) around the text bounding box
+- Weight pixels by proximity — nearer pixels get higher weight
+- If local region is uniform (single dominant color) → use that as background
+- This correctly handles badges, pills, chips with colored backgrounds
+- Only expand to wider regions if local sampling is insufficient
 - Use the **median RGB** of remaining pixels as the background color
 - Report the RAW sampled hex — do NOT snap to palette tokens
 
@@ -2029,24 +2090,37 @@ IMPORTANT CONSTRAINTS:
 - Do NOT provide implementation-level fixes
 - Keep contextualHint tool-agnostic and reusable across Bolt, Replit, and Lovable
 
-If A1 is selected, you MUST ALSO include an additional top-level array **a1TextElements** for pixel sampling:
+If A1 is selected, you MUST ALSO include an additional top-level array **a1TextElements** for pixel sampling.
+
+**CRITICAL: a1TextElements MUST include ALL visible text elements. NO EXCLUSIONS.**
+Do NOT skip text based on prominence, color, size, or semantic role.
+If a user can read it, include it.
 
 "a1TextElements": [
   {
     "screenshotIndex": 1,
     "bbox": { "x": 0.12, "y": 0.42, "w": 0.25, "h": 0.04 },
     "location": "Secondary label in a card header",
-    "elementRole": "metadata" | "caption" | "badge" | "label" | "body text" | "heading",
+    "elementRole": "metadata" | "caption" | "badge" | "label" | "body text" | "heading" | "muted" | "colored",
     "elementDescription": "Short description text",
     "isSecondary": true,
     "textSize": "normal" | "large"
   }
 ]
 
+**MANDATORY COVERAGE EXAMPLES (must include elements like these):**
+- Gray/muted secondary text: Include with elementRole "muted" or "secondary"
+- Colored price labels: Include with elementRole "colored" or "label"
+- Badge/chip text: Include with elementRole "badge"
+- Timestamp/metadata: Include with elementRole "metadata"
+- Description paragraphs: Include with elementRole "body text" or "caption"
+- Author names: Include with elementRole "metadata"
+
 IMPORTANT:
 - For A1, DO NOT guess colors or contrast ratios in the AI output. ONLY identify candidate text regions (bounding boxes) and context.
 - Bounding box coordinates MUST be normalized fractions (0..1) relative to the screenshot size.
 - The backend will compute contrast ratios from screenshot pixels using interior-stroke sampling.
+- Include EVERY readable text element — the backend will determine pass/fail.
 
 Respond with a JSON object in this exact structure:
 {
