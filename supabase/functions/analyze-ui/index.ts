@@ -140,10 +140,104 @@ type A1Sample = {
   bgHex: string;
   hexRecomputedRatio: number;
   hexToRatioDelta: number;
+  // Fallback tracking
+  fallbackMethod?: 'direct' | 'expanded' | 'clustered' | 'range';
+  expansionPx?: number;
+  clusterCount?: number;
+  // Range-based measurement for mixed backgrounds
+  contrastRange?: { min: number; max: number };
+  bgCandidates?: RGB[];
 };
 
-function computeA1Sample(img: Image, pxBox: { left: number; top: number; right: number; bottom: number }, ringPx = 3): A1Sample | { error: string } {
-  // Foreground: interior stroke sampling from text region
+// Simple k-means clustering for color grouping
+function kMeansCluster(pixels: Array<{ r: number; g: number; b: number; luma255: number }>, k: number, maxIter = 10): Array<{ centroid: RGB; members: typeof pixels }> {
+  if (pixels.length === 0 || k < 1) return [];
+  const effectiveK = Math.min(k, pixels.length);
+  
+  // Initialize centroids by picking evenly spaced pixels by luma
+  const sorted = [...pixels].sort((a, b) => a.luma255 - b.luma255);
+  const centroids: RGB[] = [];
+  for (let i = 0; i < effectiveK; i++) {
+    const idx = Math.floor((i + 0.5) * sorted.length / effectiveK);
+    const p = sorted[idx];
+    centroids.push({ r: p.r, g: p.g, b: p.b });
+  }
+  
+  let clusters: Array<{ centroid: RGB; members: typeof pixels }> = [];
+  
+  for (let iter = 0; iter < maxIter; iter++) {
+    // Assign pixels to nearest centroid
+    clusters = centroids.map(c => ({ centroid: c, members: [] as typeof pixels }));
+    
+    for (const p of pixels) {
+      let minDist = Infinity;
+      let bestIdx = 0;
+      for (let i = 0; i < centroids.length; i++) {
+        const c = centroids[i];
+        const dist = (p.r - c.r) ** 2 + (p.g - c.g) ** 2 + (p.b - c.b) ** 2;
+        if (dist < minDist) {
+          minDist = dist;
+          bestIdx = i;
+        }
+      }
+      clusters[bestIdx].members.push(p);
+    }
+    
+    // Update centroids
+    let converged = true;
+    for (let i = 0; i < clusters.length; i++) {
+      const members = clusters[i].members;
+      if (members.length === 0) continue;
+      const newCentroid: RGB = {
+        r: median(members.map(m => m.r)),
+        g: median(members.map(m => m.g)),
+        b: median(members.map(m => m.b)),
+      };
+      const dist = Math.abs(newCentroid.r - centroids[i].r) + Math.abs(newCentroid.g - centroids[i].g) + Math.abs(newCentroid.b - centroids[i].b);
+      if (dist > 2) converged = false;
+      centroids[i] = newCentroid;
+      clusters[i].centroid = newCentroid;
+    }
+    
+    if (converged) break;
+  }
+  
+  return clusters.filter(c => c.members.length > 0).sort((a, b) => b.members.length - a.members.length);
+}
+
+function sampleBackgroundPixels(
+  img: Image,
+  pxBox: { left: number; top: number; right: number; bottom: number },
+  ringPx: number,
+  fgLumaMax: number
+): Array<{ r: number; g: number; b: number; luma255: number }> {
+  const expanded = {
+    left: clamp(pxBox.left - ringPx, 0, img.width - 1),
+    top: clamp(pxBox.top - ringPx, 0, img.height - 1),
+    right: clamp(pxBox.right + ringPx, 0, img.width),
+    bottom: clamp(pxBox.bottom + ringPx, 0, img.height),
+  };
+  const ringPts = buildGridPoints(expanded.left, expanded.top, expanded.right, expanded.bottom, 300)
+    .filter(({ x, y }) => x < pxBox.left || x >= pxBox.right || y < pxBox.top || y >= pxBox.bottom);
+
+  const bgPixelsAll = ringPts
+    .map(({ x, y }) => {
+      const { r, g, b, a } = rgbaAt(img, x, y);
+      if (a < 200) return null;
+      const luma255 = relativeLuminance01({ r, g, b }) * 255;
+      return { r, g, b, luma255 };
+    })
+    .filter(Boolean) as Array<{ r: number; g: number; b: number; luma255: number }>;
+
+  // Exclude likely text pixels bleeding into ring
+  return bgPixelsAll.filter(p => p.luma255 > fgLumaMax + 2);
+}
+
+function computeA1SampleWithFallbacks(
+  img: Image,
+  pxBox: { left: number; top: number; right: number; bottom: number }
+): A1Sample | { error: string } {
+  // Foreground: interior stroke sampling from text region (consistent across fallbacks)
   const textPts = buildGridPoints(pxBox.left, pxBox.top, pxBox.right, pxBox.bottom, 160);
   const textPixels = textPts
     .map(({ x, y }) => {
@@ -158,7 +252,6 @@ function computeA1Sample(img: Image, pxBox: { left: number; top: number; right: 
     return { error: 'Insufficient text pixels for reliable sampling' };
   }
 
-  const lumas = textPixels.map(p => p.luma255);
   const sorted = [...textPixels].sort((a, b) => a.luma255 - b.luma255);
   const keepCount = Math.max(15, Math.floor(sorted.length * 0.4)); // darkest ~40%
   const fgPixels = sorted.slice(0, keepCount);
@@ -175,38 +268,80 @@ function computeA1Sample(img: Image, pxBox: { left: number; top: number; right: 
   const fgLumaStd = stddev(fgLumas);
   const fgLumaMax = Math.max(...fgLumas);
 
-  // Background: ring around text box
-  const expanded = {
-    left: clamp(pxBox.left - ringPx, 0, img.width - 1),
-    top: clamp(pxBox.top - ringPx, 0, img.height - 1),
-    right: clamp(pxBox.right + ringPx, 0, img.width),
-    bottom: clamp(pxBox.bottom + ringPx, 0, img.height),
-  };
-  const ringPts = buildGridPoints(expanded.left, expanded.top, expanded.right, expanded.bottom, 220)
-    .filter(({ x, y }) => x < pxBox.left || x >= pxBox.right || y < pxBox.top || y >= pxBox.bottom);
+  // === FALLBACK HIERARCHY FOR BACKGROUND SAMPLING ===
+  const expansionLevels = [3, 8, 16, 32]; // pixels to expand
+  let bgPixels: typeof textPixels = [];
+  let usedExpansion = 3;
+  let fallbackMethod: 'direct' | 'expanded' | 'clustered' | 'range' = 'direct';
+  let clusterCount: number | undefined;
+  let bgCandidates: RGB[] | undefined;
+  let contrastRange: { min: number; max: number } | undefined;
 
-  const bgPixelsAll = ringPts
-    .map(({ x, y }) => {
-      const { r, g, b, a } = rgbaAt(img, x, y);
-      if (a < 200) return null;
-      const luma255 = relativeLuminance01({ r, g, b }) * 255;
-      return { r, g, b, luma255 };
-    })
-    .filter(Boolean) as Array<{ r: number; g: number; b: number; luma255: number }>;
-
-  // Exclude likely text pixels bleeding into ring: anything as-dark-or-darker than the darkest subset max.
-  const bgPixels = bgPixelsAll.filter(p => p.luma255 > fgLumaMax + 2);
-  if (bgPixels.length < 15) {
-    return { error: 'Insufficient background pixels for reliable sampling' };
+  // Try progressively larger expansion until we get enough background pixels
+  for (const ringPx of expansionLevels) {
+    bgPixels = sampleBackgroundPixels(img, pxBox, ringPx, fgLumaMax);
+    usedExpansion = ringPx;
+    
+    if (bgPixels.length >= 15) {
+      if (ringPx > 3) fallbackMethod = 'expanded';
+      break;
+    }
   }
 
-  const bg: RGB = {
-    r: median(bgPixels.map(p => p.r)),
-    g: median(bgPixels.map(p => p.g)),
-    b: median(bgPixels.map(p => p.b)),
-  };
+  // If still insufficient after max expansion, return error
+  if (bgPixels.length < 8) {
+    return { error: 'Insufficient background pixels even after region expansion (up to +32px)' };
+  }
+
+  // Check background stability
   const bgLumas = bgPixels.map(p => p.luma255);
   const bgLumaStd = stddev(bgLumas);
+
+  // If background variance is high (>20), use clustering
+  let bg: RGB;
+  if (bgLumaStd > 20 && bgPixels.length >= 10) {
+    // Use k-means clustering to find dominant background color
+    const clusters = kMeansCluster(bgPixels, 3, 12);
+    
+    if (clusters.length > 0) {
+      // Check if background is truly mixed (multiple significant clusters)
+      const totalPixels = bgPixels.length;
+      const significantClusters = clusters.filter(c => c.members.length >= totalPixels * 0.15);
+      
+      if (significantClusters.length >= 2) {
+        // Mixed background: compute contrast range
+        fallbackMethod = 'range';
+        bgCandidates = significantClusters.map(c => c.centroid);
+        clusterCount = significantClusters.length;
+        
+        // Compute contrast with each candidate and find min/max
+        const ratios = bgCandidates.map(candidate => contrastRatioFromRgb(fg, candidate));
+        contrastRange = { min: Math.min(...ratios), max: Math.max(...ratios) };
+        
+        // Use the largest cluster as primary background for ratio reporting
+        bg = clusters[0].centroid;
+      } else {
+        // Single dominant cluster
+        fallbackMethod = 'clustered';
+        clusterCount = 1;
+        bg = clusters[0].centroid;
+      }
+    } else {
+      // Clustering failed, use median of all pixels
+      bg = {
+        r: median(bgPixels.map(p => p.r)),
+        g: median(bgPixels.map(p => p.g)),
+        b: median(bgPixels.map(p => p.b)),
+      };
+    }
+  } else {
+    // Stable background: use median
+    bg = {
+      r: median(bgPixels.map(p => p.r)),
+      g: median(bgPixels.map(p => p.g)),
+      b: median(bgPixels.map(p => p.b)),
+    };
+  }
 
   const fgLuma = relativeLuminance01(fg) * 255;
   const bgLuma = relativeLuminance01(bg) * 255;
@@ -234,36 +369,92 @@ function computeA1Sample(img: Image, pxBox: { left: number; top: number; right: 
     bgHex,
     hexRecomputedRatio,
     hexToRatioDelta,
+    fallbackMethod,
+    expansionPx: usedExpansion > 3 ? usedExpansion : undefined,
+    clusterCount,
+    contrastRange,
+    bgCandidates,
   };
 }
 
-function assessA1Reliability(samples: Array<A1Sample | { error: string }>): { reliable: boolean; reason?: string } {
+// Legacy function for offset-based multi-sampling (uses new fallback logic internally)
+function computeA1Sample(img: Image, pxBox: { left: number; top: number; right: number; bottom: number }, ringPx = 3): A1Sample | { error: string } {
+  return computeA1SampleWithFallbacks(img, pxBox);
+}
+
+type A1ReliabilityResult = {
+  reliable: boolean;
+  reason?: string;
+  fallbackUsed?: 'direct' | 'expanded' | 'clustered' | 'range';
+  confidencePenalty: number; // 0 = full confidence, 0.1-0.3 = reduced due to fallbacks
+};
+
+function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1ReliabilityResult {
   // If any sample outright failed to measure, treat as unreliable.
   for (const s of samples) {
-    if ('error' in s) return { reliable: false, reason: s.error };
+    if ('error' in s) return { reliable: false, reason: s.error, confidencePenalty: 0.4 };
   }
   const okSamples = samples as A1Sample[];
+  
   // Multi-sample consistency
   const ratios = okSamples.map(s => s.ratio);
   const minR = Math.min(...ratios);
   const maxR = Math.max(...ratios);
   if (maxR - minR > 0.2) {
-    return { reliable: false, reason: `Multi-sample consistency failed: ratios varied by ${(maxR - minR).toFixed(2)}` };
+    return { reliable: false, reason: `Multi-sample consistency failed: ratios varied by ${(maxR - minR).toFixed(2)}`, confidencePenalty: 0.3 };
   }
 
   const s0 = okSamples[0];
+  
+  // Base reliability checks
   if (s0.hexToRatioDelta > 0.2) {
     return {
       reliable: false,
       reason: `Hex-to-ratio verification failed: measured ${s0.ratio.toFixed(2)} vs recomputed ${s0.hexRecomputedRatio.toFixed(2)}`,
+      confidencePenalty: 0.25,
     };
   }
-  if (s0.fgPixelCount < 15) return { reliable: false, reason: 'Insufficient foreground pixels for reliable sampling' };
-  if (s0.bgPixelCount < 15) return { reliable: false, reason: 'Insufficient background pixels for reliable sampling' };
-  if (s0.lumaDistance < 20) return { reliable: false, reason: 'Foreground and background too similar for reliable measurement' };
-  if (s0.fgLumaStd > 15) return { reliable: false, reason: 'Foreground variance too high — text rendering unstable' };
-  if (s0.bgLumaStd > 20) return { reliable: false, reason: 'Background variance too high — non-uniform background' };
-  return { reliable: true };
+  if (s0.fgPixelCount < 15) return { reliable: false, reason: 'Insufficient foreground pixels for reliable sampling', confidencePenalty: 0.35 };
+  if (s0.bgPixelCount < 15) return { reliable: false, reason: 'Insufficient background pixels for reliable sampling', confidencePenalty: 0.35 };
+  if (s0.lumaDistance < 20) return { reliable: false, reason: 'Foreground and background too similar for reliable measurement', confidencePenalty: 0.3 };
+  if (s0.fgLumaStd > 15) return { reliable: false, reason: 'Foreground variance too high — text rendering unstable', confidencePenalty: 0.25 };
+  
+  // For range-based measurements, check if contrast range spans threshold
+  if (s0.fallbackMethod === 'range' && s0.contrastRange) {
+    const { min, max } = s0.contrastRange;
+    // If worst-case passes, reliable PASS
+    // If best-case fails, reliable FAIL
+    // If range spans threshold, needs review (borderline)
+    if (min >= 4.5 || max < 4.5) {
+      // Clear determination possible
+      return {
+        reliable: true,
+        fallbackUsed: 'range',
+        confidencePenalty: 0.15, // Slight penalty for range-based
+      };
+    } else {
+      // Range spans threshold — cannot confirm
+      return {
+        reliable: false,
+        reason: `Mixed background: contrast range ${min.toFixed(1)}:1 – ${max.toFixed(1)}:1 spans WCAG threshold`,
+        fallbackUsed: 'range',
+        confidencePenalty: 0.25,
+      };
+    }
+  }
+  
+  // High background variance is okay if clustering was used successfully
+  if (s0.bgLumaStd > 20 && s0.fallbackMethod !== 'clustered' && s0.fallbackMethod !== 'range') {
+    return { reliable: false, reason: 'Background variance too high — non-uniform background', confidencePenalty: 0.25 };
+  }
+  
+  // Determine confidence penalty based on fallback method
+  let confidencePenalty = 0;
+  if (s0.fallbackMethod === 'expanded') confidencePenalty = 0.08;
+  else if (s0.fallbackMethod === 'clustered') confidencePenalty = 0.12;
+  else if (s0.fallbackMethod === 'range') confidencePenalty = 0.15;
+  
+  return { reliable: true, fallbackUsed: s0.fallbackMethod, confidencePenalty };
 }
 
 async function computeA1ViolationsFromScreenshots(
@@ -323,11 +514,29 @@ async function computeA1ViolationsFromScreenshots(
     const samples = offsets.map(([dx, dy]) => computeA1Sample(img, toPxBox(img, el.bbox, dx, dy), 3));
     const reliability = assessA1Reliability(samples);
 
+    const s0 = samples[0];
+    const fgHex = 'error' in s0 ? undefined : s0.fgHex;
+    const bgHex = 'error' in s0 ? undefined : s0.bgHex;
+    const fallbackMethod = 'error' in s0 ? undefined : s0.fallbackMethod;
+    const expansionPx = 'error' in s0 ? undefined : s0.expansionPx;
+    const clusterCount = 'error' in s0 ? undefined : s0.clusterCount;
+    const contrastRange = 'error' in s0 ? undefined : s0.contrastRange;
+
+    // Build fallback method description for UI
+    const buildFallbackDescription = () => {
+      if (!fallbackMethod || fallbackMethod === 'direct') return 'direct ring sampling';
+      if (fallbackMethod === 'expanded') return `expanded region (+${expansionPx}px)`;
+      if (fallbackMethod === 'clustered') return `color clustering (${clusterCount || 1} cluster${clusterCount !== 1 ? 's' : ''})`;
+      if (fallbackMethod === 'range') return `range-based (${clusterCount || 2} background candidates)`;
+      return 'unknown';
+    };
+
     if (!reliability.reliable) {
       // Unreliable sampling -> Potential Risk (non-blocking)
-      const s0 = samples[0];
-      const fgHex = 'error' in s0 ? undefined : s0.fgHex;
-      const bgHex = 'error' in s0 ? undefined : s0.bgHex;
+      const rangeNote = contrastRange 
+        ? ` Contrast range: ${contrastRange.min.toFixed(1)}:1 – ${contrastRange.max.toFixed(1)}:1.`
+        : '';
+      
       results.push({
         ruleId,
         ruleName,
@@ -338,38 +547,54 @@ async function computeA1ViolationsFromScreenshots(
         elementRole: el.elementRole,
         elementDescription: el.elementDescription,
         evidence,
-        diagnosis: 'Contrast could not be computed reliably from this screenshot region due to sampling instability (often caused by anti-aliasing, small text, or mixed backgrounds).',
+        diagnosis: `Contrast could not be computed reliably from this screenshot region.${rangeNote} Consider verifying with a precise tool.`,
         contextualHint: 'Increase safety margin for secondary text contrast, then verify with a precise tool.',
-        confidence: 0.6,
+        confidence: Math.max(0.5, 0.7 - reliability.confidencePenalty),
         foregroundHex: fgHex,
         backgroundHex: bgHex,
+        contrastRatio: contrastRange ? undefined : ('error' in s0 ? undefined : Math.round(s0.ratio * 100) / 100),
+        contrastRange: contrastRange ? { min: Math.round(contrastRange.min * 100) / 100, max: Math.round(contrastRange.max * 100) / 100 } : undefined,
         colorApproximate: true,
         colorAttributionUnreliable: true,
         potentialRiskReason: reliability.reason || 'Unreliable pixel sampling',
         inputLimitation: 'Screenshot pixel sampling can be unstable on anti-aliased text and non-uniform backgrounds.',
         advisoryGuidance,
+        samplingFallback: {
+          method: buildFallbackDescription(),
+          expansionPx,
+          clusterCount,
+          rangeSpansThreshold: contrastRange ? (contrastRange.min < 4.5 && contrastRange.max >= 4.5) : false,
+        },
       });
       continue;
     }
 
-    const s0 = samples[0] as A1Sample;
-    const ratio = s0.ratio;
+    const sample = s0 as A1Sample;
+    const ratio = sample.ratio;
+    
+    // For range-based measurements, use worst-case for FAIL determination
+    let effectiveRatio = ratio;
+    if (sample.fallbackMethod === 'range' && sample.contrastRange) {
+      // Use worst-case (min) for pass/fail classification
+      effectiveRatio = sample.contrastRange.min;
+    }
 
     // PASS: Interior stroke contrast meets threshold — do not emit a violation.
-    if (ratio >= thresholdUsed) {
+    if (effectiveRatio >= thresholdUsed) {
       continue;
     }
 
-    // Borderline: near threshold or secondary element
-    const isBorderline = ratio >= 4.0 || !!el.isSecondary;
-    const status = isBorderline ? 'borderline' : 'confirmed';
+    // Borderline: near threshold or secondary element or using fallback methods
+    const usedFallback = sample.fallbackMethod && sample.fallbackMethod !== 'direct';
+    const isBorderline = effectiveRatio >= 4.0 || !!el.isSecondary || usedFallback;
 
-    // Confirmed Fail: only when clearly below WCAG AA and sampling reliable
-    // (we enforce a stricter cutoff for confirmation on screenshots)
-    const confirmAllowed = ratio < 4.0 && !el.isSecondary;
+    // Confirmed Fail: only when clearly below WCAG AA, sampling reliable, and no fallbacks used
+    const confirmAllowed = effectiveRatio < 4.0 && !el.isSecondary && !usedFallback;
     const finalStatus = confirmAllowed ? 'confirmed' : 'borderline';
 
-    const confidence = finalStatus === 'confirmed' ? 0.92 : 0.72;
+    // Apply confidence penalty for fallback methods
+    const baseConfidence = finalStatus === 'confirmed' ? 0.92 : 0.72;
+    const confidence = Math.max(0.55, baseConfidence - reliability.confidencePenalty);
 
     results.push({
       ruleId,
@@ -384,24 +609,34 @@ async function computeA1ViolationsFromScreenshots(
       diagnosis:
         finalStatus === 'confirmed'
           ? 'Interior-stroke contrast is reliably below WCAG AA for normal text.'
-          : 'Interior-stroke contrast is near the WCAG AA threshold, or the element is secondary; consider increasing contrast for safety margin.',
+          : usedFallback
+            ? `Contrast measurement used fallback strategy (${buildFallbackDescription()}). Consider verifying with a precise tool.`
+            : 'Interior-stroke contrast is near the WCAG AA threshold, or the element is secondary; consider increasing contrast for safety margin.',
       contextualHint: 'Increase text/background contrast for this element and re-check against WCAG AA.',
       confidence,
       contrastRatio: Math.round(ratio * 100) / 100,
+      contrastRange: sample.contrastRange ? { min: Math.round(sample.contrastRange.min * 100) / 100, max: Math.round(sample.contrastRange.max * 100) / 100 } : undefined,
       thresholdUsed,
-      foregroundRgb: `rgb(${Math.round(s0.fg.r)}, ${Math.round(s0.fg.g)}, ${Math.round(s0.fg.b)})`,
-      backgroundRgb: `rgb(${Math.round(s0.bg.r)}, ${Math.round(s0.bg.g)}, ${Math.round(s0.bg.b)})`,
-      foregroundHex: s0.fgHex,
-      backgroundHex: s0.bgHex,
+      foregroundRgb: `rgb(${Math.round(sample.fg.r)}, ${Math.round(sample.fg.g)}, ${Math.round(sample.fg.b)})`,
+      backgroundRgb: `rgb(${Math.round(sample.bg.r)}, ${Math.round(sample.bg.g)}, ${Math.round(sample.bg.b)})`,
+      foregroundHex: sample.fgHex,
+      backgroundHex: sample.bgHex,
       colorApproximate: true,
       samplingReliability: {
-        pixelSupport: `adequate (${s0.fgPixelCount} fg pixels, ${s0.bgPixelCount} bg pixels)`,
-        foregroundVariance: `stddev ${Math.round(s0.fgLumaStd)}`,
-        backgroundVariance: `stddev ${Math.round(s0.bgLumaStd)}`,
-        colorDistance: `Δluma ${Math.round(s0.lumaDistance)}`,
-        hexVerification: `passed (measured ${s0.ratio.toFixed(2)}, recomputed ${s0.hexRecomputedRatio.toFixed(2)})`,
+        pixelSupport: `adequate (${sample.fgPixelCount} fg pixels, ${sample.bgPixelCount} bg pixels)`,
+        foregroundVariance: `stddev ${Math.round(sample.fgLumaStd)}`,
+        backgroundVariance: `stddev ${Math.round(sample.bgLumaStd)}`,
+        colorDistance: `Δluma ${Math.round(sample.lumaDistance)}`,
+        hexVerification: `passed (measured ${sample.ratio.toFixed(2)}, recomputed ${sample.hexRecomputedRatio.toFixed(2)})`,
         multiSampleConsistency: 'passed (±0.2)',
+        fallbackMethod: buildFallbackDescription(),
       },
+      samplingFallback: usedFallback ? {
+        method: buildFallbackDescription(),
+        expansionPx: sample.expansionPx,
+        clusterCount: sample.clusterCount,
+        rangeSpansThreshold: sample.contrastRange ? (sample.contrastRange.min < 4.5 && sample.contrastRange.max >= 4.5) : false,
+      } : undefined,
     });
   }
 
