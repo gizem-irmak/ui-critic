@@ -75,6 +75,7 @@ export interface Violation {
   elementRole?: string; // Semantic role: caption, badge, metadata, heading, etc.
   inputType?: 'screenshots' | 'zip' | 'github'; // Which input type was used for this finding
   contrastRatio?: number; // Computed contrast ratio (e.g., 2.8) — only when samplingMethod = "pixel"
+  contrastRange?: { min: number; max: number }; // Range-based contrast for mixed backgrounds
   thresholdUsed?: 4.5 | 3.0; // WCAG threshold applied
   foregroundRgb?: string; // Sampled median RGB (e.g., "rgb(156, 163, 175)") — only when samplingMethod = "pixel"
   foregroundHex?: string; // Approximate hex derived from median RGB — only when samplingMethod = "pixel"
@@ -89,6 +90,22 @@ export interface Violation {
   // Location tracking for A1 findings
   inputLimitation?: string; // Explanation of why this is heuristic
   advisoryGuidance?: string; // Non-mandatory guidance for potential risks
+  // A1 sampling fallback tracking
+  samplingFallback?: {
+    method: string; // 'direct ring sampling', 'expanded region (+Xpx)', 'color clustering', 'range-based'
+    expansionPx?: number;
+    clusterCount?: number;
+    rangeSpansThreshold?: boolean;
+  };
+  samplingReliability?: {
+    pixelSupport?: string;
+    foregroundVariance?: string;
+    backgroundVariance?: string;
+    colorDistance?: string;
+    hexVerification?: string;
+    multiSampleConsistency?: string;
+    fallbackMethod?: string;
+  };
   // A1 affected items for aggregated display
   affected_items?: Array<{
     location?: string;

@@ -158,7 +158,7 @@ export function PotentialRiskItem({ violation, compact = false }: PotentialRiskI
       )}
 
       {/* A1 Contrast details (always show colors; ratio only when reliable/computed) */}
-      {violation.ruleId === 'A1' && (violation.foregroundHex || violation.backgroundHex || violation.contrastRatio !== undefined) && (
+      {violation.ruleId === 'A1' && (violation.foregroundHex || violation.backgroundHex || violation.contrastRatio !== undefined || violation.contrastRange) && (
         <div className={cn('space-y-1', compact ? 'text-xs' : 'text-sm')}>
           {(violation.foregroundHex || violation.backgroundHex) && (
             <div className="text-muted-foreground">
@@ -170,12 +170,27 @@ export function PotentialRiskItem({ violation, compact = false }: PotentialRiskI
           )}
           <div className="text-muted-foreground">
             <span className="font-medium">Contrast: </span>
-            {violation.contrastRatio !== undefined ? (
+            {violation.contrastRange ? (
+              <span className="font-mono">
+                {violation.contrastRange.min}:1 – {violation.contrastRange.max}:1
+                <span className="text-xs ml-1">(range)</span>
+              </span>
+            ) : violation.contrastRatio !== undefined ? (
               <span className="font-mono">{violation.contrastRatio}:1</span>
             ) : (
               <span>ratio not computed (unreliable sampling)</span>
             )}
           </div>
+          {/* Show fallback method when used */}
+          {violation.samplingFallback && (
+            <div className="text-muted-foreground">
+              <span className="font-medium">Method: </span>
+              <span>{violation.samplingFallback.method}</span>
+              {violation.samplingFallback.rangeSpansThreshold && (
+                <span className="text-warning ml-1">(spans threshold)</span>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
