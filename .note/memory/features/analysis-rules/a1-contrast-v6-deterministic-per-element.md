@@ -21,6 +21,7 @@ This is the **definitive, immutable** rule specification for A1. All previous lo
 |---------------------|------------------|----------|
 | Normal text | 4.5:1 | Default for all text |
 | Large text | 3.0:1 | ≥ 18pt normal OR ≥ 14pt bold |
+| Navigation items | 3.0:1 | Top-level nav/menu links (exception) |
 
 ### Large Text Classification
 
@@ -32,6 +33,19 @@ Visual indicators for large text:
 - Main headings (h1, h2, hero titles)
 - Bold section headers with significant height
 - Banner headlines, feature titles
+
+### Navigation Exception (v25.1)
+
+Top-level navigation items and primary menu links MUST use the 3:1 threshold,
+REGARDLESS of their actual font size. Apply this exception when:
+- Text appears in a top navigation bar/header menu
+- Text is a primary navigation link or menu item
+- Text is in a sidebar main navigation section
+- Text is a prominent tab label in a primary tab bar
+
+Do NOT apply if:
+- The navigation text is visually comparable to body paragraph text
+- The text is a secondary link (footer links, breadcrumbs, utility links)
 
 When uncertain, classify as "normal" (conservative approach).
 

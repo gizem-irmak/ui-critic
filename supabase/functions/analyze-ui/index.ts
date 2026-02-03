@@ -63,12 +63,35 @@ const corsHeaders = {
 //     b) Estimated text height ≥ 14pt (~18.7px) AND text appears bold
 //        (increased stroke width, heavier pixel density)
 //
+// ============================================================
+// NAVIGATION EXCEPTION (v25.1)
+// ============================================================
+// Top-level navigation items and primary menu links MUST use the
+// LARGE TEXT threshold (3:1), REGARDLESS of their actual font size.
+//
+// Apply the navigation exception when:
+//   - Text appears in a top navigation bar/header
+//   - Text is a primary menu link or navigation item
+//   - Text is in a sidebar main navigation
+//   - Text is a prominent tab label in a tab bar
+//
+// Do NOT apply if:
+//   - The navigation text is visually comparable to body paragraph text
+//   - The text is a secondary/utility link (e.g., footer links, breadcrumbs)
+//
+// Rationale: Navigation items serve a critical wayfinding function and
+// typically have larger tap targets and visual prominence even when
+// the font size technically falls below 18pt.
+// ============================================================
+//
 // Size estimation from screenshots:
 //   - Compare bounding box height to known reference elements
 //   - Consider visual weight: headings, titles typically are large
 //   - Bold detection: thicker strokes, denser pixel pattern, heavier weight
+//   - Consider semantic role: navigation items → large text threshold
 //
-// When in doubt, classify as "normal" (conservative approach).
+// When in doubt about size, classify as "normal" (conservative approach).
+// When in doubt about navigation, check visual context (header position).
 // ============================================================
 //
 // Classification Logic (v24):
@@ -2158,19 +2181,34 @@ You MUST classify each text element as "normal" or "large" to apply the correct 
   - Bold section headers with significant height
   - Text that visually dominates as a major element
 
+**NAVIGATION EXCEPTION — ALWAYS LARGE (regardless of font size):**
+Top-level navigation items and primary menu links MUST be classified as "large" (3:1 threshold),
+EVEN IF their font size is technically below 18pt. Apply this exception when:
+- Text appears in a top navigation bar or header menu
+- Text is a primary navigation link or menu item
+- Text is in a sidebar main navigation section
+- Text is a prominent tab label in a primary tab bar
+
+Do NOT apply this exception if:
+- The navigation text is visually comparable to body paragraph text (same size/weight)
+- The text is a secondary link (footer links, breadcrumbs, utility links)
+
 **NORMAL TEXT (textSize: "normal")** — uses 4.5:1 minimum contrast:
 - All other text elements
 - Body text, descriptions, paragraphs
 - Labels, metadata, captions, badges
 - Small headings (h3-h6) unless visually large
-- Navigation links, button text
+- Button text (unless it's a primary nav button)
 - Muted or secondary text of standard size
+- Footer links, breadcrumbs, utility navigation
 
 **How to estimate from bounding box:**
 - Compare bbox.h (normalized height) to the screenshot height
 - If bbox.h * screenshotHeight >= ~24px → consider "large" if normal weight
 - If bbox.h * screenshotHeight >= ~18.7px AND text appears bold → "large"
-- When uncertain, default to "normal" (conservative approach)
+- If text is in top navigation/primary menu → classify as "large" (navigation exception)
+- When uncertain about size, default to "normal" (conservative approach)
+- When uncertain about navigation, check visual context (header position, menu styling)
 
 "a1TextElements": [
   {
