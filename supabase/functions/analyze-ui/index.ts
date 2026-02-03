@@ -2145,7 +2145,7 @@ Any text visible to users that conveys information MUST be passed to A1 evaluati
 Filtering rules that apply to other analyses (A2, A4, etc.) MUST NOT apply to A1.
 If you can read it, it MUST be in a1TextElements.
 
-## TEXT SIZE CLASSIFICATION FOR WCAG THRESHOLDS (CRITICAL — DYNAMIC v26)
+## TEXT SIZE CLASSIFICATION FOR WCAG THRESHOLDS (CRITICAL — DYNAMIC v27)
 
 You MUST classify each text element as "normal" or "large" to apply the correct WCAG threshold.
 Use DYNAMIC, CONTEXT-AWARE detection — not fixed pixel thresholds alone.
@@ -2172,22 +2172,39 @@ Classify as "large" if ANY of the following conditions are met:
    - Navigation items with increased weight
    - Form section labels that stand out from field content
 
+4) **UI ROLE-BASED CLASSIFICATION (v27 — NEW)**:
+   Classify as "large" REGARDLESS of size/weight if the text functions as:
+   - **Top-level navigation item**: Menu links, primary nav elements, header navigation
+   - **Section or page heading**: Any text that labels a section or page, even if subtle
+   - **Sidebar or filter group label**: Labels that organize filter options or sidebar sections
+   - **Uppercase category or grouping label**: ALL-CAPS labels used for categorization
+   
+   These UI roles receive the 3:1 threshold even if:
+   - The text is not bold
+   - The text is only slightly larger than body text
+   - The text appears muted or secondary in styling
+   
+   Do NOT apply 4.5:1 to these elements unless they are visually comparable to paragraph text
+   (same size, same weight, inline with body content).
+
 **NORMAL TEXT (textSize: "normal")** — uses 4.5:1 minimum contrast:
 - All text that does NOT meet any of the above conditions
 - Standard body text, descriptions, paragraphs
-- Metadata, timestamps, small labels
-- Text that matches or is smaller than median body text height
-- Muted or secondary text without visual emphasis
+- Metadata, timestamps, small labels within body content
+- Text that matches or is smaller than median body text height AND serves no structural role
+- Inline content text that flows like paragraphs
 
 **DYNAMIC ESTIMATION PROCESS:**
 1. Scan all text elements to determine the median body text height
-2. For each element, check:
-   a) Is height ≥ 1.2× median? → "large"
-   b) Is height ≥ ~18.7px AND bold? → "large"
-   c) Is it a prominent UI label/heading visually larger than body text? → "large"
-   d) None of the above? → "normal"
+2. For each element, check in order:
+   a) Does it serve a UI ROLE (nav item, heading, group label, uppercase category)? → "large"
+   b) Is height ≥ 1.2× median? → "large"
+   c) Is height ≥ ~18.7px AND bold? → "large"
+   d) Is it a prominent UI label visually larger than body text? → "large"
+   e) None of the above? → "normal"
 
-When uncertain, default to "normal" (conservative approach).
+When uncertain about size/weight, check UI role first. If role qualifies, classify as "large".
+Only default to "normal" when NO conditions are met.
 
 "a1TextElements": [
   {
