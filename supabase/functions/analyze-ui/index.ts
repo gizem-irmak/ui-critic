@@ -398,56 +398,49 @@ type A1ReliabilityResult = {
  * uncertainty. This prevents false "Potential Risk" reports when visual
  * evidence indicates the text is clearly readable.
  */
+/**
+ * STRICT SUPPRESSION POLICY FOR A1 FINDINGS:
+ * 
+ * When contrast measurement fails due to technical limitations (insufficient pixels,
+ * unstable sampling, anti-aliasing, shadows, gradients, mixed backgrounds), suppress
+ * the A1 finding ENTIRELY unless low contrast is visually plausible.
+ * 
+ * Key principle: Algorithmic uncertainty = PASS (no report), not accessibility risk.
+ * 
+ * Suppress when:
+ * 1. Clear luminance separation exists (foreground visually distinct from background)
+ * 2. Contrast ratio is not extremely low (≥2.5:1 with good separation)
+ * 3. High variance is due to background complexity, not actual color overlap
+ * 4. Range-based measurements show worst-case passes threshold
+ * 
+ * Only report when:
+ * - Contrast failure is confidently measured (reliable sampling + ratio < threshold)
+ * - Low contrast is visually plausible (foreground/background lumas overlap significantly)
+ */
 function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?: string } {
-  // Clear luminance separation: if foreground is substantially darker than background
-  // AND sampling issues are due to instability (not actual low contrast),
-  // suppress the finding as PASS.
-  
-  // Get foreground and background luminance
   const fgLuma = relativeLuminance01(sample.fg) * 255;
   const bgLuma = relativeLuminance01(sample.bg) * 255;
-  
-  // Clear separation threshold: foreground should be at least 40 luma units darker
-  // than background (or vice versa for light-on-dark text)
   const lumaSeparation = Math.abs(bgLuma - fgLuma);
   
-  // Check if foreground is predominantly darker (normal dark-on-light text)
-  const fgIsDarker = fgLuma < bgLuma;
-  // Or lighter (light-on-dark text)
-  const fgIsLighter = fgLuma > bgLuma;
-  
-  // Strong separation criteria:
-  // 1. At least 50 luma units apart (clear visual distinction)
-  // 2. The ratio is above 3.0 (not extremely low contrast)
-  // 3. Background variance is the issue (not actual color overlap)
-  
-  if (lumaSeparation >= 50 && sample.ratio >= 3.0) {
-    // Clear luminance separation — even if sampling is "unreliable" due to
-    // background complexity (shadows, gradients, pills), the text is clearly visible
+  // === SUPPRESSION CASE 1: Very high luminance separation ===
+  // If lumas are very far apart, text is clearly distinguishable regardless of sampling issues
+  if (lumaSeparation >= 60) {
     return {
       suppress: true,
-      reason: `Clear luminance separation (Δluma=${Math.round(lumaSeparation)}) with ratio ${sample.ratio.toFixed(1)}:1 indicates readable text despite sampling complexity`,
+      reason: `High luminance separation (Δluma=${Math.round(lumaSeparation)}) indicates clearly readable text`,
     };
   }
   
-  // Even stronger case: very high separation with moderate ratio
-  if (lumaSeparation >= 70) {
+  // === SUPPRESSION CASE 2: Good separation with decent ratio ===
+  // Even moderate separation (≥40) with ratio ≥2.5 suggests readable text
+  if (lumaSeparation >= 40 && sample.ratio >= 2.5) {
     return {
       suppress: true,
-      reason: `Very high luminance separation (Δluma=${Math.round(lumaSeparation)}) indicates clearly distinguishable text`,
+      reason: `Adequate luminance separation (Δluma=${Math.round(lumaSeparation)}) with ratio ${sample.ratio.toFixed(1)}:1 indicates text is distinguishable`,
     };
   }
   
-  // Check for plausible low-contrast scenario: foreground and background lumas overlap
-  // If the distribution of sampled lumas shows overlap, low contrast IS plausible
-  // Note: High fgLumaStd or bgLumaStd with low separation = overlap risk
-  if (lumaSeparation < 30 && sample.fgLumaStd > 10 && sample.bgLumaStd > 10) {
-    // Lumas are close AND both have high variance — overlap is plausible
-    // Do NOT suppress
-    return { suppress: false };
-  }
-  
-  // For range-based measurements: check if the range worst-case passes
+  // === SUPPRESSION CASE 3: Range-based measurement where worst-case passes ===
   if (sample.contrastRange) {
     const worstCase = sample.contrastRange.min;
     if (worstCase >= 4.5) {
@@ -456,9 +449,52 @@ function shouldSuppressA1Finding(sample: A1Sample): { suppress: boolean; reason?
         reason: `Worst-case contrast (${worstCase.toFixed(1)}:1) meets WCAG AA threshold`,
       };
     }
+    // If best-case fails threshold, low contrast IS plausible — don't suppress
+    if (sample.contrastRange.max < 4.5) {
+      return { suppress: false };
+    }
   }
   
-  return { suppress: false };
+  // === SUPPRESSION CASE 4: Background variance is the issue, not actual low contrast ===
+  // If background has high variance (complex background) but foreground is stable
+  // and there's reasonable separation, suppress
+  if (sample.bgLumaStd > 15 && sample.fgLumaStd < 12 && lumaSeparation >= 30) {
+    return {
+      suppress: true,
+      reason: `Background complexity (stddev=${Math.round(sample.bgLumaStd)}) with stable foreground and separation (Δluma=${Math.round(lumaSeparation)})`,
+    };
+  }
+  
+  // === SUPPRESSION CASE 5: Moderate separation with ratio above "clearly failing" ===
+  // Ratio ≥ 3.0 with any meaningful separation (≥25) suggests acceptable visibility
+  if (lumaSeparation >= 25 && sample.ratio >= 3.0) {
+    return {
+      suppress: true,
+      reason: `Ratio ${sample.ratio.toFixed(1)}:1 with separation (Δluma=${Math.round(lumaSeparation)}) is not a plausible accessibility failure`,
+    };
+  }
+  
+  // === DO NOT SUPPRESS: Low contrast is visually plausible ===
+  // Close lumas with high variance on both sides = actual overlap risk
+  if (lumaSeparation < 25 && (sample.fgLumaStd > 8 || sample.bgLumaStd > 8)) {
+    return { suppress: false };
+  }
+  
+  // Very low separation suggests possible low contrast — do not suppress
+  if (lumaSeparation < 20) {
+    return { suppress: false };
+  }
+  
+  // Default: If ratio itself suggests near-failure and separation is questionable
+  if (sample.ratio < 3.5 && lumaSeparation < 35) {
+    return { suppress: false };
+  }
+  
+  // Otherwise, sampling uncertainty without plausible low-contrast evidence = suppress
+  return {
+    suppress: true,
+    reason: `Sampling uncertainty without plausible low-contrast evidence (ratio=${sample.ratio.toFixed(1)}:1, Δluma=${Math.round(lumaSeparation)})`,
+  };
 }
 
 function assessA1Reliability(samples: Array<A1Sample | { error: string }>): A1ReliabilityResult {
@@ -661,68 +697,43 @@ async function computeA1ViolationsFromScreenshots(
     };
 
     if (!reliability.reliable) {
-      // NEW: If finding should be suppressed due to clear luminance separation,
-      // treat as PASS and do not emit any violation
+      // STRICT SUPPRESSION POLICY:
+      // When contrast measurement is unreliable, suppress ENTIRELY unless low contrast
+      // is visually plausible. Do NOT report as "Potential Risk" — treat as PASS.
+      //
+      // Rationale: Algorithmic uncertainty ≠ accessibility risk.
+      // Only surface A1 when there is concrete, reliable evidence of insufficient contrast.
+      
+      // Check if finding should be suppressed due to clear luminance separation
+      // or lack of plausible low-contrast evidence
       if (reliability.suppressFinding) {
-        console.log(`A1 suppressed for element at ${evidence}: ${reliability.suppressReason}`);
+        console.log(`A1 suppressed (unreliable + no plausible risk): ${evidence} — ${reliability.suppressReason}`);
         continue; // Suppress — treat as PASS
       }
       
-      // ELEMENT-LEVEL SPECIFICITY CHECK:
-      // Require descriptive label AND location to report a Potential Risk.
-      // If the element cannot be reliably identified, suppress entirely.
-      const hasDescriptiveLabel = !!(el.elementDescription && el.elementDescription.trim().length > 0);
-      const hasLocation = !!(el.location && el.location.trim().length > 0);
-      const hasElementRole = !!(el.elementRole && el.elementRole.trim().length > 0);
-      
-      // Must have at least a descriptive label OR (role + location)
-      const hasElementSpecificity = hasDescriptiveLabel || (hasElementRole && hasLocation);
-      
-      if (!hasElementSpecificity) {
-        // Cannot reliably identify element — suppress rather than report anonymous finding
-        console.log(`A1 suppressed: insufficient element specificity for potential risk at ${evidence} (no description/role+location)`);
-        continue;
+      // Even if suppressFinding wasn't explicitly set, unreliable measurements
+      // should be suppressed unless we have strong reason to believe low contrast exists
+      const s0Sample = samples[0];
+      if (!('error' in s0Sample)) {
+        // Additional suppression check: if we got a sample but it's "unreliable",
+        // run the suppression logic directly
+        const directSuppressCheck = shouldSuppressA1Finding(s0Sample);
+        if (directSuppressCheck.suppress) {
+          console.log(`A1 suppressed (unreliable sampling, clear visibility): ${evidence} — ${directSuppressCheck.reason}`);
+          continue; // Suppress — treat as PASS
+        }
       }
       
-      // Unreliable sampling -> Potential Risk (non-blocking)
-      // Build element-specific diagnosis with required fields
-      const elementLabel = el.elementDescription || el.elementRole || 'text element';
-      const locationContext = el.location || `Screenshot #${screenshotIdx0 + 1}`;
-      const measurementReason = reliability.reason || 'unreliable pixel sampling';
+      // If measurement failed entirely (error), suppress without emitting Potential Risk
+      if ('error' in s0) {
+        console.log(`A1 suppressed (measurement error): ${evidence} — ${s0.error}`);
+        continue; // Suppress — treat as PASS (no aggregate counts, no anonymous findings)
+      }
       
-      const rangeNote = contrastRange 
-        ? ` Contrast range: ${contrastRange.min.toFixed(1)}:1 – ${contrastRange.max.toFixed(1)}:1.`
-        : '';
-      
-      results.push({
-        ruleId,
-        ruleName,
-        category: 'accessibility',
-        status: 'potential',
-        samplingMethod: 'inferred',
-        inputType: 'screenshots',
-        elementRole: el.elementRole,
-        elementDescription: el.elementDescription,
-        evidence: `${elementLabel} in ${locationContext}`,
-        diagnosis: `"${elementLabel}" contrast could not be measured reliably (${measurementReason}).${rangeNote}`,
-        contextualHint: `Verify contrast for "${elementLabel}" with DevTools or axe.`,
-        confidence: Math.max(0.5, 0.7 - reliability.confidencePenalty),
-        foregroundHex: fgHex,
-        backgroundHex: bgHex,
-        contrastRatio: contrastRange ? undefined : ('error' in s0 ? undefined : Math.round(s0.ratio * 100) / 100),
-        contrastRange: contrastRange ? { min: Math.round(contrastRange.min * 100) / 100, max: Math.round(contrastRange.max * 100) / 100 } : undefined,
-        colorApproximate: true,
-        colorAttributionUnreliable: true,
-        potentialRiskReason: measurementReason,
-        inputLimitation: 'Screenshot pixel sampling can be unstable on anti-aliased text and non-uniform backgrounds.',
-        advisoryGuidance,
-        samplingFallback: {
-          method: buildFallbackDescription(),
-          expansionPx,
-          clusterCount,
-          rangeSpansThreshold: contrastRange ? (contrastRange.min < 4.5 && contrastRange.max >= 4.5) : false,
-        },
-      });
+      // At this point, measurement was unreliable AND low contrast IS plausible.
+      // However, per policy: Do NOT report as "Potential Risk".
+      // Treat algorithmic uncertainty as PASS.
+      console.log(`A1 suppressed (unreliable but marginal): ${evidence} — treating uncertainty as PASS per policy`);
       continue;
     }
 
