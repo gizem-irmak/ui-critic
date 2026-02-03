@@ -694,12 +694,28 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     lowRiskCount > 0 ? `${lowRiskCount} low-risk` : '',
   ].filter(Boolean).join(', ');
   
+  // ============================================================================
+  // A1 GITHUB/REPOSITORY DETECTION (AUTHORITATIVE RULE)
+  // ============================================================================
+  // 
+  // MANDATORY CLASSIFICATION: All A1 findings from GitHub repositories MUST be
+  // classified as Heuristic Potential Risks.
+  // 
+  // Rationale:
+  // - Repository analysis cannot access runtime rendering
+  // - Computed styles, DOM measurements, and theme providers are unavailable
+  // - Contrast ratio cannot be computed without runtime rendering
+  // 
+  // Convergence Constraint:
+  // - Heuristic A1 findings → Must be reported, but NEVER block convergence
+  // ============================================================================
+  
   // Input limitation explanation for GitHub analysis
   const inputLimitation = 'GitHub repository analysis cannot access runtime rendering, computed styles, or theme configurations. ' +
     'Foreground colors are detected from Tailwind classes, but background context is often inherited, theme-dependent, or dynamic. ' +
     'External stylesheets, CSS variables, or theme providers may not be available in the analyzed code.';
   
-  // Advisory guidance for potential risk findings - AVOID repeating "heuristic" labels
+  // Advisory guidance for heuristic findings
   const advisoryGuidance = 'To confirm contrast compliance, upload screenshots of the rendered UI for visual verification.';
   
   // Build diagnosis - AVOID repeating "heuristic", "non-blocking", or policy restatements
@@ -708,26 +724,29 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     `Risk breakdown: ${riskBreakdown || 'low-risk'}. ` +
     `Background color cannot be determined from repository analysis; contrast ratio cannot be computed.`;
   
-  // NO corrective prompt for GitHub heuristic findings
-  const correctivePrompt = ''; // Empty - no mandatory corrective prompt for heuristic findings
+  // CRITICAL: No corrective prompt for heuristic findings (GitHub analysis)
+  // Heuristic findings must NOT trigger mandatory corrective prompts
+  const correctivePrompt = '';
   
-  // GitHub input = ALWAYS inferred sampling (no pixel access)
+  console.log(`A1 GitHub analysis: 0 confirmed, ${affectedComponents.length} heuristic occurrences → 1 aggregated finding`);
+  
+  // GitHub input = ALWAYS Heuristic Potential Risk (inferred sampling, no pixel access)
   return [{
     ruleId: 'A1',
     ruleName: 'Insufficient text contrast',
     category: 'accessibility',
-    status: 'potential', // Always potential for GitHub analysis
+    status: 'potential', // ALWAYS potential for GitHub analysis — NEVER confirmed
     samplingMethod: 'inferred', // GitHub cannot pixel-sample — colors from tokens/classes
     inputType: 'github', // Explicit input type tracking
     evidence: `Text color classes detected in ${displayedFiles.join(', ')}${fileMoreText}: ${displayedColors.join(', ')}${moreText}. Background color cannot be determined from static analysis.`,
     diagnosis,
     contextualHint: `Light text colors may be insufficient for informational text on light backgrounds.`,
-    correctivePrompt,
+    correctivePrompt, // Empty — no mandatory corrective prompt for heuristic findings
     confidence: overallConfidence,
     riskLevel: overallRiskLevel,
     inputLimitation,
     advisoryGuidance,
-    potentialRiskReason: 'Repository analysis cannot access rendered pixels; colors inferred from Tailwind classes.',
+    potentialRiskReason: 'Repository analysis cannot access rendered pixels; colors inferred from Tailwind classes. Confirmed classification requires rendered screenshots.',
     affectedComponents: affectedComponents.map(c => ({
       colorClass: c.colorClass,
       hexColor: c.hexColor,
