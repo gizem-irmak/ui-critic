@@ -1,17 +1,16 @@
-# Memory: features/analysis-rules/a1-contrast-v25-tiered-thresholds
+# Memory: features/analysis-rules/a1-contrast-v28-badge-local-sampling
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Tiered Thresholds v25)
+## A1 — Insufficient Text Contrast (v28 — Badge/Pill Local-Only Sampling)
 
 This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
 
-### v25 Key Changes
+### v28 Key Changes
 
-1. **Comprehensive Mandatory Detection Scope**
-2. **Local-Priority Background Sampling**
-3. **Background-Based Classification (not confidence-based)**
-4. **Tiered WCAG Thresholds: 4.5:1 (normal) / 3.0:1 (large text)**
+1. **BADGE/CHIP/PILL LOCAL-ONLY SAMPLING** — Never fall back to page/container backgrounds
+2. **BG_BADGE_UNCERTAIN Reason Code** — For unmeasurable badge backgrounds
+3. All v25-v27 features retained (tiered thresholds, dynamic large-text, UI role awareness)
 
 ---
 
@@ -20,13 +19,13 @@ This is the **definitive, immutable** rule specification for A1. All previous lo
 | Text Classification | Minimum Contrast | Criteria |
 |---------------------|------------------|----------|
 | Normal text | 4.5:1 | Default for all text |
-| Large text | 3.0:1 | Dynamic detection (see v26 rules below) |
+| Large text | 3.0:1 | Dynamic detection (see v26/v27 rules below) |
 
 ### Large Text Classification (v27 — UI Role Awareness)
 
 Classify text as "large" if **ANY** of the following conditions are met:
 
-1. **UI Role-Based** (v27 NEW — check first): Text functions as:
+1. **UI Role-Based** (v27 — check first): Text functions as:
    - Top-level navigation item (menu links, primary nav, header navigation)
    - Section or page heading (labels sections, even if subtle)
    - Sidebar or filter group label (organizes filter options or sidebar sections)
@@ -87,13 +86,27 @@ If users can read it, A1 must evaluate it.
 
 ---
 
-## Local-Priority Background Sampling (v24)
+## Badge/Chip/Pill Background Sampling (v28 — LOCAL-ONLY)
 
-For pill-shaped components (badges, chips, tags):
-- Sample background pixels within a **small local margin (6-10px)** around the text bounding box
-- **Weight pixels by proximity** to text — nearer pixels dominate over distant ones
-- If local region shows a **uniform color**, use that color directly (CERTAIN background)
-- Do NOT classify background as white/global if a uniform local background exists
+### CRITICAL RULE: Never use page/container background for badge text
+
+When text is visually enclosed within a pill, chip, badge, or tag (rounded rectangle or pill shape with distinct background):
+
+1. **SAMPLE LOCAL ONLY** (6-10px margin within the enclosing shape)
+   - The badge/pill IS the background — not the page behind it
+   - Weight pixels by proximity to text
+
+2. **NEVER FALL BACK TO GLOBAL BACKGROUNDS**
+   - If local badge background cannot be measured → classify as POTENTIAL
+   - Do NOT substitute page white/card color as background
+
+3. **CERTAIN vs UNCERTAIN Classification:**
+   - Local uniform color detected → `local_uniform` method → **CERTAIN**
+   - Local sampling fails or mixed → **POTENTIAL** with `BG_BADGE_UNCERTAIN`
+
+4. **FORBIDDEN: Confirmed violations using wrong background**
+   - If badge text contrast is reported as "confirmed" but uses page background color instead of badge color → **INVALID**
+   - Must measure against the ACTUAL enclosing shape's fill color
 
 ### Background Sampling Priority Order
 
@@ -101,6 +114,11 @@ For pill-shaped components (badges, chips, tags):
    - Captures badge/pill/chip backgrounds correctly
    - Uses proximity weighting (closer pixels get higher weight)
    - If uniform color detected → `local_uniform` method → CERTAIN
+
+2. **For badges/pills specifically:**
+   - If local sampling returns uniform color → use it (CERTAIN)
+   - If local sampling fails → POTENTIAL with reason `BG_BADGE_UNCERTAIN`
+   - NEVER expand to container/page background
 
 ---
 
