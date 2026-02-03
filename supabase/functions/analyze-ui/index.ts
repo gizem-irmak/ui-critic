@@ -1641,11 +1641,27 @@ For each detected text element, estimate colors as follows:
 - Compute the **median RGB** of this darkest subset as the foreground color
 - Report the RAW sampled hex — do NOT map to Tailwind tokens or nearest palette color
 
-**STEP 3 — Estimate background color using LOCAL-PRIORITY RING SAMPLING (v24):**
+**STEP 3 — Estimate background color using LOCAL-PRIORITY RING SAMPLING (v24/v28):**
+
+⚠️ **BADGE/CHIP/PILL DETECTION — MANDATORY LOCAL-ONLY SAMPLING (v28):**
+
+If the text element appears to be ENCLOSED within a pill, chip, badge, or tag:
+- These are typically rounded rectangles or pill shapes with a distinct background color
+- The text sits INSIDE a small colored container that differs from the page/card background
+
+**FOR BADGE/CHIP/PILL TEXT:**
+1. Sample background ONLY from within the enclosing shape (6-10px local margin)
+2. **NEVER** fall back to page, card, or container backgrounds
+3. If the local badge background is uniform → use that color (CERTAIN background)
+4. If the local badge background cannot be reliably measured:
+   - Classify as **POTENTIAL** (non-blocking) with reason "BG_BADGE_UNCERTAIN"
+   - Do NOT classify as CONFIRMED using the surrounding page/container color
+5. **NEVER** report a badge text violation as "confirmed" when the measured background is white/page color but the badge visually has a colored fill
+
+**FOR REGULAR TEXT (not in badges/pills):**
 - Sample a LOCAL margin (6-10px) around the text bounding box
 - Weight pixels by proximity — nearer pixels get higher weight
 - If local region is uniform (single dominant color) → use that as background
-- This correctly handles badges, pills, chips with colored backgrounds
 - Only expand to wider regions if local sampling is insufficient
 - Use the **median RGB** of remaining pixels as the background color
 - Report the RAW sampled hex — do NOT snap to palette tokens
@@ -1824,6 +1840,7 @@ This prevents infinite iterations where A1 repeats despite UI updates due to sam
 - "Foreground variance too high (stddev > 15) — text rendering unstable"
 - "Background variance too high (stddev > 20) — non-uniform background"
 - "Multi-sample consistency failed: ratios varied by X.X across positions"
+- "BG_BADGE_UNCERTAIN — Badge/pill background cannot be reliably measured" (v28)
 
 ---
 
@@ -3081,6 +3098,7 @@ serve(async (req) => {
           if (reason.includes('overlay') || reason.includes('transparent')) reasonCodes.push('BG_OVERLAY');
           if (reason.includes('insufficient') || reason.includes('small region')) reasonCodes.push('BG_TOO_SMALL_REGION');
           if (reason.includes('anti-alias') || reason.includes('unstable')) reasonCodes.push('FG_ANTIALIASING');
+          if (reason.includes('badge') || reason.includes('pill') || reason.includes('chip')) reasonCodes.push('BG_BADGE_UNCERTAIN');
         }
         if (item.confidence < 0.75) reasonCodes.push('LOW_CONFIDENCE');
         // Ensure at least one reason code
@@ -3107,6 +3125,7 @@ serve(async (req) => {
               case 'BG_OVERLAY': return 'transparency or overlay suspected';
               case 'BG_TOO_SMALL_REGION': return 'insufficient background pixels';
               case 'FG_ANTIALIASING': return 'glyph sampling unstable';
+              case 'BG_BADGE_UNCERTAIN': return 'badge/pill background cannot be reliably measured';
               case 'LOW_CONFIDENCE': return 'combined confidence below threshold';
               default: return code;
             }
