@@ -8,7 +8,7 @@ const corsHeaders = {
 };
 
 // ============================
-// A1 (Contrast) — MANDATORY COVERAGE RULE v21
+// A1 (Contrast) — MANDATORY COVERAGE RULE v23
 // ============================
 // 
 // Rule Objective: Detect text elements that may not meet WCAG 2.1 AA contrast
@@ -22,10 +22,19 @@ const corsHeaders = {
 //   - Normal text: minimum contrast 4.5:1
 //   - Large text (≥18pt or ≥14pt bold): minimum contrast 3.0:1
 //
-// Classification Logic:
-//   - CONFIRMED: Background certain + ratio clearly below threshold
-//   - POTENTIAL: Any uncertainty present (mixed bg, low confidence, etc.)
-//   - Worst-case rule: If best-case ratio < threshold → CONFIRMED
+// Classification Logic (v23 UPDATE):
+//   - CONFIRMED: Background is certain AND best-case contrast < threshold
+//     * Low confidence DOES NOT downgrade to Potential if background is uniform
+//     * Confidence affects reporting detail, NOT classification
+//   - POTENTIAL: Background cannot be reliably determined:
+//     * Mixed background (multiple dominant colors)
+//     * Gradient/overlay/image backgrounds
+//     * Contrast outcome depends on multiple background candidates
+//     * Contrast cannot be computed at all
+//
+// KEY CHANGE v23: Low confidence alone MUST NOT auto-downgrade.
+// If the background is visually uniform (e.g., solid white) and the 
+// best-case contrast ratio is below threshold, it is CONFIRMED.
 //
 // Convergence:
 //   - Confirmed A1 violations COUNT toward convergence (can block)
@@ -559,72 +568,132 @@ type A1ReliabilityResult = {
 };
 
 /**
- * Determines if a finding should be suppressed because there is clear
- * luminance separation between foreground and background, despite sampling
- * uncertainty. This prevents false "Potential Risk" reports when visual
- * evidence indicates the text is clearly readable.
- */
-/**
- * WORST-CASE CONTRAST BOUNDING FOR A1 CLASSIFICATION (v21)
+ * WORST-CASE CONTRAST BOUNDING FOR A1 CLASSIFICATION (v23)
  * 
  * This function determines classification (confirmed vs potential) based on
- * worst-case and best-case contrast bounds. It NEVER suppresses findings —
+ * background certainty and contrast measurement. It NEVER suppresses findings —
  * it only determines the classification tier.
  * 
- * Per Mandatory Coverage Rule: Uncertainty downgrades classification, not reporting.
- * 
- * Methodology:
- * 1. FG_worst: 80-85th percentile luminance among stroke pixels (lightest plausible stroke)
- * 2. BG_worst: 80-90th percentile luminance among background pixels (lightest plausible background)
- * 3. contrast_worst = contrast(FG_worst, BG_worst)
+ * v23 KEY CHANGE: Low confidence MUST NOT auto-downgrade to Potential.
+ * If background is certain (uniform) AND best-case contrast < threshold → CONFIRMED.
  * 
  * Classification rules:
- * - If best-case contrast < threshold → CONFIRMED violation (even in uncertainty)
- * - If worst-case contrast >= threshold → PASS (no issue)
- * - Otherwise → POTENTIAL risk (range spans threshold)
+ * - CONFIRMED: Background is certain AND best-case contrast < threshold
+ * - POTENTIAL: Background is uncertain (mixed, gradient, image, multiple candidates)
+ *              OR contrast cannot be computed
+ * - PASS: Worst-case contrast >= threshold (even conservative estimate passes)
+ * 
+ * Confidence affects:
+ * - Reporting detail and explanation
+ * - NOT the confirmed/potential classification when background is certain
  */
-function classifyA1Contrast(sample: A1Sample, threshold: number): { 
+function classifyA1Contrast(
+  sample: A1Sample, 
+  threshold: number,
+  backgroundCertainty: A1BackgroundCertainty
+): { 
   classification: 'confirmed' | 'potential' | 'pass';
   reason: string;
   effectiveRatio: number;
+  isBackgroundBased: boolean; // True if classification was based on background certainty
 } {
   const contrastWorst = sample.contrastWorst;
   const contrastBest = sample.contrastRange?.max ?? sample.ratio;
   const contrastMin = sample.contrastRange?.min ?? sample.ratio;
+  const primaryRatio = sample.ratio;
   
   // ============================================================
-  // WORST-CASE RULE (Step 6 from specification)
+  // STEP 1: Check for PASS (worst-case still passes WCAG)
   // ============================================================
-  
-  // If BEST-CASE contrast < threshold → Confirmed violation
-  // (Even the most favorable interpretation fails WCAG)
-  if (contrastBest < threshold) {
-    return {
-      classification: 'confirmed',
-      reason: `Best-case contrast ${contrastBest.toFixed(1)}:1 is below threshold ${threshold}:1`,
-      effectiveRatio: contrastMin, // Use worst-case for reporting
-    };
-  }
-  
-  // If WORST-CASE contrast >= threshold → PASS
-  // (Even the least favorable interpretation passes WCAG)
+  // If even the most conservative measurement passes, no issue
   if (contrastWorst >= threshold) {
     return {
       classification: 'pass',
       reason: `Worst-case contrast ${contrastWorst.toFixed(1)}:1 meets threshold ${threshold}:1`,
-      effectiveRatio: sample.ratio,
+      effectiveRatio: primaryRatio,
+      isBackgroundBased: false,
     };
   }
   
   // ============================================================
-  // RANGE SPANS THRESHOLD → Potential risk
+  // STEP 2: Check background certainty for classification
   // ============================================================
-  // Worst-case fails but best-case passes — classification is uncertain
+  // Per v23 rule: Low confidence alone MUST NOT downgrade
+  // Classification is based on BACKGROUND certainty, not confidence
+  
+  // Background is UNCERTAIN when any of these are true:
+  const hasMultipleBackgroundCandidates = sample.fallbackMethod === 'range' && (sample.clusterCount ?? 0) >= 2;
+  const hasMixedBackground = backgroundCertainty.mixedBackground === true;
+  const hasGradient = backgroundCertainty.hasGradient === true;
+  const hasImageOrOverlay = backgroundCertainty.hasImage === true || backgroundCertainty.hasOverlay === true;
+  const spansMultipleRegions = backgroundCertainty.spanMultipleRegions === true;
+  
+  const backgroundIsUncertain = 
+    hasMultipleBackgroundCandidates ||
+    hasMixedBackground ||
+    hasGradient ||
+    hasImageOrOverlay ||
+    spansMultipleRegions;
+  
+  // ============================================================
+  // STEP 3: CONFIRMED vs POTENTIAL based on background certainty
+  // ============================================================
+  
+  if (!backgroundIsUncertain) {
+    // BACKGROUND IS CERTAIN (uniform, single dominant color)
+    // Low confidence does NOT matter here - if background is uniform
+    // and contrast fails, it's CONFIRMED
+    
+    if (contrastBest < threshold) {
+      return {
+        classification: 'confirmed',
+        reason: `Contrast ${primaryRatio.toFixed(1)}:1 is below threshold ${threshold}:1 with certain background`,
+        effectiveRatio: primaryRatio,
+        isBackgroundBased: true,
+      };
+    }
+    
+    // Best-case passes but worst-case fails — still CONFIRMED for certain backgrounds
+    // because the primary measured ratio is the best estimate
+    if (primaryRatio < threshold) {
+      return {
+        classification: 'confirmed',
+        reason: `Measured contrast ${primaryRatio.toFixed(1)}:1 is below threshold ${threshold}:1 with certain background`,
+        effectiveRatio: primaryRatio,
+        isBackgroundBased: true,
+      };
+    }
+    
+    // Edge case: contrast is borderline but background is certain
+    // Primary ratio passes but it's close - still passes
+    return {
+      classification: 'pass',
+      reason: `Primary contrast ${primaryRatio.toFixed(1)}:1 meets threshold ${threshold}:1`,
+      effectiveRatio: primaryRatio,
+      isBackgroundBased: true,
+    };
+  }
+  
+  // BACKGROUND IS UNCERTAIN — classify as POTENTIAL
+  // This is the ONLY reason to use potential: background uncertainty
+  // (NOT low confidence when background is certain)
+  
+  const uncertaintyReasons: string[] = [];
+  if (hasMultipleBackgroundCandidates) uncertaintyReasons.push('multiple background candidates');
+  if (hasMixedBackground) uncertaintyReasons.push('mixed background');
+  if (hasGradient) uncertaintyReasons.push('gradient pattern');
+  if (hasImageOrOverlay) uncertaintyReasons.push('image/overlay');
+  if (spansMultipleRegions) uncertaintyReasons.push('spans multiple regions');
+  
+  const reasonText = sample.contrastRange
+    ? `Background uncertain (${uncertaintyReasons.join(', ')}): contrast range ${contrastMin.toFixed(1)}:1 – ${contrastBest.toFixed(1)}:1`
+    : `Background uncertain (${uncertaintyReasons.join(', ')}): estimated ${primaryRatio.toFixed(1)}:1`;
   
   return {
     classification: 'potential',
-    reason: `Contrast range spans threshold (${contrastMin.toFixed(1)}:1 – ${contrastBest.toFixed(1)}:1 vs ${threshold}:1)`,
-    effectiveRatio: contrastMin, // Report conservative estimate
+    reason: reasonText,
+    effectiveRatio: contrastMin, // Use worst-case for conservative reporting
+    isBackgroundBased: true,
   };
 }
 
@@ -886,59 +955,46 @@ async function computeA1ViolationsFromScreenshots(
     const contrastRange = sample.contrastRange;
     const ratio = sample.ratio;
     
-    // Use the new classification function for worst-case rule
-    const classification = classifyA1Contrast(sample, thresholdUsed);
+    // ====================================================================
+    // AUTHORITATIVE A1 CLASSIFICATION (v23)
+    // ====================================================================
+    // Per v23 rule:
+    // - CONFIRMED: Background is CERTAIN (uniform) + contrast < threshold
+    //   Low confidence does NOT auto-downgrade if background is uniform
+    // - POTENTIAL: Background is UNCERTAIN (mixed, gradient, multiple candidates)
+    //   This is the ONLY reason to classify as potential
+    // ====================================================================
+    
+    const bgCertainty = sample.backgroundCertainty;
+    
+    // Use the new v23 classification function that passes backgroundCertainty
+    const classification = classifyA1Contrast(sample, thresholdUsed, bgCertainty);
     
     // CASE 2: Classification is PASS — contrast is acceptable
     if (classification.classification === 'pass') {
-      // Per v21: PASS is the ONLY case where we don't emit a finding
-      // This is when worst-case contrast >= threshold (clearly passes)
       console.log(`A1 passed: ${evidence} — ${classification.reason}`);
       continue;
     }
     
     // CASE 3: Emit finding (confirmed or potential)
     const effectiveRatio = classification.effectiveRatio;
-
-    // ====================================================================
-    // AUTHORITATIVE A1 CLASSIFICATION (Screenshot Input)
-    // ====================================================================
-    // Per the authoritative rule:
-    // - CONFIRMED VIOLATION: Background is certain (single dominant color,
-    //   no gradients/images/overlays, text doesn't span multiple regions)
-    // - HEURISTIC POTENTIAL RISK: Background is uncertain (gradients, mixed,
-    //   anti-aliasing dominates, or any uncertainty factor present)
-    // ====================================================================
     
-    const bgCertainty = sample.backgroundCertainty;
-    const usedFallback = sample.fallbackMethod && sample.fallbackMethod !== 'direct';
-    
-    // Confirmed status requires:
-    // 1. Background is certain (no gradients, overlays, mixed regions)
-    // 2. Ratio clearly below WCAG threshold (not borderline)
-    // 3. Element is not secondary/decorative
-    // 4. No fallback methods were used
-    // 5. Confidence meets minimum threshold
-    const confidenceThreshold = 0.75;
+    // Calculate confidence for REPORTING purposes only (not classification)
+    // Per v23: Confidence affects detail level, NOT confirmed/potential status
     const baseConfidence = bgCertainty.isCertain ? 0.92 : 0.65;
     const confidence = Math.max(0.45, baseConfidence - reliability.confidencePenalty);
     
-    const canBeConfirmed = 
-      bgCertainty.isCertain &&           // Background certainty is met
-      effectiveRatio < 4.0 &&            // Clearly below threshold (not borderline)
-      !el.isSecondary &&                 // Not a secondary element
-      !usedFallback &&                   // No fallback methods
-      confidence >= confidenceThreshold; // Confidence threshold met
-    
-    // Classification decision: Confirmed Violation vs Heuristic Potential Risk
-    // Note: For screenshots, borderline cases (4.0-4.5) are always heuristic
-    const finalStatus: 'confirmed' | 'potential' | 'borderline' = 
-      canBeConfirmed ? 'confirmed' : 
-      (effectiveRatio >= 4.0 || bgCertainty.isCertain === false) ? 'potential' : 'borderline';
+    // Final status comes directly from the classification function
+    // v23: Classification is based on background certainty, not confidence
+    const finalStatus: 'confirmed' | 'potential' = classification.classification === 'confirmed' 
+      ? 'confirmed' 
+      : 'potential';
 
     // ====================================================================
     // BUILD REASON CODES FOR POTENTIAL FINDINGS (Mandatory per A1 rule)
     // ====================================================================
+    // Per v23: Reason codes explain why classification is POTENTIAL
+    // They should ONLY relate to background uncertainty, NOT low confidence
     const reasonCodes: string[] = [];
     if (!bgCertainty.isCertain) {
       if (bgCertainty.mixedBackground) reasonCodes.push('BG_MIXED');
@@ -948,12 +1004,16 @@ async function computeA1ViolationsFromScreenshots(
       if (bgCertainty.antiAliasingDominates) reasonCodes.push('FG_ANTIALIASING');
       if (sample.bgPixelCount < 15) reasonCodes.push('BG_TOO_SMALL_REGION');
     }
-    if (confidence < confidenceThreshold) reasonCodes.push('LOW_CONFIDENCE');
+    // v23 CHANGE: LOW_CONFIDENCE is NO LONGER added as a reason code
+    // Low confidence does not affect classification when background is certain
     
     // Determine background status
     const backgroundStatus: 'certain' | 'uncertain' | 'unmeasurable' = 
       bgCertainty.isCertain ? 'certain' :
       sample.bgPixelCount >= 8 ? 'uncertain' : 'unmeasurable';
+    
+    // Track whether fallback methods were used (for reporting, not classification)
+    const usedFallback = sample.fallbackMethod && sample.fallbackMethod !== 'direct';
     
     // Build background candidates if uncertain
     const backgroundCandidates = sample.bgCandidates?.map(c => ({
@@ -961,7 +1021,7 @@ async function computeA1ViolationsFromScreenshots(
       confidence: 0.6, // Reduced confidence for candidates
     }));
     
-    // Calculate foreground confidence based on sampling quality
+    // Calculate foreground confidence based on sampling quality (for reporting detail)
     const foregroundConfidence = Math.max(0.5, 1 - (sample.fgLumaStd / 30) - reliability.confidencePenalty);
 
     // elementIdentifier already defined earlier in loop
@@ -969,37 +1029,30 @@ async function computeA1ViolationsFromScreenshots(
     const diagnosis = (() => {
       if (finalStatus === 'confirmed') {
         return `Text contrast ${ratio.toFixed(1)}:1 is below WCAG AA minimum ${thresholdUsed}:1. ` +
-               `Foreground ${sample.fgHex} on background ${sample.bgHex} measured reliably.`;
+               `Foreground ${sample.fgHex} on background ${sample.bgHex}${confidence < 0.75 ? ' (sampling confidence reduced)' : ' measured reliably'}.`;
       }
-      if (finalStatus === 'potential') {
-        const reasons = reasonCodes.map(code => {
-          switch (code) {
-            case 'BG_MIXED': return 'multiple background colors detected';
-            case 'BG_GRADIENT': return 'gradient background';
-            case 'BG_IMAGE': return 'image or textured background';
-            case 'BG_OVERLAY': return 'transparency or overlay suspected';
-            case 'BG_TOO_SMALL_REGION': return 'insufficient background pixels';
-            case 'FG_ANTIALIASING': return 'glyph sampling unstable';
-            case 'LOW_CONFIDENCE': return 'combined confidence below threshold';
-            default: return code;
-          }
-        }).join(', ');
-        return `Potential contrast issue: ${reasons}. ` +
-               (sample.contrastRange 
-                 ? `Contrast range ${sample.contrastRange.min.toFixed(1)}:1 – ${sample.contrastRange.max.toFixed(1)}:1.`
-                 : `Estimated ratio ${ratio.toFixed(1)}:1 requires verification.`);
-      }
-      // borderline
-      return `Contrast ratio ${ratio.toFixed(1)}:1 is near WCAG AA threshold ${thresholdUsed}:1. ` +
-             'Consider increasing contrast for safety margin.';
+      // potential — explain background uncertainty
+      const reasons = reasonCodes.map(code => {
+        switch (code) {
+          case 'BG_MIXED': return 'multiple background colors detected';
+          case 'BG_GRADIENT': return 'gradient background';
+          case 'BG_IMAGE': return 'image or textured background';
+          case 'BG_OVERLAY': return 'transparency or overlay suspected';
+          case 'BG_TOO_SMALL_REGION': return 'insufficient background pixels';
+          case 'FG_ANTIALIASING': return 'glyph sampling unstable';
+          default: return code;
+        }
+      }).join(', ');
+      return `Potential contrast issue: ${reasons || 'background uncertain'}. ` +
+             (sample.contrastRange 
+               ? `Contrast range ${sample.contrastRange.min.toFixed(1)}:1 – ${sample.contrastRange.max.toFixed(1)}:1.`
+               : `Estimated ratio ${ratio.toFixed(1)}:1 requires verification.`);
     })();
     
     // Actionable guidance per element
     const actionableGuidance = finalStatus === 'confirmed'
       ? `Increase contrast to at least ${thresholdUsed}:1 by darkening text or lightening background.`
-      : finalStatus === 'potential'
-        ? `Verify contrast with browser DevTools. If ratio < ${thresholdUsed}:1, adjust colors.`
-        : `Consider increasing contrast slightly above ${thresholdUsed}:1 for safety margin.`;
+      : `Verify contrast with browser DevTools. If ratio < ${thresholdUsed}:1, adjust colors.`;
 
     // Build per-element result with all required fields
     results.push({
@@ -1036,7 +1089,7 @@ async function computeA1ViolationsFromScreenshots(
       thresholdUsed,
       colorApproximate: true,
       // Reason codes for potential findings (MANDATORY per A1 rule)
-      reasonCodes: finalStatus === 'potential' || finalStatus === 'borderline' ? reasonCodes : undefined,
+      reasonCodes: finalStatus === 'potential' ? reasonCodes : undefined,
       potentialRiskReason: reasonCodes.length > 0 ? reasonCodes.join(', ') : undefined,
       // Background certainty metadata
       backgroundCertainty: {
@@ -1067,8 +1120,7 @@ async function computeA1ViolationsFromScreenshots(
   // Log per-element classification breakdown
   const confirmed = results.filter(r => r.status === 'confirmed').length;
   const potential = results.filter(r => r.status === 'potential').length;
-  const borderline = results.filter(r => r.status === 'borderline').length;
-  console.log(`A1 pixel-sampled: ${results.length} finding(s) — ${confirmed} confirmed, ${potential} potential (heuristic), ${borderline} borderline`);
+  console.log(`A1 pixel-sampled: ${results.length} finding(s) — ${confirmed} confirmed, ${potential} potential (heuristic)`);
   return results;
 }
 
