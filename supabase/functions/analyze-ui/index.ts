@@ -610,24 +610,10 @@ async function computeA1ViolationsFromScreenshots(
   const advisoryGuidance = 'Upload a PNG at 100% zoom or verify with DevTools/axe for accurate measurement.';
 
   if (!Array.isArray(a1TextElements) || a1TextElements.length === 0) {
-    // We intentionally do NOT create a confirmed violation if we cannot locate text elements.
-    return [
-      {
-        ruleId,
-        ruleName,
-        category: 'accessibility',
-        status: 'potential',
-        samplingMethod: 'inferred',
-        inputType: 'screenshots',
-        evidence: 'Unable to identify specific text regions for contrast measurement in the provided screenshot(s).',
-        diagnosis: 'Text contrast could not be measured reliably because no per-element text regions were provided for pixel sampling.',
-        contextualHint: 'Provide a screenshot at 100% zoom, or verify contrast with DevTools/axe.',
-        confidence: 0.55,
-        potentialRiskReason: 'No text region bounding boxes provided',
-        inputLimitation: 'Screenshot-only analysis requires per-element text regions to compute contrast.',
-        advisoryGuidance,
-      },
-    ];
+    // No text elements identified — suppress A1 entirely rather than report generic warning
+    // Per policy: Do not report aggregate or anonymous A1 findings
+    console.log('A1 suppressed: No text elements identified for contrast measurement (no generic warning)');
+    return [];
   }
 
   // Decode screenshots once.
@@ -682,7 +668,28 @@ async function computeA1ViolationsFromScreenshots(
         continue; // Suppress — treat as PASS
       }
       
+      // ELEMENT-LEVEL SPECIFICITY CHECK:
+      // Require descriptive label AND location to report a Potential Risk.
+      // If the element cannot be reliably identified, suppress entirely.
+      const hasDescriptiveLabel = !!(el.elementDescription && el.elementDescription.trim().length > 0);
+      const hasLocation = !!(el.location && el.location.trim().length > 0);
+      const hasElementRole = !!(el.elementRole && el.elementRole.trim().length > 0);
+      
+      // Must have at least a descriptive label OR (role + location)
+      const hasElementSpecificity = hasDescriptiveLabel || (hasElementRole && hasLocation);
+      
+      if (!hasElementSpecificity) {
+        // Cannot reliably identify element — suppress rather than report anonymous finding
+        console.log(`A1 suppressed: insufficient element specificity for potential risk at ${evidence} (no description/role+location)`);
+        continue;
+      }
+      
       // Unreliable sampling -> Potential Risk (non-blocking)
+      // Build element-specific diagnosis with required fields
+      const elementLabel = el.elementDescription || el.elementRole || 'text element';
+      const locationContext = el.location || `Screenshot #${screenshotIdx0 + 1}`;
+      const measurementReason = reliability.reason || 'unreliable pixel sampling';
+      
       const rangeNote = contrastRange 
         ? ` Contrast range: ${contrastRange.min.toFixed(1)}:1 – ${contrastRange.max.toFixed(1)}:1.`
         : '';
@@ -696,9 +703,9 @@ async function computeA1ViolationsFromScreenshots(
         inputType: 'screenshots',
         elementRole: el.elementRole,
         elementDescription: el.elementDescription,
-        evidence,
-        diagnosis: `Contrast could not be computed reliably from this screenshot region.${rangeNote} Consider verifying with a precise tool.`,
-        contextualHint: 'Increase safety margin for secondary text contrast, then verify with a precise tool.',
+        evidence: `${elementLabel} in ${locationContext}`,
+        diagnosis: `"${elementLabel}" contrast could not be measured reliably (${measurementReason}).${rangeNote}`,
+        contextualHint: `Verify contrast for "${elementLabel}" with DevTools or axe.`,
         confidence: Math.max(0.5, 0.7 - reliability.confidencePenalty),
         foregroundHex: fgHex,
         backgroundHex: bgHex,
@@ -706,7 +713,7 @@ async function computeA1ViolationsFromScreenshots(
         contrastRange: contrastRange ? { min: Math.round(contrastRange.min * 100) / 100, max: Math.round(contrastRange.max * 100) / 100 } : undefined,
         colorApproximate: true,
         colorAttributionUnreliable: true,
-        potentialRiskReason: reliability.reason || 'Unreliable pixel sampling',
+        potentialRiskReason: measurementReason,
         inputLimitation: 'Screenshot pixel sampling can be unstable on anti-aliased text and non-uniform backgrounds.',
         advisoryGuidance,
         samplingFallback: {
