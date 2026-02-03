@@ -47,9 +47,29 @@ const corsHeaders = {
 // If text is visible and readable by users, it MUST be checked.
 // ============================================================
 //
-// WCAG Thresholds (immutable):
-//   - Normal text: minimum contrast 4.5:1
-//   - Large text (≥18pt or ≥14pt bold): minimum contrast 3.0:1
+// ============================================================
+// WCAG TIERED CONTRAST THRESHOLDS (v25)
+// ============================================================
+// Apply different thresholds based on text size classification:
+//
+// NORMAL TEXT (textSize: "normal"):
+//   - Minimum contrast: 4.5:1 (WCAG AA)
+//   - Use for: body text, descriptions, labels, metadata, most UI text
+//
+// LARGE TEXT (textSize: "large"):
+//   - Minimum contrast: 3.0:1 (WCAG AA)
+//   - Classify as "large" when:
+//     a) Estimated text height ≥ 18pt (~24px) for normal-weight text, OR
+//     b) Estimated text height ≥ 14pt (~18.7px) AND text appears bold
+//        (increased stroke width, heavier pixel density)
+//
+// Size estimation from screenshots:
+//   - Compare bounding box height to known reference elements
+//   - Consider visual weight: headings, titles typically are large
+//   - Bold detection: thicker strokes, denser pixel pattern, heavier weight
+//
+// When in doubt, classify as "normal" (conservative approach).
+// ============================================================
 //
 // Classification Logic (v24):
 //   - CONFIRMED: Background is certain AND best-case contrast < threshold
@@ -2124,6 +2144,33 @@ Any text visible to users that conveys information MUST be passed to A1 evaluati
 
 Filtering rules that apply to other analyses (A2, A4, etc.) MUST NOT apply to A1.
 If you can read it, it MUST be in a1TextElements.
+
+## TEXT SIZE CLASSIFICATION FOR WCAG THRESHOLDS (CRITICAL)
+
+You MUST classify each text element as "normal" or "large" to apply the correct WCAG threshold:
+
+**LARGE TEXT (textSize: "large")** — uses 3:1 minimum contrast:
+- Text height ≥ 18pt (~24px at 96dpi) for normal-weight text
+- Text height ≥ 14pt (~18.7px at 96dpi) AND appears bold (heavier stroke weight)
+- Visual indicators of large text:
+  - Main headings (h1, h2, large titles)
+  - Hero text, banner headlines
+  - Bold section headers with significant height
+  - Text that visually dominates as a major element
+
+**NORMAL TEXT (textSize: "normal")** — uses 4.5:1 minimum contrast:
+- All other text elements
+- Body text, descriptions, paragraphs
+- Labels, metadata, captions, badges
+- Small headings (h3-h6) unless visually large
+- Navigation links, button text
+- Muted or secondary text of standard size
+
+**How to estimate from bounding box:**
+- Compare bbox.h (normalized height) to the screenshot height
+- If bbox.h * screenshotHeight >= ~24px → consider "large" if normal weight
+- If bbox.h * screenshotHeight >= ~18.7px AND text appears bold → "large"
+- When uncertain, default to "normal" (conservative approach)
 
 "a1TextElements": [
   {
