@@ -127,4 +127,14 @@ export interface Violation {
     elementDescription?: string;
     potentialRiskReason?: string;
   }>;
+  // Background certainty assessment (screenshot analysis only)
+  backgroundCertainty?: {
+    isCertain: boolean;
+    reason?: string;
+  };
+  // Convergence constraint: Whether this finding blocks project convergence
+  // Per authoritative A1 rule:
+  //   - Confirmed violations: block convergence (true)
+  //   - Heuristic/potential findings: never block convergence (false)
+  blocksConvergence?: boolean;
 }
