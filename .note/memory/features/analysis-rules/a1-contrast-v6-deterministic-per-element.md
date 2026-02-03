@@ -1,55 +1,17 @@
-# Memory: features/analysis-rules/a1-contrast-v28-plausibility-gate
+# Memory: features/analysis-rules/a1-contrast-v25-tiered-thresholds
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Plausibility Gate v28)
+## A1 — Insufficient Text Contrast (Tiered Thresholds v25)
 
 This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
 
-### v28 Key Changes
+### v25 Key Changes
 
-1. **Foreground/Background Plausibility Gate** (NEW)
-2. **Inner Glyph Core Sampling (20-30%)**
-3. **Background-Based + Foreground Validation Classification**
-4. **New Reason Codes: FG_BG_BLEED, ANTIALIAS_DOMINANT**
-
----
-
-## v28 FOREGROUND/BACKGROUND PLAUSIBILITY GATE
-
-Before classifying a contrast result as CONFIRMED, validate that the sampled foreground truly represents glyph pixels (not background).
-
-### Foreground Sampling (Inner Glyph Core)
-
-For each text element:
-- Sample foreground from the **INNER GLYPH CORE region** (exclude edges)
-- Use only the **darkest 20-30%** of pixels within the text bounding box
-- This avoids anti-aliasing and background bleed into foreground
-
-### Background Sampling (Ring Method)
-
-- Sample background from a **ring around the text bounding box** (NOT inside)
-- Use local-priority sampling (8px margin first)
-- Weight by proximity to text
-
-### Plausibility Validation
-
-If the sampled foreground is within a small distance of the sampled background:
-- **Color distance < 30 RGB** (same color region)
-- **Both colors near-white (luma > 200) AND luma distance < 15**
-- **Foreground luma stddev > 25** (anti-aliasing dominance)
-
-When any of these conditions are met for visually prominent text (titles/headings):
-- **DO NOT mark CONFIRMED**
-- **Downgrade to POTENTIAL** with reason codes
-- Include explanation in diagnosis
-
-### New Reason Codes (v28)
-
-| Code | Meaning |
-|------|---------|
-| `FG_BG_BLEED` | Foreground sampling likely captured background pixels |
-| `ANTIALIAS_DOMINANT` | Anti-aliased edge pixels dominate foreground sampling |
+1. **Comprehensive Mandatory Detection Scope**
+2. **Local-Priority Background Sampling**
+3. **Background-Based Classification (not confidence-based)**
+4. **Tiered WCAG Thresholds: 4.5:1 (normal) / 3.0:1 (large text)**
 
 ---
 
@@ -58,36 +20,54 @@ When any of these conditions are met for visually prominent text (titles/heading
 | Text Classification | Minimum Contrast | Criteria |
 |---------------------|------------------|----------|
 | Normal text | 4.5:1 | Default for all text |
-| Large text | 3.0:1 | Dynamic detection (see v27 rules below) |
+| Large text | 3.0:1 | ≥ 18pt normal OR ≥ 14pt bold |
 
-### Large Text Classification (v27 — UI Role Awareness)
+### Large Text Classification
 
-Classify text as "large" if **ANY** of the following conditions are met:
+Classify text as "large" when:
+- Estimated text height ≥ 18pt (~24px) for normal-weight text, OR
+- Estimated text height ≥ 14pt (~18.7px) AND text appears bold (heavier stroke weight)
 
-1. **UI Role-Based** (v27 — check first): Text functions as:
-   - Top-level navigation item (menu links, primary nav, header navigation)
-   - Section or page heading (labels sections, even if subtle)
-   - Sidebar or filter group label (organizes filter options or sidebar sections)
-   - Uppercase category or grouping label (ALL-CAPS categorization labels)
-   
-   These roles receive 3:1 threshold even if not bold or only slightly larger than body text.
-   Do NOT apply 4.5:1 unless visually comparable to paragraph text.
+Visual indicators for large text:
+- Main headings (h1, h2, hero titles)
+- Bold section headers with significant height
+- Banner headlines, feature titles
 
-2. **Relative Size**: Text height ≥ 1.2× the median body text height in the same screenshot
-3. **Bold + Size**: Text height ≥ 14pt (~18.7px) AND text appears bold (heavier stroke weight)
-4. **Semantic + Visual Weight**: Text functions as a UI label, section heading, filter label, navigation item, or control label AND is visually larger or heavier than surrounding body text
+When uncertain, classify as "normal" (conservative approach).
 
-### Dynamic Estimation Process
+---
 
-1. Scan all text elements to determine the median body text height
-2. For each element, check in order:
-   - Does it serve a UI ROLE (nav item, heading, group label, uppercase category)? → "large"
-   - Is height ≥ 1.2× median? → "large"
-   - Is height ≥ ~18.7px AND bold? → "large"
-   - Is it a prominent UI label/heading visually larger than body text? → "large"
-   - None of the above? → "normal"
+## Detection Scope — NO EXCLUSIONS
 
-When uncertain about size/weight, check UI role first. Only default to "normal" when NO conditions are met.
+**CRITICAL**: ALL visible text elements MUST be evaluated. Do NOT exclude based on:
+- Visual prominence (secondary, muted, faded, subtle)
+- Semantic role (metadata, captions, badges, labels, tags)
+- Stylistic intent (intentionally low-contrast for aesthetic)
+- Text color (gray, yellow, blue, any colored text)
+- Text size or weight (small text must still be evaluated)
+- Perceived importance or emphasis
+- Font size or bounding box dimensions
+- Color brightness or luminance
+
+### TEXT DETECTION OVERRIDE FOR A1
+
+The text detection pipeline MUST expose ALL visible text to A1 evaluation.
+Filtering rules that apply to other analyses (A2, A4, etc.) MUST NOT apply to A1.
+If users can read it, A1 must evaluate it.
+
+### MUST INCLUDE (comprehensive list):
+- Secondary or muted text
+- Descriptions, summaries, captions
+- Author names, usernames, timestamps
+- Tags, labels, badges, chips, pills
+- Colored text (yellow prices, blue links, gray hints)
+- Placeholder text, helper text
+- Price labels, discount percentages
+- Footer text, copyright notices
+- Small text, light-weight text
+- Any other readable text visible to users
+
+**RULE**: If a user can read the text, it MUST be checked for WCAG contrast compliance.
 
 ---
 
