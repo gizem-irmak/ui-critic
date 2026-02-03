@@ -2159,7 +2159,56 @@ serve(async (req) => {
   }
 
   try {
-    const { images, categories, selectedRules, inputType, toolUsed } = await req.json();
+    // ============================================================
+    // RESILIENT BODY READING (handles large payloads + connection issues)
+    // ============================================================
+    // The "error reading a body from connection" occurs when:
+    // 1. Request body is very large (multiple screenshots = large base64)
+    // 2. Connection times out or is interrupted during body read
+    // 3. Client disconnects before server finishes reading
+    //
+    // Solution: Read body with explicit error handling and timeout awareness
+    // ============================================================
+    let requestBody: { images?: string[]; categories?: string[]; selectedRules?: string[]; inputType?: string; toolUsed?: string };
+    
+    try {
+      // Read the raw text first to handle partial reads gracefully
+      const bodyText = await req.text();
+      
+      if (!bodyText || bodyText.trim().length === 0) {
+        return new Response(
+          JSON.stringify({ success: false, error: "Empty request body received" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      // Parse the JSON
+      try {
+        requestBody = JSON.parse(bodyText);
+      } catch (jsonError) {
+        console.error("Failed to parse request body as JSON:", (jsonError as Error).message);
+        console.error("Body length:", bodyText.length, "First 200 chars:", bodyText.substring(0, 200));
+        return new Response(
+          JSON.stringify({ success: false, error: "Invalid JSON in request body" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    } catch (bodyReadError) {
+      // This catches the "error reading a body from connection" TypeError
+      const errorMessage = (bodyReadError as Error).message || String(bodyReadError);
+      console.error("Error reading request body:", errorMessage);
+      
+      // Return a clear error message that indicates the issue
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: "Request body could not be read. This may occur with large image payloads. Try reducing the number or size of screenshots, or retry the request."
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    
+    const { images, categories = [], selectedRules = [], inputType, toolUsed = 'unknown' } = requestBody;
 
     if (!images || images.length === 0) {
       return new Response(
@@ -2169,7 +2218,7 @@ serve(async (req) => {
     }
 
     // Validate selectedRules
-    const selectedRulesSet = new Set(selectedRules || []);
+    const selectedRulesSet = new Set(selectedRules);
     if (selectedRulesSet.size === 0) {
       return new Response(
         JSON.stringify({ success: false, error: "No rules selected for analysis" }),
