@@ -1,17 +1,19 @@
-# Memory: features/analysis-rules/a1-contrast-v25-tiered-thresholds
+# Memory: features/analysis-rules/a1-contrast-v25.2-tiered-thresholds
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Tiered Thresholds v25)
+## A1 — Insufficient Text Contrast (Tiered Thresholds v25.2)
 
 This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
 
-### v25 Key Changes
+### v25.2 Key Changes
 
 1. **Comprehensive Mandatory Detection Scope**
 2. **Local-Priority Background Sampling**
 3. **Background-Based Classification (not confidence-based)**
 4. **Tiered WCAG Thresholds: 4.5:1 (normal) / 3.0:1 (large text)**
+5. **Navigation Exception (v25.1): Top-level nav uses 3:1 threshold**
+6. **Foreground Plausibility Gate (v25.2): Prevents false positives from bad sampling**
 
 ---
 
@@ -128,27 +130,45 @@ Classify background as:
 | Uncertain | Compute worst-case (min) and best-case (max) from candidates |
 | Unmeasurable | Mark "not measurable", do NOT fabricate |
 
-### Step 4 — Classification Logic (v23: Background-Based, Not Confidence-Based)
+### Step 4 — Foreground Plausibility Gate (v25.2 — MANDATORY)
 
-**CONFIRMED Violation** (background is certain):
+Before classifying as CONFIRMED, apply the foreground plausibility gate:
+
+**Trigger conditions** (any triggers downgrade):
+- Sampled foreground has very high luminance (near-white: L > 0.85)
+- Foreground-background luminance difference is tiny (< 0.08)
+- AND the element is visually prominent (title, heading, card title, large text)
+
+**When triggered**:
+- DO NOT classify as CONFIRMED (regardless of background certainty)
+- Downgrade to POTENTIAL with reason code: `FG_IMPLAUSIBLE`
+- Add rationale: "Foreground color sampling inconsistent with visual prominence (likely background or anti-aliased pixels)."
+
+**Rationale**: If the sampled foreground color is near-white or near-background for a prominent element, the measurement is likely corrupted by background pixels or anti-aliasing artifacts.
+
+### Step 5 — Classification Logic (v25.2: Background + Foreground Gates)
+
+**CONFIRMED Violation** (all conditions must be met):
 - Background has single dominant color, no gradients/images/overlays
 - Contrast ratio < WCAG threshold
+- Foreground passes plausibility gate (not implausible for element type)
 - **Low confidence does NOT prevent confirmation**
 - ➡️ Emit Confirmed (Blocking)
 
-**Potential Risk** (background is uncertain):
+**Potential Risk** (any of these conditions):
 - Background has multiple dominant colors (BG_MIXED)
 - Background has gradient pattern (BG_GRADIENT)
 - Background has image/overlay (BG_IMAGE, BG_OVERLAY)
 - Text spans multiple regions
 - Contrast cannot be computed
+- **Foreground is implausible for prominent element (FG_IMPLAUSIBLE)** — v25.2
 - ➡️ Emit Potential (Non-blocking)
 
 **PASS (only case with no emission)**:
 - Worst-case contrast ≥ threshold
 - Even the most conservative estimate passes
 
-### Step 5 — Confidence Handling (v23 Change)
+### Step 6 — Confidence Handling (v23 Change)
 
 | Factor | Effect |
 |--------|--------|
@@ -156,13 +176,15 @@ Classify background as:
 | Low confidence + uncertain background | POTENTIAL (background uncertainty is the reason) |
 | High confidence + certain background | CONFIRMED |
 | High confidence + uncertain background | POTENTIAL (background is still uncertain) |
+| Implausible foreground + any background | POTENTIAL (v25.2: FG_IMPLAUSIBLE gate) |
 
 **Confidence affects**: Diagnosis text detail (e.g., "sampling confidence reduced")
 **Confidence does NOT affect**: Confirmed vs Potential classification
 
-### Step 6 — Mandatory Reason Codes (Only for POTENTIAL)
+### Step 7 — Mandatory Reason Codes (Only for POTENTIAL)
 
-Every Potential finding MUST include at least one reason code explaining **background uncertainty**:
+Every Potential finding MUST include at least one reason code explaining **why it's potential**:
+- `FG_IMPLAUSIBLE` — foreground sampling inconsistent with visual prominence (v25.2)
 - `BG_MIXED` — multiple background colors detected
 - `BG_GRADIENT` — gradient background
 - `BG_IMAGE` — image or textured background
