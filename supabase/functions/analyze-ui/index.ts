@@ -95,6 +95,33 @@ const corsHeaders = {
 // ============================================================
 //
 // ============================================================
+// VISUAL POLARITY CHECK (v25.4 - PRE-FILTER)
+// ============================================================
+// Before performing ANY contrast ratio calculation, perform a visual
+// polarity check to detect obviously high-contrast text.
+//
+// Visual polarity detection:
+// 1. Compute average luminance of text glyph pixels
+// 2. Compute average luminance of the immediate surrounding region
+//
+// If:
+//   - Text luminance is significantly higher than background (light-on-dark), OR
+//   - Text luminance is significantly lower than background (dark-on-light),
+//   AND the luminance difference exceeds ≥ 40%,
+// Then:
+//   - Assume visual contrast is sufficient
+//   - Do NOT report A1 for this element
+//   - Skip contrast calculation entirely
+//
+// Only proceed to WCAG contrast computation when:
+//   - Text and background luminance are close, OR
+//   - Polarity is weak or ambiguous
+//
+// This optimization avoids false positives and unnecessary calculations
+// for obviously high-contrast text (e.g., white text on dark background).
+// ============================================================
+//
+// ============================================================
 // FOREGROUND PLAUSIBILITY GATE (v25.2)
 // ============================================================
 // If the sampled foreground color appears inconsistent with visual
@@ -537,7 +564,63 @@ type A1Sample = {
     reason?: string;
     resampledVariant?: 'lightest' | 'darkest';
   };
+  // Visual polarity check result (v25.4)
+  visualPolarityPass?: boolean; // True if element passes due to clear visual polarity
+  visualPolarityDiff?: number; // Luminance difference (0-1) between text and background
 };
+
+// ============================================================
+// VISUAL POLARITY CHECK (v25.4 - PRE-FILTER)
+// ============================================================
+// Performs a quick luminance polarity check to skip contrast calculation
+// for obviously high-contrast text (e.g., white text on dark background).
+//
+// Returns { pass: true } if luminance difference is ≥ 40%, meaning
+// contrast is visually sufficient and full WCAG calculation can be skipped.
+type VisualPolarityResult = {
+  pass: boolean; // True = skip contrast calculation (obviously sufficient)
+  fgLuma01: number; // Text luminance 0-1
+  bgLuma01: number; // Background luminance 0-1
+  lumaDiff: number; // Absolute difference 0-1
+  polarity: 'light-on-dark' | 'dark-on-light' | 'ambiguous';
+};
+
+const VISUAL_POLARITY_THRESHOLD = 0.40; // 40% luminance difference threshold
+
+function checkVisualPolarity(
+  textPixels: Array<{ r: number; g: number; b: number; luma255: number }>,
+  bgPixels: Array<{ r: number; g: number; b: number; luma255: number }>
+): VisualPolarityResult {
+  // Compute average luminance of text glyph pixels (normalized 0-1)
+  const avgTextLuma = textPixels.reduce((sum, p) => sum + p.luma255, 0) / textPixels.length / 255;
+  
+  // Compute average luminance of background pixels (normalized 0-1)
+  const avgBgLuma = bgPixels.reduce((sum, p) => sum + p.luma255, 0) / bgPixels.length / 255;
+  
+  // Calculate absolute luminance difference
+  const lumaDiff = Math.abs(avgTextLuma - avgBgLuma);
+  
+  // Determine polarity direction
+  let polarity: 'light-on-dark' | 'dark-on-light' | 'ambiguous';
+  if (avgTextLuma > avgBgLuma + VISUAL_POLARITY_THRESHOLD) {
+    polarity = 'light-on-dark';
+  } else if (avgBgLuma > avgTextLuma + VISUAL_POLARITY_THRESHOLD) {
+    polarity = 'dark-on-light';
+  } else {
+    polarity = 'ambiguous';
+  }
+  
+  // Pass if luminance difference exceeds threshold (40%)
+  const pass = lumaDiff >= VISUAL_POLARITY_THRESHOLD;
+  
+  return {
+    pass,
+    fgLuma01: avgTextLuma,
+    bgLuma01: avgBgLuma,
+    lumaDiff,
+    polarity,
+  };
+}
 
 // Simple k-means clustering for color grouping
 function kMeansCluster(pixels: Array<{ r: number; g: number; b: number; luma255: number }>, k: number, maxIter = 10): Array<{ centroid: RGB; members: typeof pixels }> {
@@ -877,6 +960,24 @@ function computeA1SampleWithFallbacks(
     return { error: 'Insufficient background pixels even after region expansion (up to +32px)' };
   }
 
+  // ====================================================================
+  // VISUAL POLARITY CHECK (v25.4 — PRE-FILTER)
+  // ====================================================================
+  // Before performing full WCAG contrast computation, check if the visual
+  // polarity is obviously sufficient (≥ 40% luminance difference).
+  // If polarity is clear, we can skip detailed calculation and mark as PASS.
+  //
+  // This optimization:
+  // - Avoids false positives for obviously high-contrast text
+  // - Reduces unnecessary computation for light-on-dark/dark-on-light text
+  // - Only proceeds to WCAG calculation when polarity is weak/ambiguous
+  // ====================================================================
+  const polarityCheck = checkVisualPolarity(textPixels, bgPixels);
+  
+  // If polarity is sufficient, we still compute full metrics but flag the pass
+  // This allows callers to skip reporting this element for A1
+  const visualPolarityPass = polarityCheck.pass;
+
   // Check background stability
   const bgLumas = bgPixels.map(p => p.luma255);
   const bgLumaStd = stddev(bgLumas);
@@ -1077,6 +1178,9 @@ function computeA1SampleWithFallbacks(
       reason: fgValidation.reason,
       resampledVariant: fgValidation.resampledVariant,
     },
+    // Visual polarity check (v25.4)
+    visualPolarityPass,
+    visualPolarityDiff: polarityCheck.lumaDiff,
   };
 }
 
@@ -1146,6 +1250,21 @@ function classifyA1Contrast(
   const contrastBest = sample.contrastRange?.max ?? sample.ratio;
   const contrastMin = sample.contrastRange?.min ?? sample.ratio;
   const primaryRatio = sample.ratio;
+  
+  // ============================================================
+  // STEP 0: VISUAL POLARITY PRE-FILTER (v25.4)
+  // ============================================================
+  // If visual polarity check passed (≥40% luminance difference),
+  // assume visual contrast is sufficient and skip further analysis.
+  // This catches obviously high-contrast text (light-on-dark, dark-on-light).
+  if (sample.visualPolarityPass === true) {
+    return {
+      classification: 'pass',
+      reason: `Visual polarity check passed: ${((sample.visualPolarityDiff ?? 0) * 100).toFixed(0)}% luminance difference exceeds 40% threshold`,
+      effectiveRatio: primaryRatio,
+      isBackgroundBased: false,
+    };
+  }
   
   // ============================================================
   // STEP 1: Check for PASS (worst-case still passes WCAG)
