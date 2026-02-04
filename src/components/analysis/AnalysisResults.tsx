@@ -267,10 +267,6 @@ export function AnalysisResults({
                             {violation.ruleId}
                           </span>
                           <span className="font-medium">{violation.ruleName}</span>
-                          <Badge className="gap-1 text-xs bg-destructive/10 text-destructive border-destructive/30">
-                            <ShieldCheck className="h-3 w-3" />
-                            Confirmed
-                          </Badge>
                         </div>
                         <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
                           {Math.round(violation.confidence * 100)}%
