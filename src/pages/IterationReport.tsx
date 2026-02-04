@@ -217,19 +217,19 @@ export default function IterationReport() {
 
       {/* Status Banner */}
       <div className={cn(
-        'flex items-center gap-4 p-4 rounded-lg border',
+        'flex items-center gap-4 p-6 rounded-lg border-2',
         analysis.isAcceptable
           ? 'bg-success/5 border-success/30'
           : 'bg-destructive/5 border-destructive/30'
       )}>
         {analysis.isAcceptable ? (
-          <CheckCircle className="h-8 w-8 text-success flex-shrink-0" />
+          <CheckCircle className="h-10 w-10 text-success flex-shrink-0" />
         ) : (
-          <XCircle className="h-8 w-8 text-destructive flex-shrink-0" />
+          <XCircle className="h-10 w-10 text-destructive flex-shrink-0" />
         )}
         <div className="flex-1">
           <h3 className={cn(
-            'font-semibold',
+            'text-xl font-semibold',
             analysis.isAcceptable ? 'text-success' : 'text-destructive'
           )}>
             {analysis.isAcceptable ? 'Acceptable' : 'Not Acceptable'}
@@ -284,44 +284,48 @@ export default function IterationReport() {
       <div className="grid grid-cols-4 gap-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
               Confirmed Issues
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-destructive">{analysis.confirmedViolations}</div>
-            <p className="text-xs text-muted-foreground">Affects convergence</p>
+            <div className="text-3xl font-bold text-destructive">{analysis.confirmedViolations}</div>
+            <p className="text-xs text-muted-foreground mt-1">Affects convergence</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
               Potential Risks
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-warning">{analysis.potentialRisks}</div>
-            <p className="text-xs text-muted-foreground">Non-blocking</p>
+            <div className="text-3xl font-bold text-warning">{analysis.potentialRisks}</div>
+            <p className="text-xs text-muted-foreground mt-1">Non-blocking</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
               Threshold
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{project.threshold}</div>
+            <div className="text-3xl font-bold">{project.threshold}</div>
+            <Progress
+              value={Math.min(100, (analysis.confirmedViolations / Math.max(project.threshold, 1)) * 100)}
+              className="mt-2 h-2"
+            />
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            <CardTitle className="text-sm font-medium text-muted-foreground">
               Selected Rules
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{iteration.selectedRules.length}</div>
+            <div className="text-3xl font-bold">{iteration.selectedRules.length}</div>
           </CardContent>
         </Card>
       </div>
@@ -330,13 +334,13 @@ export default function IterationReport() {
       {/* Violations by Category */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Violations by Category</CardTitle>
+          <CardTitle>Violations by Category</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
+          <div className="space-y-4">
             {Object.entries(analysis.violationsByCategory).map(([category, count]) => (
-              <div key={category} className="flex items-center gap-3">
-                <span className={cn('category-badge w-24 justify-center text-xs', categoryColors[category])}>
+              <div key={category} className="flex items-center gap-4">
+                <span className={cn('category-badge w-28 justify-center', categoryColors[category])}>
                   {category}
                 </span>
                 <div className="flex-1">
@@ -345,7 +349,7 @@ export default function IterationReport() {
                     className="h-2"
                   />
                 </div>
-                <span className="w-8 text-right font-mono text-sm">{count}</span>
+                <span className="w-12 text-right font-mono text-sm">{count}</span>
               </div>
             ))}
           </div>
@@ -359,11 +363,11 @@ export default function IterationReport() {
         const otherConfirmed = confirmedViolationsList.filter(v => !(v.ruleId === 'A1' && v.isA1Aggregated));
         
         return confirmedViolationsList.length > 0 && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             {/* Section Header */}
             <div className="flex items-center gap-2 pt-2">
               <AlertTriangle className="h-5 w-5 text-destructive" />
-              <h3 className="text-lg font-bold text-foreground">Confirmed Violations (Blocking)</h3>
+              <h3 className="text-xl font-bold text-foreground">Confirmed Violations (Blocking)</h3>
               <span className="text-sm text-muted-foreground">
                 — {confirmedViolationsList.length} issue{confirmedViolationsList.length !== 1 ? 's' : ''}
               </span>
@@ -371,7 +375,7 @@ export default function IterationReport() {
             
             {/* A1 Aggregated Card if exists */}
             {a1Aggregated && (
-              <A1AggregatedCard violation={a1Aggregated} compact />
+              <A1AggregatedCard violation={a1Aggregated} />
             )}
             
             {/* Other confirmed issues */}
@@ -381,25 +385,25 @@ export default function IterationReport() {
                   {otherConfirmed.map((violation, idx) => (
                     <div
                       key={idx}
-                      className="p-3 rounded-lg bg-destructive/5 border border-destructive/20 space-y-2"
+                      className="p-4 rounded-lg bg-destructive/5 border border-destructive/20 space-y-3"
                     >
-                      <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
+                          <span className={cn('category-badge flex-shrink-0 text-xs', categoryColors[violation.category])}>
                             {violation.ruleId}
                           </span>
                           <span className="font-medium text-sm">{violation.ruleName}</span>
                         </div>
-                        <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
                           {Math.round(violation.confidence * 100)}%
                         </span>
                       </div>
 
                       {violation.evidence && (
-                        <p className="text-xs text-muted-foreground italic">📍 {violation.evidence}</p>
+                        <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
                       )}
 
-                      <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
+                      <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
                     </div>
                   ))}
                 </CardContent>
@@ -417,28 +421,29 @@ export default function IterationReport() {
           !(v.ruleId === 'A1' && v.isA1Aggregated)
         );
         const hasPotentialIssues = a1Potential || nonA1Potential.length > 0;
+        const totalPotential = (a1Potential ? 1 : 0) + nonA1Potential.length;
         
         return hasPotentialIssues && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             {/* Section Header */}
             <div className="flex items-center gap-2 pt-2">
               <AlertCircle className="h-5 w-5 text-warning" />
-              <h3 className="text-lg font-bold text-foreground">Potential Risks (Non-blocking)</h3>
+              <h3 className="text-xl font-bold text-foreground">Potential Risks (Non-blocking)</h3>
               <span className="text-sm text-muted-foreground">
-                — {(a1Potential ? 1 : 0) + nonA1Potential.length} issue{((a1Potential ? 1 : 0) + nonA1Potential.length) !== 1 ? 's' : ''}
+                — {totalPotential} issue{totalPotential !== 1 ? 's' : ''}
               </span>
             </div>
             
             {/* A1 Potential Card */}
             {a1Potential && (
-              <A1AggregatedCard violation={a1Potential} compact />
+              <A1AggregatedCard violation={a1Potential} />
             )}
             
             {/* Other Potential Risks */}
             {nonA1Potential.length > 0 && (
               <Card className="border-warning/30">
                 <CardContent className="pt-4">
-                  <PotentialRisksSection violations={nonA1Potential} compact />
+                  <PotentialRisksSection violations={nonA1Potential} />
                 </CardContent>
               </Card>
             )}
