@@ -226,12 +226,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
             A1
           </span>
           <span className="font-medium">Insufficient Text Contrast</span>
-          {isConfirmed ? (
-            <Badge className="gap-1 text-xs bg-destructive/10 text-destructive border-destructive/30">
-              <ShieldCheck className="h-3 w-3" />
-              Confirmed
-            </Badge>
-          ) : (
+          {!isConfirmed && (
             <Badge className="gap-1 text-xs bg-warning/10 text-warning border-warning/30">
               Potential
             </Badge>
