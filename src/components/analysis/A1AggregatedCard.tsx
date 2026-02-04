@@ -218,7 +218,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
       isConfirmed ? 'border-destructive/30' : 'border-warning/30'
     )}>
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
-        <CardTitle className="flex items-center gap-2 text-sm flex-wrap">
+        <CardTitle className="flex items-center gap-3 flex-wrap">
           <span className={cn(
             'category-badge flex-shrink-0',
             isConfirmed ? 'category-accessibility' : 'bg-warning/10 text-warning border border-warning/20'
@@ -231,9 +231,9 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
               Potential
             </Badge>
           )}
-          <span className="text-xs text-muted-foreground">
+          <Badge variant="outline" className="text-xs">
             {elements.length} element{elements.length !== 1 ? 's' : ''}
-          </span>
+          </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground mt-1', compact ? 'text-xs' : 'text-sm')}>
           {violation.diagnosis}
