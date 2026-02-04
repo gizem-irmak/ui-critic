@@ -116,6 +116,42 @@ const corsHeaders = {
 // foreground is visually plausible for the text element.
 // ============================================================
 //
+// ============================================================
+// FOREGROUND SAMPLING VALIDATION (v25.3 - MANDATORY)
+// ============================================================
+// Before computing any contrast ratio, validate that the sampled
+// foreground color truly represents the rendered text glyphs.
+//
+// FOREGROUND SAMPLING RULES:
+// 1. Sample foreground colors ONLY from pixels strictly inside
+//    detected text glyph shapes. Do NOT sample from:
+//    - container backgrounds
+//    - padding
+//    - borders
+//    - shadows
+//    - anti-aliased outer edges
+//
+// 2. If sampled foreground is visually similar to surrounding background
+//    (luminance difference < 10%), assume foreground sampling is incorrect.
+//
+// 3. In such cases, re-sample using:
+//    - the lightest 20% of glyph pixels AND
+//    - the darkest 20% of glyph pixels
+//    Select the variant that produces the higher contrast ratio.
+//
+// 4. If re-sampling yields a foreground color that is visually
+//    inconsistent with rendered text appearance (e.g., dark text
+//    reported where text appears light), discard the measurement.
+//
+// CLASSIFICATION RULES:
+// - CONFIRMED: foreground AND background both confidently identified,
+//   contrast < threshold, sampled colors match visible appearance
+// - POTENTIAL: foreground extraction fails after re-sampling
+//   Reason code: FG_SAMPLING_UNRELIABLE
+// - Never report confirmed violation for text that is visually
+//   high-contrast (e.g., light text on dark background)
+// ============================================================
+//
 // Classification Logic (v25.2):
 //   - CONFIRMED: Background is certain AND best-case contrast < threshold
 //       AND foreground is plausible for the element type
@@ -205,6 +241,154 @@ function checkForegroundPlausibility(
   }
   
   return { isPlausible: true };
+}
+
+// ============================================================
+// FOREGROUND SAMPLING VALIDATION (v25.3 - MANDATORY)
+// ============================================================
+// Validates that sampled foreground color truly represents text glyphs.
+// If sampled foreground is too similar to background, re-samples using
+// lightest and darkest 20% of glyph pixels to find the true foreground.
+type ForegroundValidation = {
+  isValid: boolean;
+  fg: RGB;
+  fgHex: string;
+  fgLumaStd: number;
+  fgWorst: RGB;
+  fgWorstHex: string;
+  reason?: string; // Only set if validation failed
+  resampledVariant?: 'lightest' | 'darkest'; // Which re-sample was used
+};
+
+function validateAndResampleForeground(
+  textPixels: Array<{ r: number; g: number; b: number; luma255: number }>,
+  bg: RGB,
+  initialFg: RGB,
+  initialFgLumaStd: number
+): ForegroundValidation {
+  const bgLuma01 = relativeLuminance01(bg);
+  const fgLuma01 = relativeLuminance01(initialFg);
+  const lumaDiff = Math.abs(fgLuma01 - bgLuma01);
+  
+  // ====================================================================
+  // STEP 1: Check if initial foreground sampling is valid
+  // If luminance difference < 10% (0.1), foreground sampling is suspect
+  // ====================================================================
+  const LUMA_DIFF_THRESHOLD = 0.10; // 10% luminance difference
+  
+  if (lumaDiff >= LUMA_DIFF_THRESHOLD) {
+    // Initial sampling is valid - use it directly
+    const fgLumas = textPixels.slice(0, Math.ceil(textPixels.length * 0.35))
+      .map(p => p.luma255);
+    const fgWorstPercentile = 82.5;
+    const fgWorstLuma = percentile(fgLumas, fgWorstPercentile);
+    const fgWorstIdx = fgLumas.findIndex(v => Math.abs(v - fgWorstLuma) < 3) ?? Math.floor(fgLumas.length * 0.82);
+    const sorted = [...textPixels].sort((a, b) => a.luma255 - b.luma255);
+    const fgWorstPixel = sorted[Math.min(Math.floor(sorted.length * 0.35) - 1, sorted.length - 1)] || sorted[0];
+    
+    return {
+      isValid: true,
+      fg: initialFg,
+      fgHex: rgbToHex(initialFg),
+      fgLumaStd: initialFgLumaStd,
+      fgWorst: { r: fgWorstPixel.r, g: fgWorstPixel.g, b: fgWorstPixel.b },
+      fgWorstHex: rgbToHex({ r: fgWorstPixel.r, g: fgWorstPixel.g, b: fgWorstPixel.b }),
+    };
+  }
+  
+  // ====================================================================
+  // STEP 2: Re-sample using lightest and darkest 20% of glyph pixels
+  // ====================================================================
+  const sorted = [...textPixels].sort((a, b) => a.luma255 - b.luma255);
+  const sampleSize = Math.max(5, Math.floor(sorted.length * 0.20)); // 20% of pixels
+  
+  // Darkest 20% (traditional foreground for dark-on-light text)
+  const darkestPixels = sorted.slice(0, sampleSize);
+  const darkestFg: RGB = {
+    r: median(darkestPixels.map(p => p.r)),
+    g: median(darkestPixels.map(p => p.g)),
+    b: median(darkestPixels.map(p => p.b)),
+  };
+  
+  // Lightest 20% (foreground for light-on-dark text)
+  const lightestPixels = sorted.slice(-sampleSize);
+  const lightestFg: RGB = {
+    r: median(lightestPixels.map(p => p.r)),
+    g: median(lightestPixels.map(p => p.g)),
+    b: median(lightestPixels.map(p => p.b)),
+  };
+  
+  // Compute contrast for each variant
+  const darkestContrast = contrastRatioFromRgb(darkestFg, bg);
+  const lightestContrast = contrastRatioFromRgb(lightestFg, bg);
+  
+  // Select the variant with higher contrast (more plausible foreground)
+  const useLightest = lightestContrast > darkestContrast;
+  const resampledFg = useLightest ? lightestFg : darkestFg;
+  const resampledContrast = useLightest ? lightestContrast : darkestContrast;
+  const resampledPixels = useLightest ? lightestPixels : darkestPixels;
+  
+  // ====================================================================
+  // STEP 3: Validate the re-sampled foreground
+  // If contrast is still below 1.5:1, the measurement is unreliable
+  // ====================================================================
+  const MIN_PLAUSIBLE_CONTRAST = 1.5; // Minimum contrast for visible text
+  
+  if (resampledContrast < MIN_PLAUSIBLE_CONTRAST) {
+    // Re-sampling failed - foreground sampling is unreliable
+    return {
+      isValid: false,
+      fg: resampledFg,
+      fgHex: rgbToHex(resampledFg),
+      fgLumaStd: stddev(resampledPixels.map(p => p.luma255)),
+      fgWorst: resampledFg,
+      fgWorstHex: rgbToHex(resampledFg),
+      reason: 'Foreground color sampling unreliable for this element (re-sampling produced contrast < 1.5:1)',
+    };
+  }
+  
+  // ====================================================================
+  // STEP 4: Visual consistency check
+  // For dark-on-light (bg is light), foreground should be dark (and vice versa)
+  // If mismatch, the measurement may be unreliable
+  // ====================================================================
+  const resampledFgLuma = relativeLuminance01(resampledFg);
+  const bgIsLight = bgLuma01 > 0.5;
+  const fgIsDark = resampledFgLuma < 0.5;
+  
+  // Check for visual consistency: light bg should have dark fg, dark bg should have light fg
+  const isVisuallyConsistent = (bgIsLight && fgIsDark) || (!bgIsLight && !fgIsDark);
+  
+  if (!isVisuallyConsistent && resampledContrast < 3.0) {
+    // Visual inconsistency with low contrast - likely measurement error
+    return {
+      isValid: false,
+      fg: resampledFg,
+      fgHex: rgbToHex(resampledFg),
+      fgLumaStd: stddev(resampledPixels.map(p => p.luma255)),
+      fgWorst: resampledFg,
+      fgWorstHex: rgbToHex(resampledFg),
+      reason: 'Foreground color sampling visually inconsistent with rendered text appearance',
+      resampledVariant: useLightest ? 'lightest' : 'darkest',
+    };
+  }
+  
+  // Re-sampling succeeded
+  const resampledLumas = resampledPixels.map(p => p.luma255);
+  const fgWorstPercentile = 82.5;
+  const fgWorstLuma = percentile(resampledLumas, fgWorstPercentile);
+  const fgWorstIdx = resampledPixels.findIndex(p => Math.abs(p.luma255 - fgWorstLuma) < 3) ?? 0;
+  const fgWorstPixel = resampledPixels[clamp(fgWorstIdx, 0, resampledPixels.length - 1)];
+  
+  return {
+    isValid: true,
+    fg: resampledFg,
+    fgHex: rgbToHex(resampledFg),
+    fgLumaStd: stddev(resampledLumas),
+    fgWorst: { r: fgWorstPixel.r, g: fgWorstPixel.g, b: fgWorstPixel.b },
+    fgWorstHex: rgbToHex({ r: fgWorstPixel.r, g: fgWorstPixel.g, b: fgWorstPixel.b }),
+    resampledVariant: useLightest ? 'lightest' : 'darkest',
+  };
 }
 
 type RGB = { r: number; g: number; b: number };
@@ -347,6 +531,12 @@ type A1Sample = {
   bgWorstHex: string;
   // Background certainty assessment for confirmed vs heuristic classification
   backgroundCertainty: A1BackgroundCertainty;
+  // Foreground sampling validation (v25.3)
+  foregroundValidation?: {
+    isValid: boolean;
+    reason?: string;
+    resampledVariant?: 'lightest' | 'darkest';
+  };
 };
 
 // Simple k-means clustering for color grouping
@@ -754,20 +944,32 @@ function computeA1SampleWithFallbacks(
     };
   }
 
-  const fgLuma = relativeLuminance01(fg) * 255;
+  // ====================================================================
+  // FOREGROUND SAMPLING VALIDATION (v25.3 - MANDATORY)
+  // Before computing contrast, validate that foreground sampling is reliable.
+  // If sampled FG is too close to BG, re-sample using lightest/darkest 20%.
+  // ====================================================================
+  const fgValidation = validateAndResampleForeground(textPixels, bg, fg, fgLumaStd);
+  
+  // Use validated foreground (may be re-sampled)
+  const validatedFg = fgValidation.fg;
+  const validatedFgHex = fgValidation.fgHex;
+  const validatedFgLumaStd = fgValidation.fgLumaStd;
+  const validatedFgWorst = fgValidation.fgWorst;
+  const validatedFgWorstHex = fgValidation.fgWorstHex;
+
+  const fgLuma = relativeLuminance01(validatedFg) * 255;
   const bgLuma = relativeLuminance01(bg) * 255;
   const lumaDistance = Math.abs(bgLuma - fgLuma);
 
-  const ratio = contrastRatioFromRgb(fg, bg);
+  const ratio = contrastRatioFromRgb(validatedFg, bg);
   
   // Compute worst-case contrast using lightest plausible colors
-  const contrastWorst = contrastRatioFromRgb(fgWorst, bgWorst);
+  const contrastWorst = contrastRatioFromRgb(validatedFgWorst, bgWorst);
 
-  const fgHex = rgbToHex(fg);
   const bgHex = rgbToHex(bg);
-  const fgWorstHex = rgbToHex(fgWorst);
   const bgWorstHex = rgbToHex(bgWorst);
-  const fgRgb2 = hexToRgb(fgHex);
+  const fgRgb2 = hexToRgb(validatedFgHex);
   const bgRgb2 = hexToRgb(bgHex);
   const hexRecomputedRatio = fgRgb2 && bgRgb2 ? contrastRatioFromRgb(fgRgb2, bgRgb2) : ratio;
   const hexToRatioDelta = Math.abs(hexRecomputedRatio - ratio);
@@ -813,7 +1015,7 @@ function computeA1SampleWithFallbacks(
     }
     
     // Check if anti-aliasing dominates foreground sampling
-    const antiAliasingDominates = fgLumaStd > 20;
+    const antiAliasingDominates = validatedFgLumaStd > 20;
     if (antiAliasingDominates) {
       reasons.push('anti-aliasing dominates color sampling');
     }
@@ -829,7 +1031,7 @@ function computeA1SampleWithFallbacks(
     const isCertain = reasons.length === 0 && 
                       fallbackMethod !== 'range' && 
                       bgLumaStd <= 20 &&
-                      fgLumaStd <= 15;
+                      validatedFgLumaStd <= 15;
     
     return {
       isCertain,
@@ -844,15 +1046,15 @@ function computeA1SampleWithFallbacks(
   })();
 
   return {
-    fg,
+    fg: validatedFg,
     bg,
     ratio,
     fgPixelCount: fgPixels.length,
     bgPixelCount: bgPixels.length,
-    fgLumaStd,
+    fgLumaStd: validatedFgLumaStd,
     bgLumaStd,
     lumaDistance,
-    fgHex,
+    fgHex: validatedFgHex,
     bgHex,
     hexRecomputedRatio,
     hexToRatioDelta,
@@ -862,13 +1064,19 @@ function computeA1SampleWithFallbacks(
     contrastRange,
     bgCandidates,
     // Worst-case bounding fields
-    fgWorst,
+    fgWorst: validatedFgWorst,
     bgWorst,
     contrastWorst,
-    fgWorstHex,
+    fgWorstHex: validatedFgWorstHex,
     bgWorstHex,
     // Background certainty for classification
     backgroundCertainty,
+    // Foreground validation status (v25.3)
+    foregroundValidation: {
+      isValid: fgValidation.isValid,
+      reason: fgValidation.reason,
+      resampledVariant: fgValidation.resampledVariant,
+    },
   };
 }
 
@@ -901,12 +1109,17 @@ type A1ReliabilityResult = {
  * If foreground is near-white or near-background for a prominent element,
  * downgrade to POTENTIAL with reason FG_IMPLAUSIBLE.
  * 
+ * v25.3 KEY CHANGE: Foreground Sampling Validation
+ * If foreground sampling fails validation (too close to BG, re-sampling unsuccessful),
+ * downgrade to POTENTIAL with reason FG_SAMPLING_UNRELIABLE.
+ * 
  * Classification rules:
  * - CONFIRMED: Background is certain AND best-case contrast < threshold
- *              AND foreground is plausible for the element type
+ *              AND foreground is plausible AND foreground sampling is valid
  * - POTENTIAL: Background is uncertain (mixed, gradient, image, multiple candidates)
  *              OR contrast cannot be computed
  *              OR foreground sampling is implausible (FG_IMPLAUSIBLE)
+ *              OR foreground sampling validation failed (FG_SAMPLING_UNRELIABLE)
  * - PASS: Worst-case contrast >= threshold (even conservative estimate passes)
  * 
  * Confidence affects:
@@ -926,6 +1139,8 @@ function classifyA1Contrast(
   isBackgroundBased: boolean; // True if classification was based on background certainty
   isForegroundImplausible?: boolean; // True if downgraded due to FG_IMPLAUSIBLE
   fgImplausibilityReason?: string;
+  isForegroundSamplingUnreliable?: boolean; // True if downgraded due to FG_SAMPLING_UNRELIABLE (v25.3)
+  fgSamplingUnreliableReason?: string;
 } {
   const contrastWorst = sample.contrastWorst;
   const contrastBest = sample.contrastRange?.max ?? sample.ratio;
@@ -966,7 +1181,23 @@ function classifyA1Contrast(
     spansMultipleRegions;
   
   // ============================================================
-  // STEP 3: FOREGROUND PLAUSIBILITY GATE (v25.2)
+  // STEP 3: FOREGROUND SAMPLING VALIDATION (v25.3)
+  // ============================================================
+  // If foreground sampling validation failed (too close to BG, re-sampling
+  // unsuccessful), downgrade to POTENTIAL with FG_SAMPLING_UNRELIABLE.
+  if (sample.foregroundValidation && !sample.foregroundValidation.isValid) {
+    return {
+      classification: 'potential',
+      reason: sample.foregroundValidation.reason || 'Foreground color sampling unreliable for this element',
+      effectiveRatio: primaryRatio,
+      isBackgroundBased: false,
+      isForegroundSamplingUnreliable: true,
+      fgSamplingUnreliableReason: sample.foregroundValidation.reason,
+    };
+  }
+  
+  // ============================================================
+  // STEP 4: FOREGROUND PLAUSIBILITY GATE (v25.2)
   // ============================================================
   // If foreground is near-white or near-background for a prominent element,
   // the measurement is likely corrupted. Downgrade to POTENTIAL.
@@ -988,7 +1219,7 @@ function classifyA1Contrast(
   }
   
   // ============================================================
-  // STEP 4: CONFIRMED vs POTENTIAL based on background certainty
+  // STEP 5: CONFIRMED vs POTENTIAL based on background certainty
   // ============================================================
   
   if (!backgroundIsUncertain) {
@@ -1359,9 +1590,15 @@ async function computeA1ViolationsFromScreenshots(
     // ====================================================================
     // Per v23: Reason codes explain why classification is POTENTIAL
     // Per v25.2: Include FG_IMPLAUSIBLE when foreground sampling is unreliable
+    // Per v25.3: Include FG_SAMPLING_UNRELIABLE when foreground validation failed
     const reasonCodes: string[] = [];
     
-    // v25.2: Add FG_IMPLAUSIBLE first if it triggered the downgrade
+    // v25.3: Add FG_SAMPLING_UNRELIABLE first if foreground validation failed
+    if (classification.isForegroundSamplingUnreliable) {
+      reasonCodes.push('FG_SAMPLING_UNRELIABLE');
+    }
+    
+    // v25.2: Add FG_IMPLAUSIBLE if it triggered the downgrade
     if (classification.isForegroundImplausible) {
       reasonCodes.push('FG_IMPLAUSIBLE');
     }
@@ -1411,6 +1648,8 @@ async function computeA1ViolationsFromScreenshots(
           case 'BG_OVERLAY': return 'transparency or overlay suspected';
           case 'BG_TOO_SMALL_REGION': return 'insufficient background pixels';
           case 'FG_ANTIALIASING': return 'glyph sampling unstable';
+          case 'FG_IMPLAUSIBLE': return 'foreground sampling inconsistent with visual prominence';
+          case 'FG_SAMPLING_UNRELIABLE': return 'foreground color sampling unreliable (re-sampling failed)';
           default: return code;
         }
       }).join(', ');
@@ -2328,6 +2567,40 @@ Do NOT apply this exception if:
 - If text is in top navigation/primary menu → classify as "large" (navigation exception)
 - When uncertain about size, default to "normal" (conservative approach)
 - When uncertain about navigation, check visual context (header position, menu styling)
+
+## FOREGROUND SAMPLING VALIDATION (MANDATORY - v25.3)
+
+Before computing any contrast ratio, the backend will validate that the sampled
+foreground color truly represents the rendered text glyphs. The AI MUST NOT
+guess or estimate contrast ratios — only identify candidate text regions.
+
+**Foreground Sampling Rules (enforced by backend):**
+1. Sample foreground colors ONLY from pixels strictly inside detected text glyph shapes.
+   Do NOT sample from:
+   - Container backgrounds
+   - Padding areas
+   - Borders
+   - Shadows
+   - Anti-aliased outer edges
+
+2. If sampled foreground is visually similar to surrounding background
+   (luminance difference < 10%), foreground sampling is treated as incorrect.
+
+3. In such cases, the backend will re-sample using:
+   - The lightest 20% of glyph pixels AND
+   - The darkest 20% of glyph pixels
+   The variant producing higher contrast ratio is selected.
+
+4. If re-sampling yields a foreground color visually inconsistent with
+   rendered text appearance (e.g., dark text reported where text appears light),
+   the measurement is discarded.
+
+**Classification Rules (backend enforcement):**
+- CONFIRMED: Foreground AND background both confidently identified,
+  contrast < threshold, sampled colors match visible appearance.
+- POTENTIAL with FG_SAMPLING_UNRELIABLE: Foreground extraction fails after re-sampling.
+- Never report confirmed violation for text that is visually high-contrast
+  (e.g., light text on dark background appears correctly visible).
 
 "a1TextElements": [
   {

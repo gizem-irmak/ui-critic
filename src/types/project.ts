@@ -183,5 +183,7 @@ export type A1ReasonCode =
   | 'BG_OVERLAY'         // Transparency or overlay suspected
   | 'BG_TOO_SMALL_REGION'// Insufficient background pixels around text
   | 'FG_ANTIALIASING'    // Glyph sampling unstable due to anti-aliasing
+  | 'FG_IMPLAUSIBLE'     // Foreground sampling inconsistent with visual prominence (v25.2)
+  | 'FG_SAMPLING_UNRELIABLE' // Foreground color sampling unreliable after re-sampling (v25.3)
   | 'LOW_CONFIDENCE'     // Combined confidence below threshold
   | 'STATIC_ANALYSIS';   // Colors inferred from code, not rendered pixels
