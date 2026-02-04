@@ -225,7 +225,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           )}>
             A1
           </span>
-          <span className="font-medium text-sm">Insufficient Text Contrast</span>
+          <span className="font-bold text-base">Insufficient Text Contrast</span>
           <Badge className={cn(
             "gap-1 text-xs",
             isConfirmed 
@@ -235,7 +235,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
             {elements.length} element{elements.length !== 1 ? 's' : ''}
           </Badge>
         </CardTitle>
-        <p className={cn('text-muted-foreground mt-1', compact ? 'text-xs' : 'text-sm')}>
+        <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
           {violation.diagnosis}
         </p>
       </CardHeader>
