@@ -1,20 +1,46 @@
-# Memory: features/analysis-rules/a1-contrast-v25.2-tiered-thresholds
+# Memory: features/analysis-rules/a1-contrast-v25.4-visual-polarity
 
 Updated: just now
 
-## A1 — Insufficient Text Contrast (Tiered Thresholds v25.2)
+## A1 — Insufficient Text Contrast (v25.4 Visual Polarity Pre-Filter)
 
 This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
 
-### v25.3 Key Changes
+### v25.4 Key Changes
 
-1. **Comprehensive Mandatory Detection Scope**
-2. **Local-Priority Background Sampling**
-3. **Background-Based Classification (not confidence-based)**
-4. **Tiered WCAG Thresholds: 4.5:1 (normal) / 3.0:1 (large text)**
-5. **Navigation Exception (v25.1): Top-level nav uses 3:1 threshold**
-6. **Foreground Plausibility Gate (v25.2): Prevents false positives from bad sampling**
-7. **Foreground Sampling Validation (v25.3): Validates glyph-interior sampling with re-sampling fallback**
+1. **Visual Polarity Pre-Filter (v25.4)**: Skip contrast calculation for obviously high-contrast text
+2. **Comprehensive Mandatory Detection Scope**
+3. **Local-Priority Background Sampling**
+4. **Background-Based Classification (not confidence-based)**
+5. **Tiered WCAG Thresholds: 4.5:1 (normal) / 3.0:1 (large text)**
+6. **Navigation Exception (v25.1): Top-level nav uses 3:1 threshold**
+7. **Foreground Plausibility Gate (v25.2): Prevents false positives from bad sampling**
+8. **Foreground Sampling Validation (v25.3): Validates glyph-interior sampling with re-sampling fallback**
+
+---
+
+## Visual Polarity Pre-Filter (v25.4 — NEW)
+
+Before performing ANY contrast ratio calculation, perform a visual polarity check:
+
+1. Compute average luminance of text glyph pixels
+2. Compute average luminance of the immediate surrounding region
+
+**If:**
+- Text luminance is significantly higher than background (light-on-dark), OR
+- Text luminance is significantly lower than background (dark-on-light),
+- AND the luminance difference exceeds **≥ 40%**,
+
+**Then:**
+- Assume visual contrast is sufficient
+- Do NOT report A1 for this element
+- Skip contrast calculation entirely (PASS)
+
+**Only proceed to WCAG contrast computation when:**
+- Text and background luminance are close, OR
+- Polarity is weak or ambiguous
+
+**Rationale:** This optimization avoids false positives and unnecessary calculations for obviously high-contrast text (e.g., white text on dark background).
 
 ---
 
