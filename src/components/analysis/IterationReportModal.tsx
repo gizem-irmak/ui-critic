@@ -319,9 +319,9 @@ export function IterationReportModal({
               return nonA1Confirmed.length > 0 && (
                 <Card className="border-destructive/30">
                   <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-sm">
-                      <AlertTriangle className="h-4 w-4 text-destructive" />
-                      Other Confirmed Issues (Blocking) — {nonA1Confirmed.length}
+                    <CardTitle className="flex items-center gap-2 text-lg font-bold">
+                      <AlertTriangle className="h-5 w-5 text-destructive" />
+                      Confirmed Violations (Blocking) — {nonA1Confirmed.length}
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
@@ -377,13 +377,10 @@ export function IterationReportModal({
               return nonA1Potential.length > 0 && (
                 <Card className="border-warning/30">
                   <CardHeader className="pb-2">
-                    <CardTitle className="flex items-center gap-2 text-sm">
-                      <AlertCircle className="h-4 w-4 text-warning" />
-                      Other Potential Risks (Non-blocking) — {nonA1Potential.length}
+                    <CardTitle className="flex items-center gap-2 text-lg font-bold">
+                      <AlertCircle className="h-5 w-5 text-warning" />
+                      Potential Risks (Non-blocking) — {nonA1Potential.length}
                     </CardTitle>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Reported for awareness only. These findings do not affect convergence.
-                    </p>
                   </CardHeader>
                   <CardContent>
                     <PotentialRisksSection violations={nonA1Potential} compact />
