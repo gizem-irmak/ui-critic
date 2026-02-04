@@ -233,57 +233,58 @@ export function AnalysisResults({
         </CardContent>
       </Card>
 
-      {/* Aggregated A1 Confirmed Card (if exists) */}
-      {analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'confirmed') && (
-        <A1AggregatedCard 
-          violation={analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'confirmed')!} 
-        />
-      )}
-
-      {/* Other Confirmed Issues (Blocking) - excluding A1 aggregated */}
+      {/* Confirmed Issues (Blocking) - all confirmed violations */}
       {(() => {
-        const nonA1Confirmed = analysis.violations.filter(v => 
-          v.status !== 'potential' && 
-          !(v.ruleId === 'A1' && v.isA1Aggregated)
-        );
-        return nonA1Confirmed.length > 0 && (
+        const confirmedViolationsList = analysis.violations.filter(v => v.status !== 'potential');
+        const a1Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A1' && v.isA1Aggregated);
+        const otherConfirmed = confirmedViolationsList.filter(v => !(v.ruleId === 'A1' && v.isA1Aggregated));
+        
+        return confirmedViolationsList.length > 0 && (
           <Card className="border-destructive/30">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <AlertTriangle className="h-5 w-5 text-destructive" />
-                Other Confirmed Issues (Blocking) — {nonA1Confirmed.length}
+                Confirmed Issues (Blocking) — {confirmedViolationsList.length}
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {nonA1Confirmed.map((violation, idx) => (
-                  <div
-                    key={idx}
-                    className="p-4 rounded-lg bg-destructive/5 border border-destructive/20 space-y-3"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <span className={cn('category-badge flex-shrink-0', categoryColors[violation.category])}>
-                          {violation.ruleId}
+            <CardContent className="space-y-4">
+              {/* A1 Aggregated Card if exists */}
+              {a1Aggregated && (
+                <A1AggregatedCard violation={a1Aggregated} />
+              )}
+              
+              {/* Other confirmed issues */}
+              {otherConfirmed.length > 0 && (
+                <div className="space-y-3">
+                  {otherConfirmed.map((violation, idx) => (
+                    <div
+                      key={idx}
+                      className="p-4 rounded-lg bg-destructive/5 border border-destructive/20 space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className={cn('category-badge flex-shrink-0', categoryColors[violation.category])}>
+                            {violation.ruleId}
+                          </span>
+                          <span className="font-medium">{violation.ruleName}</span>
+                          <Badge className="gap-1 text-xs bg-destructive/10 text-destructive border-destructive/30">
+                            <ShieldCheck className="h-3 w-3" />
+                            Confirmed
+                          </Badge>
+                        </div>
+                        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
+                          {Math.round(violation.confidence * 100)}%
                         </span>
-                        <span className="font-medium">{violation.ruleName}</span>
-                        <Badge className="gap-1 text-xs bg-destructive/10 text-destructive border-destructive/30">
-                          <ShieldCheck className="h-3 w-3" />
-                          Confirmed
-                        </Badge>
                       </div>
-                      <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
-                        {Math.round(violation.confidence * 100)}%
-                      </span>
-                    </div>
 
-                    {violation.evidence && (
-                      <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
-                    )}
-                    <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
-                  </div>
-                ))}
-              </div>
+                      {violation.evidence && (
+                        <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
+                      )}
+                      <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         );
