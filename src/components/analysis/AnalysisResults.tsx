@@ -244,7 +244,7 @@ export function AnalysisResults({
             {/* Section Header */}
             <div className="flex items-center gap-2 pt-2">
               <AlertTriangle className="h-5 w-5 text-destructive" />
-              <h3 className="text-lg font-semibold">Confirmed Issues (Blocking)</h3>
+              <h3 className="text-xl font-bold text-foreground">Confirmed Violations (Blocking)</h3>
               <span className="text-sm text-muted-foreground">
                 — {confirmedViolationsList.length} issue{confirmedViolationsList.length !== 1 ? 's' : ''}
               </span>
@@ -304,9 +304,9 @@ export function AnalysisResults({
             {/* Section Header */}
             <div className="flex items-center gap-2 pt-2">
               <AlertCircle className="h-5 w-5 text-warning" />
-              <h3 className="text-lg font-semibold">Potential Issues</h3>
+              <h3 className="text-xl font-bold text-foreground">Potential Risks (Non-blocking)</h3>
               <span className="text-sm text-muted-foreground">
-                (Non-blocking — reported for awareness only)
+                — {totalPotential} issue{totalPotential !== 1 ? 's' : ''}
               </span>
             </div>
             

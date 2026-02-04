@@ -362,8 +362,8 @@ export default function IterationReport() {
           <div className="space-y-3">
             {/* Section Header */}
             <div className="flex items-center gap-2 pt-2">
-              <AlertTriangle className="h-4 w-4 text-destructive" />
-              <h3 className="text-base font-semibold">Confirmed Issues (Blocking)</h3>
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              <h3 className="text-lg font-bold text-foreground">Confirmed Violations (Blocking)</h3>
               <span className="text-sm text-muted-foreground">
                 — {confirmedViolationsList.length} issue{confirmedViolationsList.length !== 1 ? 's' : ''}
               </span>
@@ -422,10 +422,10 @@ export default function IterationReport() {
           <div className="space-y-3">
             {/* Section Header */}
             <div className="flex items-center gap-2 pt-2">
-              <AlertCircle className="h-4 w-4 text-warning" />
-              <h3 className="text-base font-semibold">Potential Issues</h3>
+              <AlertCircle className="h-5 w-5 text-warning" />
+              <h3 className="text-lg font-bold text-foreground">Potential Risks (Non-blocking)</h3>
               <span className="text-sm text-muted-foreground">
-                (Non-blocking — reported for awareness only)
+                — {(a1Potential ? 1 : 0) + nonA1Potential.length} issue{((a1Potential ? 1 : 0) + nonA1Potential.length) !== 1 ? 's' : ''}
               </span>
             </div>
             
