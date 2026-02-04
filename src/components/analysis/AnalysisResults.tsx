@@ -240,33 +240,36 @@ export function AnalysisResults({
         const otherConfirmed = confirmedViolationsList.filter(v => !(v.ruleId === 'A1' && v.isA1Aggregated));
         
         return confirmedViolationsList.length > 0 && (
-          <Card className="border-destructive/30">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-destructive" />
-                Confirmed Issues (Blocking) — {confirmedViolationsList.length}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* A1 Aggregated Card if exists */}
-              {a1Aggregated && (
-                <A1AggregatedCard violation={a1Aggregated} />
-              )}
-              
-              {/* Other confirmed issues */}
-              {otherConfirmed.length > 0 && (
-                <div className="space-y-3">
+          <div className="space-y-4">
+            {/* Section Header */}
+            <div className="flex items-center gap-2 pt-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              <h3 className="text-lg font-semibold">Confirmed Issues (Blocking)</h3>
+              <span className="text-sm text-muted-foreground">
+                — {confirmedViolationsList.length} issue{confirmedViolationsList.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            
+            {/* A1 Aggregated Card if exists */}
+            {a1Aggregated && (
+              <A1AggregatedCard violation={a1Aggregated} />
+            )}
+            
+            {/* Other confirmed issues */}
+            {otherConfirmed.length > 0 && (
+              <Card className="border-destructive/30">
+                <CardContent className="pt-4 space-y-3">
                   {otherConfirmed.map((violation, idx) => (
                     <div
                       key={idx}
                       className="p-4 rounded-lg bg-destructive/5 border border-destructive/20 space-y-3"
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <span className={cn('category-badge flex-shrink-0', categoryColors[violation.category])}>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className={cn('category-badge flex-shrink-0 text-xs', categoryColors[violation.category])}>
                             {violation.ruleId}
                           </span>
-                          <span className="font-medium">{violation.ruleName}</span>
+                          <span className="font-medium text-sm">{violation.ruleName}</span>
                         </div>
                         <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
                           {Math.round(violation.confidence * 100)}%
@@ -279,10 +282,10 @@ export function AnalysisResults({
                       <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
                     </div>
                   ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
+            )}
+          </div>
         );
       })()}
 
@@ -294,6 +297,7 @@ export function AnalysisResults({
           !(v.ruleId === 'A1' && v.isA1Aggregated)
         );
         const hasPotentialIssues = a1Potential || nonA1Potential.length > 0;
+        const totalPotential = (a1Potential ? 1 : 0) + nonA1Potential.length;
         
         return hasPotentialIssues && (
           <div className="space-y-4">
@@ -314,12 +318,7 @@ export function AnalysisResults({
             {/* Other Potential Risks */}
             {nonA1Potential.length > 0 && (
               <Card className="border-warning/30">
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    Other Potential Risks — {nonA1Potential.length}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
+                <CardContent className="pt-4">
                   <PotentialRisksSection violations={nonA1Potential} />
                 </CardContent>
               </Card>
