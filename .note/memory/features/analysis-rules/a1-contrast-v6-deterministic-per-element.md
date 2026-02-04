@@ -255,13 +255,52 @@ Every Potential finding MUST include at least one reason code explaining **why i
 Each A1 entry MUST include:
 - Element identifier (screen + component or bounding box)
 - Text snippet (if available)
+- UI role (e.g., metadata, label, badge, navigation link, heading)
+- Pattern group (e.g., course card metadata, filter panel, header section)
 - Foreground color + confidence
 - Background: dominant color OR candidate list OR "unmeasurable"
 - Contrast: exact ratio OR min–max range OR "not measurable"
 - WCAG threshold applied
 - Classification: Confirmed—Blocking OR Potential—Non-blocking
 - Explicit uncertainty reason(s) if potential
-- Short, actionable guidance
+- **Corrective prompt (ONLY for confirmed violations)** — see below
+
+---
+
+## Corrective Prompt Requirements (Confirmed A1 Only)
+
+**CRITICAL**: Corrective prompts are ONLY generated for confirmed violations. Potential findings do NOT include corrective prompts.
+
+Each confirmed A1 element MUST have a specific corrective prompt that:
+
+1. **Explicitly mentions**:
+   - The text content (e.g., "Graduate", "3 credits")
+   - The UI role/type (e.g., metadata, label, badge, navigation link)
+   - The location or grouping (e.g., course card metadata, filter panel, header section)
+
+2. **Describes why the violation occurs**:
+   - Reference contrast being below WCAG AA threshold
+   - Mention the specific threshold used (4.5:1 or 3.0:1)
+
+3. **Suggests a concrete, pattern-oriented fix**:
+   - Apply to the entire group of similar elements, not just the single instance
+   - Recommend darkening text, lightening background, or using higher-contrast design tokens
+   - Ensure all similar elements in the pattern meet WCAG 2.1 AA
+
+### Example Corrective Prompt Structure
+
+```
+The [UI_ROLE] text '[TEXT_CONTENT]' within the [PATTERN_GROUP] uses a foreground color with insufficient contrast against its background.
+Increase text contrast for all [UI_ROLE] elements in this group by darkening the text color, lightening the background, or applying a higher-contrast design token so that all [PATTERN_GROUP] elements consistently meet WCAG 2.1 AA (≥ [THRESHOLD]:1).
+```
+
+### Constraints
+
+- Do NOT suggest fixing only one element in isolation if it belongs to a repeated UI pattern
+- Do NOT use vague advice such as "improve contrast"
+- Do NOT mention implementation details (CSS values, hex codes) unless already reported elsewhere
+- Keep the corrective prompt actionable, concise, and pattern-oriented
+- Potential findings NEVER include corrective prompts — they display reason codes instead
 
 ---
 

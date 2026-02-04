@@ -180,7 +180,15 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
               <p className="text-foreground leading-relaxed">{element.explanation}</p>
             </div>
             
-            {/* Reason codes (for potential findings) */}
+            {/* Corrective prompt (ONLY for confirmed violations) */}
+            {isConfirmed && element.correctivePrompt && (
+              <div className="pt-2 mt-2 border-t border-border/50">
+                <p className="font-medium text-foreground text-xs mb-1">🔧 Corrective Action</p>
+                <p className="text-foreground/90 leading-relaxed">{element.correctivePrompt}</p>
+              </div>
+            )}
+            
+            {/* Reason codes (for potential findings only — no corrective prompts) */}
             {!isConfirmed && element.reasonCodes && element.reasonCodes.length > 0 && (
               <div className="flex items-start gap-2 pt-1">
                 <Info className="h-3 w-3 text-warning mt-0.5 flex-shrink-0" />
