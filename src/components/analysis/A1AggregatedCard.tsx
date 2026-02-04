@@ -231,7 +231,12 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
               Potential
             </Badge>
           )}
-          <Badge variant="outline" className="text-xs">
+          <Badge className={cn(
+            "gap-1 text-xs",
+            isConfirmed 
+              ? "bg-destructive/10 text-destructive border-destructive/30" 
+              : "bg-warning/10 text-warning border-warning/30"
+          )}>
             {elements.length} element{elements.length !== 1 ? 's' : ''}
           </Badge>
         </CardTitle>
