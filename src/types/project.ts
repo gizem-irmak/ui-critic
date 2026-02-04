@@ -144,6 +144,8 @@ export interface A1ElementSubItem {
   elementLabel: string; // e.g., "Header subtitle", "Credits badge"
   textSnippet?: string; // Sample text if available
   location: string; // screen + bbox or component path
+  uiRole?: string; // Semantic UI role: "metadata", "label", "badge", "navigation link", "heading", etc.
+  patternGroup?: string; // UI pattern group: "course card metadata", "filter panel", "header section", etc.
   screenshotIndex?: number;
   bbox?: { x: number; y: number; w: number; h: number };
   
@@ -167,6 +169,10 @@ export interface A1ElementSubItem {
   // Classification explanation
   explanation: string; // Why this element is confirmed or potential
   reasonCodes?: A1ReasonCode[]; // Mandatory for potential
+  
+  // Element-specific corrective prompt (ONLY for confirmed violations)
+  // Must be pattern-oriented: mentions text content, UI role, location, and suggests group-wide fix
+  correctivePrompt?: string;
   
   // Optional "near-threshold" tag (within small margin of threshold, NOT for far-below values)
   nearThreshold?: boolean;
