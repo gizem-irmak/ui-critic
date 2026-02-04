@@ -287,11 +287,26 @@ Each confirmed A1 element MUST have a specific corrective prompt that:
    - Recommend darkening text, lightening background, or using higher-contrast design tokens
    - Ensure all similar elements in the pattern meet WCAG 2.1 AA
 
-### Example Corrective Prompt Structure
+### Corrective Prompt Format (MANDATORY)
 
 ```
-The [UI_ROLE] text '[TEXT_CONTENT]' within the [PATTERN_GROUP] uses a foreground color with insufficient contrast against its background.
-Increase text contrast for all [UI_ROLE] elements in this group by darkening the text color, lightening the background, or applying a higher-contrast design token so that all [PATTERN_GROUP] elements consistently meet WCAG 2.1 AA (≥ [THRESHOLD]:1).
+Corrective Prompt — A1: Insufficient Text Contrast
+
+[Element type] '[Text content]' ([Location / UI group])
+
+Issue reason: [Measured contrast] vs [Required threshold]
+
+Recommended fix: [Specific design change applied consistently to this UI group]
+```
+
+### Example Corrective Prompt
+
+```
+metadata 'Graduate' (course card metadata)
+
+Issue reason: 3.2:1 measured vs 4.5:1 required (WCAG AA)
+
+Recommended fix: Increase text contrast for all metadata elements in this group (currently #9CA3AF on #FFFFFF) by darkening the text color, lightening the background, or applying a higher-contrast design token so that all similar elements consistently meet WCAG 2.1 AA (≥ 4.5:1).
 ```
 
 ### Constraints

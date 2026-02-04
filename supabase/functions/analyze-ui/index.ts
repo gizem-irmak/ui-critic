@@ -3676,10 +3676,43 @@ serve(async (req) => {
           ? `Verify contrast with browser DevTools. If ratio < ${item.thresholdUsed || 4.5}:1, adjust colors.`
           : `Consider increasing contrast slightly above ${item.thresholdUsed || 4.5}:1 for safety margin.`;
       
-      // Corrective prompt only for confirmed violations
-      const correctivePrompt = item.status === 'confirmed'
-        ? `Replace ${item.foregroundHex || 'low-contrast text color'} with a higher-contrast alternative (e.g., text-gray-700 or theme foreground) to meet WCAG AA ${item.thresholdUsed || 4.5}:1 minimum.`
-        : ''; // No mandatory corrective prompt for potential/borderline
+      // ============================================================
+      // ELEMENT-SPECIFIC CORRECTIVE PROMPT (CONFIRMED A1 ONLY)
+      // ============================================================
+      // Format:
+      //   Corrective Prompt — A1: Insufficient Text Contrast
+      //   [Element type] '[Text content]' ([Location / UI group])
+      //   Issue reason: [Measured contrast] vs [Required threshold]
+      //   Recommended fix: [Specific design change applied consistently to this UI group]
+      // ============================================================
+      const correctivePrompt = (() => {
+        if (item.status !== 'confirmed') {
+          return ''; // No corrective prompt for potential/borderline
+        }
+        
+        // Determine element type from role or description
+        const elementType = item.elementRole || 'text element';
+        
+        // Extract text content hint from element description or location
+        const textContent = item.elementDescription || item.location || 'element';
+        
+        // Determine UI group/location context
+        const uiGroup = item.location || 'UI section';
+        
+        // Build issue reason with measured contrast vs threshold
+        const threshold = item.thresholdUsed || 4.5;
+        const issueReason = item.contrastRatio !== undefined
+          ? `${item.contrastRatio.toFixed(1)}:1 measured vs ${threshold}:1 required (WCAG AA)`
+          : `Contrast below ${threshold}:1 required (WCAG AA)`;
+        
+        // Build recommended fix that applies to UI group
+        const colorContext = item.foregroundHex && item.backgroundHex
+          ? ` (currently ${item.foregroundHex} on ${item.backgroundHex})`
+          : '';
+        const recommendedFix = `Increase text contrast for all ${elementType} elements in this group${colorContext} by darkening the text color, lightening the background, or applying a higher-contrast design token so that all similar elements consistently meet WCAG 2.1 AA (≥ ${threshold}:1).`;
+        
+        return `${elementType} '${textContent}' (${uiGroup})\n\nIssue reason: ${issueReason}\n\nRecommended fix: ${recommendedFix}`;
+      })();
       
       // Build per-element violation
       perElementA1Violations.push({
@@ -4357,10 +4390,18 @@ serve(async (req) => {
       const threshold = v.thresholdUsed || 4.5;
       const isNearThreshold = ratio !== undefined && ratio >= (threshold - 0.3) && ratio < threshold;
       
+      // Extract uiRole from elementRole
+      const uiRole = v.elementRole || 'text element';
+      
+      // Extract patternGroup from location or context
+      const patternGroup = v.location || 'UI section';
+      
       return {
         elementLabel: v.elementDescription || v.elementRole || 'Text element',
         textSnippet: v.textSnippet,
         location: v.evidence || v.elementIdentifier || 'Unknown location',
+        uiRole, // Semantic UI role
+        patternGroup, // UI pattern group
         screenshotIndex: parseInt(v.evidence?.match(/Screenshot #(\d+)/)?.[1] || '1'),
         foregroundHex: v.foregroundHex,
         foregroundConfidence: v.foregroundConfidence,
@@ -4375,6 +4416,8 @@ serve(async (req) => {
         reasonCodes: v.reasonCodes,
         nearThreshold: isNearThreshold,
         deduplicationKey: dedupeKey,
+        // Element-specific corrective prompt (from per-element violation)
+        correctivePrompt: v.correctivePrompt,
       };
     };
     
