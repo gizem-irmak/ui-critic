@@ -2887,62 +2887,96 @@ serve(async (req) => {
       },
     ];
 
-    // Call the AI gateway with vision capabilities
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-pro", // Using pro for better vision analysis
-        messages,
-        temperature: 0.3, // Lower temperature for more consistent analysis
-        max_tokens: 16000, // Ensure sufficient tokens for complete response
-      }),
-    });
+    // Call the AI gateway with vision capabilities and automatic retry
+    const MAX_RETRIES = 3;
+    let lastError: Error | null = null;
+    let responseText = "";
+    let aiResponse: any = null;
 
-    if (!response.ok) {
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ success: false, error: "Rate limit exceeded. Please try again later." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        console.log(`AI gateway call attempt ${attempt}/${MAX_RETRIES}`);
+        
+        const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${LOVABLE_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "google/gemini-2.5-pro", // Using pro for better vision analysis
+            messages,
+            temperature: 0.3, // Lower temperature for more consistent analysis
+            max_tokens: 16000, // Ensure sufficient tokens for complete response
+          }),
+        });
+
+        if (!response.ok) {
+          if (response.status === 429) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Rate limit exceeded. Please try again later." }),
+              { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          if (response.status === 402) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Payment required. Please add credits to your workspace." }),
+              { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          const errorText = await response.text();
+          console.error("AI gateway error:", response.status, errorText);
+          throw new Error(`AI gateway error: ${response.status}`);
+        }
+
+        // Handle potentially truncated or empty AI response body
+        responseText = await response.text();
+        if (!responseText || responseText.trim().length === 0) {
+          console.error(`AI gateway returned empty response body (attempt ${attempt})`);
+          throw new Error("AI gateway returned empty response");
+        }
+
+        try {
+          aiResponse = JSON.parse(responseText);
+        } catch (jsonParseError) {
+          console.error("Failed to parse AI gateway response:", responseText.substring(0, 500));
+          console.error("Parse error:", jsonParseError);
+          throw new Error("AI gateway returned invalid JSON");
+        }
+
+        const content = aiResponse.choices?.[0]?.message?.content;
+        if (!content) {
+          throw new Error("No content in AI response");
+        }
+
+        // Success - exit retry loop
+        console.log(`AI response received on attempt ${attempt}, parsing...`);
+        lastError = null;
+        break;
+
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        console.error(`Attempt ${attempt} failed:`, lastError.message);
+        
+        if (attempt < MAX_RETRIES) {
+          // Exponential backoff: 1s, 2s, 4s
+          const delay = Math.pow(2, attempt - 1) * 1000;
+          console.log(`Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
       }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ success: false, error: "Payment required. Please add credits to your workspace." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      const errorText = await response.text();
-      console.error("AI gateway error:", response.status, errorText);
-      throw new Error(`AI gateway error: ${response.status}`);
     }
 
-    // Handle potentially truncated or empty AI response body
-    const responseText = await response.text();
-    if (!responseText || responseText.trim().length === 0) {
-      console.error("AI gateway returned empty response body");
-      throw new Error("AI gateway returned empty response - please retry");
+    if (lastError || !aiResponse) {
+      throw new Error(lastError?.message || "AI gateway failed after all retries - please retry");
     }
 
-    let aiResponse;
-    try {
-      aiResponse = JSON.parse(responseText);
-    } catch (jsonParseError) {
-      console.error("Failed to parse AI gateway response:", responseText.substring(0, 500));
-      console.error("Parse error:", jsonParseError);
-      throw new Error("AI gateway returned invalid JSON - please retry");
-    }
     const content = aiResponse.choices?.[0]?.message?.content;
     const finishReason = aiResponse.choices?.[0]?.finish_reason;
 
     if (!content) {
       throw new Error("No content in AI response");
     }
-
-    console.log("AI response received, parsing...");
 
     // Check if response was truncated due to token limits
     if (finishReason === 'length') {
