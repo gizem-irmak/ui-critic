@@ -286,34 +286,45 @@ export function AnalysisResults({
         );
       })()}
 
-      {/* Aggregated A1 Potential Card (if exists) */}
-      {analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential') && (
-        <A1AggregatedCard 
-          violation={analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential')!} 
-        />
-      )}
-
-      {/* Other Potential Risks (Non-blocking) - excluding A1 aggregated */}
+      {/* Potential Issues Section */}
       {(() => {
+        const a1Potential = analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential');
         const nonA1Potential = analysis.violations.filter(v => 
           v.status === 'potential' && 
           !(v.ruleId === 'A1' && v.isA1Aggregated)
         );
-        return nonA1Potential.length > 0 && (
-          <Card className="border-warning/30">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2">
-                <AlertCircle className="h-5 w-5 text-warning" />
-                Other Potential Risks (Non-blocking) — {nonA1Potential.length}
-              </CardTitle>
-              <p className="text-sm text-muted-foreground mt-1">
-                Reported for awareness only. These findings do not affect convergence.
-              </p>
-            </CardHeader>
-            <CardContent>
-              <PotentialRisksSection violations={nonA1Potential} />
-            </CardContent>
-          </Card>
+        const hasPotentialIssues = a1Potential || nonA1Potential.length > 0;
+        
+        return hasPotentialIssues && (
+          <div className="space-y-4">
+            {/* Section Header */}
+            <div className="flex items-center gap-2 pt-2">
+              <AlertCircle className="h-5 w-5 text-warning" />
+              <h3 className="text-lg font-semibold">Potential Issues</h3>
+              <span className="text-sm text-muted-foreground">
+                (Non-blocking — reported for awareness only)
+              </span>
+            </div>
+            
+            {/* A1 Potential Card */}
+            {a1Potential && (
+              <A1AggregatedCard violation={a1Potential} />
+            )}
+            
+            {/* Other Potential Risks */}
+            {nonA1Potential.length > 0 && (
+              <Card className="border-warning/30">
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    Other Potential Risks — {nonA1Potential.length}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <PotentialRisksSection violations={nonA1Potential} />
+                </CardContent>
+              </Card>
+            )}
+          </div>
         );
       })()}
 
