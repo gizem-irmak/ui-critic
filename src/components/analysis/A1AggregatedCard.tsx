@@ -218,19 +218,14 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
       isConfirmed ? 'border-destructive/30' : 'border-warning/30'
     )}>
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
-        <CardTitle className="flex items-center gap-3 flex-wrap">
+        <CardTitle className="flex items-center gap-2 flex-wrap text-base">
           <span className={cn(
-            'category-badge flex-shrink-0',
+            'category-badge flex-shrink-0 text-xs',
             isConfirmed ? 'category-accessibility' : 'bg-warning/10 text-warning border border-warning/20'
           )}>
             A1
           </span>
-          <span className="font-medium">Insufficient Text Contrast</span>
-          {!isConfirmed && (
-            <Badge className="gap-1 text-xs bg-warning/10 text-warning border-warning/30">
-              Potential
-            </Badge>
-          )}
+          <span className="font-medium text-sm">Insufficient Text Contrast</span>
           <Badge className={cn(
             "gap-1 text-xs",
             isConfirmed 
