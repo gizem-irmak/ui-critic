@@ -25,43 +25,79 @@ export function AnalysisResults({
 }: AnalysisResultsProps) {
   const [copied, setCopied] = useState(false);
 
-  // Deduplicate prompts: group by prompt text, collect unique hints
+  // Collect ALL corrective prompts from confirmed violations, including A1 element-level prompts
   // ONLY include confirmed violations - potential risks don't get corrective prompts
   const confirmedViolations = analysis.violations.filter(v => v.status === 'confirmed' || v.status !== 'potential');
   
-  const deduplicatedPrompts = (() => {
-    const promptMap = new Map<string, { 
-      prompt: string; 
-      hints: Set<string>; 
-      ruleIds: Set<string>;
-      ruleNames: Set<string>;
+  // Group prompts by rule code, with element references for traceability
+  const groupedPrompts = (() => {
+    const ruleGroups = new Map<string, {
+      ruleId: string;
+      ruleName: string;
       category: string;
+      prompts: Array<{
+        prompt: string;
+        elementRef?: string; // e.g., "navigation 'Departments' — Screenshot #1"
+      }>;
     }>();
     
     for (const v of confirmedViolations) {
-      const key = v.correctivePrompt;
-      if (!promptMap.has(key)) {
-        promptMap.set(key, {
-          prompt: v.correctivePrompt,
-          hints: new Set(),
-          ruleIds: new Set([v.ruleId]),
-          ruleNames: new Set([v.ruleName]),
-          category: v.category,
-        });
+      // Handle A1 aggregated violations with element-level prompts
+      if (v.ruleId === 'A1' && v.isA1Aggregated && v.a1Elements) {
+        if (!ruleGroups.has('A1')) {
+          ruleGroups.set('A1', {
+            ruleId: 'A1',
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+          });
+        }
+        const group = ruleGroups.get('A1')!;
+        
+        for (const el of v.a1Elements) {
+          if (el.correctivePrompt) {
+            // Build element reference from available data
+            const elementRef = [
+              el.uiRole || el.elementLabel,
+              el.textSnippet ? `'${el.textSnippet}'` : null,
+              el.location ? `— ${el.location}` : null,
+            ].filter(Boolean).join(' ');
+            
+            group.prompts.push({
+              prompt: el.correctivePrompt,
+              elementRef: elementRef || el.elementLabel,
+            });
+          }
+        }
+      } else if (v.correctivePrompt) {
+        // Handle non-A1 violations
+        const key = v.ruleId;
+        if (!ruleGroups.has(key)) {
+          ruleGroups.set(key, {
+            ruleId: v.ruleId,
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+          });
+        }
+        const group = ruleGroups.get(key)!;
+        
+        // Deduplicate by prompt text within the same rule
+        const existing = group.prompts.find(p => p.prompt === v.correctivePrompt);
+        if (!existing) {
+          group.prompts.push({
+            prompt: v.correctivePrompt,
+            elementRef: v.contextualHint || v.evidence,
+          });
+        }
       }
-      const entry = promptMap.get(key)!;
-      if (v.contextualHint) {
-        entry.hints.add(v.contextualHint);
-      }
-      entry.ruleIds.add(v.ruleId);
-      entry.ruleNames.add(v.ruleName);
     }
     
-    return Array.from(promptMap.values());
+    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0);
   })();
 
   const copyPrompt = async () => {
-    if (!confirmedViolations.length) return;
+    if (!groupedPrompts.length) return;
     
     // Group by category for clipboard - only confirmed violations
     const categoryLabels: Record<string, string> = {
@@ -70,8 +106,8 @@ export function AnalysisResults({
       ethics: 'Ethics'
     };
     
-    const grouped: Record<string, typeof deduplicatedPrompts> = {};
-    for (const item of deduplicatedPrompts) {
+    const grouped: Record<string, typeof groupedPrompts> = {};
+    for (const item of groupedPrompts) {
       if (!grouped[item.category]) grouped[item.category] = [];
       grouped[item.category].push(item);
     }
@@ -82,15 +118,13 @@ export function AnalysisResults({
     for (const cat of categoryOrder) {
       if (!grouped[cat]?.length) continue;
       text += `\n${categoryLabels[cat]}:\n`;
-      for (const item of grouped[cat]) {
-        text += `- ${item.prompt}\n`;
-        const hintsArray = Array.from(item.hints);
-        if (hintsArray.length === 1) {
-          text += `  Context: ${hintsArray[0]}\n`;
-        } else if (hintsArray.length > 1) {
-          for (const hint of hintsArray) {
-            text += `  • ${hint}\n`;
+      for (const ruleGroup of grouped[cat]) {
+        text += `\n[${ruleGroup.ruleId}] ${ruleGroup.ruleName}:\n`;
+        for (const item of ruleGroup.prompts) {
+          if (item.elementRef) {
+            text += `  • ${item.elementRef}\n`;
           }
+          text += `    ${item.prompt.replace(/\n/g, '\n    ')}\n`;
         }
       }
     }
@@ -338,8 +372,8 @@ export function AnalysisResults({
         </Card>
       )}
 
-      {/* Corrective Prompt Section - ONLY for confirmed violations */}
-      {confirmedViolations.length > 0 && (
+      {/* Corrective Prompt Section - ONLY for confirmed violations, grouped by rule */}
+      {groupedPrompts.length > 0 && (
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>Corrective Prompts</CardTitle>
@@ -362,47 +396,44 @@ export function AnalysisResults({
               )}
             </Button>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {deduplicatedPrompts.map((item, idx) => {
-              const hintsArray = Array.from(item.hints);
-              const ruleIdsArray = Array.from(item.ruleIds);
-              const ruleNamesArray = Array.from(item.ruleNames);
-              
-              return (
-                <div key={idx} className="space-y-2 pb-4 border-b border-border last:border-0 last:pb-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {ruleIdsArray.map((ruleId, rIdx) => (
-                      <span key={ruleId} className={cn(
-                        'category-badge flex-shrink-0 text-xs',
-                        categoryColors[item.category]
-                      )}>
-                        {ruleId}
-                      </span>
-                    ))}
-                    <span className="text-sm font-medium">
-                      {ruleNamesArray.length === 1 
-                        ? ruleNamesArray[0] 
-                        : `${ruleNamesArray[0]} (+${ruleNamesArray.length - 1} more)`}
-                    </span>
-                  </div>
-                  <p className="text-sm bg-primary/5 p-3 rounded border-l-2 border-primary">
-                    {item.prompt}
-                  </p>
-                  {hintsArray.length === 1 && (
-                    <p className="text-xs text-muted-foreground italic pl-1">
-                      💡 {hintsArray[0]}
-                    </p>
-                  )}
-                  {hintsArray.length > 1 && (
-                    <ul className="text-xs text-muted-foreground italic pl-1 space-y-1">
-                      {hintsArray.map((hint, hIdx) => (
-                        <li key={hIdx}>💡 {hint}</li>
-                      ))}
-                    </ul>
+          <CardContent className="space-y-6">
+            {groupedPrompts.map((group, idx) => (
+              <div key={idx} className="space-y-3 pb-4 border-b border-border last:border-0 last:pb-0">
+                {/* Rule header */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className={cn(
+                    'category-badge flex-shrink-0 text-xs',
+                    categoryColors[group.category]
+                  )}>
+                    {group.ruleId}
+                  </span>
+                  <span className="text-sm font-medium">{group.ruleName}</span>
+                  {group.prompts.length > 1 && (
+                    <Badge variant="outline" className="text-xs">
+                      {group.prompts.length} elements
+                    </Badge>
                   )}
                 </div>
-              );
-            })}
+                
+                {/* Individual prompts with element references */}
+                <div className="space-y-3">
+                  {group.prompts.map((item, pIdx) => (
+                    <div key={pIdx} className="space-y-1">
+                      {/* Element reference */}
+                      {item.elementRef && (
+                        <p className="text-xs text-muted-foreground font-medium pl-1">
+                          📍 {item.elementRef}
+                        </p>
+                      )}
+                      {/* Prompt text */}
+                      <div className="text-sm bg-primary/5 p-3 rounded border-l-2 border-primary whitespace-pre-line">
+                        {item.prompt}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </CardContent>
         </Card>
       )}
