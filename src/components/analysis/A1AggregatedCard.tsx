@@ -180,11 +180,15 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
               <p className="text-foreground leading-relaxed">{element.explanation}</p>
             </div>
             
-            {/* Corrective prompt (ONLY for confirmed violations) */}
+            {/* Corrective prompt (ONLY for confirmed violations) — structured format */}
             {isConfirmed && element.correctivePrompt && (
-              <div className="pt-2 mt-2 border-t border-border/50">
-                <p className="font-medium text-foreground text-xs mb-1">🔧 Corrective Action</p>
-                <p className="text-foreground/90 leading-relaxed">{element.correctivePrompt}</p>
+              <div className="pt-2 mt-2 border-t border-border/50 space-y-2">
+                <p className="font-semibold text-foreground text-sm">
+                  🔧 Corrective Prompt — A1: Insufficient Text Contrast
+                </p>
+                <div className="text-foreground/90 leading-relaxed whitespace-pre-line">
+                  {element.correctivePrompt}
+                </div>
               </div>
             )}
             
