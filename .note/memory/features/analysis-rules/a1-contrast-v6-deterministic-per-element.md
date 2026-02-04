@@ -6,7 +6,7 @@ Updated: just now
 
 This is the **definitive, immutable** rule specification for A1. All previous logic, fallbacks, heuristics, and suppression behavior are superseded.
 
-### v25.2 Key Changes
+### v25.3 Key Changes
 
 1. **Comprehensive Mandatory Detection Scope**
 2. **Local-Priority Background Sampling**
@@ -14,6 +14,7 @@ This is the **definitive, immutable** rule specification for A1. All previous lo
 4. **Tiered WCAG Thresholds: 4.5:1 (normal) / 3.0:1 (large text)**
 5. **Navigation Exception (v25.1): Top-level nav uses 3:1 threshold**
 6. **Foreground Plausibility Gate (v25.2): Prevents false positives from bad sampling**
+7. **Foreground Sampling Validation (v25.3): Validates glyph-interior sampling with re-sampling fallback**
 
 ---
 
@@ -130,7 +131,27 @@ Classify background as:
 | Uncertain | Compute worst-case (min) and best-case (max) from candidates |
 | Unmeasurable | Mark "not measurable", do NOT fabricate |
 
-### Step 4 — Foreground Plausibility Gate (v25.2 — MANDATORY)
+### Step 4 — Foreground Sampling Validation (v25.3 — MANDATORY)
+
+Before computing any contrast ratio, validate that the sampled foreground color
+truly represents the rendered text glyphs:
+
+**Foreground Sampling Rules:**
+1. Sample foreground colors ONLY from pixels strictly inside detected text glyph shapes.
+   Do NOT sample from: container backgrounds, padding, borders, shadows, anti-aliased outer edges.
+
+2. If sampled foreground is visually similar to surrounding background
+   (luminance difference < 10%), assume foreground sampling is incorrect.
+
+3. In such cases, re-sample the foreground color using:
+   - The lightest 20% of glyph pixels AND
+   - The darkest 20% of glyph pixels
+   Select the variant that produces the higher contrast ratio.
+
+4. If re-sampling yields a foreground color visually inconsistent with rendered text
+   appearance (e.g., dark text reported where text appears light), discard the measurement.
+
+### Step 5 — Foreground Plausibility Gate (v25.2 — MANDATORY)
 
 Before classifying as CONFIRMED, apply the foreground plausibility gate:
 
@@ -146,12 +167,14 @@ Before classifying as CONFIRMED, apply the foreground plausibility gate:
 
 **Rationale**: If the sampled foreground color is near-white or near-background for a prominent element, the measurement is likely corrupted by background pixels or anti-aliasing artifacts.
 
-### Step 5 — Classification Logic (v25.2: Background + Foreground Gates)
+### Step 6 — Classification Logic (v25.3: Background + Foreground Gates)
 
 **CONFIRMED Violation** (all conditions must be met):
 - Background has single dominant color, no gradients/images/overlays
 - Contrast ratio < WCAG threshold
 - Foreground passes plausibility gate (not implausible for element type)
+- Foreground sampling validation passed (glyph-interior samples are reliable)
+- Sampled colors match visible rendered appearance
 - **Low confidence does NOT prevent confirmation**
 - ➡️ Emit Confirmed (Blocking)
 
@@ -162,13 +185,15 @@ Before classifying as CONFIRMED, apply the foreground plausibility gate:
 - Text spans multiple regions
 - Contrast cannot be computed
 - **Foreground is implausible for prominent element (FG_IMPLAUSIBLE)** — v25.2
+- **Foreground sampling unreliable after re-sampling (FG_SAMPLING_UNRELIABLE)** — v25.3
 - ➡️ Emit Potential (Non-blocking)
 
 **PASS (only case with no emission)**:
 - Worst-case contrast ≥ threshold
 - Even the most conservative estimate passes
+- OR text is visually high-contrast (light on dark / dark on light)
 
-### Step 6 — Confidence Handling (v23 Change)
+### Step 7 — Confidence Handling (v25.3 Update)
 
 | Factor | Effect |
 |--------|--------|
@@ -177,14 +202,16 @@ Before classifying as CONFIRMED, apply the foreground plausibility gate:
 | High confidence + certain background | CONFIRMED |
 | High confidence + uncertain background | POTENTIAL (background is still uncertain) |
 | Implausible foreground + any background | POTENTIAL (v25.2: FG_IMPLAUSIBLE gate) |
+| Unreliable foreground sampling + any background | POTENTIAL (v25.3: FG_SAMPLING_UNRELIABLE) |
 
 **Confidence affects**: Diagnosis text detail (e.g., "sampling confidence reduced")
 **Confidence does NOT affect**: Confirmed vs Potential classification
 
-### Step 7 — Mandatory Reason Codes (Only for POTENTIAL)
+### Step 8 — Mandatory Reason Codes (Only for POTENTIAL)
 
 Every Potential finding MUST include at least one reason code explaining **why it's potential**:
 - `FG_IMPLAUSIBLE` — foreground sampling inconsistent with visual prominence (v25.2)
+- `FG_SAMPLING_UNRELIABLE` — foreground sampling failed validation, re-sampling unsuccessful (v25.3)
 - `BG_MIXED` — multiple background colors detected
 - `BG_GRADIENT` — gradient background
 - `BG_IMAGE` — image or textured background

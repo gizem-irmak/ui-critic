@@ -19,6 +19,8 @@ const reasonCodeLabels: Record<A1ReasonCode, string> = {
   BG_OVERLAY: 'Transparency/overlay',
   BG_TOO_SMALL_REGION: 'Insufficient background pixels',
   FG_ANTIALIASING: 'Glyph sampling unstable',
+  FG_IMPLAUSIBLE: 'Foreground sampling inconsistent',
+  FG_SAMPLING_UNRELIABLE: 'Foreground sampling unreliable',
   LOW_CONFIDENCE: 'Low confidence measurement',
   STATIC_ANALYSIS: 'Static code analysis',
 };
