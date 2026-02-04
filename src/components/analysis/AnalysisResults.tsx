@@ -269,12 +269,15 @@ export function AnalysisResults({
                           <span className={cn('category-badge flex-shrink-0 text-xs', categoryColors[violation.category])}>
                             {violation.ruleId}
                           </span>
-                          <span className="font-medium text-sm">{violation.ruleName}</span>
+                          <span className="font-bold text-base">{violation.ruleName}</span>
                         </div>
                         <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
                           {Math.round(violation.confidence * 100)}%
                         </span>
                       </div>
+                      
+                      {/* Spacing separator */}
+                      <div className="h-1" />
 
                       {violation.evidence && (
                         <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>

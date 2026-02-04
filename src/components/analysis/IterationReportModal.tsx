@@ -329,29 +329,28 @@ export function IterationReportModal({
                       {nonA1Confirmed.map((violation, idx) => (
                         <div
                           key={idx}
-                          className="p-3 rounded-lg bg-destructive/5 border border-destructive/20 space-y-2"
+                          className="p-4 rounded-lg bg-destructive/5 border border-destructive/20 space-y-3"
                         >
-                          <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start justify-between gap-3">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
                                 {violation.ruleId}
                               </span>
-                              <span className="font-medium text-sm">{violation.ruleName}</span>
-                              <Badge className="gap-1 text-xs bg-destructive/10 text-destructive border-destructive/30">
-                                <ShieldCheck className="h-3 w-3" />
-                                Confirmed
-                              </Badge>
+                              <span className="font-bold text-base">{violation.ruleName}</span>
                             </div>
-                            <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                            <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
                               {Math.round(violation.confidence * 100)}%
                             </span>
                           </div>
+                          
+                          {/* Spacing separator */}
+                          <div className="h-1" />
 
                           {violation.evidence && (
-                            <p className="text-xs text-muted-foreground italic">📍 {violation.evidence}</p>
+                            <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
                           )}
 
-                          <p className="text-sm text-foreground leading-relaxed">{violation.diagnosis}</p>
+                          <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
                         </div>
                       ))}
                     </div>

@@ -109,7 +109,7 @@ export function PotentialRiskItem({ violation, compact = false }: PotentialRiskI
           <span className={cn('category-badge', compact ? 'text-xs' : '', categoryColors[violation.category])}>
             {violation.ruleId}
           </span>
-          <span className={cn('font-medium', compact ? 'text-sm' : '')}>{violation.ruleName}</span>
+          <span className={cn('font-bold', compact ? 'text-sm' : 'text-base')}>{violation.ruleName}</span>
           {violation.inputType && (
             <Badge variant="outline" className="text-xs font-normal">
               {inputTypeLabels[violation.inputType] || violation.inputType}
@@ -123,6 +123,9 @@ export function PotentialRiskItem({ violation, compact = false }: PotentialRiskI
           {Math.round(violation.confidence * 100)}%
         </span>
       </div>
+      
+      {/* Spacing separator */}
+      <div className={compact ? 'h-0.5' : 'h-1'} />
       
       {/* Location (structured, separate block) */}
       {locations.length > 0 && (
