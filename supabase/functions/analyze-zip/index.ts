@@ -11,7 +11,7 @@ const corsHeaders = {
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small informational text size', diagnosis: 'WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.', correctivePrompt: 'Increase text below 13px to at least 14px (text-sm) for informational or state-indicating content. Use 16px (text-base) for primary informational content in dialogs, alerts, tooltips, and chart labels. Retain very small text only for decorative or non-essential elements. Do not alter layout structure, spacing, or component hierarchy.' },
+    { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase body text below 16px to at least 16px (text-base / 1rem). This applies to paragraphs, descriptions, article content, and main text areas. Do not apply to badges, metadata, timestamps, or intentional microcopy. Do not alter layout structure, spacing, or component hierarchy.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
@@ -720,94 +720,77 @@ Examine the code for other accessibility issues:
 - ARIA attributes and semantic HTML usage
 - Alt text for images
 
-### A2 (Small informational text size) — PRECISE DETECTION & CLASSIFICATION RULES:
+### A2 (Small body font size) — CLASSIFICATION RULES:
 
-**TEXT SIZE THRESHOLDS:**
-1. **VIOLATION** (typeBadge: "VIOLATION"): Text size < 13px (text-xs, text-[0.75rem], font-size: 12px, or smaller)
-   - Only when used for INFORMATIONAL or INSTRUCTIONAL content
-   - Confidence: 65-75%
-   
-2. **WARNING** (typeBadge: "WARNING"): Text size 13-14px (text-[0.8rem], text-[0.85rem], borderline values)
-   - Flag as readability concern, NOT a violation
-   - Confidence: 50-60%
-   
-3. **CONTEXTUAL INFO ONLY** (DO NOT REPORT): text-sm (~14px, 0.875rem)
-   - Include ONLY as contextual information in passNotes if relevant
-   - Do NOT include in violations array
-   
-4. **NO ACTION** (DO NOT EVALUATE): text-base (16px) or larger
-   - Skip entirely — no reporting needed
+**SCOPE:** Body-level text elements: <p>, .description, .content, .article, main text areas,
+dialog descriptions, alert bodies, form descriptions, card descriptions.
+
+**DO NOT APPLY to:** Badges, metadata, timestamps, intentional microcopy, labels, tags,
+chips, status indicators, keyboard shortcuts, breadcrumbs, navigation items, button labels.
+
+**CLASSIFICATION (Confirmed vs Potential):**
+
+1. **CONFIRMED VIOLATION** (status: "confirmed", blocksConvergence: true):
+   - Font size < 16px is EXPLICITLY defined in pixels (e.g., font-size: 14px, font-size: 12px)
+   - OR mapped Tailwind class equivalent to < 16px: text-xs (12px), text-sm (14px), text-[0.75rem], text-[0.875rem]
+   - AND the computed size can be deterministically resolved from the source code
+   - AND the semantic role is confidently classified as primary body text
+   - Confidence: 70-85%
+
+2. **HEURISTIC / POTENTIAL RISK** (status: "potential", blocksConvergence: false):
+   - Font size is defined in relative units (rem, em, %) where final computed size cannot be guaranteed
+   - OR the semantic role cannot confidently be classified as primary body text
+   - OR the size mapping is ambiguous (e.g., custom CSS variables, dynamic values)
+   - Confidence: 45-60%
+   - Display with advisory label
 
 **SEMANTIC ROLE CLASSIFICATION:**
-Classify components based on semantic role inferred from component name and file path:
-
-**INFORMATIONAL COMPONENTS (Primary A2 targets):**
+**PRIMARY BODY TEXT (A2 targets — must use ≥16px):**
 - DialogDescription, AlertDescription, FormDescription, CardDescription
-- FormLabel, InputLabel, FieldLabel
-- Caption, Subtitle, HelpText, HelperText, Hint
-- MetaData, Timestamp, DateDisplay
-- Paragraph, Description, Content blocks
+- Paragraph text, article content, main content blocks
+- Description text, help text, instructional text
 
-**SECONDARY/DECORATIVE COMPONENTS (Lower confidence, only flag < 13px):**
-- Badge, Tag, Chip, Status, StatusBadge
+**EXCLUDED (DO NOT EVALUATE for A2):**
+- Badge, Tag, Chip, StatusBadge, StatusIndicator
+- Metadata, Timestamp, DateDisplay, TimeAgo
 - Shortcut, KeyboardShortcut, Kbd
-- IconLabel, IconText, IconButton content
-- Tooltip content, Popover content
-- Breadcrumb items
-
-**EXCLUDED COMPONENTS (DO NOT EVALUATE):**
-- Icon-only elements, action icons, dismiss buttons
-- Single-character controls ("×", "X", "−", "+")
-- Button labels (interactive, not informational)
-- Navigation items (typically styled intentionally)
-- Code/pre elements (monospace styling expected)
-
-**CONFIDENCE SCORE CALCULATION:**
-Base confidence on three factors:
-1. **Semantic certainty** (±15%): 
-   - High: Component name clearly indicates informational role → +10%
-   - Medium: Ambiguous naming → +0%
-   - Low: Component name suggests secondary role → -10%
-   
-2. **Threshold proximity** (±10%):
-   - Far below 13px (10-11px) → +10% confidence
-   - Borderline (13-14px) → -10% confidence
-   
-3. **Context ambiguity** (±10%):
-   - Clear static text → +5%
-   - Dynamic/conditional rendering → -5%
-   - Unclear usage context → -10%
+- Navigation items, button labels, icon labels
+- Tooltip content, popover content
+- Breadcrumb items, code/pre elements
+- Caption text under images/figures
 
 **OUTPUT FORMAT FOR A2 FINDINGS:**
 \`\`\`json
 {
   "ruleId": "A2",
-  "ruleName": "Small informational text size",
+  "ruleName": "Small body font size",
   "category": "accessibility",
+  "status": "confirmed" or "potential",
   "typeBadge": "VIOLATION" or "WARNING",
-  "sizeCategory": "<13px" or "13-14px",
-  "evidence": "text-xs used in DialogDescription.tsx, FormLabel.tsx",
-  "diagnosis": "Informational text in [components] uses [size]. WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.",
-  "contextualHint": "Increase small text to at least 14px for informational content; use 16px for primary dialog, alert, and tooltip text.",
-  "confidence": 0.70,
-  "semanticRole": "informational" or "secondary"
+  "sizeCategory": "<16px",
+  "evidence": "text-sm used in DialogDescription.tsx, CardDescription.tsx",
+  "diagnosis": "Body text in [components] uses [size] which is below the recommended 16px minimum for primary readable content.",
+  "contextualHint": "Increase body text to at least 16px (text-base) for primary content areas.",
+  "confidence": 0.75,
+  "semanticRole": "body-text"
 }
 \`\`\`
 
 **STRICT RULES:**
-- text-sm (14px, 0.875rem) → DO NOT include in violations array
-- Only flag text-xs or smaller for secondary components
-- ALWAYS include typeBadge and sizeCategory in output
+- Only report text that serves as PRIMARY BODY TEXT (not badges, metadata, timestamps, microcopy)
+- text-base (16px) or larger → DO NOT report
+- text-sm (14px) for body text → CONFIRMED violation if deterministically resolved
+- text-xs (12px) for body text → CONFIRMED violation if deterministically resolved
+- Relative units (rem/em/%) without deterministic resolution → POTENTIAL
 - Frame as best-practice concern, never WCAG violation
-- Group similar findings by size category
 
 **DO NOT:**
-- Flag text-sm as a violation (it's acceptable)
+- Flag badges, metadata, timestamps, or microcopy
+- Flag text-base or larger
 - Use "fails", "violates WCAG", or compliance language
 - Evaluate aria-labels (screen reader only)
 - Flag interactive elements (buttons, links)
 - Speculate about runtime rendering
-
 ### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
 
 **STATIC ANALYSIS LIMITATION:**
@@ -1971,10 +1954,17 @@ ${codeContent}`,
       
       const a2Rule = allRules.find(r => r.id === 'A2');
       
+      // Determine A2 status: Confirmed if deterministic pixel/Tailwind sizes, Potential otherwise
+      const hasConfirmedItems = affectedItems.some(i => i.severity === 'violation');
+      const a2Status = hasConfirmedItems ? 'confirmed' : 'potential';
+      
       aggregatedA2 = {
         ruleId: 'A2',
-        ruleName: 'Small informational text size',
+        ruleName: 'Small body font size',
         category: 'accessibility',
+        status: a2Status,
+        blocksConvergence: a2Status === 'confirmed',
+        inputType: 'zip',
         overall_confidence: Math.round(overallConfidence * 100) / 100,
         confidence_reason: confidenceReason,
         summary,
@@ -1990,9 +1980,12 @@ ${codeContent}`,
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
         })),
         diagnosis: summary,
-        contextualHint: 'Increase small text to at least 14px for informational content; use 16px for primary dialog, alert, and tooltip text.',
+        contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
+        ...(a2Status === 'potential' ? {
+          advisoryGuidance: 'Upload screenshots or verify rendered font sizes in browser DevTools to confirm body text sizing.',
+        } : {}),
       };
       
       console.log(`A2 aggregated: ${affectedItems.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);

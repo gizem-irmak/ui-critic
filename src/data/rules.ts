@@ -18,9 +18,9 @@ export const rules: Rule[] = [
   {
     id: 'A2',
     category: 'accessibility',
-    name: 'Small informational text size',
-    diagnosis: 'WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.',
-    correctivePrompt: 'Increase text below 13px to at least 14px (text-sm) for informational or state-indicating content. Use 16px (text-base) for primary informational content in dialogs, alerts, tooltips, and chart labels. Retain very small text only for decorative or non-essential elements. Do not alter layout structure, spacing, or component hierarchy.'
+    name: 'Small body font size',
+    diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.',
+    correctivePrompt: 'Increase body text below 16px to at least 16px (text-base / 1rem). This applies to paragraphs, descriptions, article content, and main text areas. Do not apply to badges, metadata, timestamps, or intentional microcopy. Do not alter layout structure, spacing, or component hierarchy.'
   },
   {
     id: 'A3',

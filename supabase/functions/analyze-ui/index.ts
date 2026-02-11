@@ -1909,7 +1909,7 @@ async function computeA1ViolationsFromScreenshots(
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small informational text size', diagnosis: 'WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.', correctivePrompt: 'Increase text below 13px to at least 14px (text-sm) for informational or state-indicating content. Use 16px (text-base) for primary informational content in dialogs, alerts, tooltips, and chart labels. Retain very small text only for decorative or non-essential elements. Do not alter layout structure, spacing, or component hierarchy.' },
+    { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase body text below 16px to at least 16px (text-base / 1rem). This applies to paragraphs, descriptions, article content, and main text areas. Do not apply to badges, metadata, timestamps, or intentional microcopy. Do not alter layout structure, spacing, or component hierarchy.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
@@ -1949,83 +1949,87 @@ Run visual inspection for accessibility issues:
 - Line spacing and readability
 - Focus indicator visibility
 
-### A2 (Small informational text size) — PRECISE VISUAL DETECTION RULES:
+### A2 (Small body font size) — VISUAL DETECTION RULES:
+
+**SCOPE:** Body-level text only: paragraphs, descriptions, article content, main text areas,
+dialog descriptions, alert bodies, form descriptions, card descriptions.
+
+**DO NOT APPLY to:** Badges, metadata, timestamps, intentional microcopy, labels, tags,
+chips, status indicators, keyboard shortcuts, breadcrumbs, navigation items, button labels.
+
+**CLASSIFICATION:**
+All screenshot-based A2 findings are **POTENTIAL RISK** (status: "potential", blocksConvergence: false)
+because visual estimation cannot deterministically resolve exact pixel sizes.
 
 **VISUAL SIZE THRESHOLDS (approximate visual assessment):**
-1. **VIOLATION** (typeBadge: "VIOLATION"): Text appears noticeably small, estimated <13px
-   - Only for INFORMATIONAL content (descriptions, labels, help text)
-   - Confidence: 55-65% (visual estimation has inherent uncertainty)
-   
-2. **WARNING** (typeBadge: "WARNING"): Text appears borderline small, estimated 13-14px
-   - Flag as readability concern
-   - Confidence: 45-55%
-   
-3. **NO ACTION**: Text appears normal sized (≈14px or larger)
+1. **POTENTIAL RISK** (typeBadge: "POTENTIAL"): Body text appears noticeably smaller than 16px
+   - Only for PRIMARY BODY TEXT content (descriptions, paragraphs, content blocks)
+   - Confidence: 45-60% (visual estimation has inherent uncertainty)
+
+2. **NO ACTION**: Text appears ≥16px or is not body text
    - Do NOT include in violations array
    - Skip entirely
 
 **SEMANTIC ROLE VISUAL CLASSIFICATION:**
-Identify UI element purpose by visual context and location:
-
-**INFORMATIONAL ELEMENTS (Primary A2 targets):**
+**PRIMARY BODY TEXT (A2 targets — must use ≥16px):**
 - Dialog/modal description text
-- Form field labels and helper text
-- Card descriptions and captions
+- Form field description/helper text
+- Card descriptions and content blocks
 - Alert/notification body text
+- Article/paragraph content
+- Main readable content areas
+
+**EXCLUDED ELEMENTS (DO NOT EVALUATE for A2):**
+- Badges, tags, status indicators, chips
 - Metadata displays (dates, counts, status text)
-
-**SECONDARY/DECORATIVE ELEMENTS (Only flag if clearly <13px):**
-- Badges, tags, status indicators
+- Timestamps, "time ago" displays
 - Keyboard shortcut hints
-- Tooltip content
-- Breadcrumb separators
-
-**EXCLUDED ELEMENTS (DO NOT EVALUATE):**
+- Tooltip content, breadcrumbs
 - Icon-only elements, action buttons
-- Navigation menu items (intentionally styled)
-- Button labels (interactive elements)
+- Navigation menu items
+- Button labels, interactive elements
 - Code blocks, monospace text
-- Large headings or display text
+- Captions under images/figures
 
 **CONFIDENCE ADJUSTMENT FACTORS:**
 1. **Visual certainty** (±15%):
-   - Text clearly tiny compared to surroundings → +10%
+   - Text clearly small compared to standard body text → +10%
    - Text size ambiguous or borderline → -10%
-   
+
 2. **Context clarity** (±10%):
-   - Standalone informational text → +5%
+   - Standalone body text paragraph → +5%
    - Part of complex UI pattern → -5%
 
 **OUTPUT FORMAT FOR A2 FINDINGS:**
 \`\`\`json
 {
   "ruleId": "A2",
-  "ruleName": "Small informational text size",
+  "ruleName": "Small body font size",
   "category": "accessibility",
-  "typeBadge": "VIOLATION" or "WARNING",
-  "sizeCategory": "<13px" or "13-14px",
-  "evidence": "Description text in dialog appears noticeably small",
-  "diagnosis": "Informational text in [location] appears to use small font size. WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.",
-  "contextualHint": "Increase small text to at least 14px for informational content; use 16px for primary dialog, alert, and tooltip text.",
-  "confidence": 0.55,
-  "semanticRole": "informational" or "secondary"
+  "status": "potential",
+  "typeBadge": "POTENTIAL",
+  "evidence": "Body text in dialog description appears smaller than 16px",
+  "diagnosis": "Body text in [location] appears to use a font size below the recommended 16px minimum for primary readable content.",
+  "contextualHint": "Increase body text to at least 16px (text-base) for primary content areas.",
+  "confidence": 0.50,
+  "semanticRole": "body-text"
 }
 \`\`\`
 
 **STRICT RULES:**
-- Text appearing ~14px or normal → DO NOT report
-- Only flag visually tiny text for secondary elements
-- Include typeBadge and sizeCategory in output
+- Only report text that serves as PRIMARY BODY TEXT (not badges, metadata, timestamps, microcopy)
+- Text appearing ≥16px → DO NOT report
+- All screenshot findings are status: "potential" (visual estimation)
 - Frame as best-practice concern, never WCAG violation
 - Lower confidence than code analysis (visual estimation)
 
 **DO NOT:**
-- Flag normal-sized text as violations
+- Flag badges, metadata, timestamps, or microcopy
+- Flag normal-sized body text as violations
 - Use "fails", "violates WCAG", or compliance language
 - Assume text size without clear visual evidence
 - Flag interactive elements (buttons, links)
 - Over-report borderline cases
-
 ### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
 
 **VISUAL ANALYSIS LIMITATION:**
@@ -3989,8 +3993,11 @@ serve(async (req) => {
       
       aggregatedA2UI = {
         ruleId: 'A2',
-        ruleName: 'Small informational text size',
+        ruleName: 'Small body font size',
         category: 'accessibility',
+        status: 'potential', // Screenshot-based A2 is ALWAYS potential (visual estimation)
+        blocksConvergence: false, // Never blocks convergence for screenshot input
+        inputType: 'screenshots',
         overall_confidence: Math.round(overallConfidence * 100) / 100,
         confidence_reason: confidenceReason,
         summary,
@@ -4005,9 +4012,10 @@ serve(async (req) => {
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
         })),
         diagnosis: summary,
-        contextualHint: 'Increase small text to at least 14px for informational content; use 16px for primary dialog, alert, and tooltip text.',
+        contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
+        advisoryGuidance: 'Visual estimation cannot determine exact pixel sizes. Verify rendered font sizes in browser DevTools for accurate measurement.',
       };
       
       console.log(`A2 aggregated: ${affectedItemsUI.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
