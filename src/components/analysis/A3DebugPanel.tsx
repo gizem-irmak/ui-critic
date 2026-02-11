@@ -131,8 +131,34 @@ export function A3DebugPanel({ analysis, currentIteration }: A3DebugPanelProps) 
     if (!currentIteration) return;
     setRerunning(true);
     try {
+      // Convert blob URLs to base64 data URLs for the edge function
+      let images = currentIteration.inputData?.previews;
+      if (images && images.length > 0 && images[0]?.startsWith('blob:')) {
+        const converted: string[] = [];
+        for (const blobUrl of images) {
+          try {
+            const resp = await fetch(blobUrl);
+            const blob = await resp.blob();
+            const base64 = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result as string);
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+            converted.push(base64);
+          } catch (e) {
+            console.error('A3 Debug: Failed to convert blob URL to base64:', e);
+          }
+        }
+        images = converted;
+      }
+      if (!images || images.length === 0) {
+        console.error('A3 Debug: No valid images available for rerun');
+        setRerunning(false);
+        return;
+      }
       const result = await runUIAnalysis({
-        images: currentIteration.inputData?.previews,
+        images,
         categories: ['accessibility'],
         selectedRules: ['A3'],
         inputType: currentIteration.inputType as any,
