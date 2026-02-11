@@ -64,41 +64,59 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Font Size */}
+            {/* Font Size — deterministic or estimated */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Font Size:</span>
               {element.computedFontSize !== undefined ? (
-                <span className={cn(
-                  'font-mono font-medium',
-                  isConfirmed ? 'text-destructive' : 'text-warning'
-                )}>
-                  {element.computedFontSize}px
-                </span>
+                <>
+                  <span className="text-muted-foreground font-medium w-28">Font Size:</span>
+                  <span className={cn(
+                    'font-mono font-medium',
+                    isConfirmed ? 'text-destructive' : 'text-warning'
+                  )}>
+                    {element.computedFontSize}px
+                  </span>
+                  {element.confidence !== undefined && (
+                    <span className="text-muted-foreground">
+                      ({Math.round(element.confidence * 100)}% conf)
+                    </span>
+                  )}
+                </>
+              ) : element.estimatedFontSize !== undefined ? (
+                <>
+                  <span className="text-muted-foreground font-medium w-28">Est. Font Size:</span>
+                  <span className={cn(
+                    'font-mono font-medium',
+                    'text-warning'
+                  )}>
+                    ≈{element.estimatedFontSize}px
+                  </span>
+                  <span className="text-muted-foreground text-xs">(visual estimation)</span>
+                </>
               ) : (
-                <span className="text-muted-foreground italic">not measured</span>
-              )}
-              {element.computedFontSize !== undefined && element.confidence !== undefined && (
-                <span className="text-muted-foreground">
-                  ({Math.round(element.confidence * 100)}% conf)
-                </span>
+                <>
+                  <span className="text-muted-foreground font-medium w-28">Est. Font Size:</span>
+                  <span className="text-muted-foreground italic">could not be reliably estimated</span>
+                </>
               )}
             </div>
 
             {/* Threshold */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Threshold:</span>
-              <span className="font-mono">{element.thresholdPx}px minimum recommended</span>
+              <span className="text-muted-foreground font-medium w-28">Threshold:</span>
+              <span className="font-mono">
+                {element.detectionMethod === 'heuristic' ? '16px readability baseline' : `${element.thresholdPx}px minimum recommended`}
+              </span>
             </div>
 
             {/* Detection Source */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Detection:</span>
+              <span className="text-muted-foreground font-medium w-28">Detection:</span>
               <span>{element.fontSizeSource || (element.detectionMethod === 'deterministic' ? 'Source code analysis' : 'Screenshot-based visual estimation')}</span>
             </div>
 
             {/* Confidence */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Confidence:</span>
+              <span className="text-muted-foreground font-medium w-28">Confidence:</span>
               <span className={cn(
                 'font-mono',
                 element.confidence >= 0.9 ? 'text-foreground' : 'text-warning'

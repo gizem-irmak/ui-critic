@@ -4059,11 +4059,27 @@ serve(async (req) => {
           .trim();
         if (cleanElementLabel.length < 3) cleanElementLabel = `Body text element ${idx + 1}`;
 
+        // Parse estimated font size from size_estimate (e.g., "~12px", "approximately 14px")
+        let estimatedFontSize: number | undefined = undefined;
+        let estimationFailed = false;
+        if (item.size_estimate) {
+          const match = item.size_estimate.match(/(\d+(?:\.\d+)?)\s*px/i);
+          if (match) {
+            estimatedFontSize = Math.round(parseFloat(match[1]));
+          } else {
+            estimationFailed = true;
+          }
+        } else {
+          estimationFailed = true;
+        }
+
         return {
         elementLabel: cleanElementLabel,
         textSnippet: undefined,
         location: formattedLocation,
         computedFontSize: undefined, // Screenshot-based: cannot deterministically measure
+        estimatedFontSize, // Visual estimation from bounding box analysis
+        estimationFailed, // True if estimation could not be performed
         fontSizeSource: undefined,
         detectionMethod: 'heuristic' as const,
         thresholdPx: 16,
