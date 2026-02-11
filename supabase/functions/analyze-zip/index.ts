@@ -1958,6 +1958,27 @@ ${codeContent}`,
       const hasConfirmedItems = affectedItems.some(i => i.severity === 'violation');
       const a2Status = hasConfirmedItems ? 'confirmed' : 'potential';
       
+      // Build a2Elements array for the aggregated card UI
+      const a2Elements = affectedItems.map((item, idx) => {
+        const computedSize = parseFloat((item.approx_px || '').replace(/[≈~px]/g, ''));
+        const isDeterministic = a2Status === 'confirmed' && !isNaN(computedSize);
+        return {
+          elementLabel: item.component_name || `Body text element ${idx + 1}`,
+          textSnippet: undefined,
+          location: item.file_path || 'Unknown file',
+          computedFontSize: isDeterministic ? computedSize : undefined,
+          fontSizeSource: item.size_token ? `Tailwind/CSS: ${item.size_token}` : undefined,
+          detectionMethod: isDeterministic ? 'deterministic' as const : 'heuristic' as const,
+          thresholdPx: 16,
+          explanation: item.rationale,
+          confidence: item.confidence,
+          correctivePrompt: isDeterministic
+            ? `[${item.component_name || 'Body text'}] — ${item.file_path}\n\nIssue reason: Computed font-size ${item.approx_px} is below recommended minimum 16px.\n\nRecommended fix:\nIncrease the base font size of all primary body text elements in this group (currently ${item.approx_px}) to at least 16px.\n\nApply this update consistently across:\n- All screens\n- All routes/pages\n- All responsive breakpoints\n- All components where this text style is reused\n\nAdjust line-height to approximately 1.4–1.6 to preserve readability.\n\nDo NOT modify:\n- Badges\n- Metadata\n- Timestamps\n- Intentional microcopy\nunless functioning as primary body content.\n\nEnsure shared typography tokens or reusable classes are updated to prevent recurrence.`
+            : undefined,
+          deduplicationKey: `${item.file_path}|${item.component_name}|${item.size_token}`,
+        };
+      });
+
       aggregatedA2 = {
         ruleId: 'A2',
         ruleName: 'Small body font size',
@@ -1965,6 +1986,8 @@ ${codeContent}`,
         status: a2Status,
         blocksConvergence: a2Status === 'confirmed',
         inputType: 'zip',
+        isA2Aggregated: true,
+        a2Elements,
         overall_confidence: Math.round(overallConfidence * 100) / 100,
         confidence_reason: confidenceReason,
         summary,
@@ -1979,12 +2002,14 @@ ${codeContent}`,
           rationale: item.rationale,
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
         })),
-        diagnosis: summary,
+        diagnosis: a2Status === 'confirmed'
+          ? `${a2Elements.length} body text element${a2Elements.length !== 1 ? 's' : ''} with confirmed insufficient font size detected.`
+          : `${a2Elements.length} text element${a2Elements.length !== 1 ? 's' : ''} with potential font size issues detected. These require manual verification due to measurement uncertainty.`,
         contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
         ...(a2Status === 'potential' ? {
-          advisoryGuidance: 'Upload screenshots or verify rendered font sizes in browser DevTools to confirm body text sizing.',
+          advisoryGuidance: 'Visual estimation cannot determine exact pixel sizes. Upload screenshots at 100% zoom or verify computed font sizes using browser DevTools for accurate measurement.',
         } : {}),
       };
       

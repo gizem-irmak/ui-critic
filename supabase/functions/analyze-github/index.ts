@@ -1134,11 +1134,83 @@ serve(async (req) => {
       console.log(`A1 aggregated (GitHub): ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
     
+    // ========== A2 AGGREGATION LOGIC (GitHub) ==========
+    const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2');
+    const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2');
+    
+    let aggregatedA2GitHub: any = null;
+    if (a2AiViolations.length > 0) {
+      const a2Elements = a2AiViolations.map((v: any, idx: number) => {
+        const diagnosis = (v.diagnosis || '').toLowerCase();
+        const evidence = (v.evidence || '').toLowerCase();
+        const combined = diagnosis + ' ' + evidence;
+        
+        // Try to extract px value
+        const pxMatch = combined.match(/(\d+)px/);
+        const computedSize = pxMatch ? parseInt(pxMatch[1]) : undefined;
+        const isDeterministic = computedSize !== undefined && (
+          /text-xs|text-sm|font-size:\s*\d+px/.test(combined)
+        );
+        
+        // Extract component name
+        const componentMatch = (v.evidence || '').match(/([A-Z][a-zA-Z0-9]*(?:Description|Content|Text|Label)?)/);
+        const fileMatch = (v.evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
+        const elementLabel = componentMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || `Body text element ${idx + 1}`;
+        const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
+        
+        return {
+          elementLabel,
+          textSnippet: undefined,
+          location,
+          computedFontSize: isDeterministic ? computedSize : undefined,
+          fontSizeSource: isDeterministic ? (v.evidence || '').match(/(text-xs|text-sm|font-size:\s*\d+px)/i)?.[1] : undefined,
+          detectionMethod: isDeterministic ? 'deterministic' as const : 'heuristic' as const,
+          thresholdPx: 16,
+          explanation: v.diagnosis || 'Body text size is below the recommended 16px baseline.',
+          confidence: v.confidence || 0.6,
+          correctivePrompt: isDeterministic
+            ? `[${elementLabel}] — ${location}\n\nIssue reason: Computed font-size ${computedSize}px is below recommended minimum 16px.\n\nRecommended fix:\nIncrease the base font size to at least 16px.\n\nApply consistently across all screens, routes, and breakpoints.\nAdjust line-height to approximately 1.4–1.6.\n\nDo NOT modify badges, metadata, timestamps, or intentional microcopy.`
+            : undefined,
+          deduplicationKey: `${location}|${elementLabel}`,
+        };
+      });
+      
+      const hasConfirmed = a2Elements.some((el: any) => el.detectionMethod === 'deterministic');
+      const a2Status = hasConfirmed ? 'confirmed' : 'potential';
+      const avgConf = a2Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a2Elements.length;
+      
+      const a2Rule = [...rules.accessibility].find(r => r.id === 'A2');
+      
+      aggregatedA2GitHub = {
+        ruleId: 'A2',
+        ruleName: 'Small body font size',
+        category: 'accessibility',
+        status: a2Status,
+        blocksConvergence: a2Status === 'confirmed',
+        inputType: 'github',
+        isA2Aggregated: true,
+        a2Elements,
+        diagnosis: a2Status === 'confirmed'
+          ? `${a2Elements.length} body text element${a2Elements.length !== 1 ? 's' : ''} with confirmed insufficient font size detected.`
+          : `${a2Elements.length} text element${a2Elements.length !== 1 ? 's' : ''} with potential font size issues detected. These require manual verification due to measurement uncertainty.`,
+        contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
+        correctivePrompt: a2Rule?.correctivePrompt || '',
+        confidence: Math.round(avgConf * 100) / 100,
+        ...(a2Status === 'potential' ? {
+          advisoryGuidance: 'Visual estimation cannot determine exact pixel sizes. Upload screenshots at 100% zoom or verify computed font sizes using browser DevTools for accurate measurement.',
+        } : {}),
+        typeBadge: a2Status === 'confirmed' ? 'Confirmed (static)' : 'Heuristic (requires runtime verification)',
+      };
+      
+      console.log(`A2 aggregated (GitHub): ${a2AiViolations.length} → 1 card with ${a2Elements.length} elements (${a2Status})`);
+    }
+    
     // Combine all violations
     const allViolations = [
       ...aggregatedA1Violations,
       ...(u1Violation ? [u1Violation] : []),
-      ...taggedAiViolations,
+      ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
+      ...nonA2AiViolations,
     ];
     
     // Deduplicate by ruleId
