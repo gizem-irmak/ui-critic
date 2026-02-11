@@ -84,8 +84,9 @@ export function AnalysisResults({
         
         for (const el of v.a2Elements) {
           if (el.correctivePrompt) {
+            // Build element reference matching A1 structure: uiRole 'textSnippet' — location
             const elementRef = [
-              el.elementLabel,
+              'body text',
               el.location ? `— ${el.location}` : null,
             ].filter(Boolean).join(' ');
             

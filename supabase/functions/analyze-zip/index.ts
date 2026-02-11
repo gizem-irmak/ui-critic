@@ -2020,7 +2020,7 @@ ${codeContent}`,
           explanation: item.rationale,
           confidence: item.confidence,
           correctivePrompt: isDeterministic
-            ? `[${item.component_name || 'Body text'}] — ${item.file_path}\n\nIssue reason: Computed font-size ${item.approx_px} is below recommended minimum 16px.\n\nRecommended fix:\nIncrease the base font size of all primary body text elements in this group (currently ${item.approx_px}) to at least 16px.\n\nApply this update consistently across:\n- All screens\n- All routes/pages\n- All responsive breakpoints\n- All components where this text style is reused\n\nAdjust line-height to approximately 1.4–1.6 to preserve readability.\n\nDo NOT modify:\n- Badges\n- Metadata\n- Timestamps\n- Intentional microcopy\nunless functioning as primary body content.\n\nEnsure shared typography tokens or reusable classes are updated to prevent recurrence.`
+            ? `body text '${(item.component_name || 'Body text element').substring(0, 60)}' (${item.file_path || 'Source file'})\n\nIssue reason: Computed font-size ${item.approx_px} is below the recommended readability baseline of 16px.\n\nRecommended fix: Increase the font size of all primary body text elements in this group (currently ${item.approx_px}${item.size_token ? ` / ${item.size_token}` : ''}) to at least 16px (text-base). Ensure this update is applied consistently across all screens and components where this text style is reused. Adjust line-height to approximately 1.4–1.6 to preserve readability.`
             : undefined,
           deduplicationKey: `${item.file_path}|${item.component_name}|${item.size_token}`,
         };
