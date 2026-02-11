@@ -70,7 +70,7 @@ export interface Violation {
   contextualHint?: string;
   confidence: number;
   // A1 contrast-specific fields
-  status?: 'confirmed' | 'potential'; // Strictly two buckets: confirmed (blocking) or potential (non-blocking)
+  status?: 'confirmed' | 'potential' | 'informational'; // confirmed (blocking), potential (non-blocking), informational (no risk, summary only)
   samplingMethod?: 'pixel' | 'inferred'; // How colors were obtained: pixel-sampled or inferred from tokens/classes
   elementRole?: string; // Semantic role: caption, badge, metadata, heading, etc.
   inputType?: 'screenshots' | 'zip' | 'github'; // Which input type was used for this finding
@@ -148,6 +148,21 @@ export interface Violation {
   // ============================================================
   isA3Aggregated?: boolean;
   a3Elements?: A3ElementSubItem[];
+  // A3 heuristic estimation summary (always present for screenshot A3)
+  a3EstimationSummary?: {
+    blocksEvaluated: number;
+    multiLineBlocks: number;
+    medianRatio?: number; // median estimated ratio across blocks
+    decision: 'potential_risk_high' | 'potential_risk_low' | 'no_risk_detected' | 'no_multiline_blocks';
+    perBlockDetails?: Array<{
+      blockIndex: number;
+      linesDetected: number;
+      estimatedRatio: number;
+      textHeightPx: number;
+      lineStepPx: number;
+      confidence: number;
+    }>;
+  };
 }
 
 // A2 Element sub-item for aggregated font-size reporting

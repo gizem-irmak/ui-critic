@@ -321,7 +321,7 @@ export function AnalysisResults({
 
       {/* Confirmed Issues (Blocking) - all confirmed violations */}
       {(() => {
-        const confirmedViolationsList = analysis.violations.filter(v => v.status !== 'potential');
+        const confirmedViolationsList = analysis.violations.filter(v => v.status !== 'potential' && v.status !== 'informational');
         const a1Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A1' && v.isA1Aggregated);
         const a2Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A2' && v.isA2Aggregated);
         const a3Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A3' && v.isA3Aggregated);
@@ -441,6 +441,20 @@ export function AnalysisResults({
                 </CardContent>
               </Card>
             )}
+          </div>
+        );
+      })()}
+
+      {/* A3 Informational Summary (no risk detected) */}
+      {(() => {
+        const a3Informational = analysis.violations.find(v => v.ruleId === 'A3' && v.isA3Aggregated && v.status === 'informational');
+        return a3Informational && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 pt-2">
+              <ShieldCheck className="h-5 w-5 text-muted-foreground" />
+              <h3 className="text-xl font-bold text-foreground">A3 — Heuristic Estimation Summary</h3>
+            </div>
+            <A3AggregatedCard violation={a3Informational} />
           </div>
         );
       })()}
