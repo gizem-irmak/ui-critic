@@ -9,7 +9,7 @@ const corsHeaders = {
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase body text below 16px to at least 16px (text-base / 1rem). This applies to paragraphs, descriptions, article content, and main text areas. Do not apply to badges, metadata, timestamps, or intentional microcopy.' },
+    { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px (text-base / 1rem) across all screens and components where this body-text style is reused. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
@@ -1140,7 +1140,52 @@ serve(async (req) => {
     
     let aggregatedA2GitHub: any = null;
     if (a2AiViolations.length > 0) {
-      const a2Elements = a2AiViolations.map((v: any, idx: number) => {
+      // ============================================================
+      // A2 STRICT SCOPE ENFORCEMENT: filter out non-body-text elements
+      // ============================================================
+      const filteredA2 = a2AiViolations.filter((v: any) => {
+        const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
+        
+        // Exclude badges, chips, pills, tags, status indicators
+        if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus\s*(?:indicator|badge|chip|text)?\b/i.test(combined)) {
+          console.log(`Filtering out A2 (badge/chip/tag): ${v.evidence}`);
+          return false;
+        }
+        // Exclude headings, titles, subtitles (unless also mentions description/body)
+        if (/\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b|\bheader\s*(?:text|subtitle)?\b/i.test(combined) &&
+            !/description|body\s*text|paragraph|content\s*block|prose/i.test(combined)) {
+          console.log(`Filtering out A2 (heading/title): ${v.evidence}`);
+          return false;
+        }
+        // Exclude navigation, menu items, breadcrumbs
+        if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) {
+          console.log(`Filtering out A2 (navigation): ${v.evidence}`);
+          return false;
+        }
+        // Exclude buttons, CTAs (unless also about description)
+        if (/\bbutton\b|\bbtn\b|\bcta\b|\baction\s*button\b|\bicon[-\s]?button\b/i.test(combined) &&
+            !/description|body\s*text|paragraph/i.test(combined)) {
+          console.log(`Filtering out A2 (button/CTA): ${v.evidence}`);
+          return false;
+        }
+        // Exclude metadata, timestamps, author names
+        if (/\bmetadata\b|\btimestamp\b|\bdate\s*(?:display|text)?\b|\btime\s*ago\b|\bauthor\b|\binstructor\b/i.test(combined)) {
+          console.log(`Filtering out A2 (metadata): ${v.evidence}`);
+          return false;
+        }
+        // Exclude captions, tooltips, keyboard shortcuts, code blocks
+        if (/\bcaption\b|\btooltip\b|\bkeyboard\s*shortcut\b|\bkbd\b|\bcode\s*block\b|\bmonospace\b/i.test(combined)) {
+          console.log(`Filtering out A2 (microcopy): ${v.evidence}`);
+          return false;
+        }
+        return true;
+      });
+      
+      // If all items were filtered out, skip aggregation
+      if (filteredA2.length === 0) {
+        console.log('A2: All items filtered out (none were primary body text)');
+      } else {
+      const a2Elements = filteredA2.map((v: any, idx: number) => {
         const diagnosis = (v.diagnosis || '').toLowerCase();
         const evidence = (v.evidence || '').toLowerCase();
         const combined = diagnosis + ' ' + evidence;
@@ -1202,7 +1247,8 @@ serve(async (req) => {
         typeBadge: a2Status === 'confirmed' ? 'Confirmed (static)' : 'Heuristic (requires runtime verification)',
       };
       
-      console.log(`A2 aggregated (GitHub): ${a2AiViolations.length} → 1 card with ${a2Elements.length} elements (${a2Status})`);
+      console.log(`A2 aggregated (GitHub): ${filteredA2.length} → 1 card with ${a2Elements.length} elements (${a2Status})`);
+      } // end filteredA2.length > 0
     }
     
     // Combine all violations
