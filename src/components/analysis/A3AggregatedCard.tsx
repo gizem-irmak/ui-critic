@@ -116,7 +116,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               <span className="text-muted-foreground font-medium w-28">Threshold:</span>
               <span className="font-mono">
                 {element.detectionMethod === 'heuristic'
-                  ? '1.35 readability baseline'
+                  ? 'Bands: <1.30 dense, 1.30–1.45 borderline, ≥1.45 baseline'
                   : `${element.thresholdRatio} minimum readability baseline`}
               </span>
             </div>
