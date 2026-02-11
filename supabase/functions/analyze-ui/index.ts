@@ -4701,15 +4701,18 @@ serve(async (req) => {
         const a3Elements = filteredA3UI.map((v: any, idx: number) => {
           const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
           
-          // Try to extract line-height estimate from diagnosis
+          // Try to extract line-height estimate from diagnosis/evidence
           const ratioMatch = combined.match(/(?:ratio|line[- ]height|spacing)[:\s]*([\d.]+)/);
           let estimatedLineHeight: number | undefined;
           let estimationFailed = false;
           
           if (ratioMatch) {
             estimatedLineHeight = parseFloat(ratioMatch[1]);
-            // Skip if pass
-            if (estimatedLineHeight >= 1.45) return null;
+            // Sensitivity bands for screenshot A3:
+            //   < 1.30 → Potential Risk (High confidence)
+            //   1.30–1.40 → Potential Risk (Low confidence, borderline)
+            //   ≥ 1.40 → No finding (silent)
+            if (estimatedLineHeight >= 1.40) return null;
           } else {
             estimationFailed = true;
           }
@@ -4721,8 +4724,21 @@ serve(async (req) => {
           const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
           const elementLabel = rawLabel || `Body text element ${idx + 1}`;
           
-          let confidence = v.confidence || 0.5;
-          confidence = Math.min(confidence, 0.65); // Screenshot always capped
+          // Confidence based on sensitivity band
+          let confidence: number;
+          if (estimationFailed) {
+            confidence = 0.40; // Unknown estimation — low confidence
+          } else if (estimatedLineHeight !== undefined && estimatedLineHeight < 1.30) {
+            confidence = 0.65; // Below threshold — higher confidence
+          } else {
+            confidence = 0.45; // Borderline 1.30–1.40 — lower confidence
+          }
+          
+          // Build explanation with borderline note
+          let explanation = v.diagnosis || 'Line spacing appears visually dense for body text.';
+          if (!estimationFailed && estimatedLineHeight !== undefined && estimatedLineHeight >= 1.30 && estimatedLineHeight < 1.40) {
+            explanation += ' Borderline dense spacing detected.';
+          }
           
           return {
             elementLabel,
@@ -4735,7 +4751,7 @@ serve(async (req) => {
             lineHeightSource: undefined,
             detectionMethod: 'heuristic' as const,
             thresholdRatio: 1.3,
-            explanation: v.diagnosis || 'Line spacing appears visually dense for body text.',
+            explanation,
             confidence: Math.round(confidence * 100) / 100,
             correctivePrompt: undefined, // Potential: no corrective prompts
             deduplicationKey: `${formattedLocation}|${elementLabel}`,
