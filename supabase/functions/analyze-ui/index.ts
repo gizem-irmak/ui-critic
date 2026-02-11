@@ -4706,14 +4706,15 @@ serve(async (req) => {
           let estimatedLineHeight: number | undefined;
           let estimationFailed = false;
           
-          if (ratioMatch) {
+           if (ratioMatch) {
             estimatedLineHeight = parseFloat(ratioMatch[1]);
-            // Sensitivity bands for screenshot A3:
-            //   < 1.30 → Potential Risk (High confidence)
-            //   1.30–1.40 → Potential Risk (Low confidence, borderline)
-            //   ≥ 1.40 → No finding (silent)
-            if (estimatedLineHeight >= 1.40) return null;
+            // Conservative sensitivity bands for screenshot A3:
+            //   < 1.35 → Potential Risk (High confidence)
+            //   1.35–1.50 → Potential Risk (Low confidence, borderline)
+            //   ≥ 1.50 → No finding (silent)
+            if (estimatedLineHeight >= 1.50) return null;
           } else {
+            // Estimation failed — trigger dense text fallback instead of skipping
             estimationFailed = true;
           }
           
@@ -4727,16 +4728,19 @@ serve(async (req) => {
           // Confidence based on sensitivity band
           let confidence: number;
           if (estimationFailed) {
-            confidence = 0.40; // Unknown estimation — low confidence
-          } else if (estimatedLineHeight !== undefined && estimatedLineHeight < 1.30) {
+            // Dense text fallback: paragraph detected but ratio unknown
+            confidence = 0.45; // Low confidence density fallback
+          } else if (estimatedLineHeight !== undefined && estimatedLineHeight < 1.35) {
             confidence = 0.65; // Below threshold — higher confidence
           } else {
-            confidence = 0.45; // Borderline 1.30–1.40 — lower confidence
+            confidence = 0.45; // Borderline 1.35–1.50 — lower confidence
           }
           
-          // Build explanation with borderline note
+          // Build explanation with band-specific notes
           let explanation = v.diagnosis || 'Line spacing appears visually dense for body text.';
-          if (!estimationFailed && estimatedLineHeight !== undefined && estimatedLineHeight >= 1.30 && estimatedLineHeight < 1.40) {
+          if (estimationFailed) {
+            explanation += ' Dense text region detected but line-height ratio could not be reliably computed.';
+          } else if (estimatedLineHeight !== undefined && estimatedLineHeight >= 1.35 && estimatedLineHeight < 1.50) {
             explanation += ' Borderline dense spacing detected.';
           }
           
