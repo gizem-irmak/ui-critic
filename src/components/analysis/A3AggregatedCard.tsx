@@ -229,12 +229,22 @@ function A3EstimationSummaryCard({ violation, compact = false }: A3AggregatedCar
           </div>
         )}
 
-        {/* No multi-line blocks guidance */}
+        {/* No multi-line blocks guidance + diagnostics */}
         {isNoMultiLine && (
-          <div className={cn('rounded-lg bg-muted/30 border border-border', compact ? 'p-2' : 'p-3')}>
+          <div className={cn('rounded-lg bg-muted/30 border border-border space-y-2', compact ? 'p-2' : 'p-3')}>
             <p className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
               A3 requires multi-line paragraph text. Upload ZIP/GitHub for deterministic measurement.
             </p>
+            {summary.diagnostics && (
+              <div className={cn('space-y-1 pt-1 border-t border-border/30', compact ? 'text-xs' : 'text-sm')}>
+                <p className="text-muted-foreground font-medium">Detection diagnostics:</p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground pl-1">
+                  <span>Raw boxes: <span className="font-mono text-foreground">{summary.diagnostics.rawBoxesDetected}</span></span>
+                  <span>Lines constructed: <span className="font-mono text-foreground">{summary.diagnostics.linesConstructed}</span></span>
+                  <span>Reason: <Badge variant="outline" className="text-xs">{summary.diagnostics.reason}</Badge></span>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

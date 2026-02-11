@@ -2030,7 +2030,100 @@ because visual estimation cannot deterministically resolve exact pixel sizes.
 - Assume text size without clear visual evidence
 - Flag interactive elements (buttons, links)
 - Over-report borderline cases
-### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
+### A3 (Insufficient line spacing) — PARAGRAPH BLOCK DETECTION FOR SCREENSHOTS:
+
+**SCOPE:** Primary body text only: paragraphs, descriptions, article content, main text areas,
+dialog descriptions, alert bodies, form descriptions, card descriptions.
+
+**DO NOT APPLY to:** Headings, badges, metadata, timestamps, navigation, buttons, labels, microcopy.
+
+**PARAGRAPH BLOCK DETECTION METHOD:**
+
+STEP 1 — Detect all text boxes (words/text regions) in the screenshot.
+
+STEP 2 — Merge word-level boxes into LINE-level boxes:
+- Two text boxes are on the same line if: abs(centerY1 - centerY2) <= 0.6 * medianTextHeight
+- Merge horizontally if gaps are small and y-overlap is high
+- Output: line boxes with combined bounding box
+
+STEP 3 — Group LINES into PARAGRAPH blocks:
+Group adjacent lines into a multi-line block when ALL conditions are met:
+- Left alignment similar: abs(leftX1 - leftX2) <= max(12px, 0.15 * lineWidth)
+- Font height similar: within ±25%
+- Vertical distance between consecutive line centers: 0.6 * textHeight to 2.2 * textHeight
+- Same column region: x-overlap >= 40%
+
+STEP 4 — For each block with >= 2 lines, compute:
+- textHeightPx = median of line box heights
+- lineStepPx = median of (centerY[i+1] - centerY[i]) for consecutive lines
+- estimatedRatio = lineStepPx / textHeightPx
+
+**CLASSIFICATION (Screenshot Only):**
+- estimatedRatio < 1.35 → Potential Risk (High confidence: 60-65%)
+- 1.35 <= estimatedRatio < 1.50 → Potential Risk (Low confidence: 40-50%, add "Borderline dense spacing detected")
+- estimatedRatio >= 1.50 → No risk (do not report as violation but include in a3ParagraphBlocks)
+- NEVER classify screenshot A3 as Confirmed
+
+**OUTPUT — a3ParagraphBlocks (MANDATORY when A3 is selected):**
+Include a top-level array \`a3ParagraphBlocks\` with ALL detected paragraph blocks (even non-violating ones):
+\`\`\`json
+"a3ParagraphBlocks": [
+  {
+    "blockIndex": 1,
+    "linesDetected": 3,
+    "textHeightPx": 16,
+    "lineStepPx": 19.2,
+    "estimatedRatio": 1.20,
+    "location": "Course description area",
+    "screenshotIndex": 1,
+    "confidence": 0.65,
+    "isViolation": true
+  },
+  {
+    "blockIndex": 2,
+    "linesDetected": 2,
+    "textHeightPx": 14,
+    "lineStepPx": 22.4,
+    "estimatedRatio": 1.60,
+    "location": "About section paragraph",
+    "screenshotIndex": 1,
+    "confidence": 0.55,
+    "isViolation": false
+  }
+]
+\`\`\`
+
+If no multi-line paragraph blocks can be detected, output:
+\`\`\`json
+"a3ParagraphBlocks": [],
+"a3DetectionDiagnostics": {
+  "rawBoxesDetected": 45,
+  "linesConstructed": 12,
+  "reason": "groupingTooStrict" | "wordBoxesNotMerged" | "noParagraphCandidates"
+}
+\`\`\`
+
+**IMPORTANT:** Even if grouping fails, if at least 2 lines exist with similar left alignment, treat them as a minimal block and compute an estimated ratio. Do NOT require perfect paragraph detection.
+
+**Also emit A3 violations** in the violations array for blocks where isViolation=true, using this format:
+\`\`\`json
+{
+  "ruleId": "A3",
+  "ruleName": "Insufficient line spacing",
+  "category": "accessibility",
+  "status": "potential",
+  "evidence": "Body text in [location] — [N] lines, estimated ratio ≈[X.XX]",
+  "diagnosis": "Line spacing ratio ≈[X.XX] is below the recommended 1.35 readability baseline for body text.",
+  "contextualHint": "Increase line-height to at least 1.5 (leading-normal) for primary body text.",
+  "confidence": 0.60,
+  "lineCount": 3,
+  "estimatedRatio": 1.20,
+  "textHeightPx": 16,
+  "lineStepPx": 19.2
+}
+\`\`\`
+
+    ### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
 
 **VISUAL ANALYSIS LIMITATION:**
 Visual inspection cannot measure exact rendered dimensions. Padding, spacing, and layout constraints may increase the actual clickable area beyond what is visually apparent. Compliance CANNOT be confirmed from screenshots alone.
@@ -2840,6 +2933,8 @@ Respond with a JSON object in this exact structure:
     }
   ],
   "a1TextElements": [],
+  "a3ParagraphBlocks": [],
+  "a3DetectionDiagnostics": null,
   "passNotes": {
     "accessibility": "Summary of accessibility pass findings",
     "usability": "Summary of usability pass findings",
@@ -4683,26 +4778,20 @@ serve(async (req) => {
     }
     
     // ========== A3 AGGREGATION LOGIC (Screenshot — Heuristic Only) ==========
-    // Robust paragraph-block-based estimation with always-visible summary
+    // Uses structured a3ParagraphBlocks from AI output for robust paragraph detection
     let aggregatedA3UI: any = null;
     const a3Selected = selectedRules.includes('A3');
     
-    // Always produce an A3 summary when A3 is selected for screenshot input
     if (a3Selected) {
-      // Scope enforcement — same filters as A2
-      const filteredA3UI = a3Violations.filter((v: any) => {
-        const combined = ((v.evidence || '') + ' ' + (v.diagnosis || '')).toLowerCase();
-        if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus/i.test(combined)) return false;
-        if (/\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
-        if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) return false;
-        if (/\bbutton\b|\bbtn\b|\bcta\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
-        if (/\bmetadata\b|\btimestamp\b|\bauthor\b/i.test(combined)) return false;
-        if (/\bcaption\b|\btooltip\b|\bmonospace\b|\bplaceholder\b/i.test(combined)) return false;
-        return true;
-      });
+      // Primary source: structured a3ParagraphBlocks from AI output
+      const a3Blocks: any[] = Array.isArray((analysisResult as any).a3ParagraphBlocks) 
+        ? (analysisResult as any).a3ParagraphBlocks 
+        : [];
+      const a3Diagnostics: any = (analysisResult as any).a3DetectionDiagnostics || null;
       
-      // Parse paragraph block data from AI output
-      // Each filtered violation represents a detected text block
+      console.log(`A3: ${a3Blocks.length} paragraph blocks from AI, ${a3Violations.length} violations from AI`);
+      
+      // Build block estimates from structured data
       const blockEstimates: Array<{
         blockIndex: number;
         linesDetected: number;
@@ -4710,26 +4799,54 @@ serve(async (req) => {
         textHeightPx: number;
         lineStepPx: number;
         confidence: number;
-        rawViolation: any;
+        location: string;
+        screenshotIndex: number;
       }> = [];
       
-      for (let idx = 0; idx < filteredA3UI.length; idx++) {
-        const v = filteredA3UI[idx];
-        const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
+      if (a3Blocks.length > 0) {
+        // Use structured block data directly
+        for (const block of a3Blocks) {
+          blockEstimates.push({
+            blockIndex: block.blockIndex || blockEstimates.length + 1,
+            linesDetected: block.linesDetected || 2,
+            estimatedRatio: block.estimatedRatio || 0,
+            textHeightPx: Math.round((block.textHeightPx || 0) * 10) / 10,
+            lineStepPx: Math.round((block.lineStepPx || 0) * 10) / 10,
+            confidence: block.isViolation 
+              ? (block.estimatedRatio < 1.35 ? 0.65 : 0.45) 
+              : (block.confidence || 0.50),
+            location: block.location || 'Body text area',
+            screenshotIndex: block.screenshotIndex || 1,
+          });
+        }
+      } else {
+        // Fallback: parse from A3 violations text (legacy path)
+        const filteredA3UI = a3Violations.filter((v: any) => {
+          const combined = ((v.evidence || '') + ' ' + (v.diagnosis || '')).toLowerCase();
+          if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus/i.test(combined)) return false;
+          if (/\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
+          if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) return false;
+          if (/\bbutton\b|\bbtn\b|\bcta\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
+          if (/\bmetadata\b|\btimestamp\b|\bauthor\b/i.test(combined)) return false;
+          if (/\bcaption\b|\btooltip\b|\bmonospace\b|\bplaceholder\b/i.test(combined)) return false;
+          return true;
+        });
         
-        // Extract ratio from AI text
-        const ratioMatch = combined.match(/(?:ratio|line[- ]height|spacing)[:\s]*([\d.]+)/);
-        // Extract line count hints
-        const lineMatch = combined.match(/(\d+)\s*(?:lines?|rows?)/);
-        // Extract height/step hints
-        const heightMatch = combined.match(/(?:text[- ]?height|font[- ]?height|glyph[- ]?height)[:\s]*([\d.]+)\s*(?:px)?/);
-        const stepMatch = combined.match(/(?:line[- ]?step|step|baseline[- ]?distance|vertical[- ]?spacing)[:\s]*([\d.]+)\s*(?:px)?/);
-        
-        if (ratioMatch) {
-          const ratio = parseFloat(ratioMatch[1]);
-          const lines = lineMatch ? parseInt(lineMatch[1]) : 3; // default assumption
-          const textH = heightMatch ? parseFloat(heightMatch[1]) : 16; // fallback
-          const step = stepMatch ? parseFloat(stepMatch[1]) : ratio * textH; // derive from ratio
+        for (let idx = 0; idx < filteredA3UI.length; idx++) {
+          const v = filteredA3UI[idx];
+          const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
+          
+          // Try structured fields first (AI may include them in violation objects)
+          const ratio = v.estimatedRatio || (() => {
+            const m = combined.match(/(?:ratio|line[- ]height|spacing)[:\s]*[≈~]?([\d.]+)/);
+            return m ? parseFloat(m[1]) : 0;
+          })();
+          const lines = v.lineCount || (() => {
+            const m = combined.match(/(\d+)\s*(?:lines?|rows?)/);
+            return m ? parseInt(m[1]) : 2;
+          })();
+          const textH = v.textHeightPx || 16;
+          const step = v.lineStepPx || (ratio > 0 ? ratio * textH : 0);
           
           blockEstimates.push({
             blockIndex: idx + 1,
@@ -4737,19 +4854,9 @@ serve(async (req) => {
             estimatedRatio: ratio,
             textHeightPx: Math.round(textH * 10) / 10,
             lineStepPx: Math.round(step * 10) / 10,
-            confidence: ratio < 1.35 ? 0.65 : 0.45,
-            rawViolation: v,
-          });
-        } else {
-          // Fallback: dense text detected but ratio not parseable
-          blockEstimates.push({
-            blockIndex: idx + 1,
-            linesDetected: lineMatch ? parseInt(lineMatch[1]) : 2,
-            estimatedRatio: 0, // unknown
-            textHeightPx: 0,
-            lineStepPx: 0,
-            confidence: 0.40,
-            rawViolation: v,
+            confidence: ratio > 0 ? (ratio < 1.35 ? 0.65 : 0.45) : 0.40,
+            location: v.evidence || 'Body text area',
+            screenshotIndex: idx + 1,
           });
         }
       }
@@ -4758,19 +4865,21 @@ serve(async (req) => {
       const multiLineBlocks = blockEstimates.filter(b => b.linesDetected >= 2).length;
       
       // Compute median ratio across valid blocks
-      const validRatios = blockEstimates.filter(b => b.estimatedRatio > 0).map(b => b.estimatedRatio).sort((a, b) => a - b);
+      const validRatios = blockEstimates
+        .filter(b => b.estimatedRatio > 0 && b.linesDetected >= 2)
+        .map(b => b.estimatedRatio)
+        .sort((a, b) => a - b);
       const medianRatio = validRatios.length > 0
         ? (validRatios.length % 2 === 0
           ? (validRatios[validRatios.length / 2 - 1] + validRatios[validRatios.length / 2]) / 2
           : validRatios[Math.floor(validRatios.length / 2)])
         : undefined;
       
-      // Determine decision based on thresholds
+      // Determine decision
       let decision: 'potential_risk_high' | 'potential_risk_low' | 'no_risk_detected' | 'no_multiline_blocks';
       if (multiLineBlocks === 0) {
         decision = 'no_multiline_blocks';
       } else if (medianRatio === undefined) {
-        // Has multi-line blocks but couldn't compute ratios — fallback to potential risk low
         decision = 'potential_risk_low';
       } else if (medianRatio < 1.35) {
         decision = 'potential_risk_high';
@@ -4793,34 +4902,42 @@ serve(async (req) => {
           confidence: b.confidence,
         }));
       
+      // Build diagnostics for 0-block case
+      const diagnostics = decision === 'no_multiline_blocks' ? {
+        rawBoxesDetected: a3Diagnostics?.rawBoxesDetected ?? 0,
+        linesConstructed: a3Diagnostics?.linesConstructed ?? 0,
+        reason: a3Diagnostics?.reason || (a3Blocks.length === 0 && a3Violations.length === 0 
+          ? 'noParagraphCandidates' 
+          : 'groupingTooStrict'),
+      } : undefined;
+      
       const a3EstimationSummary = {
         blocksEvaluated,
         multiLineBlocks,
         medianRatio: medianRatio !== undefined ? Math.round(medianRatio * 100) / 100 : undefined,
         decision,
         perBlockDetails: perBlockDetails.length > 0 ? perBlockDetails : undefined,
+        diagnostics,
       };
       
-      // Build a3Elements only for blocks that trigger risk thresholds
+      // Build a3Elements for blocks that trigger risk thresholds
       const a3Elements: any[] = [];
       if (decision === 'potential_risk_high' || decision === 'potential_risk_low') {
         for (const block of blockEstimates.filter(b => b.linesDetected >= 2)) {
-          // Skip blocks with ratio >= 1.50 (no risk)
           if (block.estimatedRatio >= 1.50 && block.estimatedRatio > 0) continue;
           
-          const v = block.rawViolation;
-          const screenshotIdx = block.blockIndex;
-          let rawLabel = v.evidence?.match(/([A-Z][a-zA-Z0-9]*)/)?.[1] || '';
-          if (rawLabel.length < 3) rawLabel = '';
-          const contextLabel = rawLabel || 'Body text area';
+          const screenshotIdx = block.screenshotIndex || block.blockIndex;
+          const contextLabel = block.location || 'Body text area';
           const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
-          const elementLabel = rawLabel || `Body text element ${block.blockIndex}`;
+          const elementLabel = contextLabel.length > 2 ? contextLabel : `Body text element ${block.blockIndex}`;
           
-          let explanation = v.diagnosis || 'Line spacing appears visually dense for body text.';
+          let explanation = `Line spacing ratio ≈${block.estimatedRatio > 0 ? block.estimatedRatio.toFixed(2) : 'unknown'} detected across ${block.linesDetected} lines.`;
           if (block.estimatedRatio === 0) {
             explanation += ' Dense text region detected but line-height ratio could not be reliably computed.';
           } else if (block.estimatedRatio >= 1.35 && block.estimatedRatio < 1.50) {
             explanation += ' Borderline dense spacing detected.';
+          } else if (block.estimatedRatio < 1.35 && block.estimatedRatio > 0) {
+            explanation += ' Below recommended 1.35 readability baseline.';
           }
           
           a3Elements.push({
@@ -4842,14 +4959,17 @@ serve(async (req) => {
         }
       }
       
-      // Determine status — only potential or informational (no risk)
       const isRisk = decision === 'potential_risk_high' || decision === 'potential_risk_low';
       const a3Rule = allRulesForViolations.find(r => r.id === 'A3');
       
-      // Build diagnosis based on decision
       let a3Diagnosis: string;
       if (decision === 'no_multiline_blocks') {
-        a3Diagnosis = 'No multi-line paragraph text blocks detected. A3 requires multi-line body text for line spacing evaluation.';
+        const diagReason = diagnostics?.reason === 'wordBoxesNotMerged' 
+          ? 'Word-level boxes could not be merged into lines.' 
+          : diagnostics?.reason === 'groupingTooStrict' 
+          ? 'Lines detected but could not be grouped into paragraph blocks.' 
+          : 'No paragraph-like text regions detected.';
+        a3Diagnosis = `No multi-line paragraph blocks detected. ${diagReason} A3 requires multi-line body text for line spacing evaluation.`;
       } else if (decision === 'no_risk_detected') {
         a3Diagnosis = `${multiLineBlocks} multi-line text block${multiLineBlocks !== 1 ? 's' : ''} evaluated. Estimated median line-height ratio ≈${medianRatio?.toFixed(2)} is above the 1.50 threshold — no risk detected (heuristic).`;
       } else {
@@ -4877,7 +4997,7 @@ serve(async (req) => {
           : undefined,
       };
       
-      console.log(`A3 aggregated (screenshot): ${blocksEvaluated} blocks evaluated, ${multiLineBlocks} multi-line, decision=${decision}`);
+      console.log(`A3 aggregated (screenshot): ${blocksEvaluated} blocks, ${multiLineBlocks} multi-line, decision=${decision}${diagnostics ? ` (diag: ${diagnostics.reason}, boxes=${diagnostics.rawBoxesDetected}, lines=${diagnostics.linesConstructed})` : ''}`);
     }
     
     // Combine all violations - A1 uses aggregated cards (max 2)

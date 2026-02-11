@@ -152,7 +152,7 @@ export interface Violation {
   a3EstimationSummary?: {
     blocksEvaluated: number;
     multiLineBlocks: number;
-    medianRatio?: number; // median estimated ratio across blocks
+    medianRatio?: number;
     decision: 'potential_risk_high' | 'potential_risk_low' | 'no_risk_detected' | 'no_multiline_blocks';
     perBlockDetails?: Array<{
       blockIndex: number;
@@ -162,6 +162,12 @@ export interface Violation {
       lineStepPx: number;
       confidence: number;
     }>;
+    // Diagnostics when 0 multi-line blocks found
+    diagnostics?: {
+      rawBoxesDetected: number;
+      linesConstructed: number;
+      reason: string;
+    };
   };
 }
 
