@@ -136,6 +136,38 @@ export interface Violation {
   a1Elements?: A1ElementSubItem[];
   // "near-threshold" tag for elements within small margin of threshold
   nearThreshold?: boolean;
+
+  // ============================================================
+  // A2 AGGREGATED ELEMENT REPORTING
+  // ============================================================
+  isA2Aggregated?: boolean;
+  a2Elements?: A2ElementSubItem[];
+}
+
+// A2 Element sub-item for aggregated font-size reporting
+export interface A2ElementSubItem {
+  elementLabel: string; // e.g., "Course description paragraph"
+  textSnippet?: string;
+  location: string; // screenshot ref or file path
+  screenshotIndex?: number;
+
+  // Font size data
+  computedFontSize?: number; // Deterministic px value (confirmed only)
+  fontSizeSource?: string; // e.g., "Explicit CSS declaration", "Tailwind class text-sm"
+  detectionMethod: 'deterministic' | 'heuristic'; // deterministic = code, heuristic = screenshot
+
+  // Threshold
+  thresholdPx: number; // always 16
+
+  // Classification
+  explanation: string;
+  confidence: number; // 0-1
+
+  // Corrective prompt (confirmed only)
+  correctivePrompt?: string;
+
+  // Deduplication
+  deduplicationKey: string;
 }
 
 // A1 Element sub-item for aggregated reporting

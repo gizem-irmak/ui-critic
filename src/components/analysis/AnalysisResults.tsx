@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import type { Analysis, Project } from '@/types/project';
 import { PotentialRisksSection } from './PotentialRiskItem';
 import { A1AggregatedCard } from './A1AggregatedCard';
+import { A2AggregatedCard } from './A2AggregatedCard';
 interface AnalysisResultsProps {
   analysis: Analysis;
   project: Project;
@@ -69,8 +70,33 @@ export function AnalysisResults({
             });
           }
         }
+      } else if (v.ruleId === 'A2' && v.isA2Aggregated && v.a2Elements) {
+        // Handle A2 aggregated violations with element-level prompts
+        if (!ruleGroups.has('A2')) {
+          ruleGroups.set('A2', {
+            ruleId: 'A2',
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+          });
+        }
+        const group = ruleGroups.get('A2')!;
+        
+        for (const el of v.a2Elements) {
+          if (el.correctivePrompt) {
+            const elementRef = [
+              el.elementLabel,
+              el.location ? `— ${el.location}` : null,
+            ].filter(Boolean).join(' ');
+            
+            group.prompts.push({
+              prompt: el.correctivePrompt,
+              elementRef: elementRef || el.elementLabel,
+            });
+          }
+        }
       } else if (v.correctivePrompt) {
-        // Handle non-A1 violations
+        // Handle non-aggregated violations
         const key = v.ruleId;
         if (!ruleGroups.has(key)) {
           ruleGroups.set(key, {
@@ -271,7 +297,11 @@ export function AnalysisResults({
       {(() => {
         const confirmedViolationsList = analysis.violations.filter(v => v.status !== 'potential');
         const a1Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A1' && v.isA1Aggregated);
-        const otherConfirmed = confirmedViolationsList.filter(v => !(v.ruleId === 'A1' && v.isA1Aggregated));
+        const a2Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A2' && v.isA2Aggregated);
+        const otherConfirmed = confirmedViolationsList.filter(v => 
+          !(v.ruleId === 'A1' && v.isA1Aggregated) && 
+          !(v.ruleId === 'A2' && v.isA2Aggregated)
+        );
         
         return confirmedViolationsList.length > 0 && (
           <div className="space-y-4">
@@ -289,6 +319,10 @@ export function AnalysisResults({
               <A1AggregatedCard violation={a1Aggregated} />
             )}
             
+            {/* A2 Aggregated Card if exists */}
+            {a2Aggregated && (
+              <A2AggregatedCard violation={a2Aggregated} />
+            )}
             {/* Other confirmed issues */}
             {otherConfirmed.length > 0 && (
               <Card className="border-destructive/30">
@@ -329,12 +363,14 @@ export function AnalysisResults({
       {/* Potential Issues Section */}
       {(() => {
         const a1Potential = analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential');
-        const nonA1Potential = analysis.violations.filter(v => 
+        const a2Potential = analysis.violations.find(v => v.ruleId === 'A2' && v.isA2Aggregated && v.status === 'potential');
+        const nonAggregatedPotential = analysis.violations.filter(v => 
           v.status === 'potential' && 
-          !(v.ruleId === 'A1' && v.isA1Aggregated)
+          !(v.ruleId === 'A1' && v.isA1Aggregated) &&
+          !(v.ruleId === 'A2' && v.isA2Aggregated)
         );
-        const hasPotentialIssues = a1Potential || nonA1Potential.length > 0;
-        const totalPotential = (a1Potential ? 1 : 0) + nonA1Potential.length;
+        const hasPotentialIssues = a1Potential || a2Potential || nonAggregatedPotential.length > 0;
+        const totalPotential = (a1Potential ? 1 : 0) + (a2Potential ? 1 : 0) + nonAggregatedPotential.length;
         
         return hasPotentialIssues && (
           <div className="space-y-4">
@@ -352,11 +388,16 @@ export function AnalysisResults({
               <A1AggregatedCard violation={a1Potential} />
             )}
             
+            {/* A2 Potential Card */}
+            {a2Potential && (
+              <A2AggregatedCard violation={a2Potential} />
+            )}
+            
             {/* Other Potential Risks */}
-            {nonA1Potential.length > 0 && (
+            {nonAggregatedPotential.length > 0 && (
               <Card className="border-warning/30">
                 <CardContent className="pt-4">
-                  <PotentialRisksSection violations={nonA1Potential} />
+                  <PotentialRisksSection violations={nonAggregatedPotential} />
                 </CardContent>
               </Card>
             )}
