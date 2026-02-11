@@ -90,6 +90,11 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
                     ≈{element.estimatedLineHeight.toFixed(2)} (visual estimation)
                   </span>
                 </>
+              ) : element.estimationFailed ? (
+                <>
+                  <span className="text-muted-foreground font-medium w-28">Est. Line Height:</span>
+                  <span className="text-muted-foreground italic">could not be reliably computed</span>
+                </>
               ) : (
                 <>
                   <span className="text-muted-foreground font-medium w-28">Est. Line Height:</span>
@@ -110,14 +115,16 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Threshold:</span>
               <span className="font-mono">
-                {element.detectionMethod === 'heuristic' ? '1.3 readability baseline' : `${element.thresholdRatio} minimum readability baseline`}
+                {element.detectionMethod === 'heuristic'
+                  ? (element.estimationFailed ? '1.35 readability baseline' : '1.35 readability baseline')
+                  : `${element.thresholdRatio} minimum readability baseline`}
               </span>
             </div>
 
             {/* Detection Source */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Detection:</span>
-              <span>{element.lineHeightSource || (element.detectionMethod === 'deterministic' ? 'CSS cascade resolution' : 'Screenshot-based visual estimation')}</span>
+              <span>{element.lineHeightSource || (element.detectionMethod === 'deterministic' ? 'CSS cascade resolution' : (element.estimationFailed ? 'Screenshot-based density fallback' : 'Screenshot-based visual estimation'))}</span>
             </div>
 
             {/* Confidence */}
@@ -140,7 +147,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
             </div>
 
             {/* Low confidence badge for potential findings */}
-            {!isConfirmed && element.detectionMethod === 'heuristic' && (
+            {!isConfirmed && (element.detectionMethod === 'heuristic' || element.estimationFailed) && (
               <div className="flex items-start gap-2 pt-1">
                 <Info className="h-3 w-3 text-warning mt-0.5 flex-shrink-0" />
                 <div className="flex flex-wrap gap-1">
