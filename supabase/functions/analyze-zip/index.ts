@@ -2056,7 +2056,7 @@ ${codeContent}`,
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
         ...(a2Status === 'potential' ? {
-          advisoryGuidance: 'Static visual estimation cannot determine exact computed font sizes. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository so computed CSS font sizes can be resolved accurately.',
+          advisoryGuidance: 'Static visual estimation cannot determine exact computed font sizes. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
         } : {}),
       };
       
