@@ -4683,17 +4683,8 @@ serve(async (req) => {
     }
     
     // ========== A3 AGGREGATION LOGIC (Screenshot — Heuristic Only) ==========
-    const A3_DEBUG_MODE = true;
-    const a3DebugLogs: any[] = [];
     let aggregatedA3UI: any = null;
-
-    if (a3Violations.length === 0) {
-      if (A3_DEBUG_MODE) {
-        const msg = 'A3 Debug: No multi-line paragraph blocks detected in screenshot';
-        console.log(msg);
-        a3DebugLogs.push({ type: 'no_blocks', message: msg });
-      }
-    } else {
+    if (a3Violations.length > 0) {
       // Scope enforcement — same filters as A2
       const filteredA3UI = a3Violations.filter((v: any) => {
         const combined = ((v.evidence || '') + ' ' + (v.diagnosis || '')).toLowerCase();
@@ -4709,108 +4700,23 @@ serve(async (req) => {
       if (filteredA3UI.length > 0) {
         const a3Elements = filteredA3UI.map((v: any, idx: number) => {
           const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
-          const blockId = `a3-block-${idx + 1}`;
-          const screenshotRef = `Screenshot #${idx + 1}`;
           
           // Try to extract line-height estimate from diagnosis/evidence
           const ratioMatch = combined.match(/(?:ratio|line[- ]height|spacing)[:\s]*([\d.]+)/);
-          // Try to extract line count
-          const lineCountMatch = combined.match(/(\d+)\s*lines?/);
-          const detectedLines = lineCountMatch ? parseInt(lineCountMatch[1]) : undefined;
-          // Try to extract text height / baseline distance estimates
-          const textHeightMatch = combined.match(/(?:text|font)\s*height[:\s]*([\d.]+)/);
-          const baselineMatch = combined.match(/(?:baseline|vertical)\s*(?:distance|gap|spacing)[:\s]*([\d.]+)/);
-          const avgTextHeight = textHeightMatch ? parseFloat(textHeightMatch[1]) : undefined;
-          const avgBaselineDistance = baselineMatch ? parseFloat(baselineMatch[1]) : undefined;
-
           let estimatedLineHeight: number | undefined;
           let estimationFailed = false;
           
-          if (ratioMatch) {
+           if (ratioMatch) {
             estimatedLineHeight = parseFloat(ratioMatch[1]);
+            // Conservative sensitivity bands for screenshot A3:
+            //   < 1.35 → Potential Risk (High confidence)
+            //   1.35–1.50 → Potential Risk (Low confidence, borderline)
+            //   ≥ 1.50 → No finding (silent)
+            if (estimatedLineHeight >= 1.50) return null;
           } else {
+            // Estimation failed — trigger dense text fallback instead of skipping
             estimationFailed = true;
           }
-
-          // Debug: determine threshold band
-          let thresholdBand: string;
-          if (estimationFailed) {
-            thresholdBand = 'N/A (estimation failed)';
-          } else if (estimatedLineHeight! < 1.35) {
-            thresholdBand = '< 1.35 (High confidence)';
-          } else if (estimatedLineHeight! < 1.50) {
-            thresholdBand = '1.35–1.50 (Borderline)';
-          } else {
-            thresholdBand = '≥ 1.50 (No finding)';
-          }
-
-          // Single-line check
-          if (detectedLines !== undefined && detectedLines < 2) {
-            const msg = `A3 Debug: Single-line block — spacing not computable`;
-            console.log(msg);
-            if (A3_DEBUG_MODE) {
-              a3DebugLogs.push({
-                type: 'single_line',
-                blockId,
-                screenshotRef,
-                detectedLines,
-                message: msg,
-              });
-            }
-            // Still allow fallback processing below
-          }
-
-          // Baseline estimation failed
-          if (estimationFailed) {
-            const msg = `A3 Debug: Baseline estimation failed for block`;
-            console.log(msg);
-            if (A3_DEBUG_MODE) {
-              a3DebugLogs.push({
-                type: 'estimation_failed',
-                blockId,
-                screenshotRef,
-                detectedLines,
-                avgTextHeight,
-                avgBaselineDistance,
-                estimatedRatio: undefined,
-                thresholdBand,
-                classification: 'Potential (density fallback)',
-                message: msg,
-              });
-            }
-          }
-
-          // Classification decision
-          let classification: string;
-          if (estimationFailed) {
-            classification = 'Potential (density fallback)';
-          } else if (estimatedLineHeight! >= 1.50) {
-            classification = 'No finding (silent)';
-          } else {
-            classification = 'Potential';
-          }
-
-          // Full debug log for every block
-          if (A3_DEBUG_MODE) {
-            const debugEntry = {
-              type: 'block_analysis',
-              blockId,
-              screenshotRef,
-              detectedLines: detectedLines ?? 'unknown',
-              avgTextHeight: avgTextHeight ?? 'not extracted',
-              avgBaselineDistance: avgBaselineDistance ?? 'not extracted',
-              estimatedRatio: estimatedLineHeight ?? 'not computed',
-              thresholdBand,
-              classification,
-              rawDiagnosis: (v.diagnosis || '').substring(0, 200),
-              rawEvidence: (v.evidence || '').substring(0, 200),
-            };
-            console.log(`A3 Debug [${blockId}]:`, JSON.stringify(debugEntry));
-            a3DebugLogs.push(debugEntry);
-          }
-
-          // Apply threshold — silent skip for ≥ 1.50
-          if (!estimationFailed && estimatedLineHeight! >= 1.50) return null;
           
           const screenshotIdx = idx + 1;
           let rawLabel = v.evidence?.match(/([A-Z][a-zA-Z0-9]*)/)?.[1] || '';
@@ -4822,11 +4728,12 @@ serve(async (req) => {
           // Confidence based on sensitivity band
           let confidence: number;
           if (estimationFailed) {
-            confidence = 0.45;
+            // Dense text fallback: paragraph detected but ratio unknown
+            confidence = 0.45; // Low confidence density fallback
           } else if (estimatedLineHeight !== undefined && estimatedLineHeight < 1.35) {
-            confidence = 0.65;
+            confidence = 0.65; // Below threshold — higher confidence
           } else {
-            confidence = 0.45;
+            confidence = 0.45; // Borderline 1.35–1.50 — lower confidence
           }
           
           // Build explanation with band-specific notes
@@ -4841,7 +4748,7 @@ serve(async (req) => {
             elementLabel,
             textSnippet: undefined,
             location: formattedLocation,
-            computedLineHeight: undefined,
+            computedLineHeight: undefined, // Screenshot: cannot deterministically measure
             estimatedLineHeight,
             estimationFailed,
             computedFontSize: undefined,
@@ -4850,18 +4757,8 @@ serve(async (req) => {
             thresholdRatio: 1.3,
             explanation,
             confidence: Math.round(confidence * 100) / 100,
-            correctivePrompt: undefined,
+            correctivePrompt: undefined, // Potential: no corrective prompts
             deduplicationKey: `${formattedLocation}|${elementLabel}`,
-            // Debug telemetry attached to element
-            _debug: A3_DEBUG_MODE ? {
-              blockId,
-              detectedLines: detectedLines ?? 'unknown',
-              avgTextHeight: avgTextHeight ?? 'not extracted',
-              avgBaselineDistance: avgBaselineDistance ?? 'not extracted',
-              estimatedRatio: estimatedLineHeight ?? 'not computed',
-              thresholdBand,
-              classification,
-            } : undefined,
           };
         }).filter(Boolean);
         
@@ -4873,7 +4770,7 @@ serve(async (req) => {
             ruleId: 'A3',
             ruleName: 'Insufficient line spacing',
             category: 'accessibility',
-            status: 'potential',
+            status: 'potential', // Screenshot-based A3 is ALWAYS potential
             blocksConvergence: false,
             inputType: 'screenshots',
             isA3Aggregated: true,
@@ -4883,20 +4780,12 @@ serve(async (req) => {
             correctivePrompt: a3Rule?.correctivePrompt || '',
             confidence: Math.round(avgConf * 100) / 100,
             advisoryGuidance: 'Visual estimation cannot determine exact computed line-height ratios. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
-            _a3DebugLogs: A3_DEBUG_MODE ? a3DebugLogs : undefined,
           };
           
           console.log(`A3 aggregated (screenshot): ${filteredA3UI.length} → ${a3Elements.length} elements (potential)`);
-        } else if (A3_DEBUG_MODE) {
-          console.log('A3 Debug: All blocks filtered out (all ≥ 1.50 or scope-excluded)');
-          a3DebugLogs.push({ type: 'all_filtered', message: 'All blocks filtered out after threshold/scope checks' });
         }
-      } else if (A3_DEBUG_MODE) {
-        console.log('A3 Debug: All violations filtered out by scope enforcement (non-body-text)');
-        a3DebugLogs.push({ type: 'scope_filtered', message: 'All violations excluded by body-text scope filters' });
       }
     }
-    
     
     // Combine all violations - A1 uses aggregated cards (max 2)
     const enhancedViolations = [

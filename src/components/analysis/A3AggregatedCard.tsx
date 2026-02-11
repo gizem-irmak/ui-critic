@@ -223,45 +223,6 @@ export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCar
             </p>
           </div>
         )}
-
-        {/* Debug Telemetry Panel */}
-        {(violation as any)._a3DebugLogs && (violation as any)._a3DebugLogs.length > 0 && (
-          <Collapsible>
-            <CollapsibleTrigger className="w-full">
-              <div className="flex items-center gap-2 cursor-pointer rounded-lg bg-muted/50 border border-dashed border-muted-foreground/30 p-2 mt-3">
-                <Badge variant="outline" className="text-xs font-mono border-muted-foreground/40">DEBUG</Badge>
-                <span className="text-xs text-muted-foreground font-medium">A3 Debug Telemetry ({(violation as any)._a3DebugLogs.length} entries)</span>
-              </div>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <div className="mt-2 space-y-1.5 rounded-lg bg-muted/30 border border-dashed border-muted-foreground/20 p-3">
-                {(violation as any)._a3DebugLogs.map((log: any, i: number) => (
-                  <div key={i} className="text-xs font-mono text-muted-foreground leading-relaxed">
-                    {log.type === 'block_analysis' ? (
-                      <div className="space-y-0.5 border-b border-border/30 pb-1.5 mb-1.5">
-                        <div><span className="text-foreground font-semibold">[{log.blockId}]</span> {log.screenshotRef}</div>
-                        <div>Lines: {log.detectedLines} | Text H: {log.avgTextHeight} | Baseline Dist: {log.avgBaselineDistance}</div>
-                        <div>Est. Ratio: {typeof log.estimatedRatio === 'number' ? log.estimatedRatio.toFixed(2) : log.estimatedRatio} | Band: {log.thresholdBand}</div>
-                        <div>Classification: <span className={cn(
-                          log.classification.includes('No finding') ? 'text-muted-foreground' : 'text-warning'
-                        )}>{log.classification}</span></div>
-                      </div>
-                    ) : (
-                      <div className="text-warning/80">{log.message}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
-        )}
-
-        {/* Per-element debug info */}
-        {elements.map((element, idx) => {
-          const debug = (element as any)._debug;
-          if (!debug) return null;
-          return null; // Debug info is shown in the panel above
-        })}
       </CardContent>
     </Card>
   );
