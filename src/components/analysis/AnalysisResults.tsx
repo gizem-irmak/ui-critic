@@ -10,6 +10,7 @@ import { PotentialRisksSection } from './PotentialRiskItem';
 import { A1AggregatedCard } from './A1AggregatedCard';
 import { A2AggregatedCard } from './A2AggregatedCard';
 import { A3AggregatedCard } from './A3AggregatedCard';
+import { A3DebugPanel } from './A3DebugPanel';
 interface AnalysisResultsProps {
   analysis: Analysis;
   project: Project;
@@ -444,6 +445,19 @@ export function AnalysisResults({
           </div>
         );
       })()}
+
+      {/* A3 Debug Panel — always rendered when toggle is on, regardless of findings */}
+      <A3DebugPanel
+        analysis={analysis}
+        currentIteration={(() => {
+          const iter = project.iterations.find(i => i.analysis?.id === analysis.id);
+          return iter ? {
+            inputType: iter.inputType,
+            selectedRules: iter.selectedRules,
+            inputData: iter.inputData,
+          } : undefined;
+        })()}
+      />
 
       {analysis.violations.length === 0 && (
         <Card>
