@@ -1214,7 +1214,7 @@ serve(async (req) => {
           explanation: v.diagnosis || 'Body text size is below the recommended 16px baseline.',
           confidence: v.confidence || 0.6,
           correctivePrompt: isDeterministic
-            ? `[${elementLabel}] — ${location}\n\nIssue reason: Computed font-size ${computedSize}px is below recommended minimum 16px.\n\nRecommended fix:\nIncrease the base font size to at least 16px.\n\nApply consistently across all screens, routes, and breakpoints.\nAdjust line-height to approximately 1.4–1.6.\n\nDo NOT modify badges, metadata, timestamps, or intentional microcopy.`
+            ? `body text '${(elementLabel || 'Body text element').substring(0, 60)}' (${location || 'Source file'})\n\nIssue reason: Computed font-size ${computedSize}px is below the recommended readability baseline of 16px.\n\nRecommended fix: Increase the font size of all primary body text elements in this group (currently ${computedSize}px${(v.evidence || '').match(/(text-xs|text-sm)/i)?.[1] ? ` / ${(v.evidence || '').match(/(text-xs|text-sm)/i)?.[1]}` : ''}) to at least 16px (text-base). Ensure this update is applied consistently across all screens and components where this text style is reused. Adjust line-height to approximately 1.4–1.6 to preserve readability.`
             : undefined,
           deduplicationKey: `${location}|${elementLabel}`,
         };
