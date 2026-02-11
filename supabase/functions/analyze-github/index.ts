@@ -9,7 +9,7 @@ const corsHeaders = {
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small informational text size', diagnosis: 'WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.', correctivePrompt: 'Increase text below 13px to at least 14px (text-sm) for informational or state-indicating content. Use 16px (text-base) for primary informational content in dialogs, alerts, tooltips, and chart labels. Retain very small text only for decorative or non-essential elements. Do not alter layout structure, spacing, or component hierarchy.' },
+    { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase body text below 16px to at least 16px (text-base / 1rem). This applies to paragraphs, descriptions, article content, and main text areas. Do not apply to badges, metadata, timestamps, or intentional microcopy.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
@@ -785,10 +785,12 @@ NOTE: A1 (text contrast) is analyzed separately. Do NOT report A1 violations.
 Accessibility rules to check:
 ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name} - ${r.diagnosis}`).join('\n')}
 
-### A2 Detection:
-- VIOLATION: text-xs (<13px) for informational content
-- WARNING: 13-14px text
-- Skip text-sm (14px) and larger
+### A2 (Small body font size) Detection:
+- **Confirmed**: Body text with explicitly defined font-size < 16px in pixels or deterministic Tailwind classes (text-xs, text-sm) → status: "confirmed"
+- **Potential**: Body text with relative units (rem/em/%) or ambiguous semantic role → status: "potential"
+- **Exclude**: Badges, metadata, timestamps, intentional microcopy, labels, tags, chips
+- Skip text-base (16px) and larger
+- Only evaluate primary body text elements (paragraphs, descriptions, content blocks)
 
 ### A4 Detection:
 - Flag elements without explicit 44×44px minimum
