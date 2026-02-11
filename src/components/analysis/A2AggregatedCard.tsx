@@ -79,7 +79,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                   {element.computedFontSize}px
                 </span>
               ) : (
-                <span className="text-muted-foreground italic">not deterministically measured</span>
+                <span className="text-muted-foreground italic">not measured</span>
               )}
               {element.computedFontSize !== undefined && element.confidence !== undefined && (
                 <span className="text-muted-foreground">
@@ -91,7 +91,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
             {/* Threshold */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-20">Threshold:</span>
-              <span className="font-mono">{element.thresholdPx}px readability baseline</span>
+              <span className="font-mono">{element.thresholdPx}px minimum recommended</span>
             </div>
 
             {/* Detection Source */}
@@ -112,16 +112,6 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                   — {element.detectionMethod === 'deterministic' ? 'deterministic' : 'heuristic'}
                 </span>
               </span>
-            </div>
-
-            {/* Status */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Status:</span>
-              {isConfirmed ? (
-                <span className="text-destructive font-medium">Confirmed violation — Deterministic measurement</span>
-              ) : (
-                <span className="text-warning font-medium">Potential risk — Measurement uncertainty</span>
-              )}
             </div>
 
             {/* Explanation */}
