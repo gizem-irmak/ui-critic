@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle, XCircle, Copy, Check, AlertTriangle, ShieldCheck, AlertCircle } from 'lucide-react';
+import { CheckCircle, XCircle, Copy, Check, AlertTriangle, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -445,19 +445,7 @@ export function AnalysisResults({
         );
       })()}
 
-      {/* A3 Informational Summary (no risk detected) */}
-      {(() => {
-        const a3Informational = analysis.violations.find(v => v.ruleId === 'A3' && v.isA3Aggregated && v.status === 'informational');
-        return a3Informational && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 pt-2">
-              <ShieldCheck className="h-5 w-5 text-muted-foreground" />
-              <h3 className="text-xl font-bold text-foreground">A3 — Heuristic Estimation Summary</h3>
-            </div>
-            <A3AggregatedCard violation={a3Informational} />
-          </div>
-        );
-      })()}
+      {/* A3 silent when no risk — no informational section rendered */}
 
       {analysis.violations.length === 0 && (
         <Card>

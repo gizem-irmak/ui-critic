@@ -148,27 +148,6 @@ export interface Violation {
   // ============================================================
   isA3Aggregated?: boolean;
   a3Elements?: A3ElementSubItem[];
-  // A3 heuristic estimation summary (always present for screenshot A3)
-  a3EstimationSummary?: {
-    blocksEvaluated: number;
-    multiLineBlocks: number;
-    medianRatio?: number;
-    decision: 'potential_risk_high' | 'potential_risk_low' | 'no_risk_detected' | 'no_multiline_blocks';
-    perBlockDetails?: Array<{
-      blockIndex: number;
-      linesDetected: number;
-      estimatedRatio: number;
-      textHeightPx: number;
-      lineStepPx: number;
-      confidence: number;
-    }>;
-    // Diagnostics when 0 multi-line blocks found
-    diagnostics?: {
-      rawBoxesDetected: number;
-      linesConstructed: number;
-      reason: string;
-    };
-  };
 }
 
 // A2 Element sub-item for aggregated font-size reporting
