@@ -244,6 +244,7 @@ Every Potential finding MUST include at least one reason code explaining **why i
 - `BG_OVERLAY` — transparency or overlay suspected
 - `BG_TOO_SMALL_REGION` — insufficient background pixels around text
 - `FG_ANTIALIASING` — glyph sampling unstable (affects background detection)
+- `FG_BG_AMBIGUITY` — foreground/background roles ambiguous in enclosed component (badge/pill/chip) (v25.5)
 - `STATIC_ANALYSIS` — colors inferred from code (ZIP/GitHub only)
 
 **v23 REMOVED**: `LOW_CONFIDENCE` is NO LONGER a valid reason code for downgrading.

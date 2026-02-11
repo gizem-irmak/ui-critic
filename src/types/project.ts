@@ -191,5 +191,6 @@ export type A1ReasonCode =
   | 'FG_ANTIALIASING'    // Glyph sampling unstable due to anti-aliasing
   | 'FG_IMPLAUSIBLE'     // Foreground sampling inconsistent with visual prominence (v25.2)
   | 'FG_SAMPLING_UNRELIABLE' // Foreground color sampling unreliable after re-sampling (v25.3)
+  | 'FG_BG_AMBIGUITY'    // Foreground/background roles ambiguous in enclosed component (badge/pill/chip)
   | 'LOW_CONFIDENCE'     // Combined confidence below threshold
   | 'STATIC_ANALYSIS';   // Colors inferred from code, not rendered pixels
