@@ -1910,7 +1910,7 @@ const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
     { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px (text-base / 1rem) across all screens and components where this body-text style is reused. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy.' },
-    { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
+    { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Primary body text elements use line-height ratios below the recommended 1.3 minimum for readability. WCAG 1.4.12 (Text Spacing) recommends adequate line spacing to support users with cognitive or visual impairments.', correctivePrompt: 'Increase line-height of primary body text (paragraphs, descriptions, main content text) to at least 1.5 (leading-normal) across all screens and components. Do not change headings, badges, navigation text, metadata, timestamps, button labels, or intentional microcopy. Adjust paragraph spacing proportionally.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
   ],
@@ -3163,9 +3163,10 @@ serve(async (req) => {
     
     console.log(`Filtered ${(analysisResult.violations || []).length - filteredBySelection.length} violations from unselected rules`);
     
-    // Separate A1, A2, A4, and A5 violations for aggregation (only from selected rules)
+    // Separate A1, A2, A3, A4, and A5 violations for aggregation (only from selected rules)
     const a1Violations: any[] = [];
     const a2Violations: any[] = [];
+    const a3Violations: any[] = [];
     const a4Violations: any[] = [];
     const a5Violations: any[] = [];
     const otherViolations: any[] = [];
@@ -3175,6 +3176,8 @@ serve(async (req) => {
         a1Violations.push(v);
       } else if (v.ruleId === 'A2') {
         a2Violations.push(v);
+      } else if (v.ruleId === 'A3') {
+        a3Violations.push(v);
       } else if (v.ruleId === 'A4') {
         a4Violations.push(v);
       } else if (v.ruleId === 'A5') {
@@ -3470,7 +3473,7 @@ serve(async (req) => {
       console.log(`U1: No valid violations found (${u1Violations.length} filtered out as speculative or lacking evidence)`);
     }
     
-    // Process non-A1/A2/A4/A5/U1 violations
+    // Process non-A1/A2/A3/A4/A5/U1 violations
     const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
@@ -4679,11 +4682,97 @@ serve(async (req) => {
       console.log(`A1 aggregated: ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
     
+    // ========== A3 AGGREGATION LOGIC (Screenshot — Heuristic Only) ==========
+    let aggregatedA3UI: any = null;
+    if (a3Violations.length > 0) {
+      // Scope enforcement — same filters as A2
+      const filteredA3UI = a3Violations.filter((v: any) => {
+        const combined = ((v.evidence || '') + ' ' + (v.diagnosis || '')).toLowerCase();
+        if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus/i.test(combined)) return false;
+        if (/\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
+        if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) return false;
+        if (/\bbutton\b|\bbtn\b|\bcta\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
+        if (/\bmetadata\b|\btimestamp\b|\bauthor\b/i.test(combined)) return false;
+        if (/\bcaption\b|\btooltip\b|\bmonospace\b|\bplaceholder\b/i.test(combined)) return false;
+        return true;
+      });
+      
+      if (filteredA3UI.length > 0) {
+        const a3Elements = filteredA3UI.map((v: any, idx: number) => {
+          const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
+          
+          // Try to extract line-height estimate from diagnosis
+          const ratioMatch = combined.match(/(?:ratio|line[- ]height|spacing)[:\s]*([\d.]+)/);
+          let estimatedLineHeight: number | undefined;
+          let estimationFailed = false;
+          
+          if (ratioMatch) {
+            estimatedLineHeight = parseFloat(ratioMatch[1]);
+            // Skip if pass
+            if (estimatedLineHeight >= 1.45) return null;
+          } else {
+            estimationFailed = true;
+          }
+          
+          const screenshotIdx = idx + 1;
+          let rawLabel = v.evidence?.match(/([A-Z][a-zA-Z0-9]*)/)?.[1] || '';
+          if (rawLabel.length < 3) rawLabel = '';
+          const contextLabel = rawLabel || 'Body text area';
+          const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
+          const elementLabel = rawLabel || `Body text element ${idx + 1}`;
+          
+          let confidence = v.confidence || 0.5;
+          confidence = Math.min(confidence, 0.65); // Screenshot always capped
+          
+          return {
+            elementLabel,
+            textSnippet: undefined,
+            location: formattedLocation,
+            computedLineHeight: undefined, // Screenshot: cannot deterministically measure
+            estimatedLineHeight,
+            estimationFailed,
+            computedFontSize: undefined,
+            lineHeightSource: undefined,
+            detectionMethod: 'heuristic' as const,
+            thresholdRatio: 1.3,
+            explanation: v.diagnosis || 'Line spacing appears visually dense for body text.',
+            confidence: Math.round(confidence * 100) / 100,
+            correctivePrompt: undefined, // Potential: no corrective prompts
+            deduplicationKey: `${formattedLocation}|${elementLabel}`,
+          };
+        }).filter(Boolean);
+        
+        if (a3Elements.length > 0) {
+          const avgConf = a3Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a3Elements.length;
+          const a3Rule = allRulesForViolations.find(r => r.id === 'A3');
+          
+          aggregatedA3UI = {
+            ruleId: 'A3',
+            ruleName: 'Insufficient line spacing',
+            category: 'accessibility',
+            status: 'potential', // Screenshot-based A3 is ALWAYS potential
+            blocksConvergence: false,
+            inputType: 'screenshots',
+            isA3Aggregated: true,
+            a3Elements,
+            diagnosis: `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected. These require manual verification due to measurement uncertainty.`,
+            contextualHint: 'Increase line-height to at least 1.5 (leading-normal) for primary body text.',
+            correctivePrompt: a3Rule?.correctivePrompt || '',
+            confidence: Math.round(avgConf * 100) / 100,
+            advisoryGuidance: 'Visual estimation cannot determine exact computed line-height ratios. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
+          };
+          
+          console.log(`A3 aggregated (screenshot): ${filteredA3UI.length} → ${a3Elements.length} elements (potential)`);
+        }
+      }
+    }
+    
     // Combine all violations - A1 uses aggregated cards (max 2)
     const enhancedViolations = [
       ...filteredOtherViolations,
       ...aggregatedA1Violations, // Aggregated A1 findings (max 2 cards: confirmed + potential)
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
+      ...(aggregatedA3UI ? [aggregatedA3UI] : []),
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),
       ...(aggregatedA5UI ? [aggregatedA5UI] : []),
     ];

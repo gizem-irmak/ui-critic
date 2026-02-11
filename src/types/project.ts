@@ -142,6 +142,12 @@ export interface Violation {
   // ============================================================
   isA2Aggregated?: boolean;
   a2Elements?: A2ElementSubItem[];
+
+  // ============================================================
+  // A3 AGGREGATED ELEMENT REPORTING
+  // ============================================================
+  isA3Aggregated?: boolean;
+  a3Elements?: A3ElementSubItem[];
 }
 
 // A2 Element sub-item for aggregated font-size reporting
@@ -160,6 +166,35 @@ export interface A2ElementSubItem {
 
   // Threshold
   thresholdPx: number; // always 16
+
+  // Classification
+  explanation: string;
+  confidence: number; // 0-1
+
+  // Corrective prompt (confirmed only)
+  correctivePrompt?: string;
+
+  // Deduplication
+  deduplicationKey: string;
+}
+
+// A3 Element sub-item for aggregated line-spacing reporting
+export interface A3ElementSubItem {
+  elementLabel: string; // e.g., "Course description paragraph"
+  textSnippet?: string;
+  location: string; // screenshot ref or file path
+  screenshotIndex?: number;
+
+  // Line height data
+  computedLineHeight?: number; // Deterministic ratio value (confirmed only), e.g. 1.2
+  estimatedLineHeight?: number; // Approximate visual estimation ratio (screenshot heuristic only)
+  estimationFailed?: boolean; // True when visual estimation could not be performed
+  computedFontSize?: number; // Associated font size in px
+  lineHeightSource?: string; // e.g., "Tailwind class leading-tight", "CSS line-height: 1.2"
+  detectionMethod: 'deterministic' | 'heuristic'; // deterministic = code, heuristic = screenshot
+
+  // Threshold
+  thresholdRatio: number; // 1.3 minimum readability baseline
 
   // Classification
   explanation: string;

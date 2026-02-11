@@ -10,7 +10,7 @@ const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
     { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px (text-base / 1rem) across all screens and components where this body-text style is reused. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy.' },
-    { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
+    { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Primary body text elements use line-height ratios below the recommended 1.3 minimum for readability. WCAG 1.4.12 (Text Spacing) recommends adequate line spacing to support users with cognitive or visual impairments.', correctivePrompt: 'Increase line-height of primary body text (paragraphs, descriptions, main content text) to at least 1.5 (leading-normal) across all screens and components. Do not change headings, badges, navigation text, metadata, timestamps, button labels, or intentional microcopy. Adjust paragraph spacing proportionally.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
   ],
@@ -1136,7 +1136,8 @@ serve(async (req) => {
     
     // ========== A2 AGGREGATION LOGIC (GitHub) ==========
     const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2');
-    const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2');
+    const a3AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A3');
+    const nonA2A3AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3');
     
     let aggregatedA2GitHub: any = null;
     if (a2AiViolations.length > 0) {
@@ -1251,12 +1252,120 @@ serve(async (req) => {
       } // end filteredA2.length > 0
     }
     
+    // ========== A3 AGGREGATION LOGIC (GitHub) ==========
+    const TAILWIND_LEADING_GH: Record<string, number> = {
+      'leading-none': 1.0, 'leading-tight': 1.25, 'leading-snug': 1.375,
+      'leading-normal': 1.5, 'leading-relaxed': 1.625, 'leading-loose': 2.0,
+    };
+    
+    let aggregatedA3GitHub: any = null;
+    if (a3AiViolations.length > 0) {
+      // Scope enforcement — same filters as A2
+      const filteredA3 = a3AiViolations.filter((v: any) => {
+        const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
+        if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus/i.test(combined)) return false;
+        if (/\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
+        if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) return false;
+        if (/\bbutton\b|\bbtn\b|\bcta\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
+        if (/\bmetadata\b|\btimestamp\b|\bauthor\b/i.test(combined)) return false;
+        if (/\bcaption\b|\btooltip\b|\bmonospace\b|\bplaceholder\b/i.test(combined)) return false;
+        return true;
+      });
+      
+      if (filteredA3.length > 0) {
+        const a3Elements = filteredA3.map((v: any, idx: number) => {
+          const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
+          
+          // Extract line-height info
+          const leadingMatch = combined.match(/leading-(none|tight|snug|normal|relaxed|loose)/);
+          const lineHeightCssMatch = combined.match(/line-height:\s*([\d.]+)/);
+          const ratioMatch = combined.match(/(?:ratio|line[- ]height)[:\s]*([\d.]+)/);
+          
+          let lineHeightRatio: number | undefined;
+          let lineHeightToken = '';
+          
+          if (leadingMatch) {
+            const key = `leading-${leadingMatch[1]}`;
+            lineHeightRatio = TAILWIND_LEADING_GH[key];
+            lineHeightToken = key;
+          } else if (lineHeightCssMatch) {
+            lineHeightRatio = parseFloat(lineHeightCssMatch[1]);
+            lineHeightToken = `line-height: ${lineHeightCssMatch[1]}`;
+          } else if (ratioMatch) {
+            lineHeightRatio = parseFloat(ratioMatch[1]);
+            lineHeightToken = `ratio ${ratioMatch[1]}`;
+          }
+          
+          // Skip if pass
+          if (lineHeightRatio !== undefined && lineHeightRatio >= 1.45) return null;
+          
+          const isDeterministic = lineHeightRatio !== undefined && lineHeightRatio < 1.3 && /leading-|line-height:/i.test(combined);
+          
+          const componentMatch = (v.evidence || '').match(/([A-Z][a-zA-Z0-9]*(?:Description|Content|Text)?)/);
+          const fileMatch = (v.evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
+          const elementLabel = componentMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || `Body text element ${idx + 1}`;
+          const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
+          
+          const fontSizeMatch = combined.match(/(\d+)px/);
+          const fontSizePx = fontSizeMatch ? parseInt(fontSizeMatch[1]) : undefined;
+          
+          return {
+            elementLabel,
+            textSnippet: undefined,
+            location,
+            computedLineHeight: isDeterministic && lineHeightRatio !== undefined ? lineHeightRatio : undefined,
+            estimatedLineHeight: !isDeterministic ? lineHeightRatio : undefined,
+            computedFontSize: fontSizePx,
+            lineHeightSource: lineHeightToken || undefined,
+            detectionMethod: isDeterministic ? 'deterministic' as const : 'heuristic' as const,
+            thresholdRatio: 1.3,
+            explanation: v.diagnosis || 'Line-height ratio is below the recommended readability baseline.',
+            confidence: v.confidence || 0.7,
+            correctivePrompt: isDeterministic && lineHeightRatio !== undefined
+              ? `body text '${elementLabel.substring(0, 60)}' (${location})\n\nIssue reason: Computed line-height ratio ${lineHeightRatio.toFixed(2)} is below the recommended readability baseline of 1.3.\n\nRecommended fix: Increase the line-height of all primary body text elements in this group (currently ${lineHeightToken || lineHeightRatio}) to at least 1.5 (leading-normal). Ensure this update is applied consistently across all screens and components where this text style is reused.`
+              : undefined,
+            deduplicationKey: `${location}|${elementLabel}`,
+          };
+        }).filter(Boolean);
+        
+        if (a3Elements.length > 0) {
+          const hasConfirmed = a3Elements.some((el: any) => el.detectionMethod === 'deterministic');
+          const a3Status = hasConfirmed ? 'confirmed' : 'potential';
+          const avgConf = a3Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a3Elements.length;
+          const a3Rule = [...rules.accessibility].find(r => r.id === 'A3');
+          
+          aggregatedA3GitHub = {
+            ruleId: 'A3',
+            ruleName: 'Insufficient line spacing',
+            category: 'accessibility',
+            status: a3Status,
+            blocksConvergence: a3Status === 'confirmed',
+            inputType: 'github',
+            isA3Aggregated: true,
+            a3Elements,
+            diagnosis: a3Status === 'confirmed'
+              ? `${a3Elements.length} body text element${a3Elements.length !== 1 ? 's' : ''} with confirmed insufficient line spacing detected.`
+              : `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected.`,
+            contextualHint: 'Increase line-height to at least 1.5 (leading-normal) for primary body text.',
+            correctivePrompt: a3Rule?.correctivePrompt || '',
+            confidence: Math.round(avgConf * 100) / 100,
+            ...(a3Status === 'potential' ? {
+              advisoryGuidance: 'Static analysis cannot fully resolve CSS cascade for line-height. For deterministic measurement, verify with browser DevTools after rendering.',
+            } : {}),
+          };
+          
+          console.log(`A3 aggregated (GitHub): ${filteredA3.length} → 1 card with ${a3Elements.length} elements (${a3Status})`);
+        }
+      }
+    }
+    
     // Combine all violations
     const allViolations = [
       ...aggregatedA1Violations,
       ...(u1Violation ? [u1Violation] : []),
       ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
-      ...nonA2AiViolations,
+      ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
+      ...nonA2A3AiViolations,
     ];
     
     // Deduplicate by ruleId

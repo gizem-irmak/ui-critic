@@ -26,8 +26,8 @@ export const rules: Rule[] = [
     id: 'A3',
     category: 'accessibility',
     name: 'Insufficient line spacing',
-    diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.',
-    correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.'
+    diagnosis: 'Primary body text elements use line-height ratios below the recommended 1.3 minimum for readability. WCAG 1.4.12 (Text Spacing) recommends adequate line spacing to support users with cognitive or visual impairments.',
+    correctivePrompt: 'Increase line-height of primary body text (paragraphs, descriptions, main content text) to at least 1.5 (leading-normal) across all screens and components. Do not change headings, badges, navigation text, metadata, timestamps, button labels, or intentional microcopy. Adjust paragraph spacing proportionally.'
   },
   {
     id: 'A4',
