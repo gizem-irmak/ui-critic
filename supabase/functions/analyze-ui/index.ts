@@ -4962,42 +4962,31 @@ serve(async (req) => {
       const isRisk = decision === 'potential_risk_high' || decision === 'potential_risk_low';
       const a3Rule = allRulesForViolations.find(r => r.id === 'A3');
       
-      let a3Diagnosis: string;
-      if (decision === 'no_multiline_blocks') {
-        const diagReason = diagnostics?.reason === 'wordBoxesNotMerged' 
-          ? 'Word-level boxes could not be merged into lines.' 
-          : diagnostics?.reason === 'groupingTooStrict' 
-          ? 'Lines detected but could not be grouped into paragraph blocks.' 
-          : 'No paragraph-like text regions detected.';
-        a3Diagnosis = `No multi-line paragraph blocks detected. ${diagReason} A3 requires multi-line body text for line spacing evaluation.`;
-      } else if (decision === 'no_risk_detected') {
-        a3Diagnosis = `${multiLineBlocks} multi-line text block${multiLineBlocks !== 1 ? 's' : ''} evaluated. Estimated median line-height ratio ≈${medianRatio?.toFixed(2)} is above the 1.45 threshold — no risk detected (heuristic).`;
+      // Silent behavior: only emit A3 when there is actual risk
+      if (isRisk && a3Elements.length > 0) {
+        const a3Diagnosis = `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected. These require manual verification due to measurement uncertainty.`;
+        
+        aggregatedA3UI = {
+          ruleId: 'A3',
+          ruleName: 'Insufficient line spacing',
+          category: 'accessibility',
+          status: 'potential',
+          blocksConvergence: false,
+          inputType: 'screenshots',
+          isA3Aggregated: true,
+          a3Elements,
+          diagnosis: a3Diagnosis,
+          contextualHint: 'Increase line-height to at least 1.5 (leading-normal) for primary body text.',
+          correctivePrompt: a3Rule?.correctivePrompt || '',
+          confidence: Math.round((a3Elements.reduce((s: number, e: any) => s + e.confidence, 0) / Math.max(a3Elements.length, 1)) * 100) / 100,
+          advisoryGuidance: 'Visual estimation cannot determine exact computed line-height ratios. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
+        };
+        
+        console.log(`A3 aggregated (screenshot): ${blocksEvaluated} blocks, ${multiLineBlocks} multi-line, decision=${decision}, ${a3Elements.length} elements emitted`);
       } else {
-        a3Diagnosis = `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected. These require manual verification due to measurement uncertainty.`;
+        // No risk or no elements — A3 is silent (no output)
+        console.log(`A3 silent (screenshot): ${blocksEvaluated} blocks, ${multiLineBlocks} multi-line, decision=${decision} — no finding emitted`);
       }
-      
-      aggregatedA3UI = {
-        ruleId: 'A3',
-        ruleName: 'Insufficient line spacing',
-        category: 'accessibility',
-        status: isRisk ? 'potential' : 'informational',
-        blocksConvergence: false,
-        inputType: 'screenshots',
-        isA3Aggregated: true,
-        a3Elements: a3Elements.length > 0 ? a3Elements : undefined,
-        a3EstimationSummary,
-        diagnosis: a3Diagnosis,
-        contextualHint: isRisk ? 'Increase line-height to at least 1.5 (leading-normal) for primary body text.' : undefined,
-        correctivePrompt: isRisk ? (a3Rule?.correctivePrompt || '') : '',
-        confidence: isRisk
-          ? Math.round((a3Elements.reduce((s: number, e: any) => s + e.confidence, 0) / Math.max(a3Elements.length, 1)) * 100) / 100
-          : 1.0,
-        advisoryGuidance: isRisk
-          ? 'Visual estimation cannot determine exact computed line-height ratios. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.'
-          : undefined,
-      };
-      
-      console.log(`A3 aggregated (screenshot): ${blocksEvaluated} blocks, ${multiLineBlocks} multi-line, decision=${decision}${diagnostics ? ` (diag: ${diagnostics.reason}, boxes=${diagnostics.rawBoxesDetected}, lines=${diagnostics.linesConstructed})` : ''}`);
     }
     
     // Combine all violations - A1 uses aggregated cards (max 2)
