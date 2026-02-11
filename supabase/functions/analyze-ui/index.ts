@@ -2058,10 +2058,10 @@ STEP 4 — For each block with >= 2 lines, compute:
 - lineStepPx = median of (centerY[i+1] - centerY[i]) for consecutive lines
 - estimatedRatio = lineStepPx / textHeightPx
 
-**CLASSIFICATION (Screenshot Only):**
-- estimatedRatio < 1.35 → Potential Risk (High confidence: 60-65%)
-- 1.35 <= estimatedRatio < 1.50 → Potential Risk (Low confidence: 40-50%, add "Borderline dense spacing detected")
-- estimatedRatio >= 1.50 → No risk (do not report as violation but include in a3ParagraphBlocks)
+**CLASSIFICATION (Screenshot Only — uses UNIFIED threshold bands):**
+- estimatedRatio < 1.30 → Potential Risk (High confidence: 60-65%)
+- 1.30 <= estimatedRatio < 1.45 → Potential Risk (Low confidence: 40-50%, add "Borderline dense spacing detected")
+- estimatedRatio >= 1.45 → No risk (do not report as violation but include in a3ParagraphBlocks)
 - NEVER classify screenshot A3 as Confirmed
 
 **OUTPUT — a3ParagraphBlocks (MANDATORY when A3 is selected):**
@@ -2113,7 +2113,7 @@ If no multi-line paragraph blocks can be detected, output:
   "category": "accessibility",
   "status": "potential",
   "evidence": "Body text in [location] — [N] lines, estimated ratio ≈[X.XX]",
-  "diagnosis": "Line spacing ratio ≈[X.XX] is below the recommended 1.35 readability baseline for body text.",
+  "diagnosis": "Line spacing ratio ≈[X.XX] is below the recommended 1.30 readability baseline for body text.",
   "contextualHint": "Increase line-height to at least 1.5 (leading-normal) for primary body text.",
   "confidence": 0.60,
   "lineCount": 3,
@@ -4813,7 +4813,7 @@ serve(async (req) => {
             textHeightPx: Math.round((block.textHeightPx || 0) * 10) / 10,
             lineStepPx: Math.round((block.lineStepPx || 0) * 10) / 10,
             confidence: block.isViolation 
-              ? (block.estimatedRatio < 1.35 ? 0.65 : 0.45) 
+              ? (block.estimatedRatio < 1.30 ? 0.65 : 0.45) 
               : (block.confidence || 0.50),
             location: block.location || 'Body text area',
             screenshotIndex: block.screenshotIndex || 1,
@@ -4854,7 +4854,7 @@ serve(async (req) => {
             estimatedRatio: ratio,
             textHeightPx: Math.round(textH * 10) / 10,
             lineStepPx: Math.round(step * 10) / 10,
-            confidence: ratio > 0 ? (ratio < 1.35 ? 0.65 : 0.45) : 0.40,
+            confidence: ratio > 0 ? (ratio < 1.30 ? 0.65 : 0.45) : 0.40,
             location: v.evidence || 'Body text area',
             screenshotIndex: idx + 1,
           });
@@ -4881,9 +4881,9 @@ serve(async (req) => {
         decision = 'no_multiline_blocks';
       } else if (medianRatio === undefined) {
         decision = 'potential_risk_low';
-      } else if (medianRatio < 1.35) {
+      } else if (medianRatio < 1.30) {
         decision = 'potential_risk_high';
-      } else if (medianRatio < 1.50) {
+      } else if (medianRatio < 1.45) {
         decision = 'potential_risk_low';
       } else {
         decision = 'no_risk_detected';
@@ -4924,7 +4924,7 @@ serve(async (req) => {
       const a3Elements: any[] = [];
       if (decision === 'potential_risk_high' || decision === 'potential_risk_low') {
         for (const block of blockEstimates.filter(b => b.linesDetected >= 2)) {
-          if (block.estimatedRatio >= 1.50 && block.estimatedRatio > 0) continue;
+          if (block.estimatedRatio >= 1.45 && block.estimatedRatio > 0) continue;
           
           const screenshotIdx = block.screenshotIndex || block.blockIndex;
           const contextLabel = block.location || 'Body text area';
@@ -4934,10 +4934,10 @@ serve(async (req) => {
           let explanation = `Line spacing ratio ≈${block.estimatedRatio > 0 ? block.estimatedRatio.toFixed(2) : 'unknown'} detected across ${block.linesDetected} lines.`;
           if (block.estimatedRatio === 0) {
             explanation += ' Dense text region detected but line-height ratio could not be reliably computed.';
-          } else if (block.estimatedRatio >= 1.35 && block.estimatedRatio < 1.50) {
+          } else if (block.estimatedRatio >= 1.30 && block.estimatedRatio < 1.45) {
             explanation += ' Borderline dense spacing detected.';
-          } else if (block.estimatedRatio < 1.35 && block.estimatedRatio > 0) {
-            explanation += ' Below recommended 1.35 readability baseline.';
+          } else if (block.estimatedRatio < 1.30 && block.estimatedRatio > 0) {
+            explanation += ' Below recommended 1.30 readability baseline.';
           }
           
           a3Elements.push({
@@ -4971,7 +4971,7 @@ serve(async (req) => {
           : 'No paragraph-like text regions detected.';
         a3Diagnosis = `No multi-line paragraph blocks detected. ${diagReason} A3 requires multi-line body text for line spacing evaluation.`;
       } else if (decision === 'no_risk_detected') {
-        a3Diagnosis = `${multiLineBlocks} multi-line text block${multiLineBlocks !== 1 ? 's' : ''} evaluated. Estimated median line-height ratio ≈${medianRatio?.toFixed(2)} is above the 1.50 threshold — no risk detected (heuristic).`;
+        a3Diagnosis = `${multiLineBlocks} multi-line text block${multiLineBlocks !== 1 ? 's' : ''} evaluated. Estimated median line-height ratio ≈${medianRatio?.toFixed(2)} is above the 1.45 threshold — no risk detected (heuristic).`;
       } else {
         a3Diagnosis = `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected. These require manual verification due to measurement uncertainty.`;
       }
