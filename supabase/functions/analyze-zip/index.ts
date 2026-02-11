@@ -728,64 +728,74 @@ dialog descriptions, alert bodies, form descriptions, card descriptions.
 **DO NOT APPLY to:** Badges, metadata, timestamps, intentional microcopy, labels, tags,
 chips, status indicators, keyboard shortcuts, breadcrumbs, navigation items, button labels.
 
+**TOKEN-LEVEL GROUPING (REQUIRED):**
+When scanning source code, group A2 findings by font-size token/class.
+Report ONE A2 finding per unique token group (e.g., text-xs, text-sm, text-[10px], font-size: 12px).
+Each finding MUST include:
+- "sizeToken": the Tailwind class or CSS declaration (e.g., "text-xs", "text-sm", "font-size: 12px")
+- "approxPx": the approximate pixel value (e.g., "12px", "14px", "10px")
+- "componentName": the component where this occurs (e.g., "CourseCard")
+- "filePath": the file path (e.g., "CourseCard.tsx")
+- "elementRole": the semantic element (e.g., "CardDescription", "p", "DialogDescription")
+
+**SEMANTIC ROLE CLASSIFICATION (REQUIRED per occurrence):**
+Classify each occurrence as either:
+- **"primary"**: Primary readable content — paragraphs, descriptions, content blocks,
+  DialogDescription, AlertDescription, FormDescription, CardDescription, article content,
+  long-form text, multi-sentence text
+- **"secondary"**: Secondary UI text — badges, labels, tags, metadata, timestamps,
+  author names, helper microcopy, tooltips, captions, keyboard shortcuts
+
+Only "primary" occurrences below 16px can be **Confirmed (Blocking)**.
+"secondary" occurrences below 16px should be **Potential Risk (Non-blocking)** unless clearly main content.
+
 **CLASSIFICATION (Confirmed vs Potential):**
 
 1. **CONFIRMED VIOLATION** (status: "confirmed", blocksConvergence: true):
    - Font size < 16px is EXPLICITLY defined in pixels (e.g., font-size: 14px, font-size: 12px)
    - OR mapped Tailwind class equivalent to < 16px: text-xs (12px), text-sm (14px), text-[0.75rem], text-[0.875rem]
    - AND the computed size can be deterministically resolved from the source code
-   - AND the semantic role is confidently classified as primary body text
+   - AND the semantic role is classified as "primary" body text
    - Confidence: 70-85%
 
 2. **HEURISTIC / POTENTIAL RISK** (status: "potential", blocksConvergence: false):
    - Font size is defined in relative units (rem, em, %) where final computed size cannot be guaranteed
-   - OR the semantic role cannot confidently be classified as primary body text
+   - OR the semantic role is classified as "secondary"
    - OR the size mapping is ambiguous (e.g., custom CSS variables, dynamic values)
    - Confidence: 45-60%
    - Display with advisory label
 
-**SEMANTIC ROLE CLASSIFICATION:**
-**PRIMARY BODY TEXT (A2 targets — must use ≥16px):**
-- DialogDescription, AlertDescription, FormDescription, CardDescription
-- Paragraph text, article content, main content blocks
-- Description text, help text, instructional text
-
-**EXCLUDED (DO NOT EVALUATE for A2):**
-- Badge, Tag, Chip, StatusBadge, StatusIndicator
-- Metadata, Timestamp, DateDisplay, TimeAgo
-- Shortcut, KeyboardShortcut, Kbd
-- Navigation items, button labels, icon labels
-- Tooltip content, popover content
-- Breadcrumb items, code/pre elements
-- Caption text under images/figures
-
-**OUTPUT FORMAT FOR A2 FINDINGS:**
+**OUTPUT FORMAT FOR A2 FINDINGS (one per occurrence, grouped by token later):**
 \`\`\`json
 {
   "ruleId": "A2",
   "ruleName": "Small body font size",
   "category": "accessibility",
   "status": "confirmed" or "potential",
-  "typeBadge": "VIOLATION" or "WARNING",
-  "sizeCategory": "<16px",
-  "evidence": "text-sm used in DialogDescription.tsx, CardDescription.tsx",
-  "diagnosis": "Body text in [components] uses [size] which is below the recommended 16px minimum for primary readable content.",
+  "sizeToken": "text-xs",
+  "approxPx": "12px",
+  "componentName": "CourseCard",
+  "filePath": "CourseCard.tsx",
+  "elementRole": "CardDescription",
+  "semanticRole": "primary" or "secondary",
+  "evidence": "text-xs used in CardDescription in CourseCard.tsx",
+  "diagnosis": "Body text in CourseCard description uses text-xs (12px) which is below the recommended readability baseline of 16px.",
   "contextualHint": "Increase body text to at least 16px (text-base) for primary content areas.",
-  "confidence": 0.75,
-  "semanticRole": "body-text"
+  "confidence": 0.75
 }
 \`\`\`
 
 **STRICT RULES:**
 - Only report text that serves as PRIMARY BODY TEXT (not badges, metadata, timestamps, microcopy)
 - text-base (16px) or larger → DO NOT report
-- text-sm (14px) for body text → CONFIRMED violation if deterministically resolved
+- text-sm (14px) for primary body text → CONFIRMED violation if deterministically resolved
 - text-xs (12px) for body text → CONFIRMED violation if deterministically resolved
 - Relative units (rem/em/%) without deterministic resolution → POTENTIAL
 - Frame as best-practice concern, never WCAG violation
+- Say "recommended readability baseline of 16px", NOT "WCAG requires 16px"
 
 **DO NOT:**
-- Flag badges, metadata, timestamps, or microcopy
+- Flag badges, metadata, timestamps, or microcopy as confirmed
 - Flag text-base or larger
 - Use "fails", "violates WCAG", or compliance language
 - Evaluate aria-labels (screen reader only)
@@ -1761,274 +1771,179 @@ ${codeContent}`,
         };
       });
 
-    // ========== A2 AGGREGATION LOGIC ==========
-    // Process and aggregate A2 violations into a single result object
+    // ========== A2 AGGREGATION LOGIC (Token-Grouped) ==========
+    // Group A2 findings by font-size token, classify primary vs secondary
     interface A2AffectedItem {
       component_name: string;
       file_path: string;
       size_token: string;
       approx_px: string;
-      semantic_role: string;
-      severity: 'violation' | 'warning';
+      semantic_role: 'primary' | 'secondary';
+      element_role: string;
       confidence: number;
       rationale: string;
       occurrence_count?: number;
     }
     
-    const processedA2Items: A2AffectedItem[] = [];
-    const dedupeMap = new Map<string, A2AffectedItem>();
+    const a2Items: A2AffectedItem[] = [];
+    const a2DedupeMap = new Map<string, A2AffectedItem>();
     
     for (const v of a2Violations) {
       const evidence = (v.evidence || '').toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
       const combined = evidence + ' ' + diagnosis;
       
-      // FILTER: text-sm (14px, 0.875rem) should NOT be reported as violation
-      const mentionsTextSm = /\btext-sm\b|0\.875rem|14px|≈14px|~14px|approximately 14/.test(combined);
-      const mentionsSmaller = /text-xs|0\.75rem|12px|11px|10px|<13px|smaller than 13/.test(combined);
-      
-      // If only text-sm is mentioned without smaller sizes, filter out
-      if (mentionsTextSm && !mentionsSmaller) {
-        console.log(`Filtering out A2 (text-sm is acceptable): ${v.evidence}`);
-        continue;
-      }
-      
       // ============================================================
       // A2 STRICT SCOPE ENFORCEMENT: ONLY primary body text allowed
       // ============================================================
-      // Exclude: badges, chips, pills, tags, status indicators
       const isBadgeChip = /\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus\s*(?:indicator|badge|chip|text)?\b|\bStatusBadge\b/i.test(combined);
-      if (isBadgeChip) {
-        console.log(`Filtering out A2 (badge/chip/tag — not body text): ${v.evidence}`);
-        continue;
-      }
+      if (isBadgeChip) { console.log(`Filtering out A2 (badge/chip/tag): ${v.evidence}`); continue; }
       
-      // Exclude: headings, titles, subtitles, headers
       const isHeadingTitle = /\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b|\bsection\s*title\b|\bpage\s*title\b|\bheader\s*(?:text|subtitle|label)?\b/i.test(combined);
-      // But allow if explicitly about description/body text inside a header component
       if (isHeadingTitle && !/description|body\s*text|paragraph|content\s*block|prose/i.test(combined)) {
-        console.log(`Filtering out A2 (heading/title — not body text): ${v.evidence}`);
-        continue;
+        console.log(`Filtering out A2 (heading/title): ${v.evidence}`); continue;
       }
       
-      // Exclude: navigation, menu items, breadcrumbs
       const isNavigation = /\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b|\bsidebar\s*(?:link|item|nav)\b/i.test(combined);
-      if (isNavigation) {
-        console.log(`Filtering out A2 (navigation — not body text): ${v.evidence}`);
-        continue;
-      }
+      if (isNavigation) { console.log(`Filtering out A2 (navigation): ${v.evidence}`); continue; }
       
-      // Exclude: buttons, CTAs, interactive elements
       const isButton = /\bbutton\b|\bbtn\b|\bcta\b|\baction\s*button\b|\binteractive\s*element\b|\blink\s*(?:text|label)?\b|\bicon[-\s]?button\b/i.test(combined);
       if (isButton && !/description|body\s*text|paragraph/i.test(combined)) {
-        console.log(`Filtering out A2 (button/CTA — not body text): ${v.evidence}`);
-        continue;
+        console.log(`Filtering out A2 (button/CTA): ${v.evidence}`); continue;
       }
       
-      // Exclude: metadata, timestamps, dates, author names, tags
       const isMetadata = /\bmetadata\b|\btimestamp\b|\bdate\s*(?:display|text)?\b|\btime\s*ago\b|\bauthor\b|\binstructor\b|\bcreated\s*(?:at|on)\b|\bupdated\s*(?:at|on)\b/i.test(combined);
-      if (isMetadata) {
-        console.log(`Filtering out A2 (metadata/timestamp — not body text): ${v.evidence}`);
-        continue;
-      }
+      if (isMetadata) { console.log(`Filtering out A2 (metadata): ${v.evidence}`); continue; }
       
-      // Exclude: captions, tooltips, keyboard shortcuts, code blocks
       const isMicrocopy = /\bcaption\b|\btooltip\b|\bkeyboard\s*shortcut\b|\bkbd\b|\bcode\s*block\b|\bmonospace\b|\bhelper\s*(?:text|microcopy)?\b|\bplaceholder\b/i.test(combined);
-      // Allow "helper text" only if it's clearly a form description (body-level)
       if (isMicrocopy && !/FormDescription|form\s*description|AlertDescription|DialogDescription/i.test(combined)) {
-        console.log(`Filtering out A2 (microcopy/caption — not body text): ${v.evidence}`);
-        continue;
+        console.log(`Filtering out A2 (microcopy): ${v.evidence}`); continue;
       }
       
-      // Exclude: icon-only elements
       const isIconOnly = /\bicon\b/i.test(combined) && !/description|paragraph|body/i.test(combined);
-      if (isIconOnly) {
-        console.log(`Filtering out A2 (icon element — not body text): ${v.evidence}`);
-        continue;
-      }
+      if (isIconOnly) { console.log(`Filtering out A2 (icon): ${v.evidence}`); continue; }
       
-      // Extract component info from evidence/diagnosis
-      // Priority: 1) Named component in PascalCase, 2) File name, 3) Fallback to file path only
+      // Extract token info from AI response or evidence
+      const sizeToken = v.sizeToken || (combined.match(/(text-xs|text-sm|text-\[\d+(?:\.\d+)?(?:rem|px)\]|font-size:\s*\d+(?:\.\d+)?px)/i)?.[1] || 'unknown');
+      const approxPxFromToken = /text-xs/i.test(sizeToken) ? '12px' 
+        : /text-sm/i.test(sizeToken) ? '14px'
+        : combined.match(/(\d+)px/)?.[1] ? `${combined.match(/(\d+)px/)![1]}px`
+        : '<16px';
+      const approxPx = v.approxPx || approxPxFromToken;
+      
+      // Extract component/file info
       const componentMatch = (v.evidence || '').match(/(?:in\s+)?([A-Z][a-zA-Z0-9]*(?:Component|Description|Label|Text|Badge|Caption|Shortcut|Tooltip|Content|Container|Wrapper|Item|Card|Dialog|Alert|Form|Chart|Table|Cell|Row|Header|Footer|Nav|Menu|Sidebar|Panel)?)/);
       const fileMatch = (v.evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js|vue|svelte))/i);
-      const sizeMatch = combined.match(/text-xs|text-\[[\d.]+(?:rem|px)\]|font-size:\s*[\d.]+(?:px|rem)/i);
       
-      // Resolve component name - avoid placeholders like "text, text"
-      let componentName = '';
-      if (componentMatch?.[1] && componentMatch[1].length > 2 && !/^text$/i.test(componentMatch[1])) {
+      let componentName = v.componentName || '';
+      if (!componentName && componentMatch?.[1] && componentMatch[1].length > 2 && !/^text$/i.test(componentMatch[1])) {
         componentName = componentMatch[1];
-      } else if (fileMatch?.[1]) {
-        // Use file name as fallback (without extension)
+      } else if (!componentName && fileMatch?.[1]) {
         componentName = fileMatch[1].replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
-      } else if (v.componentName && !/^text$/i.test(v.componentName)) {
-        componentName = v.componentName;
       }
-      // Final fallback: leave empty (will use file_path only)
       
-      const filePath = fileMatch?.[1] || v.filePath || v.contextualHint || '';
-      const sizeToken = sizeMatch?.[0] || (mentionsSmaller ? 'text-xs' : 'text-sm');
+      const filePath = v.filePath || fileMatch?.[1] || v.contextualHint || '';
+      const elementRole = v.elementRole || '';
       
-      // Determine approximate px value
-      let approxPx = '<13px';
-      if (/text-xs|0\.75rem|12px/.test(combined)) approxPx = '≈12px';
-      else if (/11px/.test(combined)) approxPx = '≈11px';
-      else if (/10px/.test(combined)) approxPx = '≈10px';
-      else if (/13px|13-14/.test(combined)) approxPx = '≈13px';
-      else if (/0\.8rem|0\.85rem/.test(combined)) approxPx = '≈13-14px';
+      // Semantic role classification
+      const isPrimaryRole = /description|DialogDescription|AlertDescription|FormDescription|CardDescription|paragraph|article|content\s*block|prose|body\s*text|main\s*text/i.test(combined + ' ' + elementRole);
+      const semanticRole: 'primary' | 'secondary' = v.semanticRole || (isPrimaryRole ? 'primary' : 'secondary');
       
-      // Determine semantic role
-      const semanticRole = /description|label|helper|caption|metadata|alert|dialog|form/i.test(componentName + combined)
-        ? 'informational' 
-        : 'secondary';
-      
-      // Determine severity
-      const severity: 'violation' | 'warning' = mentionsSmaller ? 'violation' : 'warning';
-      
-      // Calculate confidence
       let confidence = v.confidence || 0.65;
-      // Adjust based on semantic role
-      if (semanticRole === 'informational') confidence = Math.min(confidence + 0.1, 0.85);
-      // Adjust based on threshold proximity
-      if (mentionsSmaller) confidence = Math.min(confidence + 0.05, 0.85);
-      else confidence = Math.max(confidence - 0.1, 0.4);
+      if (semanticRole === 'primary') confidence = Math.min(confidence + 0.1, 0.85);
       
-      const rationale = v.diagnosis || `Small text size (${approxPx}) used for ${semanticRole} content.`;
+      const dedupeKey = `${filePath}|${componentName}|${sizeToken}|${elementRole}`;
       
-      // Deduplication key
-      const dedupeKey = `${filePath}|${componentName}|${sizeToken}`;
-      
-      if (dedupeMap.has(dedupeKey)) {
-        const existing = dedupeMap.get(dedupeKey)!;
+      if (a2DedupeMap.has(dedupeKey)) {
+        const existing = a2DedupeMap.get(dedupeKey)!;
         existing.occurrence_count = (existing.occurrence_count || 1) + 1;
-        // Keep the higher confidence
-        if (confidence > existing.confidence) {
-          existing.confidence = confidence;
-        }
+        if (confidence > existing.confidence) existing.confidence = confidence;
       } else {
-        const item: A2AffectedItem = {
+        a2DedupeMap.set(dedupeKey, {
           component_name: componentName,
           file_path: filePath,
           size_token: sizeToken,
           approx_px: approxPx,
           semantic_role: semanticRole,
-          severity,
+          element_role: elementRole,
           confidence: Math.round(confidence * 100) / 100,
-          rationale,
+          rationale: v.diagnosis || `Small text size (${approxPx}) used for ${semanticRole} content.`,
           occurrence_count: 1,
-        };
-        dedupeMap.set(dedupeKey, item);
+        });
       }
     }
     
-    const affectedItems = Array.from(dedupeMap.values());
+    const affectedItems = Array.from(a2DedupeMap.values());
     
-    // Create aggregated A2 result if there are any items
     let aggregatedA2: any = null;
     if (affectedItems.length > 0) {
-      // Calculate overall confidence
-      const highImpactItems = affectedItems.filter(i => i.semantic_role === 'informational');
-      let overallConfidence: number;
-      let confidenceReason: string;
-      
-      if (highImpactItems.length > 0) {
-        overallConfidence = Math.max(...highImpactItems.map(i => i.confidence));
-        confidenceReason = `Based on maximum confidence (${overallConfidence.toFixed(2)}) from ${highImpactItems.length} informational component(s).`;
-      } else {
-        // Use median of all items
-        const sortedConfidences = affectedItems.map(i => i.confidence).sort((a, b) => a - b);
-        const midIdx = Math.floor(sortedConfidences.length / 2);
-        overallConfidence = sortedConfidences.length % 2 === 0
-          ? (sortedConfidences[midIdx - 1] + sortedConfidences[midIdx]) / 2
-          : sortedConfidences[midIdx];
-        confidenceReason = `Based on median confidence (${overallConfidence.toFixed(2)}) across ${affectedItems.length} secondary component(s).`;
-      }
-      
-      // Count violations vs warnings
-      const violationCount = affectedItems.filter(i => i.severity === 'violation').length;
-      const warningCount = affectedItems.filter(i => i.severity === 'warning').length;
-      
-      // Build summary with DEDUPLICATED and FILTERED component names
-      // 1. Extract unique component names, filtering out invalid identifiers
-      const invalidIdentifiers = new Set([
-        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
-        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
-        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
-        'component', 'components', 'element', 'elements', 'item', 'items', 'text',
-        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array'
-      ]);
-      
-      const uniqueComponentNames = new Set<string>();
+      // Group by token
+      const tokenGroupMap = new Map<string, typeof affectedItems>();
       for (const item of affectedItems) {
-        const name = item.component_name || '';
-        // Filter out invalid identifiers (case-insensitive check)
-        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
-          // Also filter out names that look like utility tokens or non-UI identifiers
-          if (!/^(use|get|set|is|has|can|should|will|on|handle)[A-Z]/.test(name)) {
-            uniqueComponentNames.add(name);
-          }
-        }
+        const key = item.size_token || 'unknown';
+        if (!tokenGroupMap.has(key)) tokenGroupMap.set(key, []);
+        tokenGroupMap.get(key)!.push(item);
       }
       
-      // Fall back to file paths if no valid component names
-      if (uniqueComponentNames.size === 0) {
-        for (const item of affectedItems) {
-          const filePath = item.file_path || '';
-          if (filePath) {
-            // Extract meaningful name from file path
-            const fileName = filePath.replace(/.*[\/\\]/, '').replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
-            if (fileName && fileName.length > 2 && !invalidIdentifiers.has(fileName.toLowerCase())) {
-              uniqueComponentNames.add(fileName);
-            }
-          }
-        }
-      }
+      // Build token group metadata
+      const a2TokenGroups = Array.from(tokenGroupMap.entries()).map(([token, items]) => {
+        const uniqueFiles = new Set(items.map(i => i.file_path).filter(Boolean));
+        const hasPrimary = items.some(i => i.semantic_role === 'primary');
+        return {
+          token,
+          approxPx: items[0].approx_px,
+          count: items.length,
+          fileCount: uniqueFiles.size,
+          classification: (hasPrimary ? 'confirmed' : 'potential') as 'confirmed' | 'potential',
+        };
+      });
       
-      // 2. Build deduplicated component list (max 4, with "and N more")
-      const uniqueNamesArray = Array.from(uniqueComponentNames);
-      const displayLimit = 4;
-      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
-      const moreCount = uniqueNamesArray.length - displayLimit;
-      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
-      
-      // 3. Build summary with "X unique component(s)" wording
-      const componentList = displayedNames.join(', ');
-      const componentCountText = uniqueNamesArray.length > 0 
-        ? `${uniqueNamesArray.length} unique component(s): ${componentList}${moreText}`
-        : `${affectedItems.length} location(s)`;
-      
-      const summary = `Small text size detected in ${componentCountText}. ` +
-        `${violationCount > 0 ? `${violationCount} violation(s) (<13px)` : ''}` +
-        `${violationCount > 0 && warningCount > 0 ? ' and ' : ''}` +
-        `${warningCount > 0 ? `${warningCount} warning(s) (13-14px)` : ''}. ` +
-        `WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.`;
-      
-      const a2Rule = allRules.find(r => r.id === 'A2');
-      
-      // Determine A2 status: Confirmed if deterministic pixel/Tailwind sizes, Potential otherwise
-      const hasConfirmedItems = affectedItems.some(i => i.severity === 'violation');
+      // Overall status: confirmed if any primary body text items
+      const primaryItems = affectedItems.filter(i => i.semantic_role === 'primary');
+      const hasConfirmedItems = primaryItems.length > 0;
       const a2Status = hasConfirmedItems ? 'confirmed' : 'potential';
+      
+      // Calculate overall confidence
+      const relevantItems = hasConfirmedItems ? primaryItems : affectedItems;
+      const sortedConfs = relevantItems.map(i => i.confidence).sort((a, b) => a - b);
+      const midIdx = Math.floor(sortedConfs.length / 2);
+      const overallConfidence = sortedConfs.length % 2 === 0
+        ? (sortedConfs[midIdx - 1] + sortedConfs[midIdx]) / 2
+        : sortedConfs[midIdx];
+      
+      const uniqueFiles = new Set(affectedItems.map(i => i.file_path).filter(Boolean));
       
       // Build a2Elements array for the aggregated card UI
       const a2Elements = affectedItems.map((item, idx) => {
         const computedSize = parseFloat((item.approx_px || '').replace(/[≈~px]/g, ''));
-        const isDeterministic = a2Status === 'confirmed' && !isNaN(computedSize);
+        const isDeterministic = item.semantic_role === 'primary' && !isNaN(computedSize);
         return {
-          elementLabel: item.component_name || `Body text element ${idx + 1}`,
+          elementLabel: item.element_role 
+            ? `${item.component_name || 'Component'} ${item.element_role}`
+            : item.component_name || `Body text element ${idx + 1}`,
           textSnippet: undefined,
           location: item.file_path || 'Unknown file',
           computedFontSize: isDeterministic ? computedSize : undefined,
           fontSizeSource: item.size_token ? `Tailwind/CSS: ${item.size_token}` : undefined,
           detectionMethod: isDeterministic ? 'deterministic' as const : 'heuristic' as const,
+          sizeToken: item.size_token,
+          approxPx: item.approx_px,
+          semanticRole: item.semantic_role,
+          elementRole: item.element_role,
+          componentName: item.component_name,
+          filePath: item.file_path,
           thresholdPx: 16,
           explanation: item.rationale,
           confidence: item.confidence,
           correctivePrompt: isDeterministic
-            ? `body text '${(item.component_name || 'Body text element').substring(0, 60)}' (${item.file_path || 'Source file'})\n\nIssue reason: Computed font-size ${item.approx_px} is below the recommended readability baseline of 16px.\n\nRecommended fix: Increase the font size of all primary body text elements in this group (currently ${item.approx_px}${item.size_token ? ` / ${item.size_token}` : ''}) to at least 16px (text-base). Ensure this update is applied consistently across all screens and components where this text style is reused. Adjust line-height to approximately 1.4–1.6 to preserve readability.`
+            ? `• body text — ${item.file_path || 'Source file'} — (${item.element_role || item.component_name || 'Body text'})\n  Issue reason: computed font-size ${item.approx_px} (${item.size_token || 'CSS'}) is below recommended 16px baseline for primary readable content.\n  Recommended fix: Increase this primary body text to at least 16px (text-base) and set line-height ~1.4–1.6. Update shared typography tokens or reusable classes so this does not recur.`
             : undefined,
-          deduplicationKey: `${item.file_path}|${item.component_name}|${item.size_token}`,
+          deduplicationKey: `${item.file_path}|${item.component_name}|${item.size_token}|${item.element_role}`,
         };
       });
 
+      const a2Rule = allRules.find(r => r.id === 'A2');
+      
       aggregatedA2 = {
         ruleId: 'A2',
         ruleName: 'Small body font size',
@@ -2038,32 +1953,18 @@ ${codeContent}`,
         inputType: 'zip',
         isA2Aggregated: true,
         a2Elements,
+        a2TokenGroups,
         overall_confidence: Math.round(overallConfidence * 100) / 100,
-        confidence_reason: confidenceReason,
-        summary,
-        affected_items: affectedItems.map(item => ({
-          component_name: item.component_name,
-          file_path: item.file_path,
-          size_token: item.size_token,
-          approx_px: item.approx_px,
-          semantic_role: item.semantic_role,
-          severity: item.severity,
-          confidence: item.confidence,
-          rationale: item.rationale,
-          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
-        })),
-        diagnosis: a2Status === 'confirmed'
-          ? `${a2Elements.length} body text element${a2Elements.length !== 1 ? 's' : ''} with confirmed insufficient font size detected.`
-          : `${a2Elements.length} text element${a2Elements.length !== 1 ? 's' : ''} with potential font size issues detected. These require manual verification due to measurement uncertainty.`,
+        diagnosis: `Detected in ${affectedItems.length} occurrence${affectedItems.length !== 1 ? 's' : ''} across ${uniqueFiles.size} file${uniqueFiles.size !== 1 ? 's' : ''}. ${a2TokenGroups.map(g => `Token: ${g.token} (${g.approxPx})`).join('; ')}.`,
         contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
         ...(a2Status === 'potential' ? {
-          advisoryGuidance: 'Static visual estimation cannot determine exact computed font sizes. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
+          advisoryGuidance: 'These elements were classified as secondary UI text (not primary body content). For deterministic blocking classification, ensure the text serves as primary readable content (paragraphs, descriptions, content blocks).',
         } : {}),
       };
       
-      console.log(`A2 aggregated: ${affectedItems.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
+      console.log(`A2 aggregated: ${affectedItems.length} items across ${uniqueFiles.size} files, ${a2TokenGroups.length} token groups → 1 result (${a2Status})`);
     }
     
     // ========== A3 AGGREGATION LOGIC (ZIP — Deterministic) ==========

@@ -142,6 +142,14 @@ export interface Violation {
   // ============================================================
   isA2Aggregated?: boolean;
   a2Elements?: A2ElementSubItem[];
+  // Token group metadata (ZIP/GitHub only)
+  a2TokenGroups?: Array<{
+    token: string; // e.g., "text-xs"
+    approxPx: string; // e.g., "12px"
+    count: number;
+    fileCount: number;
+    classification: 'confirmed' | 'potential';
+  }>;
 
   // ============================================================
   // A3 AGGREGATED ELEMENT REPORTING
@@ -163,6 +171,16 @@ export interface A2ElementSubItem {
   estimationFailed?: boolean; // True when visual estimation could not be performed
   fontSizeSource?: string; // e.g., "Explicit CSS declaration", "Tailwind class text-sm"
   detectionMethod: 'deterministic' | 'heuristic'; // deterministic = code, heuristic = screenshot
+
+  // Token grouping (ZIP/GitHub only)
+  sizeToken?: string; // e.g., "text-xs", "text-sm", "font-size: 12px"
+  approxPx?: string; // e.g., "12px", "14px"
+  
+  // Semantic classification
+  semanticRole?: 'primary' | 'secondary'; // primary = body text, secondary = badges/metadata
+  elementRole?: string; // e.g., "CardDescription", "p", "DialogDescription"
+  componentName?: string; // e.g., "CourseCard"
+  filePath?: string; // e.g., "CourseCard.tsx"
 
   // Threshold
   thresholdPx: number; // always 16
