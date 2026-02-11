@@ -1909,7 +1909,7 @@ async function computeA1ViolationsFromScreenshots(
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase body text below 16px to at least 16px (text-base / 1rem). This applies to paragraphs, descriptions, article content, and main text areas. Do not apply to badges, metadata, timestamps, or intentional microcopy. Do not alter layout structure, spacing, or component hierarchy.' },
+    { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px (text-base / 1rem) across all screens and components where this body-text style is reused. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Poor spacing may reduce readability, especially for users with cognitive or visual impairments.', correctivePrompt: 'Increase line height and paragraph spacing to improve text readability.' },
     { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
@@ -3858,10 +3858,55 @@ serve(async (req) => {
         continue;
       }
       
-      // Filter out excluded elements
-      const isExcludedElement = /\bbutton\b|icon|navigation|menu item|action button/.test(combined);
-      if (isExcludedElement && !/description|label|helper|caption/.test(combined)) {
-        console.log(`Filtering out A2 (excluded element): ${v.evidence}`);
+      // ============================================================
+      // A2 STRICT SCOPE ENFORCEMENT: ONLY primary body text allowed
+      // ============================================================
+      // Exclude: badges, chips, pills, tags, status indicators
+      const isBadgeChip = /\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus\s*(?:indicator|badge|chip|text)?\b/i.test(combined);
+      if (isBadgeChip) {
+        console.log(`Filtering out A2 (badge/chip/tag — not body text): ${v.evidence}`);
+        continue;
+      }
+      
+      // Exclude: headings, titles, subtitles
+      const isHeadingTitle = /\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b|\bsection\s*title\b|\bpage\s*title\b|\bheader\s*(?:text|subtitle|label)?\b/i.test(combined);
+      if (isHeadingTitle && !/description|body\s*text|paragraph|content\s*block|prose/i.test(combined)) {
+        console.log(`Filtering out A2 (heading/title — not body text): ${v.evidence}`);
+        continue;
+      }
+      
+      // Exclude: navigation, menu items, breadcrumbs
+      const isNavigation = /\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b|\bsidebar\s*(?:link|item|nav)\b/i.test(combined);
+      if (isNavigation) {
+        console.log(`Filtering out A2 (navigation — not body text): ${v.evidence}`);
+        continue;
+      }
+      
+      // Exclude: buttons, CTAs, interactive elements
+      const isButton = /\bbutton\b|\bbtn\b|\bcta\b|\baction\s*button\b|\binteractive\s*element\b|\bicon[-\s]?button\b/i.test(combined);
+      if (isButton && !/description|body\s*text|paragraph/i.test(combined)) {
+        console.log(`Filtering out A2 (button/CTA — not body text): ${v.evidence}`);
+        continue;
+      }
+      
+      // Exclude: metadata, timestamps, dates, author names
+      const isMetadata = /\bmetadata\b|\btimestamp\b|\bdate\s*(?:display|text)?\b|\btime\s*ago\b|\bauthor\b|\binstructor\b|\bcreated\s*(?:at|on)\b|\bupdated\s*(?:at|on)\b/i.test(combined);
+      if (isMetadata) {
+        console.log(`Filtering out A2 (metadata/timestamp — not body text): ${v.evidence}`);
+        continue;
+      }
+      
+      // Exclude: captions, tooltips, keyboard shortcuts, code blocks
+      const isMicrocopy = /\bcaption\b|\btooltip\b|\bkeyboard\s*shortcut\b|\bkbd\b|\bcode\s*block\b|\bmonospace\b|\bplaceholder\b/i.test(combined);
+      if (isMicrocopy) {
+        console.log(`Filtering out A2 (microcopy/caption — not body text): ${v.evidence}`);
+        continue;
+      }
+      
+      // Exclude: icon-only elements
+      const isIconOnly = /\bicon\b/i.test(combined) && !/description|paragraph|body/i.test(combined);
+      if (isIconOnly) {
+        console.log(`Filtering out A2 (icon element — not body text): ${v.evidence}`);
         continue;
       }
       
