@@ -3991,6 +3991,21 @@ serve(async (req) => {
       
       const a2Rule = allRulesForViolations.find(r => r.id === 'A2');
       
+      // Build a2Elements array for the aggregated card UI
+      const a2Elements = affectedItemsUI.map((item, idx) => ({
+        elementLabel: item.component_name || `Body text element ${idx + 1}`,
+        textSnippet: undefined,
+        location: item.location || 'Unknown location',
+        computedFontSize: undefined, // Screenshot-based: cannot deterministically measure
+        fontSizeSource: undefined,
+        detectionMethod: 'heuristic' as const,
+        thresholdPx: 16,
+        explanation: item.rationale,
+        confidence: item.confidence,
+        correctivePrompt: undefined, // Potential findings: no corrective prompts
+        deduplicationKey: `${item.location}|${item.component_name}`,
+      }));
+
       aggregatedA2UI = {
         ruleId: 'A2',
         ruleName: 'Small body font size',
@@ -3998,6 +4013,8 @@ serve(async (req) => {
         status: 'potential', // Screenshot-based A2 is ALWAYS potential (visual estimation)
         blocksConvergence: false, // Never blocks convergence for screenshot input
         inputType: 'screenshots',
+        isA2Aggregated: true,
+        a2Elements,
         overall_confidence: Math.round(overallConfidence * 100) / 100,
         confidence_reason: confidenceReason,
         summary,
@@ -4011,11 +4028,11 @@ serve(async (req) => {
           rationale: item.rationale,
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
         })),
-        diagnosis: summary,
+        diagnosis: `${a2Elements.length} text element${a2Elements.length !== 1 ? 's' : ''} with potential font size issues detected. These require manual verification due to measurement uncertainty.`,
         contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
-        advisoryGuidance: 'Visual estimation cannot determine exact pixel sizes. Verify rendered font sizes in browser DevTools for accurate measurement.',
+        advisoryGuidance: 'Visual estimation cannot determine exact pixel sizes. Upload screenshots at 100% zoom or verify computed font sizes using browser DevTools for accurate measurement.',
       };
       
       console.log(`A2 aggregated: ${affectedItemsUI.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
