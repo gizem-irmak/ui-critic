@@ -68,7 +68,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Computed Font Size */}
+            {/* Font Size */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-20">Font Size:</span>
               {element.computedFontSize !== undefined ? (
@@ -79,7 +79,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                   {element.computedFontSize}px
                 </span>
               ) : (
-                <span className="text-muted-foreground italic">Not deterministically measured</span>
+                <span className="text-muted-foreground italic">not measured</span>
               )}
               {element.computedFontSize !== undefined && element.confidence !== undefined && (
                 <span className="text-muted-foreground">
@@ -100,7 +100,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <span>{element.fontSizeSource || (element.detectionMethod === 'deterministic' ? 'Source code analysis' : 'Screenshot-based visual estimation')}</span>
             </div>
 
-            {/* Explanation / Diagnosis */}
+            {/* Explanation */}
             <div className="pt-1">
               <p className="text-foreground leading-relaxed">{element.explanation}</p>
             </div>
