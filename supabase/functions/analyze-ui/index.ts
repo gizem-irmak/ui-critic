@@ -3992,10 +3992,16 @@ serve(async (req) => {
       const a2Rule = allRulesForViolations.find(r => r.id === 'A2');
       
       // Build a2Elements array for the aggregated card UI
-      const a2Elements = affectedItemsUI.map((item, idx) => ({
+      const a2Elements = affectedItemsUI.map((item, idx) => {
+        // Format location to match A1 structure: "Screenshot #X — Screenshot (Context label)"
+        const screenshotIdx = item.screenshot_index || (idx + 1);
+        const contextLabel = item.component_name || item.location || 'UI element';
+        const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
+        
+        return {
         elementLabel: item.component_name || `Body text element ${idx + 1}`,
         textSnippet: undefined,
-        location: item.location || 'Unknown location',
+        location: formattedLocation,
         computedFontSize: undefined, // Screenshot-based: cannot deterministically measure
         fontSizeSource: undefined,
         detectionMethod: 'heuristic' as const,
@@ -4004,7 +4010,8 @@ serve(async (req) => {
         confidence: item.confidence,
         correctivePrompt: undefined, // Potential findings: no corrective prompts
         deduplicationKey: `${item.location}|${item.component_name}`,
-      }));
+        };
+      });
 
       aggregatedA2UI = {
         ruleId: 'A2',
