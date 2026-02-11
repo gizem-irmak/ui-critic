@@ -4100,7 +4100,7 @@ serve(async (req) => {
         contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
-        advisoryGuidance: 'Visual estimation cannot determine exact pixel sizes. Upload screenshots at 100% zoom or verify computed font sizes using browser DevTools for accurate measurement.',
+        advisoryGuidance: 'Static visual estimation cannot determine exact computed font sizes. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository so computed CSS font sizes can be resolved accurately.',
       };
       
       console.log(`A2 aggregated: ${affectedItemsUI.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
