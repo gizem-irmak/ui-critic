@@ -19,12 +19,27 @@ Rule A2 (Small Body Font Size) uses a **strict primary body text scope** — it 
 - Placeholder text, helper microcopy (unless FormDescription-level)
 - Icon-only elements
 
+**Token-Level Grouping (ZIP/GitHub only):**
+A2 findings are grouped by font-size token/class (e.g., text-xs, text-sm, font-size: 12px). Each token group shows count and file count. The Violation type includes `a2TokenGroups` array with `{ token, approxPx, count, fileCount, classification }`. Each `A2ElementSubItem` now includes `sizeToken`, `approxPx`, `semanticRole` ('primary' | 'secondary'), `elementRole`, `componentName`, and `filePath`.
+
+**Semantic Role Classification:**
+Each occurrence is classified as either:
+- **primary**: DialogDescription, AlertDescription, FormDescription, CardDescription, paragraphs, article content, long-form text → can be Confirmed (Blocking)
+- **secondary**: badges, labels, tags, metadata, timestamps, helper microcopy → Potential Risk (Non-blocking) only
+
 **Classification Logic:**
-- **Confirmed Violation (Blocking):** Source code analysis (ZIP or GitHub) where body-level text has explicitly defined font-size < 16px in pixels OR deterministic Tailwind classes (text-xs = 12px, text-sm = 14px). The computed size must be deterministically resolved AND element must be confidently classified as primary body text.
-- **Heuristic / Potential Risk (Non-blocking):** Screenshot-based visual estimation (always potential), OR font-size in relative units where final size can't be guaranteed, OR semantic role can't be confidently classified as primary body text. Never blocks convergence.
+- **Confirmed Violation (Blocking):** Source code analysis (ZIP or GitHub) where primary body-level text has explicitly defined font-size < 16px in pixels OR deterministic Tailwind classes (text-xs = 12px, text-sm = 14px). Must be classified as "primary" semantic role.
+- **Heuristic / Potential Risk (Non-blocking):** Screenshot-based visual estimation (always potential), OR font-size in relative units, OR semantic role classified as "secondary". Never blocks convergence.
 
-**Post-processing enforcement:** All three edge functions (analyze-zip, analyze-ui, analyze-github) apply strict regex-based filters to exclude badges, headings, navigation, buttons, metadata, captions, tooltips, and icon elements from A2 results — even if the AI model reports them. Only elements passing the body-text filter are included in the aggregated A2 card.
+**Post-processing enforcement:** All three edge functions apply strict regex-based filters to exclude badges, headings, navigation, buttons, metadata, captions, tooltips, and icon elements from A2 results.
 
-**Corrective Prompt Scope:** "Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy."
+**Corrective Prompt Format (matches A1 structure):**
+```
+• body text — CourseCard.tsx — (Course description)
+  Issue reason: computed font-size 12px (text-xs) is below recommended 16px baseline for primary readable content.
+  Recommended fix: Increase this primary body text to at least 16px (text-base) and set line-height ~1.4–1.6. Update shared typography tokens or reusable classes so this does not recur.
+```
+
+**Language rule:** Say "recommended readability baseline of 16px", NOT "WCAG requires 16px".
 
 Findings aggregate into a single result per run with `status` ('confirmed' or 'potential') and `blocksConvergence` fields. The rule name is "Small body font size".

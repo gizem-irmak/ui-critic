@@ -43,7 +43,16 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                   "{element.textSnippet}"
                 </span>
               )}
-              
+              {element.semanticRole && (
+                <Badge variant="outline" className={cn(
+                  'text-xs',
+                  element.semanticRole === 'primary' 
+                    ? 'border-destructive/40 text-destructive' 
+                    : 'border-muted-foreground/40 text-muted-foreground'
+                )}>
+                  {element.semanticRole}
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               {isOpen ? (
@@ -64,7 +73,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Font Size — deterministic or estimated */}
+            {/* Font Size */}
             <div className="flex items-center gap-2">
               {element.computedFontSize !== undefined ? (
                 <>
@@ -75,6 +84,11 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                   )}>
                     {element.computedFontSize}px
                   </span>
+                  {element.sizeToken && (
+                    <span className="text-muted-foreground font-mono text-xs">
+                      ({element.sizeToken})
+                    </span>
+                  )}
                   {element.confidence !== undefined && (
                     <span className="text-muted-foreground">
                       ({Math.round(element.confidence * 100)}% conf)
@@ -84,10 +98,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               ) : element.estimatedFontSize !== undefined ? (
                 <>
                   <span className="text-muted-foreground font-medium w-28">Est. Font Size:</span>
-                  <span className={cn(
-                    'font-mono font-medium',
-                    'text-warning'
-                  )}>
+                  <span className={cn('font-mono font-medium', 'text-warning')}>
                     ≈{element.estimatedFontSize}px
                   </span>
                   <span className="text-muted-foreground text-xs">(visual estimation)</span>
@@ -104,9 +115,20 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Threshold:</span>
               <span className="font-mono">
-                {element.detectionMethod === 'heuristic' ? '16px readability baseline' : `${element.thresholdPx}px minimum recommended`}
+                {element.detectionMethod === 'heuristic' ? '16px readability baseline' : '16px recommended readability baseline'}
               </span>
             </div>
+
+            {/* Element Role (if available) */}
+            {element.elementRole && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-28">Element:</span>
+                <span className="font-mono text-xs">{element.elementRole}</span>
+                {element.componentName && (
+                  <span className="text-muted-foreground">in {element.componentName}</span>
+                )}
+              </div>
+            )}
 
             {/* Detection Source */}
             <div className="flex items-center gap-2">
@@ -133,7 +155,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <p className="text-foreground leading-relaxed">{element.explanation}</p>
             </div>
 
-            {/* Low confidence badge for potential findings — matches A1 reason code placement */}
+            {/* Low confidence badge for potential findings */}
             {!isConfirmed && element.detectionMethod === 'heuristic' && (
               <div className="flex items-start gap-2 pt-1">
                 <Info className="h-3 w-3 text-warning mt-0.5 flex-shrink-0" />
@@ -158,6 +180,7 @@ export function A2AggregatedCard({ violation, compact = false }: A2AggregatedCar
 
   const isConfirmed = violation.status === 'confirmed';
   const elements = violation.a2Elements;
+  const tokenGroups = violation.a2TokenGroups;
 
   return (
     <Card className={cn(
@@ -185,6 +208,26 @@ export function A2AggregatedCard({ violation, compact = false }: A2AggregatedCar
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
           {violation.diagnosis}
         </p>
+        
+        {/* Token group summary badges (ZIP/GitHub only) */}
+        {tokenGroups && tokenGroups.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {tokenGroups.map((group, idx) => (
+              <Badge 
+                key={idx} 
+                variant="outline" 
+                className={cn(
+                  'text-xs font-mono',
+                  group.classification === 'confirmed'
+                    ? 'border-destructive/40 text-destructive'
+                    : 'border-warning/40 text-warning'
+                )}
+              >
+                {group.token} ({group.approxPx}) · {group.count} in {group.fileCount} file{group.fileCount !== 1 ? 's' : ''}
+              </Badge>
+            ))}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="space-y-2">
         {elements.map((element, idx) => (
