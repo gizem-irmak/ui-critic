@@ -100,6 +100,20 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <span>{element.fontSizeSource || (element.detectionMethod === 'deterministic' ? 'Source code analysis' : 'Screenshot-based visual estimation')}</span>
             </div>
 
+            {/* Confidence */}
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground font-medium w-20">Confidence:</span>
+              <span className={cn(
+                'font-mono',
+                element.confidence >= 0.9 ? 'text-foreground' : 'text-warning'
+              )}>
+                {Math.round(element.confidence * 100)}%
+                <span className="text-muted-foreground ml-1">
+                  — {element.detectionMethod === 'deterministic' ? 'deterministic' : 'heuristic'}
+                </span>
+              </span>
+            </div>
+
             {/* Explanation */}
             <div className="pt-1">
               <p className="text-foreground leading-relaxed">{element.explanation}</p>
