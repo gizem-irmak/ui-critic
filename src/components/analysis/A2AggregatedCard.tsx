@@ -43,11 +43,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                   "{element.textSnippet}"
                 </span>
               )}
-              {!isConfirmed && element.detectionMethod === 'heuristic' && (
-                <Badge variant="outline" className="text-xs border-warning/50 text-warning">
-                  Low confidence measurement
-                </Badge>
-              )}
+              
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               {isOpen ? (
@@ -119,15 +115,15 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <p className="text-foreground leading-relaxed">{element.explanation}</p>
             </div>
 
-            {/* Heuristic info badge for potential */}
-            {!isConfirmed && (
+            {/* Low confidence badge for potential findings — matches A1 reason code placement */}
+            {!isConfirmed && element.detectionMethod === 'heuristic' && (
               <div className="flex items-start gap-2 pt-1">
                 <Info className="h-3 w-3 text-warning mt-0.5 flex-shrink-0" />
-                <span className="text-warning text-xs">
-                  {element.detectionMethod === 'heuristic'
-                    ? 'Visual estimation — exact computed size could not be verified'
-                    : 'Relative units — final rendered size cannot be guaranteed'}
-                </span>
+                <div className="flex flex-wrap gap-1">
+                  <Badge variant="outline" className="text-xs border-warning/50 text-warning">
+                    Low confidence measurement
+                  </Badge>
+                </div>
               </div>
             )}
           </div>

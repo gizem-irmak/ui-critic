@@ -3995,11 +3995,27 @@ serve(async (req) => {
       const a2Elements = affectedItemsUI.map((item, idx) => {
         // Format location to match A1 structure: "Screenshot #X — Screenshot (Context label)"
         const screenshotIdx = item.screenshot_index || (idx + 1);
-        const contextLabel = item.component_name || item.location || 'UI element';
+        // Clean context label: use component_name if available, otherwise derive a short label
+        // Strip diagnostic phrases like "appears smaller than", "body text for", etc.
+        let rawLabel = item.component_name || item.location || 'UI element';
+        rawLabel = rawLabel
+          .replace(/\b(appears?\s+smaller\s+than|body\s+text\s+for|text\s+for)\b.*/i, '')
+          .replace(/\b(appears?\s+to\s+be|seems?\s+to|looks?\s+like)\b.*/i, '')
+          .trim();
+        // Capitalize first letter and ensure it's a clean short label
+        const contextLabel = rawLabel.length > 2 ? rawLabel : 'UI element';
         const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
         
+        // Also clean elementLabel the same way
+        let cleanElementLabel = item.component_name || `Body text element ${idx + 1}`;
+        cleanElementLabel = cleanElementLabel
+          .replace(/\b(appears?\s+smaller\s+than|body\s+text\s+for|text\s+for)\b.*/i, '')
+          .replace(/\b(appears?\s+to\s+be|seems?\s+to|looks?\s+like)\b.*/i, '')
+          .trim();
+        if (cleanElementLabel.length < 3) cleanElementLabel = `Body text element ${idx + 1}`;
+
         return {
-        elementLabel: item.component_name || `Body text element ${idx + 1}`,
+        elementLabel: cleanElementLabel,
         textSnippet: undefined,
         location: formattedLocation,
         computedFontSize: undefined, // Screenshot-based: cannot deterministically measure
