@@ -4683,8 +4683,12 @@ serve(async (req) => {
     }
     
     // ========== A3 AGGREGATION LOGIC (Screenshot — Heuristic Only) ==========
+    // Robust paragraph-block-based estimation with always-visible summary
     let aggregatedA3UI: any = null;
-    if (a3Violations.length > 0) {
+    const a3Selected = selectedRules.includes('A3');
+    
+    // Always produce an A3 summary when A3 is selected for screenshot input
+    if (a3Selected) {
       // Scope enforcement — same filters as A2
       const filteredA3UI = a3Violations.filter((v: any) => {
         const combined = ((v.evidence || '') + ' ' + (v.diagnosis || '')).toLowerCase();
@@ -4697,94 +4701,183 @@ serve(async (req) => {
         return true;
       });
       
-      if (filteredA3UI.length > 0) {
-        const a3Elements = filteredA3UI.map((v: any, idx: number) => {
-          const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
+      // Parse paragraph block data from AI output
+      // Each filtered violation represents a detected text block
+      const blockEstimates: Array<{
+        blockIndex: number;
+        linesDetected: number;
+        estimatedRatio: number;
+        textHeightPx: number;
+        lineStepPx: number;
+        confidence: number;
+        rawViolation: any;
+      }> = [];
+      
+      for (let idx = 0; idx < filteredA3UI.length; idx++) {
+        const v = filteredA3UI[idx];
+        const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
+        
+        // Extract ratio from AI text
+        const ratioMatch = combined.match(/(?:ratio|line[- ]height|spacing)[:\s]*([\d.]+)/);
+        // Extract line count hints
+        const lineMatch = combined.match(/(\d+)\s*(?:lines?|rows?)/);
+        // Extract height/step hints
+        const heightMatch = combined.match(/(?:text[- ]?height|font[- ]?height|glyph[- ]?height)[:\s]*([\d.]+)\s*(?:px)?/);
+        const stepMatch = combined.match(/(?:line[- ]?step|step|baseline[- ]?distance|vertical[- ]?spacing)[:\s]*([\d.]+)\s*(?:px)?/);
+        
+        if (ratioMatch) {
+          const ratio = parseFloat(ratioMatch[1]);
+          const lines = lineMatch ? parseInt(lineMatch[1]) : 3; // default assumption
+          const textH = heightMatch ? parseFloat(heightMatch[1]) : 16; // fallback
+          const step = stepMatch ? parseFloat(stepMatch[1]) : ratio * textH; // derive from ratio
           
-          // Try to extract line-height estimate from diagnosis/evidence
-          const ratioMatch = combined.match(/(?:ratio|line[- ]height|spacing)[:\s]*([\d.]+)/);
-          let estimatedLineHeight: number | undefined;
-          let estimationFailed = false;
+          blockEstimates.push({
+            blockIndex: idx + 1,
+            linesDetected: lines,
+            estimatedRatio: ratio,
+            textHeightPx: Math.round(textH * 10) / 10,
+            lineStepPx: Math.round(step * 10) / 10,
+            confidence: ratio < 1.35 ? 0.65 : 0.45,
+            rawViolation: v,
+          });
+        } else {
+          // Fallback: dense text detected but ratio not parseable
+          blockEstimates.push({
+            blockIndex: idx + 1,
+            linesDetected: lineMatch ? parseInt(lineMatch[1]) : 2,
+            estimatedRatio: 0, // unknown
+            textHeightPx: 0,
+            lineStepPx: 0,
+            confidence: 0.40,
+            rawViolation: v,
+          });
+        }
+      }
+      
+      const blocksEvaluated = blockEstimates.length;
+      const multiLineBlocks = blockEstimates.filter(b => b.linesDetected >= 2).length;
+      
+      // Compute median ratio across valid blocks
+      const validRatios = blockEstimates.filter(b => b.estimatedRatio > 0).map(b => b.estimatedRatio).sort((a, b) => a - b);
+      const medianRatio = validRatios.length > 0
+        ? (validRatios.length % 2 === 0
+          ? (validRatios[validRatios.length / 2 - 1] + validRatios[validRatios.length / 2]) / 2
+          : validRatios[Math.floor(validRatios.length / 2)])
+        : undefined;
+      
+      // Determine decision based on thresholds
+      let decision: 'potential_risk_high' | 'potential_risk_low' | 'no_risk_detected' | 'no_multiline_blocks';
+      if (multiLineBlocks === 0) {
+        decision = 'no_multiline_blocks';
+      } else if (medianRatio === undefined) {
+        // Has multi-line blocks but couldn't compute ratios — fallback to potential risk low
+        decision = 'potential_risk_low';
+      } else if (medianRatio < 1.35) {
+        decision = 'potential_risk_high';
+      } else if (medianRatio < 1.50) {
+        decision = 'potential_risk_low';
+      } else {
+        decision = 'no_risk_detected';
+      }
+      
+      // Top 3 block details for summary
+      const perBlockDetails = blockEstimates
+        .filter(b => b.linesDetected >= 2)
+        .slice(0, 3)
+        .map(b => ({
+          blockIndex: b.blockIndex,
+          linesDetected: b.linesDetected,
+          estimatedRatio: Math.round(b.estimatedRatio * 100) / 100,
+          textHeightPx: b.textHeightPx,
+          lineStepPx: b.lineStepPx,
+          confidence: b.confidence,
+        }));
+      
+      const a3EstimationSummary = {
+        blocksEvaluated,
+        multiLineBlocks,
+        medianRatio: medianRatio !== undefined ? Math.round(medianRatio * 100) / 100 : undefined,
+        decision,
+        perBlockDetails: perBlockDetails.length > 0 ? perBlockDetails : undefined,
+      };
+      
+      // Build a3Elements only for blocks that trigger risk thresholds
+      const a3Elements: any[] = [];
+      if (decision === 'potential_risk_high' || decision === 'potential_risk_low') {
+        for (const block of blockEstimates.filter(b => b.linesDetected >= 2)) {
+          // Skip blocks with ratio >= 1.50 (no risk)
+          if (block.estimatedRatio >= 1.50 && block.estimatedRatio > 0) continue;
           
-           if (ratioMatch) {
-            estimatedLineHeight = parseFloat(ratioMatch[1]);
-            // Conservative sensitivity bands for screenshot A3:
-            //   < 1.35 → Potential Risk (High confidence)
-            //   1.35–1.50 → Potential Risk (Low confidence, borderline)
-            //   ≥ 1.50 → No finding (silent)
-            if (estimatedLineHeight >= 1.50) return null;
-          } else {
-            // Estimation failed — trigger dense text fallback instead of skipping
-            estimationFailed = true;
-          }
-          
-          const screenshotIdx = idx + 1;
+          const v = block.rawViolation;
+          const screenshotIdx = block.blockIndex;
           let rawLabel = v.evidence?.match(/([A-Z][a-zA-Z0-9]*)/)?.[1] || '';
           if (rawLabel.length < 3) rawLabel = '';
           const contextLabel = rawLabel || 'Body text area';
           const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
-          const elementLabel = rawLabel || `Body text element ${idx + 1}`;
+          const elementLabel = rawLabel || `Body text element ${block.blockIndex}`;
           
-          // Confidence based on sensitivity band
-          let confidence: number;
-          if (estimationFailed) {
-            // Dense text fallback: paragraph detected but ratio unknown
-            confidence = 0.45; // Low confidence density fallback
-          } else if (estimatedLineHeight !== undefined && estimatedLineHeight < 1.35) {
-            confidence = 0.65; // Below threshold — higher confidence
-          } else {
-            confidence = 0.45; // Borderline 1.35–1.50 — lower confidence
-          }
-          
-          // Build explanation with band-specific notes
           let explanation = v.diagnosis || 'Line spacing appears visually dense for body text.';
-          if (estimationFailed) {
+          if (block.estimatedRatio === 0) {
             explanation += ' Dense text region detected but line-height ratio could not be reliably computed.';
-          } else if (estimatedLineHeight !== undefined && estimatedLineHeight >= 1.35 && estimatedLineHeight < 1.50) {
+          } else if (block.estimatedRatio >= 1.35 && block.estimatedRatio < 1.50) {
             explanation += ' Borderline dense spacing detected.';
           }
           
-          return {
+          a3Elements.push({
             elementLabel,
             textSnippet: undefined,
             location: formattedLocation,
-            computedLineHeight: undefined, // Screenshot: cannot deterministically measure
-            estimatedLineHeight,
-            estimationFailed,
+            computedLineHeight: undefined,
+            estimatedLineHeight: block.estimatedRatio > 0 ? block.estimatedRatio : undefined,
+            estimationFailed: block.estimatedRatio === 0,
             computedFontSize: undefined,
             lineHeightSource: undefined,
             detectionMethod: 'heuristic' as const,
             thresholdRatio: 1.3,
             explanation,
-            confidence: Math.round(confidence * 100) / 100,
-            correctivePrompt: undefined, // Potential: no corrective prompts
+            confidence: Math.round(block.confidence * 100) / 100,
+            correctivePrompt: undefined,
             deduplicationKey: `${formattedLocation}|${elementLabel}`,
-          };
-        }).filter(Boolean);
-        
-        if (a3Elements.length > 0) {
-          const avgConf = a3Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a3Elements.length;
-          const a3Rule = allRulesForViolations.find(r => r.id === 'A3');
-          
-          aggregatedA3UI = {
-            ruleId: 'A3',
-            ruleName: 'Insufficient line spacing',
-            category: 'accessibility',
-            status: 'potential', // Screenshot-based A3 is ALWAYS potential
-            blocksConvergence: false,
-            inputType: 'screenshots',
-            isA3Aggregated: true,
-            a3Elements,
-            diagnosis: `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected. These require manual verification due to measurement uncertainty.`,
-            contextualHint: 'Increase line-height to at least 1.5 (leading-normal) for primary body text.',
-            correctivePrompt: a3Rule?.correctivePrompt || '',
-            confidence: Math.round(avgConf * 100) / 100,
-            advisoryGuidance: 'Visual estimation cannot determine exact computed line-height ratios. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
-          };
-          
-          console.log(`A3 aggregated (screenshot): ${filteredA3UI.length} → ${a3Elements.length} elements (potential)`);
+          });
         }
       }
+      
+      // Determine status — only potential or informational (no risk)
+      const isRisk = decision === 'potential_risk_high' || decision === 'potential_risk_low';
+      const a3Rule = allRulesForViolations.find(r => r.id === 'A3');
+      
+      // Build diagnosis based on decision
+      let a3Diagnosis: string;
+      if (decision === 'no_multiline_blocks') {
+        a3Diagnosis = 'No multi-line paragraph text blocks detected. A3 requires multi-line body text for line spacing evaluation.';
+      } else if (decision === 'no_risk_detected') {
+        a3Diagnosis = `${multiLineBlocks} multi-line text block${multiLineBlocks !== 1 ? 's' : ''} evaluated. Estimated median line-height ratio ≈${medianRatio?.toFixed(2)} is above the 1.50 threshold — no risk detected (heuristic).`;
+      } else {
+        a3Diagnosis = `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected. These require manual verification due to measurement uncertainty.`;
+      }
+      
+      aggregatedA3UI = {
+        ruleId: 'A3',
+        ruleName: 'Insufficient line spacing',
+        category: 'accessibility',
+        status: isRisk ? 'potential' : 'informational',
+        blocksConvergence: false,
+        inputType: 'screenshots',
+        isA3Aggregated: true,
+        a3Elements: a3Elements.length > 0 ? a3Elements : undefined,
+        a3EstimationSummary,
+        diagnosis: a3Diagnosis,
+        contextualHint: isRisk ? 'Increase line-height to at least 1.5 (leading-normal) for primary body text.' : undefined,
+        correctivePrompt: isRisk ? (a3Rule?.correctivePrompt || '') : '',
+        confidence: isRisk
+          ? Math.round((a3Elements.reduce((s: number, e: any) => s + e.confidence, 0) / Math.max(a3Elements.length, 1)) * 100) / 100
+          : 1.0,
+        advisoryGuidance: isRisk
+          ? 'Visual estimation cannot determine exact computed line-height ratios. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.'
+          : undefined,
+      };
+      
+      console.log(`A3 aggregated (screenshot): ${blocksEvaluated} blocks evaluated, ${multiLineBlocks} multi-line, decision=${decision}`);
     }
     
     // Combine all violations - A1 uses aggregated cards (max 2)
