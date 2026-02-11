@@ -153,6 +153,8 @@ export interface A2ElementSubItem {
 
   // Font size data
   computedFontSize?: number; // Deterministic px value (confirmed only)
+  estimatedFontSize?: number; // Approximate visual estimation px value (screenshot heuristic only)
+  estimationFailed?: boolean; // True when visual estimation could not be performed
   fontSizeSource?: string; // e.g., "Explicit CSS declaration", "Tailwind class text-sm"
   detectionMethod: 'deterministic' | 'heuristic'; // deterministic = code, heuristic = screenshot
 
