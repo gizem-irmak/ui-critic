@@ -21,6 +21,7 @@ const reasonCodeLabels: Record<A1ReasonCode, string> = {
   FG_ANTIALIASING: 'Glyph sampling unstable',
   FG_IMPLAUSIBLE: 'Foreground sampling inconsistent',
   FG_SAMPLING_UNRELIABLE: 'Foreground sampling unreliable',
+  FG_BG_AMBIGUITY: 'FG/BG ambiguity in enclosed component',
   LOW_CONFIDENCE: 'Low confidence measurement',
   STATIC_ANALYSIS: 'Static code analysis',
 };

@@ -567,6 +567,9 @@ type A1Sample = {
   // Visual polarity check result (v25.4)
   visualPolarityPass?: boolean; // True if element passes due to clear visual polarity
   visualPolarityDiff?: number; // Luminance difference (0-1) between text and background
+  // Badge/pill/chip FG/BG ambiguity (v25.5)
+  fgBgAmbiguity?: boolean; // True if FG/BG roles cannot be confidently determined
+  fgBgAmbiguityReason?: string;
 };
 
 // ============================================================
@@ -934,6 +937,32 @@ function computeA1SampleWithFallbacks(
     localBg = localResult.localUniformColor;
     bgPixels = localResult.pixels.map(p => ({ r: p.r, g: p.g, b: p.b, luma255: p.luma255 }));
     fallbackMethod = 'local_uniform';
+    
+    // ====================================================================
+    // BADGE/PILL/CHIP FG/BG ROLE VALIDATION (v25.5)
+    // ====================================================================
+    // For enclosed components (badges, pills, chips), the detected "foreground"
+    // (darkest pixels) could actually be the container fill, not the text color.
+    // This happens when text is lighter than its container background.
+    //
+    // Detection: If the sampled foreground color is very similar to the local
+    // uniform background, it means we likely sampled the container fill as
+    // foreground instead of the actual text glyph color.
+    //
+    // Also check: if foreground is LIGHTER than the local background, the
+    // text is light-on-dark within the badge — roles may be swapped.
+    // ====================================================================
+    const fgLuma01 = relativeLuminance01(fg);
+    const localBgLuma01 = relativeLuminance01(localBg);
+    const fgBgLumaDiff = Math.abs(fgLuma01 - localBgLuma01);
+    
+    // If fg and local bg are very close (< 15% luminance diff), roles are ambiguous
+    if (fgBgLumaDiff < 0.15) {
+      // Mark as ambiguous — will be downgraded to POTENTIAL later
+      (localResult as any)._fgBgAmbiguity = true;
+      (localResult as any)._fgBgAmbiguityReason = 
+        `Foreground/background ambiguity in enclosed component: sampled foreground luminance (${(fgLuma01 * 100).toFixed(0)}%) too close to container background (${(localBgLuma01 * 100).toFixed(0)}%).`;
+    }
   } else if (localResult.pixels.length >= 15) {
     // Local region sampled but not uniform — use proximity-weighted pixels
     bgPixels = localResult.pixels.map(p => ({ r: p.r, g: p.g, b: p.b, luma255: p.luma255 }));
@@ -1181,6 +1210,9 @@ function computeA1SampleWithFallbacks(
     // Visual polarity check (v25.4)
     visualPolarityPass,
     visualPolarityDiff: polarityCheck.lumaDiff,
+    // Badge/pill/chip FG/BG ambiguity (v25.5)
+    fgBgAmbiguity: !!(localResult as any)._fgBgAmbiguity,
+    fgBgAmbiguityReason: (localResult as any)._fgBgAmbiguityReason,
   };
 }
 
@@ -1245,6 +1277,8 @@ function classifyA1Contrast(
   fgImplausibilityReason?: string;
   isForegroundSamplingUnreliable?: boolean; // True if downgraded due to FG_SAMPLING_UNRELIABLE (v25.3)
   fgSamplingUnreliableReason?: string;
+  isFgBgAmbiguity?: boolean; // True if downgraded due to FG_BG_AMBIGUITY (v25.5)
+  fgBgAmbiguityReason?: string;
 } {
   const contrastWorst = sample.contrastWorst;
   const contrastBest = sample.contrastRange?.max ?? sample.ratio;
@@ -1312,6 +1346,23 @@ function classifyA1Contrast(
       isBackgroundBased: false,
       isForegroundSamplingUnreliable: true,
       fgSamplingUnreliableReason: sample.foregroundValidation.reason,
+    };
+  }
+  
+  // ============================================================
+  // STEP 3.5: BADGE/PILL/CHIP FG/BG AMBIGUITY (v25.5)
+  // ============================================================
+  // If the element is an enclosed component (badge, pill, chip) and
+  // foreground/background roles cannot be confidently determined,
+  // downgrade to POTENTIAL with FG_BG_AMBIGUITY.
+  if (sample.fgBgAmbiguity) {
+    return {
+      classification: 'potential',
+      reason: sample.fgBgAmbiguityReason || 'Foreground/background ambiguity in enclosed component',
+      effectiveRatio: primaryRatio,
+      isBackgroundBased: false,
+      isFgBgAmbiguity: true,
+      fgBgAmbiguityReason: sample.fgBgAmbiguityReason,
     };
   }
   
@@ -1769,6 +1820,7 @@ async function computeA1ViolationsFromScreenshots(
           case 'FG_ANTIALIASING': return 'glyph sampling unstable';
           case 'FG_IMPLAUSIBLE': return 'foreground sampling inconsistent with visual prominence';
           case 'FG_SAMPLING_UNRELIABLE': return 'foreground color sampling unreliable (re-sampling failed)';
+          case 'FG_BG_AMBIGUITY': return 'foreground/background ambiguity in enclosed component (badge/pill/chip)';
           default: return code;
         }
       }).join(', ');
@@ -2149,6 +2201,20 @@ For each detected text element, estimate colors as follows:
 - Only expand to wider regions if local sampling is insufficient
 - Use the **median RGB** of remaining pixels as the background color
 - Report the RAW sampled hex — do NOT snap to palette tokens
+
+**STEP 3.5 — BADGE/PILL/CHIP ENCLOSED COMPONENT HANDLING (v25.5):**
+- When text is inside a visually bounded container (badge, pill, chip, label with rounded background):
+  * The container fill IS the background — do NOT sample outside the badge boundary
+  * The foreground is the text glyph color, NOT the container color
+  * Measure contrast between text color and container fill color
+- If foreground and background roles cannot be determined with high confidence:
+  * Set \`status: "potential"\`
+  * Add reason: "Foreground/background ambiguity in enclosed component"
+  * Do NOT report as confirmed
+- Only report A1 — Confirmed for badges/pills when:
+  * Text color and container background are confidently identified
+  * Contrast is measured between text and its immediate container
+- This prevents false positives where light badge fills are mistaken for foreground text
 
 **STEP 4 — Compute contrast ratio:**
 - Use WCAG 2.1 relative luminance formula on the sampled median foreground/background RGB
@@ -3630,6 +3696,7 @@ serve(async (req) => {
           if (reason.includes('overlay') || reason.includes('transparent')) reasonCodes.push('BG_OVERLAY');
           if (reason.includes('insufficient') || reason.includes('small region')) reasonCodes.push('BG_TOO_SMALL_REGION');
           if (reason.includes('anti-alias') || reason.includes('unstable')) reasonCodes.push('FG_ANTIALIASING');
+          if (reason.includes('ambiguity') || reason.includes('enclosed')) reasonCodes.push('FG_BG_AMBIGUITY');
         }
         if (item.confidence < 0.75) reasonCodes.push('LOW_CONFIDENCE');
         // Ensure at least one reason code
@@ -3656,6 +3723,7 @@ serve(async (req) => {
               case 'BG_OVERLAY': return 'transparency or overlay suspected';
               case 'BG_TOO_SMALL_REGION': return 'insufficient background pixels';
               case 'FG_ANTIALIASING': return 'glyph sampling unstable';
+              case 'FG_BG_AMBIGUITY': return 'foreground/background ambiguity in enclosed component';
               case 'LOW_CONFIDENCE': return 'combined confidence below threshold';
               default: return code;
             }
