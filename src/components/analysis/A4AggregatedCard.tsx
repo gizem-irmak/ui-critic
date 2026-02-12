@@ -101,15 +101,17 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
               <span className="text-muted-foreground font-medium w-28">Threshold:</span>
               <span className="font-mono">
                 {element.detectionMethod === 'heuristic'
-                  ? '20px desktop baseline'
-                  : '20px minimum (confirmed), 24px recommended usability baseline'}
+                  ? '20×20px minimum · 24×24px recommended baseline'
+                  : isConfirmed
+                    ? '20×20px minimum (confirmed) · 24×24px recommended'
+                    : '24×24px recommended baseline (desktop)'}
               </span>
             </div>
 
             {/* Detection Source */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Detection:</span>
-              <span>{element.sizeSource || (element.detectionMethod === 'deterministic' ? 'Computed bounding box from rendered CSS' : 'Screenshot-based bounding box estimation')}</span>
+              <span>{element.sizeSource || (element.detectionMethod === 'deterministic' ? 'Computed CSS bounding box' : 'Screenshot-based bounding box estimation')}</span>
             </div>
 
             {/* Confidence */}
@@ -169,21 +171,17 @@ export function A4AggregatedCard({ violation, compact = false }: A4AggregatedCar
             A4
           </span>
           <span className="font-bold text-base">Small Tap / Click Targets</span>
-          {elements.length > 0 && (
-            <Badge className={cn(
-              "gap-1 text-xs",
-              isConfirmed
-                ? "bg-destructive/10 text-destructive border-destructive/30"
-                : "bg-warning/10 text-warning border-warning/30"
-            )}>
-              {elements.length} element{elements.length !== 1 ? 's' : ''}
-            </Badge>
-          )}
+          <Badge className={cn(
+            "gap-1 text-xs",
+            isConfirmed
+              ? "bg-destructive/10 text-destructive border-destructive/30"
+              : "bg-warning/10 text-warning border-warning/30"
+          )}>
+            {elements.length} element{elements.length !== 1 ? 's' : ''}
+          </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {isConfirmed
-            ? `${elements.length} interactive element${elements.length !== 1 ? 's' : ''} with confirmed insufficient target size detected.`
-            : `${elements.length} interactive element${elements.length !== 1 ? 's' : ''} with potential size issues detected.`}
+          {violation.diagnosis}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
