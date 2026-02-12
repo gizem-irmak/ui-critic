@@ -19,6 +19,10 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
+  const isDeterministic = element.detectionMethod === 'deterministic';
+  const hasComputed = element.computedWidth !== undefined && element.computedHeight !== undefined;
+  const hasEstimated = element.estimatedWidth !== undefined && element.estimatedHeight !== undefined;
+
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <div className={cn(
@@ -63,36 +67,51 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Target Size — deterministic or estimated */}
+            {/* Width */}
             <div className="flex items-center gap-2">
-              {element.computedWidth !== undefined && element.computedHeight !== undefined ? (
+              <span className="text-muted-foreground font-medium w-28">
+                {isDeterministic ? 'Width:' : 'Est. Width:'}
+              </span>
+              {hasComputed ? (
+                <span className={cn(
+                  'font-mono font-medium',
+                  isConfirmed ? 'text-destructive' : 'text-warning'
+                )}>
+                  {element.computedWidth}px
+                </span>
+              ) : hasEstimated ? (
                 <>
-                  <span className="text-muted-foreground font-medium w-28">Target Size:</span>
-                  <span className={cn(
-                    'font-mono font-medium',
-                    isConfirmed ? 'text-destructive' : 'text-warning'
-                  )}>
-                    {element.computedWidth}×{element.computedHeight}px
-                  </span>
-                  {element.confidence !== undefined && (
-                    <span className="text-muted-foreground">
-                      ({Math.round(element.confidence * 100)}% conf)
-                    </span>
-                  )}
-                </>
-              ) : element.estimatedWidth !== undefined && element.estimatedHeight !== undefined ? (
-                <>
-                  <span className="text-muted-foreground font-medium w-28">Est. Size:</span>
                   <span className="font-mono font-medium text-warning">
-                    ≈{element.estimatedWidth}×{element.estimatedHeight}px
+                    ≈{element.estimatedWidth}px
                   </span>
                   <span className="text-muted-foreground text-xs">(visual estimation)</span>
                 </>
               ) : (
+                <span className="text-muted-foreground italic">could not be reliably estimated</span>
+              )}
+            </div>
+
+            {/* Height */}
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground font-medium w-28">
+                {isDeterministic ? 'Height:' : 'Est. Height:'}
+              </span>
+              {hasComputed ? (
+                <span className={cn(
+                  'font-mono font-medium',
+                  isConfirmed ? 'text-destructive' : 'text-warning'
+                )}>
+                  {element.computedHeight}px
+                </span>
+              ) : hasEstimated ? (
                 <>
-                  <span className="text-muted-foreground font-medium w-28">Est. Size:</span>
-                  <span className="text-muted-foreground italic">could not be reliably estimated</span>
+                  <span className="font-mono font-medium text-warning">
+                    ≈{element.estimatedHeight}px
+                  </span>
+                  <span className="text-muted-foreground text-xs">(visual estimation)</span>
                 </>
+              ) : (
+                <span className="text-muted-foreground italic">could not be reliably estimated</span>
               )}
             </div>
 
@@ -100,18 +119,18 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Threshold:</span>
               <span className="font-mono">
-                {element.detectionMethod === 'heuristic'
-                  ? '20×20px minimum · 24×24px recommended baseline'
-                  : isConfirmed
-                    ? '20×20px minimum (confirmed) · 24×24px recommended'
-                    : '24×24px recommended baseline (desktop)'}
+                {isDeterministic
+                  ? isConfirmed
+                    ? '20px minimum (confirmed) · 24px recommended'
+                    : '24px recommended baseline (desktop)'
+                  : '20px minimum · 24px recommended baseline'}
               </span>
             </div>
 
             {/* Detection Source */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Detection:</span>
-              <span>{element.sizeSource || (element.detectionMethod === 'deterministic' ? 'Computed CSS bounding box' : 'Screenshot-based bounding box estimation')}</span>
+              <span>{element.sizeSource || (isDeterministic ? 'Computed CSS bounding box' : 'Screenshot-based bounding box estimation')}</span>
             </div>
 
             {/* Confidence */}
@@ -123,18 +142,18 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
               )}>
                 {Math.round(element.confidence * 100)}%
                 <span className="text-muted-foreground ml-1">
-                  — {element.detectionMethod === 'deterministic' ? 'deterministic' : 'heuristic'}
+                  — {isDeterministic ? 'deterministic' : 'heuristic'}
                 </span>
               </span>
             </div>
 
-            {/* Explanation */}
+            {/* Reasoning / Explanation */}
             <div className="pt-1">
               <p className="text-foreground leading-relaxed">{element.explanation}</p>
             </div>
 
-            {/* Low confidence badge for potential findings */}
-            {!isConfirmed && element.detectionMethod === 'heuristic' && (
+            {/* Low confidence badge for heuristic findings */}
+            {!isConfirmed && !isDeterministic && (
               <div className="flex items-start gap-2 pt-1">
                 <Info className="h-3 w-3 text-warning mt-0.5 flex-shrink-0" />
                 <div className="flex flex-wrap gap-1">
