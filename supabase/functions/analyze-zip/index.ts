@@ -1881,8 +1881,8 @@ ${codeContent}`,
       // Do NOT trigger A2 solely because text-sm or text-xs appears in any component.
       const nameAndEvidence = (componentName + ' ' + combined).toLowerCase();
       
-      // 1) Component name signals secondary — expanded exclusion list
-      const secondaryComponentPattern = /\b(Badge|Chip|Tag|Label|Subtitle|Meta|Caption|Breadcrumb|Menu|Dropdown|Command|Navigation|Trigger|Input|FormLabel|FormMessage|CheckboxItem|SubTrigger)\b/i;
+      // 1) Component name signals secondary — comprehensive exclusion list
+      const secondaryComponentPattern = /\b(Badge|Chip|Tag|Label|Subtitle|Meta|Caption|Breadcrumb|Menu|Dropdown|Command|Navigation|Trigger|Input|FormLabel|FormMessage|CheckboxItem|SubTrigger|Pagination|FilterBar|ContextMenu|Menubar|DropdownMenu|NavigationMenu)\b/i;
       if (secondaryComponentPattern.test(componentName)) {
         console.log(`Filtering out A2 (secondary component name "${componentName}"): ${filePath}`);
         continue;
@@ -1908,12 +1908,18 @@ ${codeContent}`,
         console.log(`Filtering out A2 (short label <25 chars, not primary): ${componentName || filePath} "${snippetText}"`);
         continue;
       }
-      // 6) Final primary-content gate: element must be explicitly primary readable content
-      //    Primary = element tag p/article/main/section, component *Description, text ≥60 chars, or multi-sentence
+      // 6) Exclude if inside navigation/menu/form/badge/filter container context
+      if (/\b(inside|within|in)\s*(nav|menu|dropdown|breadcrumb|pagination|filter|toolbar|sidebar)\b/i.test(nameAndEvidence)) {
+        console.log(`Filtering out A2 (inside secondary container): ${componentName || filePath}`);
+        continue;
+      }
+      // 7) Final primary-content gate: element must be explicitly primary readable content
+      //    Primary = element tag p/article/main/section, component *Description, text ≥60 chars, multi-sentence, or list items in content
       const isPrimary = /\bp\b|<p|paragraph|prose|content|body|article|\bmain\b|\bsection\b/i.test(nameAndEvidence)
         || /CardDescription|DialogDescription|AlertDescription|FormDescription/i.test(nameAndEvidence)
         || (snippetText.length >= 60)
-        || /\.\s+[A-Z]/.test(v.evidence || ''); // multi-sentence indicator
+        || /\.\s+[A-Z]/.test(v.evidence || '') // multi-sentence indicator
+        || /\bli\b.*content|list\s*item.*(?:main|content|body)/i.test(nameAndEvidence); // list items in content areas
       if (!isPrimary) {
         console.log(`Filtering out A2 (not primary readable content): ${componentName || filePath}`);
         continue;
