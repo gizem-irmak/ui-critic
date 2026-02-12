@@ -11,7 +11,7 @@ const rules = {
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
     { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px (text-base / 1rem) across all screens and components where this body-text style is reused. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Primary body text elements use line-height ratios below the recommended 1.3 minimum for readability. WCAG 1.4.12 (Text Spacing) recommends adequate line spacing to support users with cognitive or visual impairments.', correctivePrompt: 'Increase line-height of primary body text (paragraphs, descriptions, main content text) to at least 1.5 (leading-normal) across all screens and components. Do not change headings, badges, navigation text, metadata, timestamps, button labels, or intentional microcopy. Adjust paragraph spacing proportionally.' },
-    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
+    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Primary interactive controls (buttons, submit inputs, role="button" elements) do not meet the minimum desktop click target size of 24×24 CSS px. Elements below 20×20px are confirmed violations; elements between 20–23px are potential risks. This evaluation uses desktop-appropriate thresholds — the 44px mobile recommendation does not apply.', correctivePrompt: 'Increase primary interactive element dimensions to at least 24×24 CSS px using min-width and min-height constraints or equivalent padding. Apply only to primary actionable controls (buttons, submit inputs). Do not modify navigation menus, dropdowns, breadcrumbs, pagination, toolbar icons, or secondary UI chrome.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
   ],
   usability: [
@@ -792,10 +792,20 @@ ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name} - ${r.diagnosis}`).
 - Skip text-base (16px) and larger
 - Only evaluate primary body text elements (paragraphs, descriptions, content blocks)
 
-### A4 Detection:
-- Flag elements without explicit 44×44px minimum
-- Classify as "Heuristic (requires runtime verification)"
-- Size tokens: h-8 (~32px), h-9 (~36px), h-10 (~40px)
+### A4 (Small tap / click targets) — DESKTOP WEB UI EVALUATION:
+
+**SCOPE:** Only primary actionable controls: \`<button>\`, \`<input type="button|submit">\`, \`role="button"\`.
+**EXCLUDE:** Breadcrumb links, DropdownMenuItem, NavigationMenuTrigger, PaginationLink, toolbar icons, table row actions, Badge, Tag, Chip, Label, elements inside nav/menu systems.
+
+**DESKTOP THRESHOLDS (NOT mobile 44px):**
+- width < 20px OR height < 20px → Confirmed (Blocking) — only if primary control
+- 20px ≤ size < 24px → Potential Risk (Non-blocking)
+- ≥ 24px → Pass (no finding)
+- Elements inside navigation/menu → at most Potential, never Confirmed
+
+**SIZE TOKENS:** h-4 (~16px), h-5 (~20px), h-6 (~24px Pass), h-8 (~32px Pass)
+
+Report: element name, file, computed width × height, threshold, detection method, confidence.
 
 ### A5 Detection:
 - Only flag elements that REMOVE default outline (outline-none)
@@ -1136,8 +1146,8 @@ serve(async (req) => {
     
     // ========== A2 AGGREGATION LOGIC (GitHub) ==========
     const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2');
-    const a3AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A3');
-    const nonA2A3AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3');
+    const a4AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A4');
+    const nonA2A3A4AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4');
     
     let aggregatedA2GitHub: any = null;
     if (a2AiViolations.length > 0) {
@@ -1408,13 +1418,101 @@ serve(async (req) => {
       }
     }
     
+    // ========== A4 AGGREGATION LOGIC (GitHub — Desktop thresholds) ==========
+    const a4SecondaryGH = /^(Breadcrumb|DropdownMenu|DropdownMenuItem|NavigationMenu|NavigationMenuTrigger|NavLink|PaginationLink|PaginationPrevious|PaginationNext|Pagination|ContextMenu|ContextMenuItem|Menubar|MenubarItem|Badge|Tag|Chip|Label|Toolbar|ToolbarButton|TableAction)$/i;
+    const a4SecondaryContainerGH = /\b(breadcrumb|dropdown|navigation|pagination|toolbar|sidebar|menu|menubar|context-menu|nav\b)/i;
+    
+    let aggregatedA4GitHub: any = null;
+    if (a4AiViolations.length > 0) {
+      const filteredA4 = a4AiViolations.filter((v: any) => {
+        const evidence = v.evidence || '';
+        const combined = ((v.diagnosis || '') + ' ' + evidence).toLowerCase();
+        const compMatch = evidence.match(/([A-Z][a-zA-Z0-9]*)/);
+        const compName = compMatch?.[1] || '';
+        
+        // Exclude secondary components
+        if (a4SecondaryGH.test(compName)) {
+          console.log(`A4 SKIP (secondary component "${compName}"): ${evidence.substring(0, 80)}`);
+          return false;
+        }
+        // Exclude if inside secondary container
+        if (a4SecondaryContainerGH.test(combined)) {
+          console.log(`A4 SKIP (inside secondary container): ${evidence.substring(0, 80)}`);
+          return false;
+        }
+        return true;
+      });
+      
+      if (filteredA4.length > 0) {
+        const a4Elements = filteredA4.map((v: any) => {
+          const evidence = v.evidence || '';
+          const combined = ((v.diagnosis || '') + ' ' + evidence).toLowerCase();
+          const compMatch = evidence.match(/([A-Z][a-zA-Z0-9]*)/);
+          const fileMatch = evidence.match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
+          const elementLabel = compMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || 'Interactive element';
+          const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
+          
+          // Extract approx px from tokens
+          let approxPxNum = 16;
+          if (/h-4\b|w-4\b|size-4\b|~16px/.test(combined)) approxPxNum = 16;
+          else if (/h-5\b|w-5\b|size-5\b|~20px/.test(combined)) approxPxNum = 20;
+          else if (/h-6\b|w-6\b|size-6\b|~24px/.test(combined)) approxPxNum = 24;
+          else if (/h-7\b|w-7\b|size-7\b|~28px/.test(combined)) approxPxNum = 28;
+          else if (/h-8\b|w-8\b|size-8\b|~32px/.test(combined)) approxPxNum = 32;
+          
+          // ≥ 24px → Pass
+          if (approxPxNum >= 24) return null;
+          
+          const isConfirmed = approxPxNum < 20;
+          
+          return {
+            elementLabel,
+            location,
+            approxPx: `~${approxPxNum}px`,
+            approxPxNum,
+            detectionMethod: isConfirmed ? 'deterministic' as const : 'heuristic' as const,
+            confidence: isConfirmed ? 0.80 : 0.60,
+            explanation: v.diagnosis || `Element may be below the desktop minimum click target size of 24×24 CSS px.`,
+          };
+        }).filter(Boolean);
+        
+        if (a4Elements.length > 0) {
+          const hasConfirmed = a4Elements.some((el: any) => el.detectionMethod === 'deterministic');
+          const a4Status = hasConfirmed ? 'confirmed' : 'potential';
+          const avgConf = a4Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a4Elements.length;
+          const a4Rule = [...rules.accessibility].find(r => r.id === 'A4');
+          
+          aggregatedA4GitHub = {
+            ruleId: 'A4',
+            ruleName: 'Small tap / click targets',
+            category: 'accessibility',
+            status: a4Status,
+            blocksConvergence: a4Status === 'confirmed',
+            inputType: 'github',
+            typeBadge: a4Status === 'confirmed' ? 'Confirmed Violation' : 'Potential Risk (Heuristic)',
+            diagnosis: `${a4Elements.length} interactive element(s) may be below the desktop minimum click target size. Desktop thresholds: <20px Confirmed, 20-23px Potential, ≥24px Pass.`,
+            contextualHint: 'Ensure primary interactive controls meet the 24×24 CSS px desktop minimum.',
+            correctivePrompt: a4Rule?.correctivePrompt || '',
+            confidence: Math.round(avgConf * 100) / 100,
+            affected_items: a4Elements,
+            ...(a4Status === 'potential' ? {
+              advisoryGuidance: 'Static analysis cannot fully determine rendered dimensions. Verify with browser DevTools.',
+            } : {}),
+          };
+          
+          console.log(`A4 aggregated (GitHub): ${filteredA4.length} → 1 card (${a4Status}, ${a4Elements.length} elements)`);
+        }
+      }
+    }
+    
     // Combine all violations
     const allViolations = [
       ...aggregatedA1Violations,
       ...(u1Violation ? [u1Violation] : []),
       ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
       ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
-      ...nonA2A3AiViolations,
+      ...(aggregatedA4GitHub ? [aggregatedA4GitHub] : []),
+      ...nonA2A3A4AiViolations,
     ];
     
     // Deduplicate by ruleId
