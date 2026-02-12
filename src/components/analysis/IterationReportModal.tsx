@@ -14,6 +14,9 @@ import { cn } from '@/lib/utils';
 import type { Iteration, Project } from '@/types/project';
 import { PotentialRisksSection } from './PotentialRiskItem';
 import { A1AggregatedCard } from './A1AggregatedCard';
+import { A2AggregatedCard } from './A2AggregatedCard';
+import { A3AggregatedCard } from './A3AggregatedCard';
+import { A4AggregatedCard } from './A4AggregatedCard';
 
 interface IterationReportModalProps {
   iteration: Iteration | null;
@@ -312,79 +315,104 @@ export function IterationReportModal({
 
             {/* Other Confirmed Issues (Blocking) - excluding A1 aggregated */}
             {(() => {
-              const nonA1Confirmed = analysis.violations.filter(v => 
+              const nonAggConfirmed = analysis.violations.filter(v => 
                 v.status !== 'potential' && 
-                !(v.ruleId === 'A1' && v.isA1Aggregated)
+                !(v.ruleId === 'A1' && v.isA1Aggregated) &&
+                !(v.ruleId === 'A2' && v.isA2Aggregated) &&
+                !(v.ruleId === 'A3' && v.isA3Aggregated) &&
+                !(v.ruleId === 'A4' && v.isA4Aggregated)
               );
-              return nonA1Confirmed.length > 0 && (
-                <Card className="border-destructive/30">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-lg font-bold">
-                      <AlertTriangle className="h-5 w-5 text-destructive" />
-                      Confirmed Violations (Blocking) — {nonA1Confirmed.length}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {nonA1Confirmed.map((violation, idx) => (
-                        <div
-                          key={idx}
-                          className="p-4 rounded-lg bg-destructive/5 border border-destructive/20 space-y-3"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
-                                {violation.ruleId}
-                              </span>
-                              <span className="font-bold text-base">{violation.ruleName}</span>
+
+              const a1C = analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'confirmed');
+              const a2C = analysis.violations.find(v => v.ruleId === 'A2' && v.isA2Aggregated && v.status === 'confirmed');
+              const a3C = analysis.violations.find(v => v.ruleId === 'A3' && v.isA3Aggregated && v.status === 'confirmed');
+              const a4C = analysis.violations.find(v => v.ruleId === 'A4' && v.isA4Aggregated && v.status === 'confirmed');
+              const hasConfirmed = a1C || a2C || a3C || a4C || nonAggConfirmed.length > 0;
+
+              return hasConfirmed && (
+                <>
+                  {a1C && <A1AggregatedCard violation={a1C} compact />}
+                  {a2C && <A2AggregatedCard violation={a2C} compact />}
+                  {a3C && <A3AggregatedCard violation={a3C} compact />}
+                  {a4C && <A4AggregatedCard violation={a4C} compact />}
+                  
+                  {nonAggConfirmed.length > 0 && (
+                    <Card className="border-destructive/30">
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2 text-lg font-bold">
+                          <AlertTriangle className="h-5 w-5 text-destructive" />
+                          Confirmed Violations (Blocking) — {nonAggConfirmed.length}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-3">
+                          {nonAggConfirmed.map((violation, idx) => (
+                            <div
+                              key={idx}
+                              className="p-4 rounded-lg bg-destructive/5 border border-destructive/20 space-y-3"
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className={cn('category-badge text-xs', categoryColors[violation.category])}>
+                                    {violation.ruleId}
+                                  </span>
+                                  <span className="font-bold text-base">{violation.ruleName}</span>
+                                </div>
+                                <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
+                                  {Math.round(violation.confidence * 100)}%
+                                </span>
+                              </div>
+                              <div className="h-1" />
+                              {violation.evidence && (
+                                <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
+                              )}
+                              <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
                             </div>
-                            <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
-                              {Math.round(violation.confidence * 100)}%
-                            </span>
-                          </div>
-                          
-                          {/* Spacing separator */}
-                          <div className="h-1" />
-
-                          {violation.evidence && (
-                            <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
-                          )}
-
-                          <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
+                      </CardContent>
+                    </Card>
+                  )}
+                </>
               );
             })()}
 
-            {/* Aggregated A1 Potential Card (if exists) */}
-            {analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential') && (
-              <A1AggregatedCard 
-                violation={analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential')!} 
-                compact 
-              />
-            )}
-
-            {/* Other Potential Risks (Non-blocking) - excluding A1 aggregated */}
+            {/* Potential Section */}
             {(() => {
-              const nonA1Potential = analysis.violations.filter(v => 
+              const a1P = analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential');
+              const a2P = analysis.violations.find(v => v.ruleId === 'A2' && v.isA2Aggregated && v.status === 'potential');
+              const a3P = analysis.violations.find(v => v.ruleId === 'A3' && v.isA3Aggregated && v.status === 'potential');
+              const a4P = analysis.violations.find(v => v.ruleId === 'A4' && v.isA4Aggregated && v.status === 'potential');
+              const nonAggPotential = analysis.violations.filter(v => 
                 v.status === 'potential' && 
-                !(v.ruleId === 'A1' && v.isA1Aggregated)
+                !(v.ruleId === 'A1' && v.isA1Aggregated) &&
+                !(v.ruleId === 'A2' && v.isA2Aggregated) &&
+                !(v.ruleId === 'A3' && v.isA3Aggregated) &&
+                !(v.ruleId === 'A4' && v.isA4Aggregated)
               );
-              return nonA1Potential.length > 0 && (
-                <Card className="border-warning/30">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="flex items-center gap-2 text-lg font-bold">
-                      <AlertCircle className="h-5 w-5 text-warning" />
-                      Potential Risks (Non-blocking) — {nonA1Potential.length}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <PotentialRisksSection violations={nonA1Potential} compact />
-                  </CardContent>
-                </Card>
+              const hasPotential = a1P || a2P || a3P || a4P || nonAggPotential.length > 0;
+
+              return hasPotential && (
+                <>
+                  {a1P && <A1AggregatedCard violation={a1P} compact />}
+                  {a2P && <A2AggregatedCard violation={a2P} compact />}
+                  {a3P && <A3AggregatedCard violation={a3P} compact />}
+                  {a4P && <A4AggregatedCard violation={a4P} compact />}
+                  
+                  {nonAggPotential.length > 0 && (
+                    <Card className="border-warning/30">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="flex items-center gap-2 text-lg font-bold">
+                          <AlertCircle className="h-5 w-5 text-warning" />
+                          Potential Risks (Non-blocking) — {nonAggPotential.length}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <PotentialRisksSection violations={nonAggPotential} compact />
+                      </CardContent>
+                    </Card>
+                  )}
+                </>
               );
             })()}
 

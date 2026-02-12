@@ -148,6 +148,12 @@ export interface Violation {
   // ============================================================
   isA3Aggregated?: boolean;
   a3Elements?: A3ElementSubItem[];
+
+  // ============================================================
+  // A4 AGGREGATED ELEMENT REPORTING
+  // ============================================================
+  isA4Aggregated?: boolean;
+  a4Elements?: A4ElementSubItem[];
 }
 
 // A2 Element sub-item for aggregated font-size reporting
@@ -195,6 +201,35 @@ export interface A3ElementSubItem {
 
   // Threshold
   thresholdRatio: number; // 1.3 minimum readability baseline
+
+  // Classification
+  explanation: string;
+  confidence: number; // 0-1
+
+  // Corrective prompt (confirmed only)
+  correctivePrompt?: string;
+
+  // Deduplication
+  deduplicationKey: string;
+}
+
+// A4 Element sub-item for aggregated tap/click target reporting
+export interface A4ElementSubItem {
+  elementLabel: string; // e.g., "Submit button", "Icon button"
+  textSnippet?: string;
+  location: string; // file path or screenshot reference
+  screenshotIndex?: number;
+
+  // Size data
+  computedWidth?: number; // Deterministic px (confirmed only)
+  computedHeight?: number;
+  estimatedWidth?: number; // Visual estimation (screenshot heuristic only)
+  estimatedHeight?: number;
+  sizeSource?: string; // e.g., "Tailwind class h-4 w-4", "CSS width/height"
+  detectionMethod: 'deterministic' | 'heuristic';
+
+  // Threshold
+  thresholdPx: number; // 24 for desktop pass, 20 for confirmed cutoff
 
   // Classification
   explanation: string;

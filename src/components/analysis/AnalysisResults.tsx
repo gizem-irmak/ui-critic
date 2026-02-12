@@ -10,6 +10,7 @@ import { PotentialRisksSection } from './PotentialRiskItem';
 import { A1AggregatedCard } from './A1AggregatedCard';
 import { A2AggregatedCard } from './A2AggregatedCard';
 import { A3AggregatedCard } from './A3AggregatedCard';
+import { A4AggregatedCard } from './A4AggregatedCard';
 interface AnalysisResultsProps {
   analysis: Analysis;
   project: Project;
@@ -112,6 +113,31 @@ export function AnalysisResults({
           if (el.correctivePrompt) {
             const elementRef = [
               'body text',
+              el.location ? `— ${el.location}` : null,
+            ].filter(Boolean).join(' ');
+            
+            group.prompts.push({
+              prompt: el.correctivePrompt,
+              elementRef: elementRef || el.elementLabel,
+            });
+          }
+        }
+      } else if (v.ruleId === 'A4' && v.isA4Aggregated && v.a4Elements) {
+        // Handle A4 aggregated violations with element-level prompts
+        if (!ruleGroups.has('A4')) {
+          ruleGroups.set('A4', {
+            ruleId: 'A4',
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+          });
+        }
+        const group = ruleGroups.get('A4')!;
+        
+        for (const el of v.a4Elements) {
+          if (el.correctivePrompt) {
+            const elementRef = [
+              el.elementLabel,
               el.location ? `— ${el.location}` : null,
             ].filter(Boolean).join(' ');
             
@@ -325,10 +351,12 @@ export function AnalysisResults({
         const a1Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A1' && v.isA1Aggregated);
         const a2Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A2' && v.isA2Aggregated);
         const a3Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A3' && v.isA3Aggregated);
+        const a4Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A4' && v.isA4Aggregated);
         const otherConfirmed = confirmedViolationsList.filter(v => 
           !(v.ruleId === 'A1' && v.isA1Aggregated) && 
           !(v.ruleId === 'A2' && v.isA2Aggregated) &&
-          !(v.ruleId === 'A3' && v.isA3Aggregated)
+          !(v.ruleId === 'A3' && v.isA3Aggregated) &&
+          !(v.ruleId === 'A4' && v.isA4Aggregated)
         );
         
         return confirmedViolationsList.length > 0 && (
@@ -355,6 +383,11 @@ export function AnalysisResults({
             {/* A3 Aggregated Card if exists */}
             {a3Aggregated && (
               <A3AggregatedCard violation={a3Aggregated} />
+            )}
+            
+            {/* A4 Aggregated Card if exists */}
+            {a4Aggregated && (
+              <A4AggregatedCard violation={a4Aggregated} />
             )}
             {/* Other confirmed issues */}
             {otherConfirmed.length > 0 && (
@@ -398,14 +431,16 @@ export function AnalysisResults({
         const a1Potential = analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential');
         const a2Potential = analysis.violations.find(v => v.ruleId === 'A2' && v.isA2Aggregated && v.status === 'potential');
         const a3Potential = analysis.violations.find(v => v.ruleId === 'A3' && v.isA3Aggregated && v.status === 'potential');
+        const a4Potential = analysis.violations.find(v => v.ruleId === 'A4' && v.isA4Aggregated && v.status === 'potential');
         const nonAggregatedPotential = analysis.violations.filter(v => 
           v.status === 'potential' && 
           !(v.ruleId === 'A1' && v.isA1Aggregated) &&
           !(v.ruleId === 'A2' && v.isA2Aggregated) &&
-          !(v.ruleId === 'A3' && v.isA3Aggregated)
+          !(v.ruleId === 'A3' && v.isA3Aggregated) &&
+          !(v.ruleId === 'A4' && v.isA4Aggregated)
         );
-        const hasPotentialIssues = a1Potential || a2Potential || a3Potential || nonAggregatedPotential.length > 0;
-        const totalPotential = (a1Potential ? 1 : 0) + (a2Potential ? 1 : 0) + (a3Potential ? 1 : 0) + nonAggregatedPotential.length;
+        const hasPotentialIssues = a1Potential || a2Potential || a3Potential || a4Potential || nonAggregatedPotential.length > 0;
+        const totalPotential = (a1Potential ? 1 : 0) + (a2Potential ? 1 : 0) + (a3Potential ? 1 : 0) + (a4Potential ? 1 : 0) + nonAggregatedPotential.length;
         
         return hasPotentialIssues && (
           <div className="space-y-4">
@@ -431,6 +466,11 @@ export function AnalysisResults({
             {/* A3 Potential Card */}
             {a3Potential && (
               <A3AggregatedCard violation={a3Potential} />
+            )}
+            
+            {/* A4 Potential Card */}
+            {a4Potential && (
+              <A4AggregatedCard violation={a4Potential} />
             )}
             
             {/* Other Potential Risks */}
