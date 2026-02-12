@@ -63,23 +63,28 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Size — deterministic or estimated */}
+            {/* Target Size — deterministic or estimated */}
             <div className="flex items-center gap-2">
               {element.computedWidth !== undefined && element.computedHeight !== undefined ? (
                 <>
-                  <span className="text-muted-foreground font-medium w-28">Size:</span>
+                  <span className="text-muted-foreground font-medium w-28">Target Size:</span>
                   <span className={cn(
                     'font-mono font-medium',
                     isConfirmed ? 'text-destructive' : 'text-warning'
                   )}>
-                    {element.computedWidth}px × {element.computedHeight}px
+                    {element.computedWidth}×{element.computedHeight}px
                   </span>
+                  {element.confidence !== undefined && (
+                    <span className="text-muted-foreground">
+                      ({Math.round(element.confidence * 100)}% conf)
+                    </span>
+                  )}
                 </>
               ) : element.estimatedWidth !== undefined && element.estimatedHeight !== undefined ? (
                 <>
                   <span className="text-muted-foreground font-medium w-28">Est. Size:</span>
                   <span className="font-mono font-medium text-warning">
-                    ≈{element.estimatedWidth}px × {element.estimatedHeight}px
+                    ≈{element.estimatedWidth}×{element.estimatedHeight}px
                   </span>
                   <span className="text-muted-foreground text-xs">(visual estimation)</span>
                 </>
@@ -96,15 +101,15 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
               <span className="text-muted-foreground font-medium w-28">Threshold:</span>
               <span className="font-mono">
                 {element.detectionMethod === 'heuristic'
-                  ? '&lt;20px Potential (High), 20–23px Potential (Low), ≥24px Pass'
-                  : `<20px Confirmed, 20–23px Potential, ≥${element.thresholdPx}px Pass`}
+                  ? '20px desktop baseline'
+                  : '20px minimum (confirmed), 24px recommended usability baseline'}
               </span>
             </div>
 
             {/* Detection Source */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Detection:</span>
-              <span>{element.sizeSource || (element.detectionMethod === 'deterministic' ? 'CSS box model analysis' : 'Screenshot-based bounding box estimation')}</span>
+              <span>{element.sizeSource || (element.detectionMethod === 'deterministic' ? 'Computed bounding box from rendered CSS' : 'Screenshot-based bounding box estimation')}</span>
             </div>
 
             {/* Confidence */}
@@ -176,7 +181,9 @@ export function A4AggregatedCard({ violation, compact = false }: A4AggregatedCar
           )}
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {violation.diagnosis}
+          {isConfirmed
+            ? `${elements.length} interactive element${elements.length !== 1 ? 's' : ''} with confirmed insufficient target size detected.`
+            : `${elements.length} interactive element${elements.length !== 1 ? 's' : ''} with potential size issues detected.`}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
