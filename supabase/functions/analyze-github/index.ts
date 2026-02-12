@@ -1180,12 +1180,14 @@ serve(async (req) => {
           return false;
         }
         // ── A2 PRIMARY vs SECONDARY classification (deterministic GitHub) ──
+        // Do NOT trigger A2 solely because text-sm or text-xs appears in any component.
         const evidenceRaw = v.evidence || '';
         const componentMatch2 = evidenceRaw.match(/([A-Z][a-zA-Z0-9]*)/);
         const compName = componentMatch2?.[1] || '';
         
-        // 1) Component name signals secondary
-        if (/^(Badge|Chip|Tag|Label|Subtitle|Meta|Caption)$/i.test(compName)) {
+        // 1) Component name signals secondary — expanded exclusion list
+        const secondaryComponentPattern = /^(Badge|Chip|Tag|Label|Subtitle|Meta|Caption|Breadcrumb|Menu|Dropdown|Command|Navigation|Trigger|Input|FormLabel|FormMessage|CheckboxItem|SubTrigger)$/i;
+        if (secondaryComponentPattern.test(compName)) {
           console.log(`Filtering out A2 (secondary component "${compName}"): ${evidenceRaw}`);
           return false;
         }
@@ -1204,16 +1206,17 @@ serve(async (req) => {
           console.log(`Filtering out A2 (subtitle/nav/filter label): ${evidenceRaw}`);
           return false;
         }
-        // 5) Short labels (<25 chars) not paragraphs/descriptions
+        // 5) Short text (<25 chars) not clearly primary content
         const snippet = (v.textSnippet || evidenceRaw).replace(/[^a-zA-Z0-9\s]/g, '').trim();
-        if (snippet.length > 0 && snippet.length < 25 && !/paragraph|description|content|prose|body|article/i.test(combined)) {
+        if (snippet.length > 0 && snippet.length < 25 && !/\bp\b|paragraph|description|content|prose|body|article|CardDescription|DialogDescription|AlertDescription/i.test(combined)) {
           console.log(`Filtering out A2 (short label <25 chars): ${evidenceRaw}`);
           return false;
         }
-        // 6) Primary content gate
-        const isPrimaryGH = /description|paragraph|prose|content|body|article|main|alert|dialog|form/i.test(combined)
+        // 6) Final primary-content gate: element must be explicitly primary readable content
+        const isPrimaryGH = /\bp\b|<p|paragraph|prose|content|body|article|\bmain\b|\bsection\b/i.test(combined)
+          || /CardDescription|DialogDescription|AlertDescription|FormDescription/i.test(combined)
           || (snippet.length >= 60)
-          || /\.\s+[A-Z]/.test(evidenceRaw);
+          || /\.\s+[A-Z]/.test(evidenceRaw); // multi-sentence indicator
         if (!isPrimaryGH) {
           console.log(`Filtering out A2 (not primary readable content): ${evidenceRaw}`);
           return false;
