@@ -12,16 +12,17 @@ interface A4AggregatedCardProps {
   compact?: boolean;
 }
 
+/**
+ * Single element finding card — identical structure to A2ElementItem.
+ * Renders: elementLabel, location, width, height, threshold, detection, confidence, reasoning.
+ */
 function A4ElementItem({ element, isConfirmed, compact = false }: {
   element: A4ElementSubItem;
   isConfirmed: boolean;
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-
   const isDeterministic = element.detectionMethod === 'deterministic';
-  const hasComputed = element.computedWidth !== undefined && element.computedHeight !== undefined;
-  const hasEstimated = element.estimatedWidth !== undefined && element.estimatedHeight !== undefined;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -32,7 +33,7 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
-        {/* Header row */}
+        {/* Header row — element label + optional text snippet */}
         <CollapsibleTrigger className="w-full">
           <div className="flex items-start justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
@@ -58,13 +59,13 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
 
-        {/* Location (always visible) */}
+        {/* Location — always visible */}
         <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
           <span className="font-medium">📍 </span>
           {element.location}
         </div>
 
-        {/* Expandable details */}
+        {/* Expandable measurement rows */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
             {/* Width */}
@@ -72,22 +73,17 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
               <span className="text-muted-foreground font-medium w-28">
                 {isDeterministic ? 'Width:' : 'Est. Width:'}
               </span>
-              {hasComputed ? (
-                <span className={cn(
-                  'font-mono font-medium',
-                  isConfirmed ? 'text-destructive' : 'text-warning'
-                )}>
+              {isDeterministic && element.computedWidth !== undefined ? (
+                <span className={cn('font-mono font-medium', isConfirmed ? 'text-destructive' : 'text-warning')}>
                   {element.computedWidth}px
                 </span>
-              ) : hasEstimated ? (
+              ) : element.estimatedWidth !== undefined ? (
                 <>
-                  <span className="font-mono font-medium text-warning">
-                    ≈{element.estimatedWidth}px
-                  </span>
+                  <span className="font-mono font-medium text-warning">≈{element.estimatedWidth}px</span>
                   <span className="text-muted-foreground text-xs">(visual estimation)</span>
                 </>
               ) : (
-                <span className="text-muted-foreground italic">could not be reliably estimated</span>
+                <span className="text-muted-foreground italic">not measured</span>
               )}
             </div>
 
@@ -96,63 +92,47 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
               <span className="text-muted-foreground font-medium w-28">
                 {isDeterministic ? 'Height:' : 'Est. Height:'}
               </span>
-              {hasComputed ? (
-                <span className={cn(
-                  'font-mono font-medium',
-                  isConfirmed ? 'text-destructive' : 'text-warning'
-                )}>
+              {isDeterministic && element.computedHeight !== undefined ? (
+                <span className={cn('font-mono font-medium', isConfirmed ? 'text-destructive' : 'text-warning')}>
                   {element.computedHeight}px
                 </span>
-              ) : hasEstimated ? (
+              ) : element.estimatedHeight !== undefined ? (
                 <>
-                  <span className="font-mono font-medium text-warning">
-                    ≈{element.estimatedHeight}px
-                  </span>
+                  <span className="font-mono font-medium text-warning">≈{element.estimatedHeight}px</span>
                   <span className="text-muted-foreground text-xs">(visual estimation)</span>
                 </>
               ) : (
-                <span className="text-muted-foreground italic">could not be reliably estimated</span>
+                <span className="text-muted-foreground italic">not measured</span>
               )}
             </div>
 
             {/* Threshold */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Threshold:</span>
-              <span className="font-mono">
-                {isDeterministic
-                  ? isConfirmed
-                    ? '20px minimum (confirmed) · 24px recommended'
-                    : '24px recommended baseline (desktop)'
-                  : '20px minimum · 24px recommended baseline'}
-              </span>
+              <span className="font-mono">20px minimum (desktop)</span>
             </div>
 
-            {/* Detection Source */}
+            {/* Detection */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Detection:</span>
-              <span>{element.sizeSource || (isDeterministic ? 'Computed CSS bounding box' : 'Screenshot-based bounding box estimation')}</span>
+              <span>{isDeterministic ? 'Computed CSS bounding box' : 'Screenshot-based bounding box estimation'}</span>
             </div>
 
             {/* Confidence */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-28">Confidence:</span>
-              <span className={cn(
-                'font-mono',
-                element.confidence >= 0.9 ? 'text-foreground' : 'text-warning'
-              )}>
+              <span className={cn('font-mono', element.confidence >= 0.9 ? 'text-foreground' : 'text-warning')}>
                 {Math.round(element.confidence * 100)}%
-                <span className="text-muted-foreground ml-1">
-                  — {isDeterministic ? 'deterministic' : 'heuristic'}
-                </span>
+                <span className="text-muted-foreground ml-1">— {isDeterministic ? 'deterministic' : 'heuristic'}</span>
               </span>
             </div>
 
-            {/* Reasoning / Explanation */}
+            {/* Reasoning */}
             <div className="pt-1">
               <p className="text-foreground leading-relaxed">{element.explanation}</p>
             </div>
 
-            {/* Low confidence badge for heuristic findings */}
+            {/* Low confidence badge for heuristic */}
             {!isConfirmed && !isDeterministic && (
               <div className="flex items-start gap-2 pt-1">
                 <Info className="h-3 w-3 text-warning mt-0.5 flex-shrink-0" />
@@ -170,11 +150,17 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
   );
 }
 
+/**
+ * A4 aggregated card — mirrors A2AggregatedCard exactly.
+ * Renders nothing if no a4Elements exist.
+ */
 export function A4AggregatedCard({ violation, compact = false }: A4AggregatedCardProps) {
-  if (!violation.isA4Aggregated) return null;
+  if (!violation.isA4Aggregated || !violation.a4Elements || violation.a4Elements.length === 0) {
+    return null;
+  }
 
   const isConfirmed = violation.status === 'confirmed';
-  const elements = violation.a4Elements || [];
+  const elements = violation.a4Elements;
 
   return (
     <Card className={cn(
