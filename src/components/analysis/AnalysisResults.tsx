@@ -1,16 +1,12 @@
 import { useState } from 'react';
-import { CheckCircle, XCircle, Copy, Check, AlertTriangle, AlertCircle } from 'lucide-react';
+import { CheckCircle, XCircle, Copy, Check } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import type { Analysis, Project } from '@/types/project';
-import { PotentialRisksSection } from './PotentialRiskItem';
-import { A1AggregatedCard } from './A1AggregatedCard';
-import { A2AggregatedCard } from './A2AggregatedCard';
-import { A3AggregatedCard } from './A3AggregatedCard';
-import { A4AggregatedCard } from './A4AggregatedCard';
+import { ViolationsRenderer } from './ViolationsRenderer';
 interface AnalysisResultsProps {
   analysis: Analysis;
   project: Project;
@@ -345,155 +341,8 @@ export function AnalysisResults({
         </CardContent>
       </Card>
 
-      {/* Confirmed Issues (Blocking) - all confirmed violations */}
-      {(() => {
-        const confirmedViolationsList = analysis.violations.filter(v => v.status !== 'potential' && v.status !== 'informational');
-        const a1Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A1' && v.isA1Aggregated);
-        const a2Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A2' && v.isA2Aggregated);
-        const a3Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A3' && v.isA3Aggregated);
-        const a4Aggregated = confirmedViolationsList.find(v => v.ruleId === 'A4' && v.isA4Aggregated);
-        const otherConfirmed = confirmedViolationsList.filter(v => 
-          !(v.ruleId === 'A1' && v.isA1Aggregated) && 
-          !(v.ruleId === 'A2' && v.isA2Aggregated) &&
-          !(v.ruleId === 'A3' && v.isA3Aggregated) &&
-          !(v.ruleId === 'A4' && v.isA4Aggregated)
-        );
-        
-        return confirmedViolationsList.length > 0 && (
-          <div className="space-y-4">
-            {/* Section Header */}
-            <div className="flex items-center gap-2 pt-2">
-              <AlertTriangle className="h-5 w-5 text-destructive" />
-              <h3 className="text-xl font-bold text-foreground">Confirmed Violations (Blocking)</h3>
-              <span className="text-sm text-muted-foreground">
-                — {confirmedViolationsList.length} issue{confirmedViolationsList.length !== 1 ? 's' : ''}
-              </span>
-            </div>
-            
-            {/* A1 Aggregated Card if exists */}
-            {a1Aggregated && (
-              <A1AggregatedCard violation={a1Aggregated} />
-            )}
-            
-            {/* A2 Aggregated Card if exists */}
-            {a2Aggregated && (
-              <A2AggregatedCard violation={a2Aggregated} />
-            )}
-            
-            {/* A3 Aggregated Card if exists */}
-            {a3Aggregated && (
-              <A3AggregatedCard violation={a3Aggregated} />
-            )}
-            
-            {/* A4 Aggregated Card if exists */}
-            {a4Aggregated && (
-              <A4AggregatedCard violation={a4Aggregated} />
-            )}
-            {/* Other confirmed issues */}
-            {otherConfirmed.length > 0 && (
-              <Card className="border-destructive/30">
-                <CardContent className="pt-4 space-y-3">
-                  {otherConfirmed.map((violation, idx) => (
-                    <div
-                      key={idx}
-                      className="p-4 rounded-lg bg-destructive/5 border border-destructive/20 space-y-3"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={cn('category-badge flex-shrink-0 text-xs', categoryColors[violation.category])}>
-                            {violation.ruleId}
-                          </span>
-                          <span className="font-bold text-base">{violation.ruleName}</span>
-                        </div>
-                        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
-                          {Math.round(violation.confidence * 100)}%
-                        </span>
-                      </div>
-                      
-                      {/* Spacing separator */}
-                      <div className="h-1" />
-
-                      {violation.evidence && (
-                        <p className="text-sm text-muted-foreground italic pl-1">📍 {violation.evidence}</p>
-                      )}
-                      <p className="text-sm text-foreground leading-relaxed pl-1">{violation.diagnosis}</p>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        );
-      })()}
-
-      {/* Potential Issues Section */}
-      {(() => {
-        const a1Potential = analysis.violations.find(v => v.ruleId === 'A1' && v.isA1Aggregated && v.status === 'potential');
-        const a2Potential = analysis.violations.find(v => v.ruleId === 'A2' && v.isA2Aggregated && v.status === 'potential');
-        const a3Potential = analysis.violations.find(v => v.ruleId === 'A3' && v.isA3Aggregated && v.status === 'potential');
-        const a4Potential = analysis.violations.find(v => v.ruleId === 'A4' && v.isA4Aggregated && v.status === 'potential');
-        const nonAggregatedPotential = analysis.violations.filter(v => 
-          v.status === 'potential' && 
-          !(v.ruleId === 'A1' && v.isA1Aggregated) &&
-          !(v.ruleId === 'A2' && v.isA2Aggregated) &&
-          !(v.ruleId === 'A3' && v.isA3Aggregated) &&
-          !(v.ruleId === 'A4' && v.isA4Aggregated)
-        );
-        const hasPotentialIssues = a1Potential || a2Potential || a3Potential || a4Potential || nonAggregatedPotential.length > 0;
-        const totalPotential = (a1Potential ? 1 : 0) + (a2Potential ? 1 : 0) + (a3Potential ? 1 : 0) + (a4Potential ? 1 : 0) + nonAggregatedPotential.length;
-        
-        return hasPotentialIssues && (
-          <div className="space-y-4">
-            {/* Section Header */}
-            <div className="flex items-center gap-2 pt-2">
-              <AlertCircle className="h-5 w-5 text-warning" />
-              <h3 className="text-xl font-bold text-foreground">Potential Risks (Non-blocking)</h3>
-              <span className="text-sm text-muted-foreground">
-                — {totalPotential} issue{totalPotential !== 1 ? 's' : ''}
-              </span>
-            </div>
-            
-            {/* A1 Potential Card */}
-            {a1Potential && (
-              <A1AggregatedCard violation={a1Potential} />
-            )}
-            
-            {/* A2 Potential Card */}
-            {a2Potential && (
-              <A2AggregatedCard violation={a2Potential} />
-            )}
-            
-            {/* A3 Potential Card */}
-            {a3Potential && (
-              <A3AggregatedCard violation={a3Potential} />
-            )}
-            
-            {/* A4 Potential Card */}
-            {a4Potential && (
-              <A4AggregatedCard violation={a4Potential} />
-            )}
-            
-            {/* Other Potential Risks */}
-            {nonAggregatedPotential.length > 0 && (
-              <Card className="border-warning/30">
-                <CardContent className="pt-4">
-                  <PotentialRisksSection violations={nonAggregatedPotential} />
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        );
-      })()}
-
-      {/* A3 silent when no risk — no informational section rendered */}
-
-      {analysis.violations.length === 0 && (
-        <Card>
-          <CardContent className="py-8 text-center text-muted-foreground">
-            No violations detected
-          </CardContent>
-        </Card>
-      )}
+      {/* Violations — single source of truth renderer */}
+      <ViolationsRenderer violations={analysis.violations} />
 
       {/* Corrective Prompt Section - ONLY for confirmed violations, grouped by rule */}
       {groupedPrompts.length > 0 && (
