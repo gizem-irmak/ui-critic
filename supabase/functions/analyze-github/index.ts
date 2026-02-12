@@ -786,13 +786,11 @@ Accessibility rules to check:
 ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name} - ${r.diagnosis}`).join('\n')}
 
 ### A2 (Small body font size) Detection:
-- **Confirmed**: Primary body text with explicitly defined font-size < 16px in pixels or deterministic Tailwind classes (text-xs, text-sm) AND classified as "primary" semantic role → status: "confirmed"
-- **Potential**: Body text with relative units (rem/em/%) or classified as "secondary" semantic role → status: "potential"
+- **Confirmed**: Body text with explicitly defined font-size < 16px in pixels or deterministic Tailwind classes (text-xs, text-sm) → status: "confirmed"
+- **Potential**: Body text with relative units (rem/em/%) or ambiguous semantic role → status: "potential"
 - **Exclude**: Badges, metadata, timestamps, intentional microcopy, labels, tags, chips
 - Skip text-base (16px) and larger
 - Only evaluate primary body text elements (paragraphs, descriptions, content blocks)
-- For each finding, include: "sizeToken", "approxPx", "componentName", "filePath", "elementRole", "semanticRole" ("primary" or "secondary")
-- Say "recommended readability baseline of 16px", NOT "WCAG requires 16px"
 
 ### A4 Detection:
 - Flag elements without explicit 44×44px minimum
@@ -1143,20 +1141,48 @@ serve(async (req) => {
     
     let aggregatedA2GitHub: any = null;
     if (a2AiViolations.length > 0) {
+      // ============================================================
       // A2 STRICT SCOPE ENFORCEMENT: filter out non-body-text elements
+      // ============================================================
       const filteredA2 = a2AiViolations.filter((v: any) => {
         const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
-        if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus\s*(?:indicator|badge|chip|text)?\b/i.test(combined)) return false;
+        
+        // Exclude badges, chips, pills, tags, status indicators
+        if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus\s*(?:indicator|badge|chip|text)?\b/i.test(combined)) {
+          console.log(`Filtering out A2 (badge/chip/tag): ${v.evidence}`);
+          return false;
+        }
+        // Exclude headings, titles, subtitles (unless also mentions description/body)
         if (/\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b|\bheader\s*(?:text|subtitle)?\b/i.test(combined) &&
-            !/description|body\s*text|paragraph|content\s*block|prose/i.test(combined)) return false;
-        if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) return false;
+            !/description|body\s*text|paragraph|content\s*block|prose/i.test(combined)) {
+          console.log(`Filtering out A2 (heading/title): ${v.evidence}`);
+          return false;
+        }
+        // Exclude navigation, menu items, breadcrumbs
+        if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) {
+          console.log(`Filtering out A2 (navigation): ${v.evidence}`);
+          return false;
+        }
+        // Exclude buttons, CTAs (unless also about description)
         if (/\bbutton\b|\bbtn\b|\bcta\b|\baction\s*button\b|\bicon[-\s]?button\b/i.test(combined) &&
-            !/description|body\s*text|paragraph/i.test(combined)) return false;
-        if (/\bmetadata\b|\btimestamp\b|\bdate\s*(?:display|text)?\b|\btime\s*ago\b|\bauthor\b|\binstructor\b/i.test(combined)) return false;
-        if (/\bcaption\b|\btooltip\b|\bkeyboard\s*shortcut\b|\bkbd\b|\bcode\s*block\b|\bmonospace\b/i.test(combined)) return false;
+            !/description|body\s*text|paragraph/i.test(combined)) {
+          console.log(`Filtering out A2 (button/CTA): ${v.evidence}`);
+          return false;
+        }
+        // Exclude metadata, timestamps, author names
+        if (/\bmetadata\b|\btimestamp\b|\bdate\s*(?:display|text)?\b|\btime\s*ago\b|\bauthor\b|\binstructor\b/i.test(combined)) {
+          console.log(`Filtering out A2 (metadata): ${v.evidence}`);
+          return false;
+        }
+        // Exclude captions, tooltips, keyboard shortcuts, code blocks
+        if (/\bcaption\b|\btooltip\b|\bkeyboard\s*shortcut\b|\bkbd\b|\bcode\s*block\b|\bmonospace\b/i.test(combined)) {
+          console.log(`Filtering out A2 (microcopy): ${v.evidence}`);
+          return false;
+        }
         return true;
       });
       
+      // If all items were filtered out, skip aggregation
       if (filteredA2.length === 0) {
         console.log('A2: All items filtered out (none were primary body text)');
       } else {
@@ -1165,28 +1191,18 @@ serve(async (req) => {
         const evidence = (v.evidence || '').toLowerCase();
         const combined = diagnosis + ' ' + evidence;
         
+        // Try to extract px value
         const pxMatch = combined.match(/(\d+)px/);
         const computedSize = pxMatch ? parseInt(pxMatch[1]) : undefined;
         const isDeterministic = computedSize !== undefined && (
           /text-xs|text-sm|font-size:\s*\d+px/.test(combined)
         );
         
-        // Extract token info
-        const sizeToken = v.sizeToken || (combined.match(/(text-xs|text-sm|text-\[\d+(?:\.\d+)?(?:rem|px)\]|font-size:\s*\d+(?:\.\d+)?px)/i)?.[1] || 'unknown');
-        const approxPx = v.approxPx || (computedSize ? `${computedSize}px` : '<16px');
-        
+        // Extract component name
         const componentMatch = (v.evidence || '').match(/([A-Z][a-zA-Z0-9]*(?:Description|Content|Text|Label)?)/);
         const fileMatch = (v.evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
-        const componentName = v.componentName || componentMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || '';
-        const elementRole = v.elementRole || '';
-        const elementLabel = elementRole 
-          ? `${componentName || 'Component'} ${elementRole}`
-          : componentName || `Body text element ${idx + 1}`;
-        const location = v.filePath || fileMatch?.[1] || v.contextualHint || 'Unknown file';
-        
-        // Semantic role
-        const isPrimaryRole = /description|DialogDescription|AlertDescription|FormDescription|CardDescription|paragraph|article|content|prose|body\s*text/i.test(combined + ' ' + elementRole);
-        const semanticRole = v.semanticRole || (isPrimaryRole ? 'primary' : 'secondary');
+        const elementLabel = componentMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || `Body text element ${idx + 1}`;
+        const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
         
         return {
           elementLabel,
@@ -1195,48 +1211,20 @@ serve(async (req) => {
           computedFontSize: isDeterministic ? computedSize : undefined,
           fontSizeSource: isDeterministic ? (v.evidence || '').match(/(text-xs|text-sm|font-size:\s*\d+px)/i)?.[1] : undefined,
           detectionMethod: isDeterministic ? 'deterministic' as const : 'heuristic' as const,
-          sizeToken,
-          approxPx,
-          semanticRole,
-          elementRole,
-          componentName,
-          filePath: location,
           thresholdPx: 16,
           explanation: v.diagnosis || 'Body text size is below the recommended 16px baseline.',
           confidence: v.confidence || 0.6,
-          correctivePrompt: isDeterministic && semanticRole === 'primary'
-            ? `• body text — ${location} — (${elementRole || componentName || 'Body text'})\n  Issue reason: computed font-size ${approxPx} (${sizeToken}) is below recommended 16px baseline for primary readable content.\n  Recommended fix: Increase this primary body text to at least 16px (text-base) and set line-height ~1.4–1.6. Update shared typography tokens or reusable classes so this does not recur.`
+          correctivePrompt: isDeterministic
+            ? `body text '${(elementLabel || 'Body text element').substring(0, 60)}' (${location || 'Source file'})\n\nIssue reason: Computed font-size ${computedSize}px is below the recommended readability baseline of 16px.\n\nRecommended fix: Increase the font size of all primary body text elements in this group (currently ${computedSize}px${(v.evidence || '').match(/(text-xs|text-sm)/i)?.[1] ? ` / ${(v.evidence || '').match(/(text-xs|text-sm)/i)?.[1]}` : ''}) to at least 16px (text-base). Ensure this update is applied consistently across all screens and components where this text style is reused. Adjust line-height to approximately 1.4–1.6 to preserve readability.`
             : undefined,
-          deduplicationKey: `${location}|${componentName}|${sizeToken}|${elementRole}`,
+          deduplicationKey: `${location}|${elementLabel}`,
         };
       });
       
-      // Build token groups
-      const tokenGroupMap = new Map<string, typeof a2Elements>();
-      for (const el of a2Elements) {
-        const key = el.sizeToken || 'unknown';
-        if (!tokenGroupMap.has(key)) tokenGroupMap.set(key, []);
-        tokenGroupMap.get(key)!.push(el);
-      }
-      
-      const a2TokenGroups = Array.from(tokenGroupMap.entries()).map(([token, items]) => {
-        const uniqueFiles = new Set(items.map((i: any) => i.filePath || i.location).filter(Boolean));
-        const hasPrimary = items.some((i: any) => i.semanticRole === 'primary');
-        return {
-          token,
-          approxPx: items[0].approxPx || '<16px',
-          count: items.length,
-          fileCount: uniqueFiles.size,
-          classification: (hasPrimary ? 'confirmed' : 'potential') as 'confirmed' | 'potential',
-        };
-      });
-      
-      const primaryElements = a2Elements.filter((el: any) => el.semanticRole === 'primary');
-      const hasConfirmed = primaryElements.length > 0 && a2Elements.some((el: any) => el.detectionMethod === 'deterministic');
+      const hasConfirmed = a2Elements.some((el: any) => el.detectionMethod === 'deterministic');
       const a2Status = hasConfirmed ? 'confirmed' : 'potential';
       const avgConf = a2Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a2Elements.length;
       
-      const uniqueFiles = new Set(a2Elements.map((el: any) => el.filePath || el.location).filter(Boolean));
       const a2Rule = [...rules.accessibility].find(r => r.id === 'A2');
       
       aggregatedA2GitHub = {
@@ -1248,18 +1236,19 @@ serve(async (req) => {
         inputType: 'github',
         isA2Aggregated: true,
         a2Elements,
-        a2TokenGroups,
-        diagnosis: `Detected in ${a2Elements.length} occurrence${a2Elements.length !== 1 ? 's' : ''} across ${uniqueFiles.size} file${uniqueFiles.size !== 1 ? 's' : ''}. ${a2TokenGroups.map((g: any) => `Token: ${g.token} (${g.approxPx})`).join('; ')}.`,
+        diagnosis: a2Status === 'confirmed'
+          ? `${a2Elements.length} body text element${a2Elements.length !== 1 ? 's' : ''} with confirmed insufficient font size detected.`
+          : `${a2Elements.length} text element${a2Elements.length !== 1 ? 's' : ''} with potential font size issues detected. These require manual verification due to measurement uncertainty.`,
         contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(avgConf * 100) / 100,
         ...(a2Status === 'potential' ? {
-          advisoryGuidance: 'These elements were classified as secondary UI text or use relative units. For deterministic blocking classification, ensure the text serves as primary readable content.',
+          advisoryGuidance: 'Static visual estimation cannot determine exact computed font sizes. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
         } : {}),
         typeBadge: a2Status === 'confirmed' ? 'Confirmed (static)' : 'Heuristic (requires runtime verification)',
       };
       
-      console.log(`A2 aggregated (GitHub): ${filteredA2.length} → 1 card with ${a2Elements.length} elements, ${a2TokenGroups.length} token groups (${a2Status})`);
+      console.log(`A2 aggregated (GitHub): ${filteredA2.length} → 1 card with ${a2Elements.length} elements (${a2Status})`);
       } // end filteredA2.length > 0
     }
     

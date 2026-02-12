@@ -86,9 +86,8 @@ export function AnalysisResults({
         for (const el of v.a2Elements) {
           if (el.correctivePrompt) {
             const elementRef = [
-              el.elementRole || el.componentName || 'body text',
-              el.filePath || el.location ? `— ${el.filePath || el.location}` : null,
-              el.elementRole && el.componentName ? `— (${el.componentName})` : null,
+              'body text',
+              el.location ? `— ${el.location}` : null,
             ].filter(Boolean).join(' ');
             
             group.prompts.push({
