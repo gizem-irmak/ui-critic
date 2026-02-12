@@ -1185,8 +1185,8 @@ serve(async (req) => {
         const componentMatch2 = evidenceRaw.match(/([A-Z][a-zA-Z0-9]*)/);
         const compName = componentMatch2?.[1] || '';
         
-        // 1) Component name signals secondary — expanded exclusion list
-        const secondaryComponentPattern = /^(Badge|Chip|Tag|Label|Subtitle|Meta|Caption|Breadcrumb|Menu|Dropdown|Command|Navigation|Trigger|Input|FormLabel|FormMessage|CheckboxItem|SubTrigger)$/i;
+        // 1) Component name signals secondary — comprehensive exclusion list
+        const secondaryComponentPattern = /^(Badge|Chip|Tag|Label|Subtitle|Meta|Caption|Breadcrumb|Menu|Dropdown|Command|Navigation|Trigger|Input|FormLabel|FormMessage|CheckboxItem|SubTrigger|Pagination|FilterBar|ContextMenu|Menubar|DropdownMenu|NavigationMenu)$/i;
         if (secondaryComponentPattern.test(compName)) {
           console.log(`Filtering out A2 (secondary component "${compName}"): ${evidenceRaw}`);
           return false;
@@ -1212,11 +1212,17 @@ serve(async (req) => {
           console.log(`Filtering out A2 (short label <25 chars): ${evidenceRaw}`);
           return false;
         }
-        // 6) Final primary-content gate: element must be explicitly primary readable content
+        // 6) Exclude if inside navigation/menu/form/badge/filter container context
+        if (/\b(inside|within|in)\s*(nav|menu|dropdown|breadcrumb|pagination|filter|toolbar|sidebar)\b/i.test(combined)) {
+          console.log(`Filtering out A2 (inside secondary container): ${evidenceRaw}`);
+          return false;
+        }
+        // 7) Final primary-content gate: element must be explicitly primary readable content
         const isPrimaryGH = /\bp\b|<p|paragraph|prose|content|body|article|\bmain\b|\bsection\b/i.test(combined)
           || /CardDescription|DialogDescription|AlertDescription|FormDescription/i.test(combined)
           || (snippet.length >= 60)
-          || /\.\s+[A-Z]/.test(evidenceRaw); // multi-sentence indicator
+          || /\.\s+[A-Z]/.test(evidenceRaw) // multi-sentence indicator
+          || /\bli\b.*content|list\s*item.*(?:main|content|body)/i.test(combined); // list items in content areas
         if (!isPrimaryGH) {
           console.log(`Filtering out A2 (not primary readable content): ${evidenceRaw}`);
           return false;
