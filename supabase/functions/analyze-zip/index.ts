@@ -13,7 +13,7 @@ const rules = {
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
     { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px (text-base / 1rem) across all screens and components where this body-text style is reused. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Primary body text elements use line-height ratios below the recommended 1.3 minimum for readability. WCAG 1.4.12 (Text Spacing) recommends adequate line spacing to support users with cognitive or visual impairments.', correctivePrompt: 'Increase line-height of primary body text (paragraphs, descriptions, main content text) to at least 1.5 (leading-normal) across all screens and components. Do not change headings, badges, navigation text, metadata, timestamps, button labels, or intentional microcopy. Adjust paragraph spacing proportionally.' },
-    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
+    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Primary interactive controls (buttons, submit inputs, role="button" elements) do not meet the minimum desktop click target size of 24×24 CSS px. Elements below 20×20px are confirmed violations; elements between 20–23px are potential risks. This evaluation uses desktop-appropriate thresholds — the 44px mobile recommendation does not apply.', correctivePrompt: 'Increase primary interactive element dimensions to at least 24×24 CSS px using min-width and min-height constraints or equivalent padding. Apply only to primary actionable controls (buttons, submit inputs). Do not modify navigation menus, dropdowns, breadcrumbs, pagination, toolbar icons, or secondary UI chrome.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
   ],
   usability: [
@@ -791,55 +791,57 @@ chips, status indicators, keyboard shortcuts, breadcrumbs, navigation items, but
 - Evaluate aria-labels (screen reader only)
 - Flag interactive elements (buttons, links)
 - Speculate about runtime rendering
-### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
+### A4 (Small tap / click targets) — DESKTOP WEB UI EVALUATION:
 
-**STATIC ANALYSIS LIMITATION:**
-Static code analysis cannot measure rendered DOM dimensions. Padding, box-sizing, flex/grid layout, and parent constraints at runtime may increase the clickable area beyond what size tokens indicate. Compliance CANNOT be confirmed from static analysis alone.
+**SCOPE:**
+A4 applies ONLY to primary actionable controls:
+- \`<button>\`, \`<a>\` styled as button, \`<input type="button|submit">\`
+- Elements with \`role="button"\`
+- Primary actionable controls (e.g., submit, save, delete buttons)
 
-**GUIDELINE FRAMING:**
-- 44×44 CSS px is commonly recommended in usability and accessibility guidelines
-- WCAG 2.1 Target Size (Level AAA) suggests 44×44px, but this is NOT an AA requirement
-- Do NOT state that WCAG mandates 44×44 at AA level
-- Frame as: "commonly recommended touch target size" or "usability guideline"
+**EXPLICITLY EXCLUDE from A4 (never report):**
+- Breadcrumb links
+- Dropdown menu items (DropdownMenuItem, MenubarItem, ContextMenuItem)
+- Navigation menu triggers (NavigationMenuTrigger, NavLink)
+- Pagination controls (PaginationLink, PaginationPrevious, PaginationNext)
+- Compact toolbar icons
+- Table row action icons
+- Secondary UI chrome elements (Badge, Tag, Chip, Label)
+- Elements inside navigation/menu systems → at most Potential, never Confirmed
 
-**CLASSIFICATION:**
-- ALWAYS classify A4 as "⚠️ Potential Risk (Heuristic)" — NEVER "Confirmed"
-- Static code analysis CANNOT confirm tap target violations
-
-**CONFIDENCE REASONING:**
-Confidence is based on:
-1. **Presence of size tokens** (±15%): Elements with h-8, h-9, w-8, w-9, size-8, size-9 tokens → lower confidence they meet 44px
-2. **Lack of explicit min-width/min-height enforcement** (±10%): No min-h-11, min-w-11, min-h-[44px], min-w-[44px] → higher risk
-3. **Static analysis limitation** (-15%): Always reduce confidence since runtime layout cannot be evaluated
+**DESKTOP THRESHOLDS (NOT mobile 44px):**
+- width < 20px OR height < 20px → Confirmed (Blocking) — only if primary actionable control
+- 20px ≤ size < 24px → Potential Risk (Non-blocking)
+- ≥ 24px → Pass (no finding)
 
 **SIZE TOKEN TO APPROXIMATE PX MAPPING:**
-- h-8/w-8/size-8 → ~32px (may be below 44px)
-- h-9/w-9/size-9 → ~36px (may be below 44px)
-- h-10/w-10/size-10 → ~40px (may be below 44px)
-- h-11/w-11/size-11 → ~44px (meets guideline)
-- h-12/w-12/size-12 → ~48px (exceeds guideline)
+- h-4/w-4/size-4 → ~16px (below 20px → Confirmed if primary control)
+- h-5/w-5/size-5 → ~20px (borderline → Potential Risk)
+- h-6/w-6/size-6 → ~24px (meets desktop threshold → Pass)
+- h-7/w-7/size-7 → ~28px (Pass)
+- h-8/w-8/size-8 → ~32px (Pass)
 
-**WHAT TO REPORT:**
-1. Only report interactive elements (buttons, links, clickable elements) that LACK explicit minimum size enforcement
-2. List detected size classes and their approximate px values
-3. DO NOT report elements that have explicit size constraints ≥44px
+**CLASSIFICATION:**
+- Confirmed: width OR height < 20px AND element is a primary actionable control (not in nav/menu/dropdown)
+- Potential Risk: 20px ≤ size < 24px, OR element is inside navigation/menu systems regardless of size
+- Pass: ≥ 24px AND primary control
+
+**EVIDENCE REQUIREMENTS:**
+For each A4 finding, report:
+- Element name
+- File path
+- Computed width × height (from Tailwind tokens)
+- Which threshold applies (20px or 24px)
+- Detection method: deterministic (from CSS/Tailwind classes)
+- Confidence level
 
 **DO NOT:**
-- Infer or assume final tap target size from padding, font size, or icon size
-- Mention internal glyphs, spans, icons, or characters (e.g., "×", "X", icons)
-- Describe user difficulty as a confirmed outcome
-- Use language implying measurement or certainty
-- Use "non-compliant" or "fails" — prefer "may be below recommended touch target size"
+- Use 44px as the threshold — this evaluates desktop web UI only
+- Report large groups of unrelated components
+- Report elements inside dropdowns, breadcrumbs, navigation, pagination, or toolbars as Confirmed
+- Mention internal glyphs, spans, or icon characters
 
-**REQUIRED WORDING:**
-- Refer to elements as "button" or "interactive element" — not internal content
-- Use neutral, academic phrasing: "does not explicitly enforce", "cannot be guaranteed", "may be below"
-- Include the file/component name where the issue occurs
-
-**OUTPUT TEMPLATE:**
-"The [button/interactive element] in [File.tsx] does not explicitly enforce a minimum tap target size of 44×44 CSS px. Detected size class(es): [h-9, w-9] (~36px). Although padding or layout constraints at runtime may increase the clickable area, the element's dimensions are not explicitly constrained to guarantee compliance with commonly recommended touch target guidelines (WCAG 2.1 Target Size is AAA, not AA)."
-
-**Report each potentially undersized element SEPARATELY** — do not merge into one violation
+**Report each potentially undersized primary control SEPARATELY** — do not merge into one violation
 
 ### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
@@ -2303,16 +2305,18 @@ ${codeContent}`,
       console.log(`A3 aggregated: ${a3AffectedItems.length} items → 1 result (${a3Status})`);
     }
     
-    // ========== A4 AGGREGATION LOGIC ==========
+    // ========== A4 AGGREGATION LOGIC (Desktop Web UI — 20/24px thresholds) ==========
     // Process and aggregate A4 violations into a single result object
     interface A4AffectedItem {
       component_name: string;
       file_path: string;
       size_token: string;
       approx_px: string;
+      approx_px_num: number; // numeric for threshold classification
       confidence: number;
       rationale: string;
       occurrence_count?: number;
+      isInsideSecondaryContainer: boolean;
     }
     
     const a4DedupeMap = new Map<string, A4AffectedItem>();
@@ -2328,16 +2332,18 @@ ${codeContent}`,
       'variants', 'variant', 'props', 'className', 'style', 'styles'
     ]);
     
+    // Secondary UI components that should NEVER be Confirmed for A4
+    const a4SecondaryComponents = /^(Breadcrumb|DropdownMenu|DropdownMenuItem|NavigationMenu|NavigationMenuTrigger|NavLink|PaginationLink|PaginationPrevious|PaginationNext|PaginationItem|PaginationEllipsis|Pagination|ContextMenu|ContextMenuItem|Menubar|MenubarItem|MenubarTrigger|Badge|Tag|Chip|Label|Toolbar|ToolbarButton|TableAction|TableRowAction)$/i;
+    
+    // Context patterns indicating element is inside nav/menu/dropdown systems
+    const a4SecondaryContainerContext = /\b(breadcrumb|dropdown|navigation|pagination|toolbar|sidebar|menu|menubar|context-menu|nav-|nav\b)/i;
+    
     // Helper to validate component name (must be PascalCase, no spaces, no verbs/instructions)
     function isValidA4ComponentName(name: string): boolean {
       if (!name || name.length < 3) return false;
-      // Must start with uppercase (PascalCase)
       if (!/^[A-Z]/.test(name)) return false;
-      // No spaces allowed
       if (/\s/.test(name)) return false;
-      // No instructional/verb phrases
       if (/^(Increase|Ensure|Add|Use|Apply|Set|Get|Make|Create|Should|Must|Will|Can)/i.test(name)) return false;
-      // Not in invalid set
       if (a4InvalidComponentNames.has(name.toLowerCase())) return false;
       return true;
     }
@@ -2348,26 +2354,18 @@ ${codeContent}`,
       const diagnosis = (v.diagnosis || '').toLowerCase();
       const combined = evidenceLower + ' ' + diagnosis;
       
-      // Extract component info from evidence - prioritize compound PascalCase names
+      // Extract component info from evidence
       const compoundMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Previous|Next|Button|Icon|Close|Nav|Toggle|Trigger|Control|Action|Arrow|Pagination|Calendar|Carousel))\b/);
       const simpleMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]{3,})\b/);
       const fileMatch = (evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js|vue|svelte))/i);
       
-      // Resolve component name with strict validation
       let componentName = '';
-      
-      // 1. Try compound component name first (e.g., CarouselPrevious, CalendarNavButton)
       if (compoundMatch?.[1] && isValidA4ComponentName(compoundMatch[1])) {
         componentName = compoundMatch[1];
-      }
-      // 2. Try simple PascalCase component
-      else if (simpleMatch?.[1] && isValidA4ComponentName(simpleMatch[1])) {
+      } else if (simpleMatch?.[1] && isValidA4ComponentName(simpleMatch[1])) {
         componentName = simpleMatch[1];
-      }
-      // 3. Fallback to file name
-      else if (fileMatch?.[1]) {
+      } else if (fileMatch?.[1]) {
         const fileName = fileMatch[1].replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
-        // Convert file name to PascalCase if needed (e.g., carousel -> Carousel)
         if (fileName && fileName.length > 2) {
           componentName = fileName.charAt(0).toUpperCase() + fileName.slice(1);
         }
@@ -2375,57 +2373,74 @@ ${codeContent}`,
       
       const filePath = fileMatch?.[1] || v.filePath || '';
       
-      // Extract size token and approximate px - be more specific when possible
+      // Check if component is secondary UI chrome
+      const isSecondaryComponent = a4SecondaryComponents.test(componentName);
+      const isInsideSecondaryContainer = a4SecondaryContainerContext.test(combined) || a4SecondaryContainerContext.test(filePath);
+      const isSecondary = isSecondaryComponent || isInsideSecondaryContainer;
+      
+      // If secondary → suppress entirely (do not report)
+      if (isSecondaryComponent) {
+        console.log(`A4 SKIP (secondary component "${componentName}"): ${evidence.substring(0, 100)}`);
+        continue;
+      }
+      
+      // Extract size token and approximate px — DESKTOP THRESHOLDS
       let sizeToken = '';
       let approxPx = '';
+      let approxPxNum = 0;
       
-      // Common Tailwind size patterns - check most specific first
-      if (/h-6\b|w-6\b|size-6\b/.test(combined)) { sizeToken = 'h-6/w-6'; approxPx = '~24px'; detectedSizeRanges.add('~24px'); }
-      else if (/h-7\b|w-7\b|size-7\b/.test(combined)) { sizeToken = 'h-7/w-7'; approxPx = '~28px'; detectedSizeRanges.add('~28px'); }
-      else if (/h-8\b|w-8\b|size-8\b/.test(combined)) { sizeToken = 'h-8/w-8'; approxPx = '~32px'; detectedSizeRanges.add('~32px'); }
-      else if (/h-9\b|w-9\b|size-9\b/.test(combined)) { sizeToken = 'h-9/w-9'; approxPx = '~36px'; detectedSizeRanges.add('~36px'); }
-      else if (/h-10\b|w-10\b|size-10\b/.test(combined)) { sizeToken = 'h-10/w-10'; approxPx = '~40px'; detectedSizeRanges.add('~40px'); }
-      else if (/24px|1\.5rem/.test(combined)) { sizeToken = '24px'; approxPx = '~24px'; detectedSizeRanges.add('~24px'); }
-      else if (/28px|1\.75rem/.test(combined)) { sizeToken = '28px'; approxPx = '~28px'; detectedSizeRanges.add('~28px'); }
-      else if (/32px|2rem/.test(combined)) { sizeToken = '32px'; approxPx = '~32px'; detectedSizeRanges.add('~32px'); }
-      else if (/36px|2\.25rem/.test(combined)) { sizeToken = '36px'; approxPx = '~36px'; detectedSizeRanges.add('~36px'); }
-      else if (/40px|2\.5rem/.test(combined)) { sizeToken = '40px'; approxPx = '~40px'; detectedSizeRanges.add('~40px'); }
-      else if (/min-h-|min-w-/.test(combined)) { sizeToken = 'min-h/w constraint'; approxPx = 'variable'; }
-      else if (/small|compact|undersized/.test(combined)) { sizeToken = 'implicit sizing'; approxPx = '<44px'; detectedSizeRanges.add('<44px'); }
-      else { sizeToken = 'implicit sizing'; approxPx = '<44px'; detectedSizeRanges.add('<44px'); }
+      if (/h-3\b|w-3\b|size-3\b/.test(combined)) { sizeToken = 'h-3/w-3'; approxPx = '~12px'; approxPxNum = 12; }
+      else if (/h-4\b|w-4\b|size-4\b/.test(combined)) { sizeToken = 'h-4/w-4'; approxPx = '~16px'; approxPxNum = 16; }
+      else if (/h-5\b|w-5\b|size-5\b/.test(combined)) { sizeToken = 'h-5/w-5'; approxPx = '~20px'; approxPxNum = 20; }
+      else if (/h-6\b|w-6\b|size-6\b/.test(combined)) { sizeToken = 'h-6/w-6'; approxPx = '~24px'; approxPxNum = 24; }
+      else if (/h-7\b|w-7\b|size-7\b/.test(combined)) { sizeToken = 'h-7/w-7'; approxPx = '~28px'; approxPxNum = 28; }
+      else if (/h-8\b|w-8\b|size-8\b/.test(combined)) { sizeToken = 'h-8/w-8'; approxPx = '~32px'; approxPxNum = 32; }
+      else if (/h-9\b|w-9\b|size-9\b/.test(combined)) { sizeToken = 'h-9/w-9'; approxPx = '~36px'; approxPxNum = 36; }
+      else if (/h-10\b|w-10\b|size-10\b/.test(combined)) { sizeToken = 'h-10/w-10'; approxPx = '~40px'; approxPxNum = 40; }
+      else if (/16px|1rem(?!\.)/.test(combined)) { sizeToken = '16px'; approxPx = '~16px'; approxPxNum = 16; }
+      else if (/20px|1\.25rem/.test(combined)) { sizeToken = '20px'; approxPx = '~20px'; approxPxNum = 20; }
+      else if (/24px|1\.5rem/.test(combined)) { sizeToken = '24px'; approxPx = '~24px'; approxPxNum = 24; }
+      else { sizeToken = 'implicit sizing'; approxPx = '<20px'; approxPxNum = 16; }
+      
+      detectedSizeRanges.add(approxPx);
+      
+      // Desktop threshold classification:
+      // ≥ 24px → Pass (skip)
+      if (approxPxNum >= 24 && !isInsideSecondaryContainer) {
+        console.log(`A4 SKIP (≥24px pass): ${componentName} ${approxPx}`);
+        continue;
+      }
       
       // Calculate confidence
-      let confidence = v.confidence || 0.60;
-      // Adjust based on size proximity to 44px
-      if (approxPx.includes('40')) confidence = Math.max(confidence - 0.1, 0.45);
-      else if (approxPx.includes('36')) confidence = Math.min(confidence + 0.05, 0.75);
-      else if (approxPx.includes('32') || approxPx.includes('28') || approxPx.includes('24')) confidence = Math.min(confidence + 0.1, 0.80);
+      let confidence = v.confidence || 0.70;
+      if (approxPxNum < 20) confidence = Math.min(confidence + 0.10, 0.90);
+      else if (approxPxNum >= 20 && approxPxNum < 24) confidence = Math.max(confidence - 0.05, 0.55);
       
-      const rationale = v.diagnosis || `Element may be below the commonly recommended touch target size of 44×44 CSS px.`;
+      const rationale = v.diagnosis || `Element may be below the desktop minimum click target size of 24×24 CSS px.`;
       
-      // Deduplication key - by component name only (to aggregate all instances)
       const dedupeKey = componentName || filePath || 'unknown';
       
       if (a4DedupeMap.has(dedupeKey)) {
         const existing = a4DedupeMap.get(dedupeKey)!;
         existing.occurrence_count = (existing.occurrence_count || 1) + 1;
-        // Keep the higher confidence
         if (confidence > existing.confidence) {
           existing.confidence = confidence;
           existing.size_token = sizeToken;
           existing.approx_px = approxPx;
+          existing.approx_px_num = approxPxNum;
         }
       } else {
-        const item: A4AffectedItem = {
+        a4DedupeMap.set(dedupeKey, {
           component_name: componentName,
           file_path: filePath,
           size_token: sizeToken,
           approx_px: approxPx,
+          approx_px_num: approxPxNum,
           confidence: Math.round(confidence * 100) / 100,
           rationale,
           occurrence_count: 1,
-        };
-        a4DedupeMap.set(dedupeKey, item);
+          isInsideSecondaryContainer,
+        });
       }
     }
     
@@ -2434,18 +2449,24 @@ ${codeContent}`,
     // Create aggregated A4 result if there are any items
     let aggregatedA4: any = null;
     if (a4AffectedItems.length > 0) {
-      // Calculate overall confidence (max of all findings - deterministic)
-      const overallConfidence = Math.max(...a4AffectedItems.map(i => i.confidence));
-      const confidenceReason = `Confidence is based on code-level size tokens (${Array.from(detectedSizeRanges).join(', ')}) and the absence of runtime layout evaluation. Static analysis cannot confirm actual rendered dimensions.`;
+      // Classify: items <20px AND not in secondary container → Confirmed
+      // Items 20-23px OR in secondary container → Potential
+      const confirmedItems = a4AffectedItems.filter(i => i.approx_px_num < 20 && !i.isInsideSecondaryContainer);
+      const potentialItems = a4AffectedItems.filter(i => i.approx_px_num >= 20 || i.isInsideSecondaryContainer);
       
-      // Build unique component names list (filter invalid identifiers and non-component strings)
+      const hasConfirmed = confirmedItems.length > 0;
+      const a4Status = hasConfirmed ? 'confirmed' : 'potential';
+      
+      const overallConfidence = Math.max(...a4AffectedItems.map(i => i.confidence));
+      const confidenceReason = `Confidence is based on code-level size tokens (${Array.from(detectedSizeRanges).join(', ')}) using desktop thresholds (Confirmed: <20px, Potential: 20–23px, Pass: ≥24px).`;
+      
+      // Build unique component names list
       const invalidIdentifiers = new Set([
         'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
         'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
         'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
         'component', 'components', 'element', 'elements', 'item', 'items', 'button',
         'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array',
-        // Instructional/guideline words that should never be component names
         'increase', 'ensure', 'add', 'use', 'apply', 'set', 'get', 'make', 'create',
         'interactive', 'dimensions', 'target', 'targets', 'minimum', 'size', 'sizes'
       ]);
@@ -2453,31 +2474,26 @@ ${codeContent}`,
       const uniqueComponentNames = new Set<string>();
       for (const item of a4AffectedItems) {
         const name = item.component_name || '';
-        // Validate: must be PascalCase, no spaces, not in invalid set
         if (name && name.length > 2 && 
-            /^[A-Z][a-zA-Z0-9]+$/.test(name) && // PascalCase, no spaces
+            /^[A-Z][a-zA-Z0-9]+$/.test(name) && 
             !invalidIdentifiers.has(name.toLowerCase()) &&
             !/^(Use|Get|Set|Is|Has|Can|Should|Will|On|Handle)[A-Z]/.test(name)) {
           uniqueComponentNames.add(name);
         }
       }
       
-      // Fall back to file paths if no valid component names
       if (uniqueComponentNames.size === 0) {
         for (const item of a4AffectedItems) {
-          const filePath = item.file_path || '';
-          if (filePath) {
-            const fileName = filePath.replace(/.*[\/\\]/, '').replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
+          const fp = item.file_path || '';
+          if (fp) {
+            const fileName = fp.replace(/.*[\/\\]/, '').replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
             if (fileName && fileName.length > 2 && !invalidIdentifiers.has(fileName.toLowerCase())) {
-              // Convert to PascalCase for display
-              const displayName = fileName.charAt(0).toUpperCase() + fileName.slice(1);
-              uniqueComponentNames.add(displayName);
+              uniqueComponentNames.add(fileName.charAt(0).toUpperCase() + fileName.slice(1));
             }
           }
         }
       }
       
-      // Build deduplicated component list (max 4, with "and N more")
       const uniqueNamesArray = Array.from(uniqueComponentNames);
       const displayLimit = 4;
       const displayedNames = uniqueNamesArray.slice(0, displayLimit);
@@ -2492,9 +2508,12 @@ ${codeContent}`,
         ? `Detected size ranges: ${Array.from(detectedSizeRanges).join(', ')}.`
         : '';
       
-      const summary = `Interactive elements in ${componentCountText} may be below the commonly recommended touch target size of 44×44 CSS px. ${sizeRangesText} ` +
-        `44×44 CSS px is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). ` +
-        `Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.`;
+      const thresholdExplanation = hasConfirmed
+        ? `${confirmedItems.length} element(s) below 20px (Confirmed). ${potentialItems.length > 0 ? `${potentialItems.length} element(s) between 20–23px (Potential Risk).` : ''}`
+        : `${potentialItems.length} element(s) between 20–23px or inside navigation/menu systems (Potential Risk).`;
+      
+      const summary = `Interactive elements in ${componentCountText} may be below the desktop minimum click target size of 24×24 CSS px. ${sizeRangesText} ${thresholdExplanation} ` +
+        `Desktop evaluation uses 20px (Confirmed) and 24px (Potential) thresholds — the 44px mobile recommendation does not apply.`;
       
       const a4Rule = allRules.find(r => r.id === 'A4');
       
@@ -2502,7 +2521,10 @@ ${codeContent}`,
         ruleId: 'A4',
         ruleName: 'Small tap / click targets',
         category: 'accessibility',
-        typeBadge: 'Potential Risk (Heuristic)',
+        status: a4Status,
+        blocksConvergence: a4Status === 'confirmed',
+        inputType: 'zip',
+        typeBadge: a4Status === 'confirmed' ? 'Confirmed Violation' : 'Potential Risk (Heuristic)',
         overall_confidence: Math.round(overallConfidence * 100) / 100,
         confidence_reason: confidenceReason,
         summary,
@@ -2517,12 +2539,12 @@ ${codeContent}`,
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
         })),
         diagnosis: summary,
-        contextualHint: 'Explicitly enforce minimum dimensions (44×44 CSS px) using min-width and min-height constraints for interactive elements.',
+        contextualHint: 'Ensure primary interactive controls meet the 24×24 CSS px desktop minimum. Elements below 20px are confirmed violations.',
         correctivePrompt: a4Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
       };
       
-      console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${uniqueNamesArray.length} unique components, sizes: ${Array.from(detectedSizeRanges).join(', ')})`);
+      console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${a4Status}, ${uniqueNamesArray.length} unique components, sizes: ${Array.from(detectedSizeRanges).join(', ')})`);
     }
     
     // ========== A5 AGGREGATION LOGIC ==========

@@ -1911,7 +1911,7 @@ const rules = {
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
     { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px (text-base / 1rem) across all screens and components where this body-text style is reused. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy.' },
     { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Primary body text elements use line-height ratios below the recommended 1.3 minimum for readability. WCAG 1.4.12 (Text Spacing) recommends adequate line spacing to support users with cognitive or visual impairments.', correctivePrompt: 'Increase line-height of primary body text (paragraphs, descriptions, main content text) to at least 1.5 (leading-normal) across all screens and components. Do not change headings, badges, navigation text, metadata, timestamps, button labels, or intentional microcopy. Adjust paragraph spacing proportionally.' },
-    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.', correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.' },
+    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Primary interactive controls (buttons, submit inputs, role="button" elements) do not meet the minimum desktop click target size of 24×24 CSS px. Elements below 20×20px are confirmed violations; elements between 20–23px are potential risks. This evaluation uses desktop-appropriate thresholds — the 44px mobile recommendation does not apply.', correctivePrompt: 'Increase primary interactive element dimensions to at least 24×24 CSS px using min-width and min-height constraints or equivalent padding. Apply only to primary actionable controls (buttons, submit inputs). Do not modify navigation menus, dropdowns, breadcrumbs, pagination, toolbar icons, or secondary UI chrome.' },
     { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
   ],
   usability: [
@@ -2123,47 +2123,29 @@ If no multi-line paragraph blocks can be detected, output:
 }
 \`\`\`
 
-    ### A4 (Small tap / click targets) — STRICT CLASSIFICATION & WORDING RULES:
+    ### A4 (Small tap / click targets) — DESKTOP WEB UI EVALUATION (Screenshot):
+
+**SCOPE:** Only primary actionable controls: buttons, submit inputs, role="button" elements.
+**EXCLUDE:** Breadcrumb links, dropdown menu items, navigation triggers, pagination controls, compact toolbar icons, table row action icons, secondary UI chrome (Badge, Tag, Chip, Label).
 
 **VISUAL ANALYSIS LIMITATION:**
-Visual inspection cannot measure exact rendered dimensions. Padding, spacing, and layout constraints may increase the actual clickable area beyond what is visually apparent. Compliance CANNOT be confirmed from screenshots alone.
+Visual inspection cannot measure exact rendered dimensions. Always classify as Potential Risk from screenshots — never Confirmed.
 
-**GUIDELINE FRAMING:**
-- 44×44 CSS px is commonly recommended in usability and accessibility guidelines
-- WCAG 2.1 Target Size (Level AAA) suggests 44×44px, but this is NOT an AA requirement
-- Do NOT state that WCAG mandates 44×44 at AA level
-- Frame as: "commonly recommended touch target size" or "usability guideline"
+**DESKTOP THRESHOLDS (NOT mobile 44px):**
+- Estimated size < 20px → Potential Risk (High confidence)
+- 20px ≤ estimated size < 24px → Potential Risk (Low confidence)
+- ≥ 24px → No finding (silent)
 
-**CLASSIFICATION:**
-- ALWAYS classify A4 as "⚠️ Potential Risk (Heuristic)" — NEVER "Confirmed"
-- Visual inspection CANNOT confirm tap target violations without actual DOM measurement
-
-**CONFIDENCE REASONING:**
-Confidence is based on:
-1. **Visual size assessment** (±15%): Elements that appear noticeably small → higher confidence of potential risk
-2. **Element type** (±10%): Icon-only buttons, close buttons → higher risk of small targets
-3. **Visual analysis limitation** (-15%): Always reduce confidence since exact dimensions cannot be measured
-
-**WHAT TO REPORT:**
-1. Only report interactive elements (buttons, links, clickable elements) that visually appear to lack adequate size
-2. DO NOT report elements that appear to have sufficient visual size (buttons with visible padding, large touch areas)
+Detection label: Screenshot-based bounding box estimation.
+Confidence: heuristic.
 
 **DO NOT:**
-- Infer or assume final tap target size from visual estimation alone
-- Mention internal glyphs, spans, icons, or characters (e.g., "×", "X", icons)
-- Describe user difficulty as a confirmed outcome
-- Use language implying measurement or certainty
-- Use "non-compliant" or "fails" — prefer "may be below recommended touch target size"
+- Use 44px as the threshold
+- Report elements inside dropdowns, breadcrumbs, navigation, pagination, or toolbars
+- Report as Confirmed — screenshots are always heuristic
+- Mention internal glyphs or icon characters
 
-**REQUIRED WORDING:**
-- Refer to elements as "button" or "interactive element" — not internal content
-- Use neutral, academic phrasing: "does not explicitly enforce", "cannot be guaranteed", "may be below"
-- Include the component/location where the issue occurs
-
-**OUTPUT TEMPLATE:**
-"The [button/interactive element] in [component/location] appears to be below the commonly recommended touch target size of 44×44 CSS px. Although padding or layout constraints may increase the actual clickable area, this cannot be confirmed from visual inspection alone. (WCAG 2.1 Target Size is AAA, not AA.)"
-
-**Report each potentially undersized element SEPARATELY** — do not group into one violation
+**Report each potentially undersized primary control SEPARATELY** — do not group into one violation
 
 ### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
@@ -4220,11 +4202,12 @@ serve(async (req) => {
       console.log(`A2 aggregated: ${affectedItemsUI.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
     }
     
-    // ========== A4 AGGREGATION LOGIC (Screenshot Analysis) ==========
+    // ========== A4 AGGREGATION LOGIC (Screenshot — Desktop, always Potential) ==========
     interface A4AffectedItemUI {
       component_name: string;
       location: string;
       size_estimate: string;
+      estimated_px: number;
       confidence: number;
       rationale: string;
       occurrence_count?: number;
@@ -4233,7 +4216,6 @@ serve(async (req) => {
     const a4DedupeMapUI = new Map<string, A4AffectedItemUI>();
     const detectedSizeRangesUI = new Set<string>();
     
-    // Invalid identifiers for A4 component naming - filter out non-component strings
     const a4InvalidComponentNamesUI = new Set([
       'increase', 'ensure', 'add', 'use', 'apply', 'set', 'get', 'make', 'create',
       'element', 'elements', 'interactive', 'dimensions', 'target', 'targets',
@@ -4243,16 +4225,15 @@ serve(async (req) => {
       'variants', 'variant', 'props', 'className', 'style', 'styles'
     ]);
     
-    // Helper to validate component name (must be PascalCase, no spaces, no verbs/instructions)
+    // Secondary UI components to exclude from A4
+    const a4SecondaryComponentsUI = /^(Breadcrumb|DropdownMenu|DropdownMenuItem|NavigationMenu|NavigationMenuTrigger|NavLink|PaginationLink|PaginationPrevious|PaginationNext|PaginationItem|Pagination|ContextMenu|ContextMenuItem|Menubar|MenubarItem|Badge|Tag|Chip|Label|Toolbar|ToolbarButton|TableAction)$/i;
+    const a4SecondaryContainerUI = /\b(breadcrumb|dropdown|navigation|pagination|toolbar|sidebar|menu|menubar|context-menu|nav\b)/i;
+    
     function isValidA4ComponentNameUI(name: string): boolean {
       if (!name || name.length < 3) return false;
-      // Must start with uppercase (PascalCase)
       if (!/^[A-Z]/.test(name)) return false;
-      // No spaces allowed
       if (/\s/.test(name)) return false;
-      // No instructional/verb phrases
       if (/^(Increase|Ensure|Add|Use|Apply|Set|Get|Make|Create|Should|Must|Will|Can)/i.test(name)) return false;
-      // Not in invalid set
       if (a4InvalidComponentNamesUI.has(name.toLowerCase())) return false;
       return true;
     }
@@ -4263,49 +4244,60 @@ serve(async (req) => {
       const diagnosis = (v.diagnosis || '').toLowerCase();
       const combined = evidenceLower + ' ' + diagnosis;
       
-      // Extract component/element info from evidence - prioritize compound PascalCase names
       const compoundMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Previous|Next|Button|Icon|Close|Nav|Toggle|Trigger|Control|Action|Arrow|Pagination|Calendar|Carousel))\b/);
       const simpleMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]{3,})\b/);
       const locationMatch = (evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar|carousel|navigation)?)/i);
       
-      // Resolve component name with strict validation
       let componentName = '';
-      
-      // 1. Try compound component name first (e.g., CarouselPrevious, CalendarNavButton)
       if (compoundMatch?.[1] && isValidA4ComponentNameUI(compoundMatch[1])) {
         componentName = compoundMatch[1];
-      }
-      // 2. Try simple PascalCase component
-      else if (simpleMatch?.[1] && isValidA4ComponentNameUI(simpleMatch[1])) {
+      } else if (simpleMatch?.[1] && isValidA4ComponentNameUI(simpleMatch[1])) {
         componentName = simpleMatch[1];
+      }
+      
+      // Skip secondary components
+      if (a4SecondaryComponentsUI.test(componentName)) {
+        console.log(`A4 SKIP (secondary component "${componentName}"): ${evidence.substring(0, 100)}`);
+        continue;
+      }
+      
+      // Skip if inside secondary container
+      if (a4SecondaryContainerUI.test(combined)) {
+        console.log(`A4 SKIP (inside secondary container): ${evidence.substring(0, 100)}`);
+        continue;
       }
       
       const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
       
-      // Estimate size from visual description - be more specific when possible
-      let sizeEstimate = '<44px (visual estimate)';
-      if (/very small|tiny|noticeably small|~24|~28/.test(combined)) { 
-        sizeEstimate = '~24-28px (visual estimate)'; 
-        detectedSizeRangesUI.add('~24-28px'); 
-      } else if (/small|compact|~32|~36/.test(combined)) { 
-        sizeEstimate = '~32-36px (visual estimate)'; 
-        detectedSizeRangesUI.add('~32-36px'); 
-      } else if (/~40|borderline/.test(combined)) {
-        sizeEstimate = '~40px (visual estimate)';
-        detectedSizeRangesUI.add('~40px');
+      // Desktop thresholds for screenshot estimation
+      let sizeEstimate = '<20px (visual estimate)';
+      let estimatedPx = 16;
+      if (/very small|tiny|~12|~16/.test(combined)) { 
+        sizeEstimate = '~12-16px (visual estimate)'; estimatedPx = 14;
+        detectedSizeRangesUI.add('~12-16px'); 
+      } else if (/small|compact|~20/.test(combined)) { 
+        sizeEstimate = '~20px (visual estimate)'; estimatedPx = 20;
+        detectedSizeRangesUI.add('~20px'); 
+      } else if (/~24|borderline/.test(combined)) {
+        // ≥ 24px → Pass for desktop, skip
+        console.log(`A4 SKIP (≥24px pass): ${componentName || location}`);
+        continue;
+      } else if (/~28|~32|~36|~40|~44/.test(combined)) {
+        // Well above desktop threshold → skip
+        console.log(`A4 SKIP (well above desktop threshold): ${componentName || location}`);
+        continue;
       } else { 
-        sizeEstimate = '<44px (visual estimate)'; 
-        detectedSizeRangesUI.add('<44px'); 
+        sizeEstimate = '<24px (visual estimate)'; estimatedPx = 18;
+        detectedSizeRangesUI.add('<24px'); 
       }
       
-      // Calculate confidence (lower for screenshot analysis due to visual estimation)
+      // Screenshot confidence is always capped (heuristic)
       let confidence = v.confidence || 0.50;
-      // Reduce confidence since visual inspection cannot measure exact dimensions
       confidence = Math.min(confidence, 0.65);
+      if (estimatedPx < 20) confidence = Math.min(confidence + 0.05, 0.65);
       
-      const rationale = v.diagnosis || `Interactive element appears to be below the commonly recommended touch target size of 44×44 CSS px. Visual inspection cannot confirm actual dimensions.`;
+      const rationale = v.diagnosis || `Interactive element appears to be below the desktop minimum click target size of 24×24 CSS px. Visual inspection cannot confirm actual dimensions.`;
       
-      // Deduplication key - by component name or location (but filter out generic locations)
       const dedupeKey = componentName || (location !== 'UI area' ? location : 'unknown');
       
       if (a4DedupeMapUI.has(dedupeKey)) {
@@ -4314,52 +4306,46 @@ serve(async (req) => {
         if (confidence > existing.confidence) {
           existing.confidence = confidence;
           existing.size_estimate = sizeEstimate;
+          existing.estimated_px = estimatedPx;
         }
       } else {
-        const item: A4AffectedItemUI = {
+        a4DedupeMapUI.set(dedupeKey, {
           component_name: componentName,
           location,
           size_estimate: sizeEstimate,
+          estimated_px: estimatedPx,
           confidence: Math.round(confidence * 100) / 100,
           rationale,
           occurrence_count: 1,
-        };
-        a4DedupeMapUI.set(dedupeKey, item);
+        });
       }
     }
     
     const a4AffectedItemsUI = Array.from(a4DedupeMapUI.values());
     
-    // Create aggregated A4 result if there are any items
     let aggregatedA4UI: any = null;
     if (a4AffectedItemsUI.length > 0) {
-      // Calculate overall confidence (max of all findings - deterministic)
       const overallConfidence = Math.max(...a4AffectedItemsUI.map(i => i.confidence));
-      const confidenceReason = `Confidence is based on visual size assessment of interactive elements. Screenshot analysis cannot measure exact rendered dimensions, so findings are based on visual estimation.`;
+      const confidenceReason = `Confidence is based on visual size assessment using desktop thresholds (Potential: <24px). Screenshot analysis cannot measure exact rendered dimensions.`;
       
-      // Build unique component/location names list - filter out non-component strings
       const invalidIdentifiers = new Set([
         'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
         'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
         'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
         'component', 'components', 'element', 'elements', 'item', 'items', 'button',
         'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area',
-        // Instructional/guideline words that should never be component names
         'increase', 'ensure', 'add', 'use', 'apply', 'set', 'get', 'make', 'create',
         'interactive', 'dimensions', 'target', 'targets', 'minimum', 'size', 'sizes'
       ]);
       
       const uniqueNames = new Set<string>();
       for (const item of a4AffectedItemsUI) {
-        // Prefer component_name (PascalCase), then location (if descriptive)
         const name = item.component_name || '';
-        // Validate: must be PascalCase, no spaces
         if (name && name.length > 2 && 
             /^[A-Z][a-zA-Z0-9]+$/.test(name) && 
             !invalidIdentifiers.has(name.toLowerCase())) {
           uniqueNames.add(name);
         } else if (item.location && item.location !== 'UI area') {
-          // Fall back to location, but only if descriptive and not generic
           const loc = item.location;
           if (loc.length > 3 && !invalidIdentifiers.has(loc.toLowerCase()) &&
               !/^(the\s+)?ui\s*(area|section|component)?$/i.test(loc)) {
@@ -4368,7 +4354,6 @@ serve(async (req) => {
         }
       }
       
-      // Build deduplicated list (max 4, with "and N more")
       const uniqueNamesArray = Array.from(uniqueNames);
       const displayLimit = 4;
       const displayedNames = uniqueNamesArray.slice(0, displayLimit);
@@ -4379,14 +4364,13 @@ serve(async (req) => {
         ? `${uniqueNamesArray.length} unique element(s): ${displayedNames.join(', ')}${moreText}`
         : `${a4AffectedItemsUI.length} element(s)`;
       
-      
       const sizeRangesText = detectedSizeRangesUI.size > 0 
         ? `Estimated size ranges: ${Array.from(detectedSizeRangesUI).join(', ')}.`
         : '';
       
-      const summary = `Interactive elements in ${areaCountText} appear to be below the commonly recommended touch target size of 44×44 CSS px. ${sizeRangesText} ` +
-        `44×44 CSS px is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). ` +
-        `Visual inspection cannot confirm actual rendered dimensions; padding or layout constraints may increase the clickable area.`;
+      const summary = `Interactive elements in ${areaCountText} appear to be below the desktop minimum click target size of 24×24 CSS px. ${sizeRangesText} ` +
+        `Desktop evaluation uses 24px threshold — the 44px mobile recommendation does not apply. ` +
+        `Visual inspection cannot confirm actual rendered dimensions.`;
       
       const a4Rule = allRulesForViolations.find(r => r.id === 'A4');
       
@@ -4394,6 +4378,9 @@ serve(async (req) => {
         ruleId: 'A4',
         ruleName: 'Small tap / click targets',
         category: 'accessibility',
+        status: 'potential', // Screenshots are ALWAYS potential
+        blocksConvergence: false, // Screenshot findings are advisory only
+        inputType: 'screenshots',
         typeBadge: 'Potential Risk (Heuristic)',
         overall_confidence: Math.round(overallConfidence * 100) / 100,
         confidence_reason: confidenceReason,
@@ -4408,7 +4395,7 @@ serve(async (req) => {
           ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
         })),
         diagnosis: summary,
-        contextualHint: 'Explicitly enforce minimum dimensions (44×44 CSS px) for interactive elements using visible padding or size constraints.',
+        contextualHint: 'Ensure primary interactive controls meet the 24×24 CSS px desktop minimum.',
         correctivePrompt: a4Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
       };
