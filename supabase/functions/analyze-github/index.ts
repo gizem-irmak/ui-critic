@@ -1179,6 +1179,14 @@ serve(async (req) => {
           console.log(`Filtering out A2 (microcopy): ${v.evidence}`);
           return false;
         }
+        // SUPPRESS secondary UI text entirely for deterministic GitHub analysis
+        // Only primary readable content should be evaluated
+        const isSecondaryUI = !/description|label|helper|paragraph|prose|content|body|alert|dialog|form/i.test(combined);
+        if (isSecondaryUI) {
+          console.log(`Filtering out A2 (secondary UI text — not primary body content): ${v.evidence}`);
+          return false;
+        }
+        
         return true;
       });
       
