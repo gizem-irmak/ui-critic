@@ -1482,6 +1482,24 @@ serve(async (req) => {
           const avgConf = a4Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a4Elements.length;
           const a4Rule = [...rules.accessibility].find(r => r.id === 'A4');
           
+          // Build proper a4Elements for aggregated card UI
+          const a4ElementsForUI = a4Elements.map((el: any) => ({
+            elementLabel: el.elementLabel || 'Interactive element',
+            textSnippet: undefined,
+            location: el.location || 'Unknown file',
+            computedWidth: el.approxPxNum < 24 ? el.approxPxNum : undefined,
+            computedHeight: el.approxPxNum < 24 ? el.approxPxNum : undefined,
+            estimatedWidth: undefined,
+            estimatedHeight: undefined,
+            sizeSource: undefined,
+            detectionMethod: el.detectionMethod || 'deterministic',
+            thresholdPx: 20,
+            explanation: el.explanation || `Element may be below the desktop minimum click target size.`,
+            confidence: el.confidence || 0.80,
+            correctivePrompt: el.detectionMethod === 'deterministic' ? `Increase this element's clickable area to at least 24×24 CSS px.` : undefined,
+            deduplicationKey: `${el.location}|${el.elementLabel}`,
+          }));
+
           aggregatedA4GitHub = {
             ruleId: 'A4',
             ruleName: 'Small tap / click targets',
@@ -1489,12 +1507,12 @@ serve(async (req) => {
             status: a4Status,
             blocksConvergence: a4Status === 'confirmed',
             inputType: 'github',
-            typeBadge: a4Status === 'confirmed' ? 'Confirmed Violation' : 'Potential Risk (Heuristic)',
-            diagnosis: `${a4Elements.length} interactive element(s) may be below the desktop minimum click target size. Desktop thresholds: <20px Confirmed, 20-23px Potential, ≥24px Pass.`,
+            isA4Aggregated: true,
+            a4Elements: a4ElementsForUI,
+            diagnosis: `${a4ElementsForUI.length} interactive element${a4ElementsForUI.length !== 1 ? 's' : ''} with target size issues detected.`,
             contextualHint: 'Ensure primary interactive controls meet the 24×24 CSS px desktop minimum.',
             correctivePrompt: a4Rule?.correctivePrompt || '',
             confidence: Math.round(avgConf * 100) / 100,
-            affected_items: a4Elements,
             ...(a4Status === 'potential' ? {
               advisoryGuidance: 'Static analysis cannot fully determine rendered dimensions. Verify with browser DevTools.',
             } : {}),

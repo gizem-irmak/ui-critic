@@ -2517,6 +2517,32 @@ ${codeContent}`,
       
       const a4Rule = allRules.find(r => r.id === 'A4');
       
+      // Build proper a4Elements for aggregated card UI (mirrors A2 pattern)
+      const a4Elements = a4AffectedItems.map((item, idx) => {
+        const cleanLabel = item.component_name && item.component_name.length > 2 
+          ? item.component_name 
+          : `Interactive element ${idx + 1}`;
+        const location = item.file_path || 'Unknown file';
+        const isConfirmedItem = item.approx_px_num < 20 && !item.isInsideSecondaryContainer;
+        
+        return {
+          elementLabel: cleanLabel,
+          textSnippet: undefined,
+          location,
+          computedWidth: item.approx_px_num,
+          computedHeight: item.approx_px_num,
+          estimatedWidth: undefined,
+          estimatedHeight: undefined,
+          sizeSource: item.size_token || undefined,
+          detectionMethod: 'deterministic' as const,
+          thresholdPx: 20,
+          explanation: item.rationale || `Element's clickable area is ${item.approx_px}×${item.approx_px}, ${isConfirmedItem ? 'below the confirmed desktop minimum of 20×20px' : 'below the recommended 24×24px desktop baseline'}.`,
+          confidence: item.confidence,
+          correctivePrompt: isConfirmedItem ? `Increase this element's clickable area to at least 24×24 CSS px using min-width/min-height or padding.` : undefined,
+          deduplicationKey: `${item.file_path}|${item.component_name}`,
+        };
+      });
+
       aggregatedA4 = {
         ruleId: 'A4',
         ruleName: 'Small tap / click targets',
@@ -2524,27 +2550,19 @@ ${codeContent}`,
         status: a4Status,
         blocksConvergence: a4Status === 'confirmed',
         inputType: 'zip',
-        typeBadge: a4Status === 'confirmed' ? 'Confirmed Violation' : 'Potential Risk (Heuristic)',
+        isA4Aggregated: true,
+        a4Elements,
         overall_confidence: Math.round(overallConfidence * 100) / 100,
-        confidence_reason: confidenceReason,
-        summary,
-        detected_size_ranges: Array.from(detectedSizeRanges),
-        affected_items: a4AffectedItems.map(item => ({
-          component_name: item.component_name,
-          file_path: item.file_path,
-          size_token: item.size_token,
-          approx_px: item.approx_px,
-          confidence: item.confidence,
-          rationale: item.rationale,
-          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
-        })),
-        diagnosis: summary,
+        diagnosis: `${a4Elements.length} interactive element${a4Elements.length !== 1 ? 's' : ''} with target size issues detected.`,
         contextualHint: 'Ensure primary interactive controls meet the 24×24 CSS px desktop minimum. Elements below 20px are confirmed violations.',
         correctivePrompt: a4Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
+        ...(a4Status === 'potential' ? {
+          advisoryGuidance: 'Code-level analysis estimates dimensions from size tokens. Verify rendered dimensions with browser DevTools.',
+        } : {}),
       };
       
-      console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${a4Status}, ${uniqueNamesArray.length} unique components, sizes: ${Array.from(detectedSizeRanges).join(', ')})`);
+      console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${a4Status}, ${a4Elements.length} elements)`);
     }
     
     // ========== A5 AGGREGATION LOGIC ==========

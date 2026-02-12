@@ -4326,81 +4326,73 @@ serve(async (req) => {
     let aggregatedA4UI: any = null;
     if (a4AffectedItemsUI.length > 0) {
       const overallConfidence = Math.max(...a4AffectedItemsUI.map(i => i.confidence));
-      const confidenceReason = `Confidence is based on visual size assessment using desktop thresholds (Potential: <24px). Screenshot analysis cannot measure exact rendered dimensions.`;
-      
-      const invalidIdentifiers = new Set([
-        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
-        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
-        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
-        'component', 'components', 'element', 'elements', 'item', 'items', 'button',
-        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area',
-        'increase', 'ensure', 'add', 'use', 'apply', 'set', 'get', 'make', 'create',
-        'interactive', 'dimensions', 'target', 'targets', 'minimum', 'size', 'sizes'
-      ]);
-      
-      const uniqueNames = new Set<string>();
-      for (const item of a4AffectedItemsUI) {
-        const name = item.component_name || '';
-        if (name && name.length > 2 && 
-            /^[A-Z][a-zA-Z0-9]+$/.test(name) && 
-            !invalidIdentifiers.has(name.toLowerCase())) {
-          uniqueNames.add(name);
-        } else if (item.location && item.location !== 'UI area') {
-          const loc = item.location;
-          if (loc.length > 3 && !invalidIdentifiers.has(loc.toLowerCase()) &&
-              !/^(the\s+)?ui\s*(area|section|component)?$/i.test(loc)) {
-            uniqueNames.add(loc);
-          }
-        }
-      }
-      
-      const uniqueNamesArray = Array.from(uniqueNames);
-      const displayLimit = 4;
-      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
-      const moreCount = uniqueNamesArray.length - displayLimit;
-      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
-      
-      const areaCountText = uniqueNamesArray.length > 0 
-        ? `${uniqueNamesArray.length} unique element(s): ${displayedNames.join(', ')}${moreText}`
-        : `${a4AffectedItemsUI.length} element(s)`;
-      
-      const sizeRangesText = detectedSizeRangesUI.size > 0 
-        ? `Estimated size ranges: ${Array.from(detectedSizeRangesUI).join(', ')}.`
-        : '';
-      
-      const summary = `Interactive elements in ${areaCountText} appear to be below the desktop minimum click target size of 24×24 CSS px. ${sizeRangesText} ` +
-        `Desktop evaluation uses 24px threshold — the 44px mobile recommendation does not apply. ` +
-        `Visual inspection cannot confirm actual rendered dimensions.`;
-      
       const a4Rule = allRulesForViolations.find(r => r.id === 'A4');
       
+      // Build a4Elements array for aggregated card UI (mirrors A2 pattern)
+      const a4Elements = a4AffectedItemsUI.map((item, idx) => {
+        const screenshotIdx = idx + 1;
+        let cleanLabel = item.component_name || `Interactive element ${idx + 1}`;
+        cleanLabel = cleanLabel
+          .replace(/\b(appears?\s+to\s+be|seems?\s+to|looks?\s+like)\b.*/i, '')
+          .trim();
+        if (cleanLabel.length < 3) cleanLabel = `Interactive element ${idx + 1}`;
+        
+        const contextLabel = item.component_name || item.location || 'UI element';
+        const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
+        
+        // Parse estimated dimensions from size_estimate
+        let estimatedWidth: number | undefined = undefined;
+        let estimatedHeight: number | undefined = undefined;
+        if (item.size_estimate) {
+          const match = item.size_estimate.match(/(\d+(?:\.\d+)?)\s*px/i);
+          if (match) {
+            const px = Math.round(parseFloat(match[1]));
+            estimatedWidth = px;
+            estimatedHeight = px;
+          }
+        }
+        if (estimatedWidth === undefined) {
+          estimatedWidth = item.estimated_px;
+          estimatedHeight = item.estimated_px;
+        }
+        
+        return {
+          elementLabel: cleanLabel,
+          textSnippet: undefined,
+          location: formattedLocation,
+          screenshotIndex: screenshotIdx,
+          computedWidth: undefined,
+          computedHeight: undefined,
+          estimatedWidth,
+          estimatedHeight,
+          sizeSource: undefined,
+          detectionMethod: 'heuristic' as const,
+          thresholdPx: 20,
+          explanation: item.rationale,
+          confidence: item.confidence,
+          correctivePrompt: undefined,
+          deduplicationKey: `${item.location}|${item.component_name}`,
+        };
+      });
+
       aggregatedA4UI = {
         ruleId: 'A4',
         ruleName: 'Small tap / click targets',
         category: 'accessibility',
-        status: 'potential', // Screenshots are ALWAYS potential
-        blocksConvergence: false, // Screenshot findings are advisory only
+        status: 'potential',
+        blocksConvergence: false,
         inputType: 'screenshots',
-        typeBadge: 'Potential Risk (Heuristic)',
+        isA4Aggregated: true,
+        a4Elements,
         overall_confidence: Math.round(overallConfidence * 100) / 100,
-        confidence_reason: confidenceReason,
-        summary,
-        detected_size_ranges: Array.from(detectedSizeRangesUI),
-        affected_items: a4AffectedItemsUI.map(item => ({
-          component_name: item.component_name,
-          location: item.location,
-          size_estimate: item.size_estimate,
-          confidence: item.confidence,
-          rationale: item.rationale,
-          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
-        })),
-        diagnosis: summary,
+        diagnosis: `${a4Elements.length} interactive element${a4Elements.length !== 1 ? 's' : ''} with potential target size issues detected.`,
         contextualHint: 'Ensure primary interactive controls meet the 24×24 CSS px desktop minimum.',
         correctivePrompt: a4Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
+        advisoryGuidance: 'Screenshot estimation cannot guarantee exact target sizes. For deterministic measurement, upload ZIP source code or provide a GitHub repository.',
       };
       
-      console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${uniqueNamesArray.length} unique elements, sizes: ${Array.from(detectedSizeRangesUI).join(', ')})`);
+      console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${a4Elements.length} elements)`);
     }
     
     // ========== A5 AGGREGATION LOGIC (Screenshot Analysis) ==========
