@@ -1877,9 +1877,16 @@ ${codeContent}`,
       else if (/0\.8rem|0\.85rem/.test(combined)) approxPx = '≈13-14px';
       
       // Determine semantic role
-      const semanticRole = /description|label|helper|caption|metadata|alert|dialog|form/i.test(componentName + combined)
+      const semanticRole = /description|label|helper|caption|metadata|alert|dialog|form|paragraph|prose|content|body/i.test(componentName + combined)
         ? 'informational' 
         : 'secondary';
+      
+      // SUPPRESS secondary UI text entirely for deterministic ZIP analysis
+      // Only primary readable content (paragraphs, descriptions, content blocks) should be evaluated
+      if (semanticRole === 'secondary') {
+        console.log(`Filtering out A2 (secondary UI text — not primary body content): ${componentName || filePath} [${v.evidence}]`);
+        continue;
+      }
       
       // Determine severity
       const severity: 'violation' | 'warning' = mentionsSmaller ? 'violation' : 'warning';
