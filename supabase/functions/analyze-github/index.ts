@@ -1179,11 +1179,43 @@ serve(async (req) => {
           console.log(`Filtering out A2 (microcopy): ${v.evidence}`);
           return false;
         }
-        // SUPPRESS secondary UI text entirely for deterministic GitHub analysis
-        // Only primary readable content should be evaluated
-        const isSecondaryUI = !/description|label|helper|paragraph|prose|content|body|alert|dialog|form/i.test(combined);
-        if (isSecondaryUI) {
-          console.log(`Filtering out A2 (secondary UI text — not primary body content): ${v.evidence}`);
+        // ── A2 PRIMARY vs SECONDARY classification (deterministic GitHub) ──
+        const evidenceRaw = v.evidence || '';
+        const componentMatch2 = evidenceRaw.match(/([A-Z][a-zA-Z0-9]*)/);
+        const compName = componentMatch2?.[1] || '';
+        
+        // 1) Component name signals secondary
+        if (/^(Badge|Chip|Tag|Label|Subtitle|Meta|Caption)$/i.test(compName)) {
+          console.log(`Filtering out A2 (secondary component "${compName}"): ${evidenceRaw}`);
+          return false;
+        }
+        // 2) Course codes
+        if (/[A-Z]{2,4}\d{2,4}/.test(evidenceRaw) || /course\s*code/i.test(combined)) {
+          console.log(`Filtering out A2 (course code): ${evidenceRaw}`);
+          return false;
+        }
+        // 3) Credits / badge text
+        if (/\d+\s*credits?\b/i.test(combined)) {
+          console.log(`Filtering out A2 (credits text): ${evidenceRaw}`);
+          return false;
+        }
+        // 4) Header subtitles, nav labels, filter labels
+        if (/\b(header\s*subtitle|nav(?:igation)?\s*label|filter\s*label|tab\s*label|breadcrumb)\b/i.test(combined)) {
+          console.log(`Filtering out A2 (subtitle/nav/filter label): ${evidenceRaw}`);
+          return false;
+        }
+        // 5) Short labels (<25 chars) not paragraphs/descriptions
+        const snippet = (v.textSnippet || evidenceRaw).replace(/[^a-zA-Z0-9\s]/g, '').trim();
+        if (snippet.length > 0 && snippet.length < 25 && !/paragraph|description|content|prose|body|article/i.test(combined)) {
+          console.log(`Filtering out A2 (short label <25 chars): ${evidenceRaw}`);
+          return false;
+        }
+        // 6) Primary content gate
+        const isPrimaryGH = /description|paragraph|prose|content|body|article|main|alert|dialog|form/i.test(combined)
+          || (snippet.length >= 60)
+          || /\.\s+[A-Z]/.test(evidenceRaw);
+        if (!isPrimaryGH) {
+          console.log(`Filtering out A2 (not primary readable content): ${evidenceRaw}`);
           return false;
         }
         

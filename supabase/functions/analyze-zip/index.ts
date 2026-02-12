@@ -1876,17 +1876,46 @@ ${codeContent}`,
       else if (/13px|13-14/.test(combined)) approxPx = '≈13px';
       else if (/0\.8rem|0\.85rem/.test(combined)) approxPx = '≈13-14px';
       
-      // Determine semantic role
-      const semanticRole = /description|label|helper|caption|metadata|alert|dialog|form|paragraph|prose|content|body/i.test(componentName + combined)
-        ? 'informational' 
-        : 'secondary';
+      // ── A2 PRIMARY vs SECONDARY classification (deterministic ZIP) ──
+      // Secondary UI text is ALWAYS suppressed — no A2 finding at all.
+      const nameAndEvidence = (componentName + ' ' + combined).toLowerCase();
       
-      // SUPPRESS secondary UI text entirely for deterministic ZIP analysis
-      // Only primary readable content (paragraphs, descriptions, content blocks) should be evaluated
-      if (semanticRole === 'secondary') {
-        console.log(`Filtering out A2 (secondary UI text — not primary body content): ${componentName || filePath} [${v.evidence}]`);
+      // 1) Component name signals secondary
+      if (/\b(badge|chip|tag|label|subtitle|meta|caption)\b/i.test(componentName)) {
+        console.log(`Filtering out A2 (secondary component name "${componentName}"): ${filePath}`);
         continue;
       }
+      // 2) Course codes (CS101, EE202, etc.)
+      if (/[A-Z]{2,4}\d{2,4}/.test(v.evidence || '') || /course\s*code/i.test(nameAndEvidence)) {
+        console.log(`Filtering out A2 (course code pattern): ${componentName || filePath}`);
+        continue;
+      }
+      // 3) Credits / badge text ("3 credits", "4 credits")
+      if (/\d+\s*credits?\b/i.test(nameAndEvidence) || /\bcredits?\s*(?:badge|pill|chip)?\b/i.test(nameAndEvidence)) {
+        console.log(`Filtering out A2 (credits/badge text): ${componentName || filePath}`);
+        continue;
+      }
+      // 4) Header subtitles, navigation labels, filter labels
+      if (/\b(header\s*subtitle|nav(?:igation)?\s*label|filter\s*label|tab\s*label|breadcrumb)\b/i.test(nameAndEvidence)) {
+        console.log(`Filtering out A2 (header subtitle / nav / filter label): ${componentName || filePath}`);
+        continue;
+      }
+      // 5) Short labels (< 25 chars) that aren't paragraphs/descriptions
+      const snippetText = (v.textSnippet || v.evidence || '').replace(/[^a-zA-Z0-9\s]/g, '').trim();
+      if (snippetText.length > 0 && snippetText.length < 25 && !/paragraph|description|content|prose|body|article/i.test(nameAndEvidence)) {
+        console.log(`Filtering out A2 (short label <25 chars, not primary): ${componentName || filePath} "${snippetText}"`);
+        continue;
+      }
+      // 6) Final primary-content gate: must match primary readable content signals
+      const isPrimary = /description|paragraph|prose|content|body|article|main|alert|dialog|form/i.test(nameAndEvidence)
+        || (snippetText.length >= 60)
+        || /\.\s+[A-Z]/.test(v.evidence || ''); // multi-sentence indicator
+      if (!isPrimary) {
+        console.log(`Filtering out A2 (not primary readable content): ${componentName || filePath}`);
+        continue;
+      }
+      
+      const semanticRole = 'informational';
       
       // Determine severity
       const severity: 'violation' | 'warning' = mentionsSmaller ? 'violation' : 'warning';
