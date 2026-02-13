@@ -1526,7 +1526,9 @@ serve(async (req) => {
               sizeSource: undefined,
               detectionMethod: el.detectionMethod || 'deterministic',
               thresholdPx: 20,
-              explanation: el.explanation || `Element may be below the desktop minimum click target size.`,
+              explanation: isConfirmedEl
+                ? `Computed clickable area is ${w}×${h}px (min side: ${minSide}px), below the confirmed desktop minimum of 20×20px. Increase to at least 20×20px (preferably 24×24px).`
+                : `Computed clickable area is ${w}×${h}px (min side: ${minSide}px), which meets the 20px minimum but is below the recommended 24×24px comfort size. Consider increasing for easier interaction.`,
               confidence: el.confidence || 0.80,
               potentialSubtype: elSubtype,
               correctivePrompt: elementCorrectivePrompt,
