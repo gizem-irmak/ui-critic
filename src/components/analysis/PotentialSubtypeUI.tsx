@@ -34,15 +34,11 @@ export function PotentialSubtypeBadge({ subtype, compact = false }: {
  */
 
 const ACCURACY_GUIDANCE: Record<string, string> = {
-  A2: 'Static visual estimation cannot determine exact computed font sizes. For deterministic verification, upload ZIP source code or provide a GitHub repository.',
-  A3: 'Visual estimation cannot determine exact computed line-height ratios. For deterministic verification, upload the rendered source code (ZIP file) or provide a GitHub repository.',
-  A4: 'Screenshot estimation cannot guarantee exact target sizes. For deterministic measurement, upload ZIP source code or provide a GitHub repository.',
+  A1: 'Static analysis cannot determine exact rendered contrast. For deterministic verification, upload screenshots of the rendered UI.',
 };
 
 const BORDERLINE_GUIDANCE: Record<string, string> = {
-  A2: 'Font size meets the technical minimum but is below the recommended 16px baseline for comfortable reading. Consider increasing body text to at least 16px for improved readability.',
-  A3: 'Line spacing is near the lower bound. Consider increasing line-height to ~1.45–1.6 for improved readability.',
-  A4: 'Target size meets the minimum 20px threshold but is below the recommended 24×24px comfort size. Consider increasing for easier clicking.',
+  A1: 'Contrast is near the threshold. Consider increasing contrast for improved readability.',
 };
 
 export function SubtypeAdvisoryGuidance({ ruleId, potentialSubtype, fallbackGuidance, compact = false }: {
