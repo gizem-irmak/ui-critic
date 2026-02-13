@@ -3237,25 +3237,17 @@ serve(async (req) => {
     
     console.log(`Filtered ${(analysisResult.violations || []).length - filteredBySelection.length} violations from unselected rules`);
     
-    // Separate A1, A2, A3, A4, and A5 violations for aggregation (only from selected rules)
+    // Separate A1 and A2 (focus visibility, formerly A5) violations for aggregation
     const a1Violations: any[] = [];
-    const a2Violations: any[] = [];
-    const a3Violations: any[] = [];
-    const a4Violations: any[] = [];
-    const a5Violations: any[] = [];
+    const a2Violations: any[] = []; // A2 = Poor focus visibility (accepts both old A5 and new A2 IDs)
     const otherViolations: any[] = [];
     
     filteredBySelection.forEach((v: any) => {
       if (v.ruleId === 'A1') {
         a1Violations.push(v);
-      } else if (v.ruleId === 'A2') {
+      } else if (v.ruleId === 'A2' || v.ruleId === 'A5') {
+        v.ruleId = 'A2'; // Normalize to A2
         a2Violations.push(v);
-      } else if (v.ruleId === 'A3') {
-        a3Violations.push(v);
-      } else if (v.ruleId === 'A4') {
-        a4Violations.push(v);
-      } else if (v.ruleId === 'A5') {
-        a5Violations.push(v);
       } else {
         otherViolations.push(v);
       }
@@ -3547,7 +3539,7 @@ serve(async (req) => {
       console.log(`U1: No valid violations found (${u1Violations.length} filtered out as speculative or lacking evidence)`);
     }
     
-    // Process non-A1/A2/A3/A4/A5/U1 violations
+    // Process non-A1/A2/U1 violations
     const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
@@ -3906,722 +3898,147 @@ serve(async (req) => {
     }
     
     console.log(`A1 per-element: ${perElementA1Violations.length} individual violations (${perElementA1Violations.filter(v => v.status === 'confirmed').length} confirmed, ${perElementA1Violations.filter(v => v.status === 'potential').length} potential, ${perElementA1Violations.filter(v => v.status === 'borderline').length} borderline)`);
-    // ========== A2 AGGREGATION LOGIC (Screenshot Analysis) ==========
-    interface A2AffectedItemUI {
+    // ========== A2 AGGREGATION LOGIC (Screenshot — Focus Visibility, always Potential) ==========
+    // For screenshot input: A2 is NEVER confirmed (heuristic only).
+    // Only report if screenshot clearly shows a focused state with no visible indicator.
+    interface A2FocusItemUI {
       component_name: string;
       location: string;
-      size_estimate: string;
-      semantic_role: string;
-      severity: 'violation' | 'warning';
+      typeBadge: 'Heuristic';
       confidence: number;
       rationale: string;
       occurrence_count?: number;
     }
-    
-    const dedupeMapUI = new Map<string, A2AffectedItemUI>();
-    
+
+    const a2DedupeMapUI = new Map<string, A2FocusItemUI>();
+    const a2ValidViolationsUI: any[] = [];
+
     for (const v of a2Violations) {
-      const evidence = (v.evidence || '').toLowerCase();
-      const diagnosis = (v.diagnosis || '').toLowerCase();
-      const combined = evidence + ' ' + diagnosis;
-      
-      // FILTER: Normal-sized text (~14px or larger) should NOT be reported
-      const mentionsNormalSize = /normal size|normal-sized|adequate|14px|~14px|approximately 14|appears normal/.test(combined);
-      const mentionsSmall = /noticeably small|very small|tiny|<13|smaller than 13|clearly small/.test(combined);
-      
-      // If text appears normal sized and not explicitly small, filter out
-      if (mentionsNormalSize && !mentionsSmall) {
-        console.log(`Filtering out A2 (normal text size): ${v.evidence}`);
-        continue;
-      }
-      
-      // ============================================================
-      // A2 STRICT SCOPE ENFORCEMENT: ONLY primary body text allowed
-      // ============================================================
-      // Exclude: badges, chips, pills, tags, status indicators
-      const isBadgeChip = /\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus\s*(?:indicator|badge|chip|text)?\b/i.test(combined);
-      if (isBadgeChip) {
-        console.log(`Filtering out A2 (badge/chip/tag — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: headings, titles, subtitles
-      const isHeadingTitle = /\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b|\bsection\s*title\b|\bpage\s*title\b|\bheader\s*(?:text|subtitle|label)?\b/i.test(combined);
-      if (isHeadingTitle && !/description|body\s*text|paragraph|content\s*block|prose/i.test(combined)) {
-        console.log(`Filtering out A2 (heading/title — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: navigation, menu items, breadcrumbs
-      const isNavigation = /\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b|\bsidebar\s*(?:link|item|nav)\b/i.test(combined);
-      if (isNavigation) {
-        console.log(`Filtering out A2 (navigation — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: buttons, CTAs, interactive elements
-      const isButton = /\bbutton\b|\bbtn\b|\bcta\b|\baction\s*button\b|\binteractive\s*element\b|\bicon[-\s]?button\b/i.test(combined);
-      if (isButton && !/description|body\s*text|paragraph/i.test(combined)) {
-        console.log(`Filtering out A2 (button/CTA — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: metadata, timestamps, dates, author names
-      const isMetadata = /\bmetadata\b|\btimestamp\b|\bdate\s*(?:display|text)?\b|\btime\s*ago\b|\bauthor\b|\binstructor\b|\bcreated\s*(?:at|on)\b|\bupdated\s*(?:at|on)\b/i.test(combined);
-      if (isMetadata) {
-        console.log(`Filtering out A2 (metadata/timestamp — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: captions, tooltips, keyboard shortcuts, code blocks
-      const isMicrocopy = /\bcaption\b|\btooltip\b|\bkeyboard\s*shortcut\b|\bkbd\b|\bcode\s*block\b|\bmonospace\b|\bplaceholder\b/i.test(combined);
-      if (isMicrocopy) {
-        console.log(`Filtering out A2 (microcopy/caption — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: icon-only elements
-      const isIconOnly = /\bicon\b/i.test(combined) && !/description|paragraph|body/i.test(combined);
-      if (isIconOnly) {
-        console.log(`Filtering out A2 (icon element — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Extract info from evidence/diagnosis for screenshots
-      // Priority: 1) Named UI element, 2) Location description, 3) Fallback to location only
-      const locationMatch = (v.evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar|tooltip|popover|alert|banner)?)/i);
-      const componentMatch = (v.evidence || '').match(/([A-Z][a-zA-Z0-9]*(?:Description|Label|Text|Badge|Caption|Content|Title|Subtitle|Header|Footer)?)/);
-      
-      // Resolve component name - avoid placeholders like "Text" alone
-      let componentName = '';
-      if (componentMatch?.[1] && componentMatch[1].length > 4) {
-        componentName = componentMatch[1];
-      }
-      // If no specific component, leave empty and rely on location
-      
-      const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
-      
-      // Determine size estimate
-      const sizeEstimate = mentionsSmall ? '<13px (visually estimated)' : '13-14px (visually estimated)';
-      
-      // Determine semantic role
-      const semanticRole = /description|label|helper|caption|alert|dialog|form|body text/i.test(combined)
-        ? 'informational' 
-        : 'secondary';
-      
-      // Determine severity
-      const severity: 'violation' | 'warning' = mentionsSmall ? 'violation' : 'warning';
-      
-      // Calculate confidence (lower for screenshot analysis)
-      let confidence = v.confidence || 0.55;
-      if (semanticRole === 'informational') confidence = Math.min(confidence + 0.1, 0.75);
-      if (mentionsSmall) confidence = Math.min(confidence + 0.05, 0.75);
-      else confidence = Math.max(confidence - 0.1, 0.35);
-      
-      const rationale = v.diagnosis || `Text appears ${severity === 'violation' ? 'noticeably small' : 'borderline small'} for ${semanticRole} content.`;
-      
-      // Deduplication key
-      const dedupeKey = `${location}|${componentName}|${severity}`;
-      
-      if (dedupeMapUI.has(dedupeKey)) {
-        const existing = dedupeMapUI.get(dedupeKey)!;
-        existing.occurrence_count = (existing.occurrence_count || 1) + 1;
-        if (confidence > existing.confidence) {
-          existing.confidence = confidence;
-        }
-      } else {
-        const item: A2AffectedItemUI = {
-          component_name: componentName,
-          location,
-          size_estimate: sizeEstimate,
-          semantic_role: semanticRole,
-          severity,
-          confidence: Math.round(confidence * 100) / 100,
-          rationale,
-          occurrence_count: 1,
-        };
-        dedupeMapUI.set(dedupeKey, item);
-      }
-    }
-    
-    const affectedItemsUI = Array.from(dedupeMapUI.values());
-    
-    // Create aggregated A2 result if there are any items
-    let aggregatedA2UI: any = null;
-    if (affectedItemsUI.length > 0) {
-      // Calculate overall confidence
-      const highImpactItems = affectedItemsUI.filter(i => i.semantic_role === 'informational');
-      let overallConfidence: number;
-      let confidenceReason: string;
-      
-      if (highImpactItems.length > 0) {
-        overallConfidence = Math.max(...highImpactItems.map(i => i.confidence));
-        confidenceReason = `Based on maximum confidence (${overallConfidence.toFixed(2)}) from ${highImpactItems.length} informational element(s).`;
-      } else {
-        const sortedConfidences = affectedItemsUI.map(i => i.confidence).sort((a, b) => a - b);
-        const midIdx = Math.floor(sortedConfidences.length / 2);
-        overallConfidence = sortedConfidences.length % 2 === 0
-          ? (sortedConfidences[midIdx - 1] + sortedConfidences[midIdx]) / 2
-          : sortedConfidences[midIdx];
-        confidenceReason = `Based on median confidence (${overallConfidence.toFixed(2)}) across ${affectedItemsUI.length} secondary element(s).`;
-      }
-      
-      const violationCount = affectedItemsUI.filter(i => i.severity === 'violation').length;
-      const warningCount = affectedItemsUI.filter(i => i.severity === 'warning').length;
-      
-      // Build summary with DEDUPLICATED and FILTERED component/location names
-      // 1. Extract unique names, filtering out invalid identifiers
-      const invalidIdentifiers = new Set([
-        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
-        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
-        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
-        'component', 'components', 'element', 'elements', 'item', 'items', 'text',
-        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area'
-      ]);
-      
-      const uniqueNames = new Set<string>();
-      for (const item of affectedItemsUI) {
-        // Prefer component_name, then location
-        const name = item.component_name || item.location || '';
-        // Filter out invalid identifiers (case-insensitive check)
-        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
-          // Also filter out generic location names
-          if (!/^(the\s+)?ui\s*(area|section|component)?$/i.test(name)) {
-            uniqueNames.add(name);
-          }
-        }
-      }
-      
-      // 2. Build deduplicated list (max 4, with "and N more")
-      const uniqueNamesArray = Array.from(uniqueNames);
-      const displayLimit = 4;
-      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
-      const moreCount = uniqueNamesArray.length - displayLimit;
-      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
-      
-      // 3. Build summary with "X unique area(s)" wording
-      const locationList = displayedNames.join(', ');
-      const areaCountText = uniqueNamesArray.length > 0 
-        ? `${uniqueNamesArray.length} unique area(s): ${locationList}${moreText}`
-        : `${affectedItemsUI.length} location(s)`;
-      
-      const summary = `Small text size visually detected in ${areaCountText}. ` +
-        `${violationCount > 0 ? `${violationCount} appear noticeably small` : ''}` +
-        `${violationCount > 0 && warningCount > 0 ? ' and ' : ''}` +
-        `${warningCount > 0 ? `${warningCount} appear borderline` : ''}. ` +
-        `WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.`;
-      
-      const a2Rule = allRulesForViolations.find(r => r.id === 'A2');
-      
-      // Build a2Elements array for the aggregated card UI
-      const a2Elements = affectedItemsUI.map((item, idx) => {
-        // Format location to match A1 structure: "Screenshot #X — Screenshot (Context label)"
-        const screenshotIdx = item.screenshot_index || (idx + 1);
-        // Clean context label: use component_name if available, otherwise derive a short label
-        // Strip diagnostic phrases like "appears smaller than", "body text for", etc.
-        let rawLabel = item.component_name || item.location || 'UI element';
-        rawLabel = rawLabel
-          .replace(/\b(appears?\s+smaller\s+than|body\s+text\s+for|text\s+for)\b.*/i, '')
-          .replace(/\b(appears?\s+to\s+be|seems?\s+to|looks?\s+like)\b.*/i, '')
-          .trim();
-        // Capitalize first letter and ensure it's a clean short label
-        const contextLabel = rawLabel.length > 2 ? rawLabel : 'UI element';
-        const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
-        
-        // Also clean elementLabel the same way
-        let cleanElementLabel = item.component_name || `Body text element ${idx + 1}`;
-        cleanElementLabel = cleanElementLabel
-          .replace(/\b(appears?\s+smaller\s+than|body\s+text\s+for|text\s+for)\b.*/i, '')
-          .replace(/\b(appears?\s+to\s+be|seems?\s+to|looks?\s+like)\b.*/i, '')
-          .trim();
-        if (cleanElementLabel.length < 3) cleanElementLabel = `Body text element ${idx + 1}`;
-
-        // Parse estimated font size from size_estimate (e.g., "~12px", "approximately 14px")
-        let estimatedFontSize: number | undefined = undefined;
-        let estimationFailed = false;
-        if (item.size_estimate) {
-          const match = item.size_estimate.match(/(\d+(?:\.\d+)?)\s*px/i);
-          if (match) {
-            estimatedFontSize = Math.round(parseFloat(match[1]));
-          } else {
-            estimationFailed = true;
-          }
-        } else {
-          estimationFailed = true;
-        }
-
-        return {
-        elementLabel: cleanElementLabel,
-        textSnippet: undefined,
-        location: formattedLocation,
-        computedFontSize: undefined, // Screenshot-based: cannot deterministically measure
-        estimatedFontSize, // Visual estimation from bounding box analysis
-        estimationFailed, // True if estimation could not be performed
-        fontSizeSource: undefined,
-        detectionMethod: 'heuristic' as const,
-        thresholdPx: 16,
-        explanation: item.rationale,
-        confidence: item.confidence,
-        correctivePrompt: undefined, // Potential findings: no corrective prompts
-        deduplicationKey: `${item.location}|${item.component_name}`,
-        };
-      });
-
-      // Tag each element with potentialSubtype for screenshot: always 'accuracy'
-      a2Elements.forEach((el: any) => { el.potentialSubtype = 'accuracy'; });
-
-      aggregatedA2UI = {
-        ruleId: 'A2',
-        ruleName: 'Small body font size',
-        category: 'accessibility',
-        status: 'potential', // Screenshot-based A2 is ALWAYS potential (visual estimation)
-        potentialSubtype: 'accuracy',
-        blocksConvergence: false, // Never blocks convergence for screenshot input
-        inputType: 'screenshots',
-        isA2Aggregated: true,
-        a2Elements,
-        overall_confidence: Math.round(overallConfidence * 100) / 100,
-        confidence_reason: confidenceReason,
-        summary,
-        affected_items: affectedItemsUI.map(item => ({
-          component_name: item.component_name,
-          location: item.location,
-          size_estimate: item.size_estimate,
-          semantic_role: item.semantic_role,
-          severity: item.severity,
-          confidence: item.confidence,
-          rationale: item.rationale,
-          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
-        })),
-        diagnosis: `${a2Elements.length} text element${a2Elements.length !== 1 ? 's' : ''} with potential font size issues detected. These require manual verification due to measurement uncertainty.`,
-        contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
-        correctivePrompt: a2Rule?.correctivePrompt || '',
-        confidence: Math.round(overallConfidence * 100) / 100,
-        advisoryGuidance: 'Static visual estimation cannot determine exact computed font sizes. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
-      };
-      
-      console.log(`A2 aggregated: ${affectedItemsUI.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
-    }
-    
-    // ========== A4 AGGREGATION LOGIC (Screenshot — Desktop, always Potential) ==========
-    interface A4AffectedItemUI {
-      component_name: string;
-      location: string;
-      size_estimate: string;
-      estimated_px: number;
-      confidence: number;
-      rationale: string;
-      occurrence_count?: number;
-    }
-    
-    const a4DedupeMapUI = new Map<string, A4AffectedItemUI>();
-    const detectedSizeRangesUI = new Set<string>();
-    
-    const a4InvalidComponentNamesUI = new Set([
-      'increase', 'ensure', 'add', 'use', 'apply', 'set', 'get', 'make', 'create',
-      'element', 'elements', 'interactive', 'dimensions', 'target', 'targets',
-      'minimum', 'size', 'sizes', 'width', 'height', 'padding', 'constraint',
-      'button', 'buttons', 'icon', 'icons', 'control', 'controls',
-      'component', 'components', 'item', 'items', 'unknown', 'default',
-      'variants', 'variant', 'props', 'className', 'style', 'styles'
-    ]);
-    
-    // Secondary UI components to exclude from A4
-    const a4SecondaryComponentsUI = /^(Breadcrumb|DropdownMenu|DropdownMenuItem|NavigationMenu|NavigationMenuTrigger|NavLink|PaginationLink|PaginationPrevious|PaginationNext|PaginationItem|Pagination|ContextMenu|ContextMenuItem|Menubar|MenubarItem|Badge|Tag|Chip|Label|Toolbar|ToolbarButton|TableAction)$/i;
-    const a4SecondaryContainerUI = /\b(breadcrumb|dropdown|navigation|pagination|toolbar|sidebar|menu|menubar|context-menu|nav\b)/i;
-    
-    function isValidA4ComponentNameUI(name: string): boolean {
-      if (!name || name.length < 3) return false;
-      if (!/^[A-Z]/.test(name)) return false;
-      if (/\s/.test(name)) return false;
-      if (/^(Increase|Ensure|Add|Use|Apply|Set|Get|Make|Create|Should|Must|Will|Can)/i.test(name)) return false;
-      if (a4InvalidComponentNamesUI.has(name.toLowerCase())) return false;
-      return true;
-    }
-    
-    for (const v of a4Violations) {
       const evidence = (v.evidence || '');
       const evidenceLower = evidence.toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
       const combined = evidenceLower + ' ' + diagnosis;
-      
-      const compoundMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Previous|Next|Button|Icon|Close|Nav|Toggle|Trigger|Control|Action|Arrow|Pagination|Calendar|Carousel))\b/);
-      const simpleMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]{3,})\b/);
-      const locationMatch = (evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar|carousel|navigation)?)/i);
-      
+
+      // PASS: has visible focus ring/border/indicator
+      const hasVisibleFocusRing = /has.*ring|visible ring|shows.*ring|focus ring|ring.*focus/i.test(combined);
+      const hasVisibleFocusBorder = /has.*border|visible border|shows.*border|focus border|border.*focus/i.test(combined);
+      const hasVisibleFocusIndicator = /has.*focus indicator|visible focus indicator|clear focus/i.test(combined);
+      if (hasVisibleFocusRing || hasVisibleFocusBorder || hasVisibleFocusIndicator) {
+        console.log(`A2 PASS (has visible focus indicator): ${evidence}`);
+        continue;
+      }
+
+      // PASS: explicitly acceptable
+      const mentionsAcceptable = /(?<!no\s)(?<!without\s)(?<!lacks?\s)(?<!missing\s)(?:acceptable|compliant|proper focus|adequate)/i.test(combined);
+      const explicitlyPasses = /\bpass\b(?!word)/i.test(combined) && !/does not pass|doesn't pass|fail/i.test(combined);
+      if (mentionsAcceptable || explicitlyPasses) {
+        console.log(`A2 PASS (explicitly acceptable): ${evidence}`);
+        continue;
+      }
+
+      // SKIP: cannot determine focus state from screenshot
+      const cannotDetermine = /cannot determine|unable to assess|not visible in screenshot|no focus state shown|no focused state/.test(combined);
+      if (cannotDetermine) {
+        console.log(`A2 SKIP (cannot determine from screenshot): ${evidence}`);
+        continue;
+      }
+
+      console.log(`A2 VIOLATION (screenshot heuristic): ${evidence}`);
+      a2ValidViolationsUI.push(v);
+    }
+
+    // Aggregate valid A2 violations
+    for (const v of a2ValidViolationsUI) {
+      const evidence = (v.evidence || '');
+      const combined = (evidence + ' ' + (v.diagnosis || '')).toLowerCase();
+
+      const locationMatch = (evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar)?)/i);
+      const componentMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link|Card|Dialog|Modal|Menu|Header|Footer|Sidebar|Panel|Form))\b/);
+      const simpleComponentMatch = evidence.match(/(?:the\s+)?([A-Z][a-zA-Z0-9]{3,})/);
+
       let componentName = '';
-      if (compoundMatch?.[1] && isValidA4ComponentNameUI(compoundMatch[1])) {
-        componentName = compoundMatch[1];
-      } else if (simpleMatch?.[1] && isValidA4ComponentNameUI(simpleMatch[1])) {
-        componentName = simpleMatch[1];
+      if (componentMatch?.[1] && componentMatch[1].length > 4) {
+        componentName = componentMatch[1];
+      } else if (simpleComponentMatch?.[1] && simpleComponentMatch[1].length > 3) {
+        componentName = simpleComponentMatch[1];
       }
-      
-      // Skip secondary components
-      if (a4SecondaryComponentsUI.test(componentName)) {
-        console.log(`A4 SKIP (secondary component "${componentName}"): ${evidence.substring(0, 100)}`);
-        continue;
-      }
-      
-      // Skip if inside secondary container
-      if (a4SecondaryContainerUI.test(combined)) {
-        console.log(`A4 SKIP (inside secondary container): ${evidence.substring(0, 100)}`);
-        continue;
-      }
-      
+
       const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
-      
-      // Desktop thresholds for screenshot estimation
-      let sizeEstimate = '<20px (visual estimate)';
-      let estimatedPx = 16;
-      if (/very small|tiny|~12|~16/.test(combined)) { 
-        sizeEstimate = '~12-16px (visual estimate)'; estimatedPx = 14;
-        detectedSizeRangesUI.add('~12-16px'); 
-      } else if (/small|compact|~20/.test(combined)) { 
-        sizeEstimate = '~20px (visual estimate)'; estimatedPx = 20;
-        detectedSizeRangesUI.add('~20px'); 
-      } else if (/~24|borderline/.test(combined)) {
-        // ≥ 24px → Pass for desktop, skip
-        console.log(`A4 SKIP (≥24px pass): ${componentName || location}`);
-        continue;
-      } else if (/~28|~32|~36|~40|~44/.test(combined)) {
-        // Well above desktop threshold → skip
-        console.log(`A4 SKIP (well above desktop threshold): ${componentName || location}`);
-        continue;
-      } else { 
-        sizeEstimate = '<24px (visual estimate)'; estimatedPx = 18;
-        detectedSizeRangesUI.add('<24px'); 
-      }
-      
-      // Screenshot confidence is always capped (heuristic)
-      let confidence = v.confidence || 0.50;
-      confidence = Math.min(confidence, 0.65);
-      if (estimatedPx < 20) confidence = Math.min(confidence + 0.05, 0.65);
-      
-      const rationale = v.diagnosis || `Interactive element appears to be below the desktop minimum click target size of 24×24 CSS px. Visual inspection cannot confirm actual dimensions.`;
-      
-      const dedupeKey = componentName || (location !== 'UI area' ? location : 'unknown');
-      
-      if (a4DedupeMapUI.has(dedupeKey)) {
-        const existing = a4DedupeMapUI.get(dedupeKey)!;
+      let confidence = v.confidence || 0.55;
+      confidence = Math.min(confidence, 0.75); // Cap for screenshot
+
+      const rationale = 'Interactive element appears to lack a visible focus indicator for keyboard users.';
+      const dedupeKey = componentName || location || 'unknown';
+
+      if (a2DedupeMapUI.has(dedupeKey)) {
+        const existing = a2DedupeMapUI.get(dedupeKey)!;
         existing.occurrence_count = (existing.occurrence_count || 1) + 1;
-        if (confidence > existing.confidence) {
-          existing.confidence = confidence;
-          existing.size_estimate = sizeEstimate;
-          existing.estimated_px = estimatedPx;
-        }
+        if (confidence > existing.confidence) existing.confidence = confidence;
       } else {
-        a4DedupeMapUI.set(dedupeKey, {
+        a2DedupeMapUI.set(dedupeKey, {
           component_name: componentName,
           location,
-          size_estimate: sizeEstimate,
-          estimated_px: estimatedPx,
+          typeBadge: 'Heuristic',
           confidence: Math.round(confidence * 100) / 100,
           rationale,
           occurrence_count: 1,
         });
       }
     }
-    
-    const a4AffectedItemsUI = Array.from(a4DedupeMapUI.values());
-    
-    let aggregatedA4UI: any = null;
-    if (a4AffectedItemsUI.length > 0) {
-      const overallConfidence = Math.max(...a4AffectedItemsUI.map(i => i.confidence));
-      const a4Rule = allRulesForViolations.find(r => r.id === 'A4');
-      
-      // Build a4Elements array for aggregated card UI (mirrors A2 pattern)
-      const a4Elements = a4AffectedItemsUI.map((item, idx) => {
+
+    const a2AffectedItemsUI = Array.from(a2DedupeMapUI.values());
+
+    let aggregatedA2UI: any = null;
+    if (a2AffectedItemsUI.length > 0) {
+      const overallConfidence = Math.max(...a2AffectedItemsUI.map(i => i.confidence));
+
+      const a2Elements = a2AffectedItemsUI.map((item, idx) => {
         const screenshotIdx = idx + 1;
-        let cleanLabel = item.component_name || `Interactive element ${idx + 1}`;
-        cleanLabel = cleanLabel
-          .replace(/\b(appears?\s+to\s+be|seems?\s+to|looks?\s+like)\b.*/i, '')
-          .trim();
-        if (cleanLabel.length < 3) cleanLabel = `Interactive element ${idx + 1}`;
-        
-        const contextLabel = item.component_name || item.location || 'UI element';
+        const contextLabel = item.component_name || item.location || 'Interactive element';
         const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
-        
-        // Parse estimated dimensions from size_estimate
-        let estimatedWidth: number | undefined = undefined;
-        let estimatedHeight: number | undefined = undefined;
-        if (item.size_estimate) {
-          const match = item.size_estimate.match(/(\d+(?:\.\d+)?)\s*px/i);
-          if (match) {
-            const px = Math.round(parseFloat(match[1]));
-            estimatedWidth = px;
-            estimatedHeight = px;
-          }
-        }
-        if (estimatedWidth === undefined) {
-          estimatedWidth = item.estimated_px;
-          estimatedHeight = item.estimated_px;
-        }
-        
+
+        let elementType = 'interactive element';
+        const combinedName = (item.component_name + ' ' + item.location).toLowerCase();
+        if (/button/i.test(combinedName)) elementType = 'button';
+        else if (/link/i.test(combinedName)) elementType = 'link';
+        else if (/input/i.test(combinedName)) elementType = 'input';
+
         return {
-          elementLabel: cleanLabel,
+          elementLabel: item.component_name || `Interactive element ${idx + 1}`,
+          elementType,
           textSnippet: undefined,
           location: formattedLocation,
-          screenshotIndex: screenshotIdx,
-          computedWidth: undefined,
-          computedHeight: undefined,
-          estimatedWidth,
-          estimatedHeight,
-          sizeSource: undefined,
-          detectionMethod: 'heuristic' as const,
-          thresholdPx: 20,
-          explanation: estimatedWidth !== undefined
-            ? `Estimated clickable area is approximately ${estimatedWidth}×${estimatedHeight}px. ${estimatedWidth < 20 ? 'This appears below the 20px desktop minimum.' : 'This is below the recommended 24×24px desktop baseline.'} Verify with ZIP or GitHub for computed size.`
-            : (item.rationale || 'Estimated clickable area appears below recommended desktop target size. Verify with ZIP or GitHub for computed size.'),
+          detection: 'Visual heuristic: no visible focus indicator detected in screenshot',
+          focusClasses: [],
+          classification: 'potential' as const,
+          potentialSubtype: 'accuracy' as const,
+          explanation: item.rationale,
           confidence: item.confidence,
-          correctivePrompt: undefined, // Heuristic findings never get corrective prompts
+          correctivePrompt: undefined, // Screenshot findings never get corrective prompts
           deduplicationKey: `${item.location}|${item.component_name}`,
         };
       });
 
-      // Tag each element with potentialSubtype for screenshot: always 'accuracy'
-      a4Elements.forEach((el: any) => { el.potentialSubtype = 'accuracy'; });
-
-      aggregatedA4UI = {
-        ruleId: 'A4',
-        ruleName: 'Small tap / click targets',
+      aggregatedA2UI = {
+        ruleId: 'A2',
+        ruleName: 'Poor focus visibility',
         category: 'accessibility',
         status: 'potential',
         potentialSubtype: 'accuracy',
-        blocksConvergence: false,
+        blocksConvergence: false, // Screenshot A2 NEVER blocks convergence
         inputType: 'screenshots',
-        isA4Aggregated: true,
-        a4Elements,
-        overall_confidence: Math.round(overallConfidence * 100) / 100,
-        diagnosis: `${a4Elements.length} interactive element${a4Elements.length !== 1 ? 's' : ''} with potential target size issues detected.`,
-        contextualHint: 'Ensure primary interactive controls meet the 24×24 CSS px desktop minimum.',
-        correctivePrompt: a4Rule?.correctivePrompt || '',
+        isA2Aggregated: true,
+        a2Elements,
+        diagnosis: `${a2Elements.length} interactive element${a2Elements.length !== 1 ? 's' : ''} with potential focus visibility issues detected. Screenshot analysis cannot confirm actual focus behavior.`,
+        contextualHint: 'Add visible focus-visible indicators for keyboard accessibility.',
+        correctivePrompt: '',
         confidence: Math.round(overallConfidence * 100) / 100,
-        advisoryGuidance: 'Screenshot estimation cannot guarantee exact target sizes. For deterministic measurement, upload ZIP source code or provide a GitHub repository.',
+        advisoryGuidance: 'Focus visibility cannot be verified reliably without a captured focused state or source styles. For deterministic verification, upload ZIP source code or provide a GitHub repository.',
       };
-      
-      console.log(`A4 aggregated: ${a4Violations.length} findings → 1 result (${a4Elements.length} elements)`);
-    }
-    
-    // ========== A5 AGGREGATION LOGIC (Screenshot Analysis) ==========
-    // Process and aggregate A5 violations into a single result object
-    // Only report A5 when there is visual evidence of missing focus indicator
-    interface A5AffectedItemUI {
-      component_name: string;
-      location: string;
-      typeBadge: 'Confirmed' | 'Heuristic';
-      confidence: number;
-      rationale: string;
-      occurrence_count?: number;
-    }
-    
-    const a5DedupeMapUI = new Map<string, A5AffectedItemUI>();
-    const a5ValidViolationsUI: any[] = [];
-    
-    // First pass: filter A5 violations to only include actual violations
-    for (const v of a5Violations) {
-      const evidence = (v.evidence || '');
-      const evidenceLower = evidence.toLowerCase();
-      const diagnosis = (v.diagnosis || '').toLowerCase();
-      const combined = evidenceLower + ' ' + diagnosis;
-      
-      // Check for indicators that this is a PASS (has visible focus)
-      // Use positive checks for visible focus indicators
-      const hasVisibleFocusRing = /has.*ring|visible ring|shows.*ring|focus ring|ring.*focus/i.test(combined);
-      const hasVisibleFocusBorder = /has.*border|visible border|shows.*border|focus border|border.*focus/i.test(combined);
-      const hasVisibleFocusIndicator = /has.*focus indicator|visible focus indicator|clear focus/i.test(combined);
-      
-      const hasVisibleReplacement = hasVisibleFocusRing || hasVisibleFocusBorder || hasVisibleFocusIndicator;
-      
-      // Check if explicitly marked as acceptable
-      // IMPORTANT: Avoid matching negative phrases like "no visible", "lacks", etc.
-      const mentionsAcceptable = /(?<!no\s)(?<!without\s)(?<!lacks?\s)(?<!missing\s)(?:acceptable|compliant|proper focus|adequate)/i.test(combined);
-      const explicitlyPasses = /\bpass\b(?!word)/i.test(combined) && !/does not pass|doesn't pass|fail/i.test(combined);
-      
-      // If evidence shows visible focus or acceptable, this is a PASS - skip entirely
-      if (hasVisibleReplacement) {
-        console.log(`A5 PASS (has visible focus indicator): ${evidence}`);
-        continue;
-      }
-      
-      if (mentionsAcceptable || explicitlyPasses) {
-        console.log(`A5 PASS (explicitly acceptable): ${evidence}`);
-        continue;
-      }
-      
-      // Check if screenshot cannot determine focus state
-      const cannotDetermine = /cannot determine|unable to assess|not visible in screenshot|no focus state shown/.test(combined);
-      if (cannotDetermine) {
-        console.log(`A5 SKIP (cannot determine from screenshot): ${evidence}`);
-        continue;
-      }
-      
-      // Check for weak indicators (background-only focus)
-      const hasBackgroundOnlyFocus = /only.*background|background.*change|background.*color|relies on.*background/.test(combined);
-      
-      // This is a valid violation - add it
-      console.log(`A5 VIOLATION: ${evidence} [background-only: ${hasBackgroundOnlyFocus}]`);
-      a5ValidViolationsUI.push({
-        ...v,
-        isHeuristicRisk: hasBackgroundOnlyFocus,
-      });
-    }
-    
-    // Second pass: aggregate valid A5 violations
-    // Invalid identifiers for component naming - single words, utility tokens, non-UI terms
-    const a5InvalidComponentNamesUI = new Set([
-      'clear', 'close', 'open', 'toggle', 'show', 'hide', 'set', 'get', 'add', 'remove',
-      'delete', 'edit', 'update', 'create', 'submit', 'cancel', 'save', 'reset',
-      'next', 'previous', 'prev', 'back', 'forward', 'up', 'down', 'left', 'right',
-      'true', 'false', 'yes', 'no', 'on', 'off', 'enabled', 'disabled',
-      'button', 'link', 'input', 'icon', 'text', 'label', 'container', 'wrapper',
-      'component', 'element', 'item', 'items', 'default', 'variants', 'variant'
-    ]);
-    
-    for (const v of a5ValidViolationsUI) {
-      const evidence = (v.evidence || '');
-      const combined = (evidence + ' ' + (v.diagnosis || '')).toLowerCase();
-      
-      // Extract location description for screenshots (no file paths in screenshots)
-      const locationMatch = (evidence || v.contextualHint || '').match(/(?:in\s+(?:the\s+)?)?([a-zA-Z\s]+(?:dialog|modal|card|form|section|area|component|panel|header|footer|sidebar)?)/i);
-      
-      // Extract PascalCase component names (prioritize compound names like CloseButton, NavToggle)
-      const componentMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link|Card|Dialog|Modal|Menu|Header|Footer|Sidebar|Panel|Form))\b/);
-      const simpleComponentMatch = evidence.match(/(?:the\s+)?([A-Z][a-zA-Z0-9]{3,})/);
-      
-      // Resolve component name - prioritize compound PascalCase names
-      let componentName = '';
-      
-      // 1. Try compound component name first (e.g., CloseButton, NavToggle)
-      if (componentMatch?.[1] && componentMatch[1].length > 4) {
-        componentName = componentMatch[1];
-      }
-      // 2. Try simple PascalCase component (but not single-word utility names)
-      else if (simpleComponentMatch?.[1] && simpleComponentMatch[1].length > 3) {
-        const candidate = simpleComponentMatch[1];
-        if (!a5InvalidComponentNamesUI.has(candidate.toLowerCase())) {
-          componentName = candidate;
-        }
-      }
-      
-      // Extract location from matched text
-      const location = locationMatch?.[1]?.trim() || v.contextualHint || 'UI area';
-      // Determine type badge
-      const typeBadge: 'Confirmed' | 'Heuristic' = v.isHeuristicRisk ? 'Heuristic' : 'Confirmed';
-      
-      // Calculate confidence (lower for screenshot analysis)
-      let confidence = v.confidence || 0.55;
-      if (v.isHeuristicRisk) {
-        confidence = Math.min(confidence, 0.45); // Lower confidence for heuristic
-      }
-      confidence = Math.min(confidence, 0.65); // Cap for screenshot analysis
-      
-      const rationale = v.isHeuristicRisk 
-        ? 'Focus indication appears to rely only on background color change, which may be insufficient.'
-        : 'Interactive element appears to lack a visible focus indicator for keyboard users.';
-      
-      // Deduplication key
-      const dedupeKey = componentName || location || 'unknown';
-      
-      if (a5DedupeMapUI.has(dedupeKey)) {
-        const existing = a5DedupeMapUI.get(dedupeKey)!;
-        existing.occurrence_count = (existing.occurrence_count || 1) + 1;
-        if (confidence > existing.confidence) {
-          existing.confidence = confidence;
-        }
-      } else {
-        const item: A5AffectedItemUI = {
-          component_name: componentName,
-          location,
-          typeBadge,
-          confidence: Math.round(confidence * 100) / 100,
-          rationale,
-          occurrence_count: 1,
-        };
-        a5DedupeMapUI.set(dedupeKey, item);
-      }
-    }
-    
-    const a5AffectedItemsUI = Array.from(a5DedupeMapUI.values());
-    
-    // Create aggregated A5 result ONLY if there are actual violations
-    let aggregatedA5UI: any = null;
-    if (a5AffectedItemsUI.length > 0) {
-      // Calculate overall confidence (max of all findings)
-      const overallConfidence = Math.max(...a5AffectedItemsUI.map(i => i.confidence));
-      
-      const confirmedCount = a5AffectedItemsUI.filter(i => i.typeBadge === 'Confirmed').length;
-      const heuristicCount = a5AffectedItemsUI.filter(i => i.typeBadge === 'Heuristic').length;
-      
-      const confidenceReason = `Confidence is based on visual assessment of focus indicators. Screenshot analysis cannot confirm actual focus behavior, so findings are based on visual observation.`;
-      
-      // Build unique component/location names list - filter out non-semantic identifiers
-      const invalidIdentifiers = new Set([
-        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
-        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
-        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
-        'component', 'components', 'element', 'elements', 'item', 'items', 'button',
-        'unknown', 'undefined', 'null', 'true', 'false', 'ui area', 'area',
-        // Single words that are not UI components
-        'clear', 'close', 'open', 'toggle', 'show', 'hide', 'set', 'get', 'add', 'remove',
-        'delete', 'edit', 'update', 'create', 'submit', 'cancel', 'save', 'reset',
-        'next', 'previous', 'prev', 'back', 'forward', 'up', 'down', 'left', 'right'
-      ]);
-      
-      const uniqueNames = new Set<string>();
-      for (const item of a5AffectedItemsUI) {
-        const name = item.component_name || item.location || '';
-        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
-          if (!/^(the\s+)?ui\s*(area|section|component)?$/i.test(name)) {
-            uniqueNames.add(name);
-          }
-        }
-      }
-      
-      // Build deduplicated list (max 4, with "and N more")
-      const uniqueNamesArray = Array.from(uniqueNames);
-      const displayLimit = 4;
-      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
-      const moreCount = uniqueNamesArray.length - displayLimit;
-      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
-      
-      const areaCountText = uniqueNamesArray.length > 0 
-        ? `${uniqueNamesArray.length} unique element(s): ${displayedNames.join(', ')}${moreText}`
-        : `${a5AffectedItemsUI.length} element(s)`;
-      
-      const typeBreakdown = [
-        confirmedCount > 0 ? `${confirmedCount} appear to lack visible focus` : '',
-        heuristicCount > 0 ? `${heuristicCount} may rely only on background color` : '',
-      ].filter(Boolean).join(' and ');
-      
-      const summary = `Focus visibility issues detected in ${areaCountText}. ${typeBreakdown}. ` +
-        `Interactive elements should have visible focus indicators for keyboard accessibility.`;
-      
-      const a5Rule = allRulesForViolations.find(r => r.id === 'A5');
-      
-      aggregatedA5UI = {
-        ruleId: 'A5',
-        ruleName: 'Poor focus visibility',
-        category: 'accessibility',
-        overall_confidence: Math.round(overallConfidence * 100) / 100,
-        confidence_reason: confidenceReason,
-        summary,
-        affected_items: a5AffectedItemsUI.map(item => ({
-          component_name: item.component_name,
-          location: item.location,
-          typeBadge: item.typeBadge,
-          confidence: item.confidence,
-          rationale: item.rationale,
-          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
-        })),
-        diagnosis: summary,
-        contextualHint: 'Interactive elements appear to lack visible focus indicators for keyboard users.',
-        correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements. Do not alter layout structure or component behavior beyond focus styling.',
-        confidence: Math.round(overallConfidence * 100) / 100,
-      };
-      
-      console.log(`A5 aggregated: ${a5Violations.length} findings → ${a5AffectedItemsUI.length} valid violations → 1 result (${confirmedCount} confirmed, ${heuristicCount} heuristic)`);
+
+      console.log(`A2 aggregated (screenshot): ${a2Violations.length} findings → ${a2AffectedItemsUI.length} valid → 1 result (all potential/accuracy)`);
     } else {
-      console.log(`A5: No valid violations found (${a5Violations.length} filtered out as PASS or NOT APPLICABLE)`);
+      console.log(`A2: No valid violations found (${a2Violations.length} filtered out as PASS or NOT APPLICABLE)`);
     }
     
     // ========== A1 AGGREGATION LOGIC (v22) ==========
@@ -4763,227 +4180,13 @@ serve(async (req) => {
       console.log(`A1 aggregated: ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
     
-    // ========== A3 AGGREGATION LOGIC (Screenshot — Heuristic Only) ==========
-    // Uses structured a3ParagraphBlocks from AI output for robust paragraph detection
-    let aggregatedA3UI: any = null;
-    const a3Selected = selectedRules.includes('A3');
+    // (A3/A4 rules removed — only A1 and A2 remain as accessibility rules)
     
-    if (a3Selected) {
-      // Primary source: structured a3ParagraphBlocks from AI output
-      const a3Blocks: any[] = Array.isArray((analysisResult as any).a3ParagraphBlocks) 
-        ? (analysisResult as any).a3ParagraphBlocks 
-        : [];
-      const a3Diagnostics: any = (analysisResult as any).a3DetectionDiagnostics || null;
-      
-      console.log(`A3: ${a3Blocks.length} paragraph blocks from AI, ${a3Violations.length} violations from AI`);
-      
-      // Build block estimates from structured data
-      const blockEstimates: Array<{
-        blockIndex: number;
-        linesDetected: number;
-        estimatedRatio: number;
-        textHeightPx: number;
-        lineStepPx: number;
-        confidence: number;
-        location: string;
-        screenshotIndex: number;
-      }> = [];
-      
-      if (a3Blocks.length > 0) {
-        // Use structured block data directly
-        for (const block of a3Blocks) {
-          blockEstimates.push({
-            blockIndex: block.blockIndex || blockEstimates.length + 1,
-            linesDetected: block.linesDetected || 2,
-            estimatedRatio: block.estimatedRatio || 0,
-            textHeightPx: Math.round((block.textHeightPx || 0) * 10) / 10,
-            lineStepPx: Math.round((block.lineStepPx || 0) * 10) / 10,
-            confidence: block.isViolation 
-              ? (block.estimatedRatio < 1.30 ? 0.65 : 0.45) 
-              : (block.confidence || 0.50),
-            location: block.location || 'Body text area',
-            screenshotIndex: block.screenshotIndex || 1,
-          });
-        }
-      } else {
-        // Fallback: parse from A3 violations text (legacy path)
-        const filteredA3UI = a3Violations.filter((v: any) => {
-          const combined = ((v.evidence || '') + ' ' + (v.diagnosis || '')).toLowerCase();
-          if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus/i.test(combined)) return false;
-          if (/\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
-          if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) return false;
-          if (/\bbutton\b|\bbtn\b|\bcta\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
-          if (/\bmetadata\b|\btimestamp\b|\bauthor\b/i.test(combined)) return false;
-          if (/\bcaption\b|\btooltip\b|\bmonospace\b|\bplaceholder\b/i.test(combined)) return false;
-          return true;
-        });
-        
-        for (let idx = 0; idx < filteredA3UI.length; idx++) {
-          const v = filteredA3UI[idx];
-          const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
-          
-          // Try structured fields first (AI may include them in violation objects)
-          const ratio = v.estimatedRatio || (() => {
-            const m = combined.match(/(?:ratio|line[- ]height|spacing)[:\s]*[≈~]?([\d.]+)/);
-            return m ? parseFloat(m[1]) : 0;
-          })();
-          const lines = v.lineCount || (() => {
-            const m = combined.match(/(\d+)\s*(?:lines?|rows?)/);
-            return m ? parseInt(m[1]) : 2;
-          })();
-          const textH = v.textHeightPx || 16;
-          const step = v.lineStepPx || (ratio > 0 ? ratio * textH : 0);
-          
-          blockEstimates.push({
-            blockIndex: idx + 1,
-            linesDetected: lines,
-            estimatedRatio: ratio,
-            textHeightPx: Math.round(textH * 10) / 10,
-            lineStepPx: Math.round(step * 10) / 10,
-            confidence: ratio > 0 ? (ratio < 1.30 ? 0.65 : 0.45) : 0.40,
-            location: v.evidence || 'Body text area',
-            screenshotIndex: idx + 1,
-          });
-        }
-      }
-      
-      const blocksEvaluated = blockEstimates.length;
-      const multiLineBlocks = blockEstimates.filter(b => b.linesDetected >= 2).length;
-      
-      // Compute median ratio across valid blocks
-      const validRatios = blockEstimates
-        .filter(b => b.estimatedRatio > 0 && b.linesDetected >= 2)
-        .map(b => b.estimatedRatio)
-        .sort((a, b) => a - b);
-      const medianRatio = validRatios.length > 0
-        ? (validRatios.length % 2 === 0
-          ? (validRatios[validRatios.length / 2 - 1] + validRatios[validRatios.length / 2]) / 2
-          : validRatios[Math.floor(validRatios.length / 2)])
-        : undefined;
-      
-      // Determine decision
-      let decision: 'potential_risk_high' | 'potential_risk_low' | 'no_risk_detected' | 'no_multiline_blocks';
-      if (multiLineBlocks === 0) {
-        decision = 'no_multiline_blocks';
-      } else if (medianRatio === undefined) {
-        decision = 'potential_risk_low';
-      } else if (medianRatio < 1.30) {
-        decision = 'potential_risk_high';
-      } else if (medianRatio < 1.45) {
-        decision = 'potential_risk_low';
-      } else {
-        decision = 'no_risk_detected';
-      }
-      
-      // Top 3 block details for summary
-      const perBlockDetails = blockEstimates
-        .filter(b => b.linesDetected >= 2)
-        .slice(0, 3)
-        .map(b => ({
-          blockIndex: b.blockIndex,
-          linesDetected: b.linesDetected,
-          estimatedRatio: Math.round(b.estimatedRatio * 100) / 100,
-          textHeightPx: b.textHeightPx,
-          lineStepPx: b.lineStepPx,
-          confidence: b.confidence,
-        }));
-      
-      // Build diagnostics for 0-block case
-      const diagnostics = decision === 'no_multiline_blocks' ? {
-        rawBoxesDetected: a3Diagnostics?.rawBoxesDetected ?? 0,
-        linesConstructed: a3Diagnostics?.linesConstructed ?? 0,
-        reason: a3Diagnostics?.reason || (a3Blocks.length === 0 && a3Violations.length === 0 
-          ? 'noParagraphCandidates' 
-          : 'groupingTooStrict'),
-      } : undefined;
-      
-      const a3EstimationSummary = {
-        blocksEvaluated,
-        multiLineBlocks,
-        medianRatio: medianRatio !== undefined ? Math.round(medianRatio * 100) / 100 : undefined,
-        decision,
-        perBlockDetails: perBlockDetails.length > 0 ? perBlockDetails : undefined,
-        diagnostics,
-      };
-      
-      // Build a3Elements for blocks that trigger risk thresholds
-      const a3Elements: any[] = [];
-      if (decision === 'potential_risk_high' || decision === 'potential_risk_low') {
-        for (const block of blockEstimates.filter(b => b.linesDetected >= 2)) {
-          if (block.estimatedRatio >= 1.45 && block.estimatedRatio > 0) continue;
-          
-          const screenshotIdx = block.screenshotIndex || block.blockIndex;
-          const contextLabel = block.location || 'Body text area';
-          const formattedLocation = `Screenshot #${screenshotIdx} — Screenshot (${contextLabel})`;
-          const elementLabel = contextLabel.length > 2 ? contextLabel : `Body text element ${block.blockIndex}`;
-          
-          let explanation = `Line spacing ratio ≈${block.estimatedRatio > 0 ? block.estimatedRatio.toFixed(2) : 'unknown'} detected across ${block.linesDetected} lines.`;
-          if (block.estimatedRatio === 0) {
-            explanation += ' Dense text region detected but line-height ratio could not be reliably computed.';
-          } else if (block.estimatedRatio >= 1.30 && block.estimatedRatio < 1.45) {
-            explanation += ' Borderline dense spacing detected.';
-          } else if (block.estimatedRatio < 1.30 && block.estimatedRatio > 0) {
-            explanation += ' Below recommended 1.30 readability baseline.';
-          }
-          
-          a3Elements.push({
-            elementLabel,
-            textSnippet: undefined,
-            location: formattedLocation,
-            computedLineHeight: undefined,
-            estimatedLineHeight: block.estimatedRatio > 0 ? block.estimatedRatio : undefined,
-            estimationFailed: block.estimatedRatio === 0,
-            computedFontSize: undefined,
-            lineHeightSource: undefined,
-            detectionMethod: 'heuristic' as const,
-            thresholdRatio: 1.3,
-            explanation,
-            confidence: Math.round(block.confidence * 100) / 100,
-            correctivePrompt: undefined,
-            deduplicationKey: `${formattedLocation}|${elementLabel}`,
-          });
-        }
-      }
-      
-      const isRisk = decision === 'potential_risk_high' || decision === 'potential_risk_low';
-      const a3Rule = allRulesForViolations.find(r => r.id === 'A3');
-      
-      // Silent behavior: only emit A3 when there is actual risk
-      if (isRisk && a3Elements.length > 0) {
-        const a3Diagnosis = `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected. These require manual verification due to measurement uncertainty.`;
-        
-        // Tag each element with potentialSubtype for screenshot: always 'accuracy'
-        a3Elements.forEach((el: any) => { el.potentialSubtype = 'accuracy'; });
-
-        aggregatedA3UI = {
-          ruleId: 'A3',
-          ruleName: 'Insufficient line spacing',
-          category: 'accessibility',
-          status: 'potential',
-          potentialSubtype: 'accuracy',
-          blocksConvergence: false,
-          inputType: 'screenshots',
-          isA3Aggregated: true,
-          a3Elements,
-          diagnosis: a3Diagnosis,
-          contextualHint: 'Increase line-height to at least 1.5 (leading-normal) for primary body text.',
-          correctivePrompt: a3Rule?.correctivePrompt || '',
-          confidence: Math.round((a3Elements.reduce((s: number, e: any) => s + e.confidence, 0) / Math.max(a3Elements.length, 1)) * 100) / 100,
-          advisoryGuidance: 'Visual estimation cannot determine exact computed line-height ratios. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
-        };
-        
-        console.log(`A3 aggregated (screenshot): ${blocksEvaluated} blocks, ${multiLineBlocks} multi-line, decision=${decision}, ${a3Elements.length} elements emitted`);
-      } else {
-        // No risk or no elements — A3 is silent (no output)
-        console.log(`A3 silent (screenshot): ${blocksEvaluated} blocks, ${multiLineBlocks} multi-line, decision=${decision} — no finding emitted`);
-      }
-    }
-    
-    // Combine all violations - A1 uses aggregated cards (max 2)
+    // Combine all violations - A1 uses aggregated cards (max 2), A2 uses aggregated card
     const enhancedViolations = [
       ...filteredOtherViolations,
       ...aggregatedA1Violations,
-      ...(aggregatedA5UI ? [{ ...aggregatedA5UI, ruleId: 'A2', ruleName: 'Poor focus visibility' }] : []),
+      ...(aggregatedA2UI ? [aggregatedA2UI] : []),
     ];
 
     console.log(`Analysis complete: ${enhancedViolations.length} violations found`);
