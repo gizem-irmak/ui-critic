@@ -718,11 +718,11 @@ Examine the code for other accessibility issues:
 ### A2 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
 **ABSOLUTE RULE:**
-If an element does NOT remove the default browser focus outline, it MUST NOT be reported under A5.
+If an element does NOT remove the default browser focus outline, it MUST NOT be reported under A2.
 Lack of a custom focus-visible style alone is NOT an accessibility issue — browser defaults are acceptable.
 
 **PREREQUISITE — OUTLINE REMOVAL CHECK:**
-ONLY evaluate an element for A5 if it explicitly removes the default focus outline:
+ONLY evaluate an element for A2 if it explicitly removes the default focus outline:
 - \`outline-none\`, \`focus:outline-none\`, or \`focus-visible:outline-none\` is present in the class list
 If the element does NOT remove the outline → SKIP (do not report)
 
@@ -777,13 +777,13 @@ When \`focus:outline-none\` or \`outline-none\` is present, check for VISIBLE RE
 6. NONE of the above → CONFIRMED VIOLATION
 
 **GROUPING RULE:**
-Group identical background-only focus patterns into a SINGLE A5 finding with multiple occurrences listed.
+Group identical background-only focus patterns into a SINGLE A2 finding with multiple occurrences listed.
 Example: If 5 buttons all use \`focus:bg-primary\` without ring/border, report ONE violation listing all 5 locations.
 
-**OUTPUT FORMAT FOR A5 VIOLATIONS ONLY:**
+**OUTPUT FORMAT FOR A2 VIOLATIONS ONLY:**
 \`\`\`json
 {
-  "ruleId": "A5",
+  "ruleId": "A2",
   "ruleName": "Poor focus visibility",
   "category": "accessibility",
   "typeBadge": "CONFIRMED" or "HEURISTIC",
@@ -1042,10 +1042,10 @@ IMPORTANT CONSTRAINTS:
   "violations": [
     {
       "ruleId": "A2",
-      "ruleName": "Small body font size",
+      "ruleName": "Poor focus visibility",
       "category": "accessibility",
-      "diagnosis": "In Button.tsx, font-size is set to 12px which is below the recommended 16px minimum.",
-      "contextualHint": "Increase body text size to meet accessibility standards.",
+      "diagnosis": "In Button.tsx, outline-none removes focus ring without replacement.",
+      "contextualHint": "Add visible focus-visible indicator for keyboard users.",
       "confidence": 0.85
     }
   ],
@@ -1628,379 +1628,25 @@ ${codeContent}`,
         };
       });
 
-    // ========== A2 AGGREGATION LOGIC ==========
+    // ========== A2 AGGREGATION LOGIC (Focus Visibility — Deterministic) ==========
     // Process and aggregate A2 violations into a single result object
-    interface A2AffectedItem {
+    // Only report A2 when: outline is removed AND no visible focus replacement exists
+    interface A2FocusItem {
       component_name: string;
       file_path: string;
-      size_token: string;
-      approx_px: string;
-      semantic_role: string;
-      severity: 'violation' | 'warning';
-      confidence: number;
-      rationale: string;
-      occurrence_count?: number;
-    }
-    
-    const processedA2Items: A2AffectedItem[] = [];
-    const dedupeMap = new Map<string, A2AffectedItem>();
-    
-    for (const v of a2Violations) {
-      const evidence = (v.evidence || '').toLowerCase();
-      const diagnosis = (v.diagnosis || '').toLowerCase();
-      const combined = evidence + ' ' + diagnosis;
-      
-      // FILTER: text-sm (14px, 0.875rem) should NOT be reported as violation
-      const mentionsTextSm = /\btext-sm\b|0\.875rem|14px|≈14px|~14px|approximately 14/.test(combined);
-      const mentionsSmaller = /text-xs|0\.75rem|12px|11px|10px|<13px|smaller than 13/.test(combined);
-      
-      // If only text-sm is mentioned without smaller sizes, filter out
-      if (mentionsTextSm && !mentionsSmaller) {
-        console.log(`Filtering out A2 (text-sm is acceptable): ${v.evidence}`);
-        continue;
-      }
-      
-      // ============================================================
-      // A2 STRICT SCOPE ENFORCEMENT: ONLY primary body text allowed
-      // ============================================================
-      // Exclude: badges, chips, pills, tags, status indicators
-      const isBadgeChip = /\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus\s*(?:indicator|badge|chip|text)?\b|\bStatusBadge\b/i.test(combined);
-      if (isBadgeChip) {
-        console.log(`Filtering out A2 (badge/chip/tag — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: headings, titles, subtitles, headers
-      const isHeadingTitle = /\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b|\bsection\s*title\b|\bpage\s*title\b|\bheader\s*(?:text|subtitle|label)?\b/i.test(combined);
-      // But allow if explicitly about description/body text inside a header component
-      if (isHeadingTitle && !/description|body\s*text|paragraph|content\s*block|prose/i.test(combined)) {
-        console.log(`Filtering out A2 (heading/title — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: navigation, menu items, breadcrumbs
-      const isNavigation = /\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b|\bsidebar\s*(?:link|item|nav)\b/i.test(combined);
-      if (isNavigation) {
-        console.log(`Filtering out A2 (navigation — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: buttons, CTAs, interactive elements
-      const isButton = /\bbutton\b|\bbtn\b|\bcta\b|\baction\s*button\b|\binteractive\s*element\b|\blink\s*(?:text|label)?\b|\bicon[-\s]?button\b/i.test(combined);
-      if (isButton && !/description|body\s*text|paragraph/i.test(combined)) {
-        console.log(`Filtering out A2 (button/CTA — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: metadata, timestamps, dates, author names, tags
-      const isMetadata = /\bmetadata\b|\btimestamp\b|\bdate\s*(?:display|text)?\b|\btime\s*ago\b|\bauthor\b|\binstructor\b|\bcreated\s*(?:at|on)\b|\bupdated\s*(?:at|on)\b/i.test(combined);
-      if (isMetadata) {
-        console.log(`Filtering out A2 (metadata/timestamp — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: captions, tooltips, keyboard shortcuts, code blocks
-      const isMicrocopy = /\bcaption\b|\btooltip\b|\bkeyboard\s*shortcut\b|\bkbd\b|\bcode\s*block\b|\bmonospace\b|\bhelper\s*(?:text|microcopy)?\b|\bplaceholder\b/i.test(combined);
-      // Allow "helper text" only if it's clearly a form description (body-level)
-      if (isMicrocopy && !/FormDescription|form\s*description|AlertDescription|DialogDescription/i.test(combined)) {
-        console.log(`Filtering out A2 (microcopy/caption — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Exclude: icon-only elements
-      const isIconOnly = /\bicon\b/i.test(combined) && !/description|paragraph|body/i.test(combined);
-      if (isIconOnly) {
-        console.log(`Filtering out A2 (icon element — not body text): ${v.evidence}`);
-        continue;
-      }
-      
-      // Extract component info from evidence/diagnosis
-      // Priority: 1) Named component in PascalCase, 2) File name, 3) Fallback to file path only
-      const componentMatch = (v.evidence || '').match(/(?:in\s+)?([A-Z][a-zA-Z0-9]*(?:Component|Description|Label|Text|Badge|Caption|Shortcut|Tooltip|Content|Container|Wrapper|Item|Card|Dialog|Alert|Form|Chart|Table|Cell|Row|Header|Footer|Nav|Menu|Sidebar|Panel)?)/);
-      const fileMatch = (v.evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js|vue|svelte))/i);
-      const sizeMatch = combined.match(/text-xs|text-\[[\d.]+(?:rem|px)\]|font-size:\s*[\d.]+(?:px|rem)/i);
-      
-      // Resolve component name - avoid placeholders like "text, text"
-      let componentName = '';
-      if (componentMatch?.[1] && componentMatch[1].length > 2 && !/^text$/i.test(componentMatch[1])) {
-        componentName = componentMatch[1];
-      } else if (fileMatch?.[1]) {
-        // Use file name as fallback (without extension)
-        componentName = fileMatch[1].replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
-      } else if (v.componentName && !/^text$/i.test(v.componentName)) {
-        componentName = v.componentName;
-      }
-      // Final fallback: leave empty (will use file_path only)
-      
-      const filePath = fileMatch?.[1] || v.filePath || v.contextualHint || '';
-      const sizeToken = sizeMatch?.[0] || (mentionsSmaller ? 'text-xs' : 'text-sm');
-      
-      // Determine approximate px value
-      let approxPx = '<13px';
-      if (/text-xs|0\.75rem|12px/.test(combined)) approxPx = '≈12px';
-      else if (/11px/.test(combined)) approxPx = '≈11px';
-      else if (/10px/.test(combined)) approxPx = '≈10px';
-      else if (/13px|13-14/.test(combined)) approxPx = '≈13px';
-      else if (/0\.8rem|0\.85rem/.test(combined)) approxPx = '≈13-14px';
-      
-      // ── A2 PRIMARY vs SECONDARY classification (deterministic ZIP) ──
-      // Secondary UI text is ALWAYS suppressed — no A2 finding at all.
-      // Do NOT trigger A2 solely because text-sm or text-xs appears in any component.
-      const nameAndEvidence = (componentName + ' ' + combined).toLowerCase();
-      
-      // 1) Component name signals secondary — comprehensive exclusion list
-      const secondaryComponentPattern = /\b(Badge|Chip|Tag|Label|Subtitle|Meta|Caption|Breadcrumb|Menu|Dropdown|Command|Navigation|Trigger|Input|FormLabel|FormMessage|CheckboxItem|SubTrigger|Pagination|FilterBar|ContextMenu|Menubar|DropdownMenu|NavigationMenu)\b/i;
-      if (secondaryComponentPattern.test(componentName)) {
-        console.log(`Filtering out A2 (secondary component name "${componentName}"): ${filePath}`);
-        continue;
-      }
-      // 2) Course codes (CS101, EE202, etc.)
-      if (/[A-Z]{2,4}\d{2,4}/.test(v.evidence || '') || /course\s*code/i.test(nameAndEvidence)) {
-        console.log(`Filtering out A2 (course code pattern): ${componentName || filePath}`);
-        continue;
-      }
-      // 3) Credits / badge text ("3 credits", "4 credits")
-      if (/\d+\s*credits?\b/i.test(nameAndEvidence) || /\bcredits?\s*(?:badge|pill|chip)?\b/i.test(nameAndEvidence)) {
-        console.log(`Filtering out A2 (credits/badge text): ${componentName || filePath}`);
-        continue;
-      }
-      // 4) Header subtitles, navigation labels, filter labels
-      if (/\b(header\s*subtitle|nav(?:igation)?\s*label|filter\s*label|tab\s*label|breadcrumb)\b/i.test(nameAndEvidence)) {
-        console.log(`Filtering out A2 (header subtitle / nav / filter label): ${componentName || filePath}`);
-        continue;
-      }
-      // 5) Short text (< 25 chars) that isn't clearly primary content
-      const snippetText = (v.textSnippet || v.evidence || '').replace(/[^a-zA-Z0-9\s]/g, '').trim();
-      if (snippetText.length > 0 && snippetText.length < 25 && !/\bp\b|paragraph|description|content|prose|body|article|CardDescription|DialogDescription|AlertDescription/i.test(nameAndEvidence)) {
-        console.log(`Filtering out A2 (short label <25 chars, not primary): ${componentName || filePath} "${snippetText}"`);
-        continue;
-      }
-      // 6) Exclude if inside navigation/menu/form/badge/filter container context
-      if (/\b(inside|within|in)\s*(nav|menu|dropdown|breadcrumb|pagination|filter|toolbar|sidebar)\b/i.test(nameAndEvidence)) {
-        console.log(`Filtering out A2 (inside secondary container): ${componentName || filePath}`);
-        continue;
-      }
-      // 7) Final primary-content gate: element must be explicitly primary readable content
-      //    Primary = element tag p/article/main/section, component *Description, text ≥60 chars, multi-sentence, or list items in content
-      const isPrimary = /\bp\b|<p|paragraph|prose|content|body|article|\bmain\b|\bsection\b/i.test(nameAndEvidence)
-        || /CardDescription|DialogDescription|AlertDescription|FormDescription/i.test(nameAndEvidence)
-        || (snippetText.length >= 60)
-        || /\.\s+[A-Z]/.test(v.evidence || '') // multi-sentence indicator
-        || /\bli\b.*content|list\s*item.*(?:main|content|body)/i.test(nameAndEvidence); // list items in content areas
-      if (!isPrimary) {
-        console.log(`Filtering out A2 (not primary readable content): ${componentName || filePath}`);
-        continue;
-      }
-      
-      const semanticRole = 'informational';
-      
-      // Determine severity
-      const severity: 'violation' | 'warning' = mentionsSmaller ? 'violation' : 'warning';
-      
-      // Calculate confidence
-      let confidence = v.confidence || 0.65;
-      // Adjust based on semantic role
-      if (semanticRole === 'informational') confidence = Math.min(confidence + 0.1, 0.85);
-      // Adjust based on threshold proximity
-      if (mentionsSmaller) confidence = Math.min(confidence + 0.05, 0.85);
-      else confidence = Math.max(confidence - 0.1, 0.4);
-      
-      const rationale = v.diagnosis || `Small text size (${approxPx}) used for ${semanticRole} content.`;
-      
-      // Deduplication key
-      const dedupeKey = `${filePath}|${componentName}|${sizeToken}`;
-      
-      if (dedupeMap.has(dedupeKey)) {
-        const existing = dedupeMap.get(dedupeKey)!;
-        existing.occurrence_count = (existing.occurrence_count || 1) + 1;
-        // Keep the higher confidence
-        if (confidence > existing.confidence) {
-          existing.confidence = confidence;
-        }
-      } else {
-        const item: A2AffectedItem = {
-          component_name: componentName,
-          file_path: filePath,
-          size_token: sizeToken,
-          approx_px: approxPx,
-          semantic_role: semanticRole,
-          severity,
-          confidence: Math.round(confidence * 100) / 100,
-          rationale,
-          occurrence_count: 1,
-        };
-        dedupeMap.set(dedupeKey, item);
-      }
-    }
-    
-    const affectedItems = Array.from(dedupeMap.values());
-    
-    // Create aggregated A2 result if there are any items
-    let aggregatedA2: any = null;
-    if (affectedItems.length > 0) {
-      // Calculate overall confidence
-      const highImpactItems = affectedItems.filter(i => i.semantic_role === 'informational');
-      let overallConfidence: number;
-      let confidenceReason: string;
-      
-      if (highImpactItems.length > 0) {
-        overallConfidence = Math.max(...highImpactItems.map(i => i.confidence));
-        confidenceReason = `Based on maximum confidence (${overallConfidence.toFixed(2)}) from ${highImpactItems.length} informational component(s).`;
-      } else {
-        // Use median of all items
-        const sortedConfidences = affectedItems.map(i => i.confidence).sort((a, b) => a - b);
-        const midIdx = Math.floor(sortedConfidences.length / 2);
-        overallConfidence = sortedConfidences.length % 2 === 0
-          ? (sortedConfidences[midIdx - 1] + sortedConfidences[midIdx]) / 2
-          : sortedConfidences[midIdx];
-        confidenceReason = `Based on median confidence (${overallConfidence.toFixed(2)}) across ${affectedItems.length} secondary component(s).`;
-      }
-      
-      // Count violations vs warnings
-      const violationCount = affectedItems.filter(i => i.severity === 'violation').length;
-      const warningCount = affectedItems.filter(i => i.severity === 'warning').length;
-      
-      // Build summary with DEDUPLICATED and FILTERED component names
-      // 1. Extract unique component names, filtering out invalid identifiers
-      const invalidIdentifiers = new Set([
-        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
-        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
-        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
-        'component', 'components', 'element', 'elements', 'item', 'items', 'text',
-        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array'
-      ]);
-      
-      const uniqueComponentNames = new Set<string>();
-      for (const item of affectedItems) {
-        const name = item.component_name || '';
-        // Filter out invalid identifiers (case-insensitive check)
-        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
-          // Also filter out names that look like utility tokens or non-UI identifiers
-          if (!/^(use|get|set|is|has|can|should|will|on|handle)[A-Z]/.test(name)) {
-            uniqueComponentNames.add(name);
-          }
-        }
-      }
-      
-      // Fall back to file paths if no valid component names
-      if (uniqueComponentNames.size === 0) {
-        for (const item of affectedItems) {
-          const filePath = item.file_path || '';
-          if (filePath) {
-            // Extract meaningful name from file path
-            const fileName = filePath.replace(/.*[\/\\]/, '').replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
-            if (fileName && fileName.length > 2 && !invalidIdentifiers.has(fileName.toLowerCase())) {
-              uniqueComponentNames.add(fileName);
-            }
-          }
-        }
-      }
-      
-      // 2. Build deduplicated component list (max 4, with "and N more")
-      const uniqueNamesArray = Array.from(uniqueComponentNames);
-      const displayLimit = 4;
-      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
-      const moreCount = uniqueNamesArray.length - displayLimit;
-      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
-      
-      // 3. Build summary with "X unique component(s)" wording
-      const componentList = displayedNames.join(', ');
-      const componentCountText = uniqueNamesArray.length > 0 
-        ? `${uniqueNamesArray.length} unique component(s): ${componentList}${moreText}`
-        : `${affectedItems.length} location(s)`;
-      
-      const summary = `Small text size detected in ${componentCountText}. ` +
-        `${violationCount > 0 ? `${violationCount} violation(s) (<13px)` : ''}` +
-        `${violationCount > 0 && warningCount > 0 ? ' and ' : ''}` +
-        `${warningCount > 0 ? `${warningCount} warning(s) (13-14px)` : ''}. ` +
-        `WCAG 2.1 does not mandate a minimum font size; however, larger font sizes (approximately 14–16px) are widely adopted in usability and accessibility practice to support readability, particularly for users with low vision.`;
-      
-      const a2Rule = allRules.find(r => r.id === 'A2');
-      
-      // Determine A2 status: Confirmed if deterministic pixel/Tailwind sizes, Potential otherwise
-      const hasConfirmedItems = affectedItems.some(i => i.severity === 'violation');
-      const a2Status = hasConfirmedItems ? 'confirmed' : 'potential';
-      
-      // Build a2Elements array for the aggregated card UI
-      const a2Elements = affectedItems.map((item, idx) => {
-        const computedSize = parseFloat((item.approx_px || '').replace(/[≈~px]/g, ''));
-        const isDeterministic = a2Status === 'confirmed' && !isNaN(computedSize);
-        // For ZIP: confirmed items have no subtype; potential items are 'borderline' (deterministic value near threshold)
-        const elSubtype = isDeterministic ? undefined : 'borderline' as const;
-        return {
-          elementLabel: item.component_name || `Body text element ${idx + 1}`,
-          textSnippet: undefined,
-          location: item.file_path || 'Unknown file',
-          computedFontSize: isDeterministic ? computedSize : undefined,
-          fontSizeSource: item.size_token ? `Tailwind/CSS: ${item.size_token}` : undefined,
-          detectionMethod: isDeterministic ? 'deterministic' as const : 'heuristic' as const,
-          thresholdPx: 16,
-          explanation: item.rationale,
-          confidence: item.confidence,
-          potentialSubtype: elSubtype,
-          correctivePrompt: isDeterministic
-            ? `body text '${(item.component_name || 'Body text element').substring(0, 60)}' (${item.file_path || 'Source file'})\n\nIssue reason: Computed font-size ${item.approx_px} is below the recommended readability baseline of 16px.\n\nRecommended fix: Increase the font size of all primary body text elements in this group (currently ${item.approx_px}${item.size_token ? ` / ${item.size_token}` : ''}) to at least 16px (text-base). Ensure this update is applied consistently across all screens and components where this text style is reused. Adjust line-height to approximately 1.4–1.6 to preserve readability.`
-            : undefined,
-          deduplicationKey: `${item.file_path}|${item.component_name}|${item.size_token}`,
-        };
-      });
-
-      aggregatedA2 = {
-        ruleId: 'A2',
-        ruleName: 'Small body font size',
-        category: 'accessibility',
-        status: a2Status,
-        potentialSubtype: a2Status === 'potential' ? 'borderline' : undefined,
-        blocksConvergence: a2Status === 'confirmed',
-        inputType: 'zip',
-        isA2Aggregated: true,
-        a2Elements,
-        overall_confidence: Math.round(overallConfidence * 100) / 100,
-        confidence_reason: confidenceReason,
-        summary,
-        affected_items: affectedItems.map(item => ({
-          component_name: item.component_name,
-          file_path: item.file_path,
-          size_token: item.size_token,
-          approx_px: item.approx_px,
-          semantic_role: item.semantic_role,
-          severity: item.severity,
-          confidence: item.confidence,
-          rationale: item.rationale,
-          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
-        })),
-        diagnosis: a2Status === 'confirmed'
-          ? `${a2Elements.length} body text element${a2Elements.length !== 1 ? 's' : ''} with confirmed insufficient font size detected.`
-          : `${a2Elements.length} text element${a2Elements.length !== 1 ? 's' : ''} with potential font size issues detected. These require manual verification due to measurement uncertainty.`,
-        contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
-        correctivePrompt: a2Rule?.correctivePrompt || '',
-        confidence: Math.round(overallConfidence * 100) / 100,
-        ...(a2Status === 'potential' ? {
-          advisoryGuidance: 'Font size meets the technical minimum but is below the recommended 16px baseline for comfortable reading. Consider increasing body text to at least 16px for improved readability.',
-        } : {}),
-      };
-      
-      console.log(`A2 aggregated: ${affectedItems.length} items → 1 result (${violationCount} violations, ${warningCount} warnings)`);
-    }
-    
-    
-    // ========== A5 AGGREGATION LOGIC ==========
-    // Process and aggregate A5 violations into a single result object
-    // Only report A5 when: outline is removed AND no visible focus replacement exists
-    interface A5AffectedItem {
-      component_name: string;
-      file_path: string;
+      element_type: string;
       typeBadge: 'Confirmed Violation' | 'Heuristic Risk';
       focus_classes: string[];
+      detection: string;
       confidence: number;
       rationale: string;
       occurrence_count?: number;
     }
     
-    const a5DedupeMap = new Map<string, A5AffectedItem>();
-    const a5ValidViolations: any[] = [];
+    const a2FocusDedupeMap = new Map<string, A2FocusItem>();
+    const a2ValidViolations: any[] = [];
     
-    // First pass: filter A5 violations to only include actual violations
+    // First pass: filter A2 violations to only include actual violations
     for (const v of a2Violations) {
       const evidence = (v.evidence || '');
       const evidenceLower = evidence.toLowerCase();
@@ -2008,263 +1654,254 @@ ${codeContent}`,
       const combined = evidenceLower + ' ' + diagnosis;
       
       // ABSOLUTE RULE: Only evaluate elements that explicitly remove the browser outline
-      const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none/.test(combined);
+      const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none|ring-0|focus:ring-0|focus-visible:ring-0/.test(combined);
       if (!mentionsOutlineRemoval) {
-        console.log(`A5 SKIP (no outline removal): ${evidence}`);
+        console.log(`A2 SKIP (no outline removal): ${evidence}`);
         continue;
       }
       
       // Extract actual focus-related class tokens from the evidence
-      // These are the actual Tailwind classes found in code, not just text descriptions
-      const focusClassTokens: string[] = evidence.match(/focus(?:-visible)?:(?:ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?|bg-\w+)/gi) || [];
+      const focusClassTokens: string[] = evidence.match(/focus(?:-visible)?:(?:ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?|bg-\w+|text-\w+)/gi) || [];
       
       // Check for visible focus replacement indicators (actual class tokens)
-      const hasRingToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:ring/i.test(t));
+      const hasRingToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:ring-[^0]/i.test(t));
       const hasBorderToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:border/i.test(t));
-      const hasShadowToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:shadow/i.test(t));
+      const hasShadowToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:shadow(?!-none)/i.test(t));
       const hasOutlineToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:outline-(?!none)/i.test(t));
       
       // Also check in diagnosis for class mentions
-      const hasRingInDiagnosis = /focus:ring-|focus-visible:ring-|ring-offset-\d/.test(combined);
+      const hasRingInDiagnosis = /focus:ring-[^0]|focus-visible:ring-[^0]|ring-offset-\d/.test(combined);
       const hasBorderInDiagnosis = /focus:border-|focus-visible:border-/.test(combined);
-      const hasShadowInDiagnosis = /focus:shadow-|focus-visible:shadow-/.test(combined);
+      const hasShadowInDiagnosis = /focus:shadow-(?!none)|focus-visible:shadow-(?!none)/.test(combined);
       
       const hasVisibleReplacement = hasRingToken || hasBorderToken || hasShadowToken || hasOutlineToken ||
                                      hasRingInDiagnosis || hasBorderInDiagnosis || hasShadowInDiagnosis;
       
       // Check if explicitly marked as pass/acceptable
-      // IMPORTANT: Avoid matching negative phrases like "no visible replacement"
       const mentionsAcceptable = /(?<!no\s)(?<!without\s)(?<!lacks?\s)(?<!missing\s)(?:acceptable|compliant|has visible|proper focus|adequate focus|valid focus)/i.test(combined);
       const explicitlyPasses = /\bpass\b(?!word)/i.test(combined) && !/does not pass|doesn't pass|fail/i.test(combined);
       
       // If evidence shows valid replacement or acceptable, this is a PASS - skip entirely
       if (hasVisibleReplacement) {
-        console.log(`A5 PASS (has focus replacement tokens): ${evidence} [tokens: ${focusClassTokens.join(', ')}]`);
+        console.log(`A2 PASS (has focus replacement tokens): ${evidence} [tokens: ${focusClassTokens.join(', ')}]`);
         continue;
       }
       
       if (mentionsAcceptable || explicitlyPasses) {
-        console.log(`A5 PASS (explicitly acceptable): ${evidence}`);
+        console.log(`A2 PASS (explicitly acceptable): ${evidence}`);
         continue;
       }
       
-      // Check for weak indicators (background-only focus)
+      // Check for weak indicators (background-only or text-only focus)
       const hasBgToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:bg-/i.test(t));
-      const hasBackgroundOnlyFocus = (hasBgToken || /focus:bg-|focus-visible:bg-/.test(combined)) && 
+      const hasTextToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:text-/i.test(t));
+      const hasBackgroundOnlyFocus = (hasBgToken || hasTextToken || /focus:bg-|focus-visible:bg-|focus:text-|focus-visible:text-/.test(combined)) && 
                                       !hasRingToken && !hasBorderToken && !hasShadowToken && !hasOutlineToken;
       
+      // Check for ring-1 only (too subtle)
+      const hasRing1Only = /focus(?:-visible)?:ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]|ring-offset/.test(combined);
+      
+      // Check for :focus only without :focus-visible
+      const hasFocusOnly = /\bfocus:/.test(combined) && !/focus-visible:/.test(combined) && !hasBackgroundOnlyFocus;
+      
+      const isBorderline = hasBackgroundOnlyFocus || hasRing1Only || hasFocusOnly;
+      
       // This is a valid violation - add it
-      console.log(`A5 VIOLATION: ${evidence} [background-only: ${hasBackgroundOnlyFocus}]`);
-      a5ValidViolations.push({
+      console.log(`A2 VIOLATION: ${evidence} [borderline: ${isBorderline}]`);
+      a2ValidViolations.push({
         ...v,
-        isHeuristicRisk: hasBackgroundOnlyFocus,
+        isBorderline,
         detectedFocusClasses: focusClassTokens,
       });
     }
     
-    // Second pass: aggregate valid A5 violations
-    // Invalid identifiers for component naming - single words, utility tokens, non-UI terms
-    const a5InvalidComponentNames = new Set([
+    // Second pass: aggregate valid A2 violations
+    const a2InvalidComponentNames = new Set([
       'clear', 'close', 'open', 'toggle', 'show', 'hide', 'set', 'get', 'add', 'remove',
       'delete', 'edit', 'update', 'create', 'submit', 'cancel', 'save', 'reset',
       'next', 'previous', 'prev', 'back', 'forward', 'up', 'down', 'left', 'right',
       'true', 'false', 'yes', 'no', 'on', 'off', 'enabled', 'disabled',
-      'button', 'link', 'input', 'icon', 'text', 'label', 'container', 'wrapper',
+      'text', 'label', 'container', 'wrapper',
       'component', 'element', 'item', 'items', 'default', 'variants', 'variant'
     ]);
     
-    for (const v of a5ValidViolations) {
+    for (const v of a2ValidViolations) {
       const evidence = (v.evidence || '');
       const combined = (evidence + ' ' + (v.diagnosis || '')).toLowerCase();
       
-      // Extract file path first (most reliable for component identification)
+      // Extract file path first (most reliable)
       const fileMatch = (evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js|vue|svelte))/i);
       
-      // Extract PascalCase component names (prioritize compound names like CloseButton, NavToggle)
-      const componentMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link|Card|Dialog|Modal|Menu|Header|Footer|Sidebar|Panel|Form))\b/);
+      // Extract PascalCase component names
+      const componentMatch = evidence.match(/\b([A-Z][a-zA-Z0-9]*(?:Button|Close|Toggle|Trigger|Nav|Icon|Control|Action|Link|Card|Dialog|Modal|Menu|Header|Footer|Sidebar|Panel|Form|Input|Select|Textarea))\b/);
       const simpleComponentMatch = evidence.match(/(?:in\s+)?([A-Z][a-zA-Z0-9]{3,})/);
       
-      // Resolve component name - prioritize compound PascalCase names
+      // Resolve component name
       let componentName = '';
       let filePath = fileMatch?.[1] || v.filePath || '';
       
-      // 1. Try compound component name first (e.g., CloseButton, NavToggle)
       if (componentMatch?.[1] && componentMatch[1].length > 4) {
         componentName = componentMatch[1];
-      }
-      // 2. Try simple PascalCase component (but not single-word utility names)
-      else if (simpleComponentMatch?.[1] && simpleComponentMatch[1].length > 3) {
+      } else if (simpleComponentMatch?.[1] && simpleComponentMatch[1].length > 3) {
         const candidate = simpleComponentMatch[1];
-        if (!a5InvalidComponentNames.has(candidate.toLowerCase())) {
+        if (!a2InvalidComponentNames.has(candidate.toLowerCase())) {
           componentName = candidate;
         }
       }
-      // 3. Fallback to file name with "Unnamed component" prefix if no valid component name
       if (!componentName && filePath) {
         const fileName = filePath.replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
-        if (fileName && fileName.length > 2 && !a5InvalidComponentNames.has(fileName.toLowerCase())) {
+        if (fileName && fileName.length > 2 && !a2InvalidComponentNames.has(fileName.toLowerCase())) {
           componentName = `Unnamed component (${filePath})`;
         }
       }
-      // 4. Final fallback if still no name
-      if (!componentName && v.componentName && !a5InvalidComponentNames.has(v.componentName.toLowerCase())) {
+      if (!componentName && v.componentName && !a2InvalidComponentNames.has(v.componentName.toLowerCase())) {
         componentName = v.componentName;
       }
       
-      // filePath already extracted above
+      // Determine element type from evidence
+      let elementType = 'interactive element';
+      if (/\bbutton\b/i.test(combined)) elementType = 'button';
+      else if (/\blink\b|\ba\b(?:\s|>)/i.test(combined)) elementType = 'link';
+      else if (/\binput\b/i.test(combined)) elementType = 'input';
+      else if (/\bselect\b/i.test(combined)) elementType = 'select';
+      else if (/\btextarea\b/i.test(combined)) elementType = 'textarea';
+      else if (/\btab\b/i.test(combined)) elementType = 'tab';
+      else if (/\bmenu/i.test(combined)) elementType = 'menuitem';
       
       // Extract focus-related classes mentioned
       const focusClasses: string[] = [];
-      const classMatches = combined.match(/(?:focus:|focus-visible:)?(?:outline-none|bg-\w+|ring-\w+|border-\w+)/g);
+      const classMatches = combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|bg-\w+|ring-\w+|border-\w+|text-\w+)/g);
       if (classMatches) {
         focusClasses.push(...new Set(classMatches));
       }
       
-      // Determine type badge
-      const typeBadge: 'Confirmed Violation' | 'Heuristic Risk' = v.isHeuristicRisk ? 'Heuristic Risk' : 'Confirmed Violation';
+      // Build detection string
+      const detection = v.isBorderline
+        ? `Focus styling exists but may be too subtle (${focusClasses.filter(c => /focus|ring|border|bg-|text-/.test(c)).join(', ') || 'background/text change only'})`
+        : `Focus indicator removed (${focusClasses.filter(c => /outline-none|ring-0/.test(c)).join(', ') || 'outline-none'}) without visible replacement`;
+      
+      // Determine classification
+      const typeBadge: 'Confirmed Violation' | 'Heuristic Risk' = v.isBorderline ? 'Heuristic Risk' : 'Confirmed Violation';
       
       // Calculate confidence
-      let confidence = v.confidence || 0.65;
-      if (v.isHeuristicRisk) {
-        confidence = Math.min(confidence, 0.55); // Lower confidence for heuristic
+      let confidence = v.confidence || 0.90;
+      if (v.isBorderline) {
+        confidence = Math.min(confidence, 0.80);
+        confidence = Math.max(confidence, 0.70);
+      } else {
+        confidence = Math.min(confidence, 0.95);
+        confidence = Math.max(confidence, 0.90);
       }
       
-      const rationale = v.isHeuristicRisk 
-        ? 'Focus indication relies only on background color change, which may be insufficient for users with color vision deficiencies.'
+      const rationale = v.isBorderline 
+        ? 'Focus indication relies only on background/text color change or subtle ring, which may be insufficient for users with color vision deficiencies.'
         : 'Element removes the default browser outline without providing a visible focus replacement.';
       
       // Deduplication key
       const dedupeKey = componentName || filePath || 'unknown';
       
-      if (a5DedupeMap.has(dedupeKey)) {
-        const existing = a5DedupeMap.get(dedupeKey)!;
+      if (a2FocusDedupeMap.has(dedupeKey)) {
+        const existing = a2FocusDedupeMap.get(dedupeKey)!;
         existing.occurrence_count = (existing.occurrence_count || 1) + 1;
         if (confidence > existing.confidence) {
           existing.confidence = confidence;
         }
-        // Merge focus classes
         focusClasses.forEach(c => {
           if (!existing.focus_classes.includes(c)) {
             existing.focus_classes.push(c);
           }
         });
       } else {
-        const item: A5AffectedItem = {
+        const item: A2FocusItem = {
           component_name: componentName,
           file_path: filePath,
+          element_type: elementType,
           typeBadge,
           focus_classes: focusClasses,
+          detection,
           confidence: Math.round(confidence * 100) / 100,
           rationale,
           occurrence_count: 1,
         };
-        a5DedupeMap.set(dedupeKey, item);
+        a2FocusDedupeMap.set(dedupeKey, item);
       }
     }
     
-    const a5AffectedItems = Array.from(a5DedupeMap.values());
+    const a2FocusItems = Array.from(a2FocusDedupeMap.values());
     
-    // Create aggregated A5 result ONLY if there are actual violations
-    let aggregatedA5: any = null;
-    if (a5AffectedItems.length > 0) {
-      // Calculate overall confidence (max of all findings)
-      const overallConfidence = Math.max(...a5AffectedItems.map(i => i.confidence));
+    // Create aggregated A2 result ONLY if there are actual violations
+    let aggregatedA2: any = null;
+    if (a2FocusItems.length > 0) {
+      const overallConfidence = Math.max(...a2FocusItems.map(i => i.confidence));
       
-      const confirmedCount = a5AffectedItems.filter(i => i.typeBadge === 'Confirmed Violation').length;
-      const heuristicCount = a5AffectedItems.filter(i => i.typeBadge === 'Heuristic Risk').length;
+      const confirmedCount = a2FocusItems.filter(i => i.typeBadge === 'Confirmed Violation').length;
+      const heuristicCount = a2FocusItems.filter(i => i.typeBadge === 'Heuristic Risk').length;
       
-      const confidenceReason = `Confidence is based on static analysis of focus-related CSS classes. Elements that remove outline-none without visible ring/border/shadow replacements are flagged. Confidence may be lower for background-only focus patterns.`;
+      // Determine overall status: confirmed if ANY confirmed items exist
+      const hasConfirmedItems = confirmedCount > 0;
+      const a2Status = hasConfirmedItems ? 'confirmed' : 'potential';
+      const a2Subtype = hasConfirmedItems ? undefined : 'borderline';
       
-      // Build unique component names list - filter out non-semantic/utility identifiers
-      const invalidIdentifiers = new Set([
-        'variants', 'variant', 'props', 'className', 'classname', 'style', 'styles',
-        'default', 'config', 'options', 'settings', 'utils', 'helpers', 'constants',
-        'types', 'index', 'main', 'app', 'root', 'container', 'wrapper', 'layout',
-        'component', 'components', 'element', 'elements', 'item', 'items', 'button',
-        'unknown', 'undefined', 'null', 'true', 'false', 'function', 'object', 'array',
-        // Single words that are not UI components
-        'clear', 'close', 'open', 'toggle', 'show', 'hide', 'set', 'get', 'add', 'remove',
-        'delete', 'edit', 'update', 'create', 'submit', 'cancel', 'save', 'reset',
-        'next', 'previous', 'prev', 'back', 'forward', 'up', 'down', 'left', 'right',
-        'true', 'false', 'yes', 'no', 'on', 'off', 'enabled', 'disabled'
-      ]);
-      
-      const uniqueComponentNames = new Set<string>();
-      for (const item of a5AffectedItems) {
-        const name = item.component_name || '';
-        if (name && name.length > 2 && !invalidIdentifiers.has(name.toLowerCase())) {
-          if (!/^(use|get|set|is|has|can|should|will|on|handle)[A-Z]/.test(name)) {
-            uniqueComponentNames.add(name);
-          }
-        }
-      }
-      
-      // Fall back to file paths if no valid component names
-      if (uniqueComponentNames.size === 0) {
-        for (const item of a5AffectedItems) {
-          const filePath = item.file_path || '';
-          if (filePath) {
-            const fileName = filePath.replace(/.*[\/\\]/, '').replace(/\.(tsx|jsx|ts|js|vue|svelte)$/i, '');
-            if (fileName && fileName.length > 2 && !invalidIdentifiers.has(fileName.toLowerCase())) {
-              uniqueComponentNames.add(fileName);
-            }
-          }
-        }
-      }
-      
-      // Build deduplicated component list (max 4, with "and N more")
-      const uniqueNamesArray = Array.from(uniqueComponentNames);
-      const displayLimit = 4;
-      const displayedNames = uniqueNamesArray.slice(0, displayLimit);
-      const moreCount = uniqueNamesArray.length - displayLimit;
-      const moreText = moreCount > 0 ? ` and ${moreCount} more` : '';
-      
-      const componentCountText = uniqueNamesArray.length > 0 
-        ? `${uniqueNamesArray.length} unique component(s): ${displayedNames.join(', ')}${moreText}`
-        : `${a5AffectedItems.length} element(s)`;
+      // Build a2Elements array for the aggregated card UI
+      const a2Elements = a2FocusItems.map((item) => {
+        const isConfirmed = item.typeBadge === 'Confirmed Violation';
+        const elSubtype = isConfirmed ? undefined : 'borderline' as const;
+        
+        return {
+          elementLabel: item.component_name || 'Interactive element',
+          elementType: item.element_type,
+          textSnippet: undefined,
+          location: item.file_path || 'Unknown file',
+          detection: item.detection,
+          focusClasses: item.focus_classes,
+          classification: isConfirmed ? 'confirmed' as const : 'potential' as const,
+          potentialSubtype: elSubtype,
+          explanation: item.rationale,
+          confidence: item.confidence,
+          correctivePrompt: isConfirmed
+            ? `[${(item.component_name || 'Interactive element').substring(0, 60)} ${item.element_type}] — ${item.file_path || 'Source file'}\n\nIssue reason:\nFocus indicator is removed (${item.focus_classes.filter(c => /outline-none|ring-0/.test(c)).join(', ') || 'outline-none'}) without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2 or an outline/border/underline) and apply consistently across all instances.`
+            : undefined,
+          deduplicationKey: `${item.file_path}|${item.component_name}`,
+        };
+      });
       
       const typeBreakdown = [
         confirmedCount > 0 ? `${confirmedCount} confirmed violation(s)` : '',
-        heuristicCount > 0 ? `${heuristicCount} heuristic risk(s)` : '',
+        heuristicCount > 0 ? `${heuristicCount} borderline risk(s)` : '',
       ].filter(Boolean).join(' and ');
       
-      const summary = `Focus visibility issues detected in ${componentCountText}. ${typeBreakdown}. ` +
+      const summary = `Focus visibility issues detected: ${typeBreakdown}. ` +
         `Elements that remove the default browser outline (outline-none) without providing a visible focus replacement ` +
         `(ring, border, or shadow) may reduce keyboard accessibility.`;
       
-      const a5Rule = allRules.find(r => r.id === 'A5');
-      
-      aggregatedA5 = {
-        ruleId: 'A5',
+      aggregatedA2 = {
+        ruleId: 'A2',
         ruleName: 'Poor focus visibility',
         category: 'accessibility',
-        overall_confidence: Math.round(overallConfidence * 100) / 100,
-        confidence_reason: confidenceReason,
-        summary,
-        affected_items: a5AffectedItems.map(item => ({
-          component_name: item.component_name,
-          file_path: item.file_path,
-          typeBadge: item.typeBadge,
-          focus_classes: item.focus_classes,
-          confidence: item.confidence,
-          rationale: item.rationale,
-          ...(item.occurrence_count && item.occurrence_count > 1 ? { occurrence_count: item.occurrence_count } : {}),
-        })),
+        status: a2Status,
+        potentialSubtype: a2Subtype,
+        blocksConvergence: a2Status === 'confirmed',
+        inputType: 'zip',
+        isA2Aggregated: true,
+        a2Elements,
         diagnosis: summary,
-        contextualHint: 'Interactive elements remove the default focus outline (outline-none) without a visible replacement indicator.',
+        contextualHint: 'Interactive elements remove the default focus outline without a visible replacement indicator.',
         correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline. Do not alter layout structure or component behavior beyond focus styling.',
         confidence: Math.round(overallConfidence * 100) / 100,
+        ...(a2Status === 'potential' ? {
+          advisoryGuidance: 'Focus styling exists but may be too subtle. Consider using a clearer focus-visible indicator (e.g., ring-2 with offset) and ensure it is visually distinct.',
+        } : {}),
       };
       
-      console.log(`A5 aggregated: ${a2Violations.length} findings → ${a5AffectedItems.length} valid violations → 1 result (${confirmedCount} confirmed, ${heuristicCount} heuristic)`);
+      console.log(`A2 aggregated: ${a2Violations.length} findings → ${a2FocusItems.length} valid violations → 1 result (${confirmedCount} confirmed, ${heuristicCount} heuristic)`);
     } else {
-      console.log(`A5: No valid violations found (${a2Violations.length} filtered out as PASS or NOT APPLICABLE)`);
+      console.log(`A2: No valid violations found (${a2Violations.length} filtered out as PASS or NOT APPLICABLE)`);
     }
     
     // Combine all violations
     let aiViolations = [
       ...filteredOtherViolations,
-      ...(aggregatedA5 ? [{ ...aggregatedA5, ruleId: 'A2', ruleName: 'Poor focus visibility' }] : []),
+      ...(aggregatedA2 ? [aggregatedA2] : []),
     ];
 
     // ========== Deterministic U1 (competing primary actions) ==========

@@ -55,10 +55,36 @@ export function AnalysisResults({
         
         for (const el of v.a1Elements) {
           if (el.correctivePrompt) {
-            // Build element reference from available data
             const elementRef = [
               el.uiRole || el.elementLabel,
               el.textSnippet ? `'${el.textSnippet}'` : null,
+              el.location ? `— ${el.location}` : null,
+            ].filter(Boolean).join(' ');
+            
+            group.prompts.push({
+              prompt: el.correctivePrompt,
+              elementRef: elementRef || el.elementLabel,
+            });
+          }
+        }
+      }
+      // Handle A2 aggregated violations with element-level prompts
+      else if (v.ruleId === 'A2' && v.isA2Aggregated && v.a2Elements) {
+        if (!ruleGroups.has('A2')) {
+          ruleGroups.set('A2', {
+            ruleId: 'A2',
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+          });
+        }
+        const group = ruleGroups.get('A2')!;
+        
+        for (const el of v.a2Elements) {
+          if (el.correctivePrompt) {
+            const elementRef = [
+              el.elementLabel,
+              el.elementType ? `(${el.elementType})` : null,
               el.location ? `— ${el.location}` : null,
             ].filter(Boolean).join(' ');
             

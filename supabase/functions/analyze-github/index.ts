@@ -1141,445 +1141,107 @@ serve(async (req) => {
       console.log(`A1 aggregated (GitHub): ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
     
-    // ========== A2/A3/A4 rules removed — skip to other violations ==========
-    const nonA2A3A4AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4');
-    const nonA2A3A4AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4');
+    // ========== A2 Focus Visibility — Aggregate from AI findings ==========
+    const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2' || v.ruleId === 'A5');
+    const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4' && v.ruleId !== 'A5');
     
     let aggregatedA2GitHub: any = null;
     if (a2AiViolations.length > 0) {
-      // ============================================================
-      // A2 STRICT SCOPE ENFORCEMENT: filter out non-body-text elements
-      // ============================================================
-      const filteredA2 = a2AiViolations.filter((v: any) => {
+      // Filter valid focus violations
+      const validA2 = a2AiViolations.filter((v: any) => {
         const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
-        
-        // Exclude badges, chips, pills, tags, status indicators
-        if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus\s*(?:indicator|badge|chip|text)?\b/i.test(combined)) {
-          console.log(`Filtering out A2 (badge/chip/tag): ${v.evidence}`);
+        const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none|ring-0/.test(combined);
+        if (!mentionsOutlineRemoval) {
+          console.log(`A2 SKIP (no outline removal): ${(v.evidence || '').substring(0, 80)}`);
           return false;
         }
-        // Exclude headings, titles, subtitles (unless also mentions description/body)
-        if (/\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b|\bheader\s*(?:text|subtitle)?\b/i.test(combined) &&
-            !/description|body\s*text|paragraph|content\s*block|prose/i.test(combined)) {
-          console.log(`Filtering out A2 (heading/title): ${v.evidence}`);
+        // Check for visible replacement = PASS
+        const hasReplacement = /focus(?:-visible)?:ring-[^0]|focus(?:-visible)?:border|focus(?:-visible)?:shadow(?!-none)|focus(?:-visible)?:outline-(?!none)/.test(combined);
+        if (hasReplacement) {
+          console.log(`A2 PASS (has replacement): ${(v.evidence || '').substring(0, 80)}`);
           return false;
         }
-        // Exclude navigation, menu items, breadcrumbs
-        if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) {
-          console.log(`Filtering out A2 (navigation): ${v.evidence}`);
-          return false;
-        }
-        // Exclude buttons, CTAs (unless also about description)
-        if (/\bbutton\b|\bbtn\b|\bcta\b|\baction\s*button\b|\bicon[-\s]?button\b/i.test(combined) &&
-            !/description|body\s*text|paragraph/i.test(combined)) {
-          console.log(`Filtering out A2 (button/CTA): ${v.evidence}`);
-          return false;
-        }
-        // Exclude metadata, timestamps, author names
-        if (/\bmetadata\b|\btimestamp\b|\bdate\s*(?:display|text)?\b|\btime\s*ago\b|\bauthor\b|\binstructor\b/i.test(combined)) {
-          console.log(`Filtering out A2 (metadata): ${v.evidence}`);
-          return false;
-        }
-        // Exclude captions, tooltips, keyboard shortcuts, code blocks
-        if (/\bcaption\b|\btooltip\b|\bkeyboard\s*shortcut\b|\bkbd\b|\bcode\s*block\b|\bmonospace\b/i.test(combined)) {
-          console.log(`Filtering out A2 (microcopy): ${v.evidence}`);
-          return false;
-        }
-        // ── A2 PRIMARY vs SECONDARY classification (deterministic GitHub) ──
-        // Do NOT trigger A2 solely because text-sm or text-xs appears in any component.
-        const evidenceRaw = v.evidence || '';
-        const componentMatch2 = evidenceRaw.match(/([A-Z][a-zA-Z0-9]*)/);
-        const compName = componentMatch2?.[1] || '';
-        
-        // 1) Component name signals secondary — comprehensive exclusion list
-        const secondaryComponentPattern = /^(Badge|Chip|Tag|Label|Subtitle|Meta|Caption|Breadcrumb|Menu|Dropdown|Command|Navigation|Trigger|Input|FormLabel|FormMessage|CheckboxItem|SubTrigger|Pagination|FilterBar|ContextMenu|Menubar|DropdownMenu|NavigationMenu)$/i;
-        if (secondaryComponentPattern.test(compName)) {
-          console.log(`Filtering out A2 (secondary component "${compName}"): ${evidenceRaw}`);
-          return false;
-        }
-        // 2) Course codes
-        if (/[A-Z]{2,4}\d{2,4}/.test(evidenceRaw) || /course\s*code/i.test(combined)) {
-          console.log(`Filtering out A2 (course code): ${evidenceRaw}`);
-          return false;
-        }
-        // 3) Credits / badge text
-        if (/\d+\s*credits?\b/i.test(combined)) {
-          console.log(`Filtering out A2 (credits text): ${evidenceRaw}`);
-          return false;
-        }
-        // 4) Header subtitles, nav labels, filter labels
-        if (/\b(header\s*subtitle|nav(?:igation)?\s*label|filter\s*label|tab\s*label|breadcrumb)\b/i.test(combined)) {
-          console.log(`Filtering out A2 (subtitle/nav/filter label): ${evidenceRaw}`);
-          return false;
-        }
-        // 5) Short text (<25 chars) not clearly primary content
-        const snippet = (v.textSnippet || evidenceRaw).replace(/[^a-zA-Z0-9\s]/g, '').trim();
-        if (snippet.length > 0 && snippet.length < 25 && !/\bp\b|paragraph|description|content|prose|body|article|CardDescription|DialogDescription|AlertDescription/i.test(combined)) {
-          console.log(`Filtering out A2 (short label <25 chars): ${evidenceRaw}`);
-          return false;
-        }
-        // 6) Exclude if inside navigation/menu/form/badge/filter container context
-        if (/\b(inside|within|in)\s*(nav|menu|dropdown|breadcrumb|pagination|filter|toolbar|sidebar)\b/i.test(combined)) {
-          console.log(`Filtering out A2 (inside secondary container): ${evidenceRaw}`);
-          return false;
-        }
-        // 7) Final primary-content gate: element must be explicitly primary readable content
-        const isPrimaryGH = /\bp\b|<p|paragraph|prose|content|body|article|\bmain\b|\bsection\b/i.test(combined)
-          || /CardDescription|DialogDescription|AlertDescription|FormDescription/i.test(combined)
-          || (snippet.length >= 60)
-          || /\.\s+[A-Z]/.test(evidenceRaw) // multi-sentence indicator
-          || /\bli\b.*content|list\s*item.*(?:main|content|body)/i.test(combined); // list items in content areas
-        if (!isPrimaryGH) {
-          console.log(`Filtering out A2 (not primary readable content): ${evidenceRaw}`);
-          return false;
-        }
-        
         return true;
       });
       
-      // If all items were filtered out, skip aggregation
-      if (filteredA2.length === 0) {
-        console.log('A2: All items filtered out (none were primary body text)');
-      } else {
-      const a2Elements = filteredA2.map((v: any, idx: number) => {
-        const diagnosis = (v.diagnosis || '').toLowerCase();
-        const evidence = (v.evidence || '').toLowerCase();
-        const combined = diagnosis + ' ' + evidence;
-        
-        // Try to extract px value
-        const pxMatch = combined.match(/(\d+)px/);
-        const computedSize = pxMatch ? parseInt(pxMatch[1]) : undefined;
-        const isDeterministic = computedSize !== undefined && (
-          /text-xs|text-sm|font-size:\s*\d+px/.test(combined)
-        );
-        
-        // Extract component name
-        const componentMatch = (v.evidence || '').match(/([A-Z][a-zA-Z0-9]*(?:Description|Content|Text|Label)?)/);
-        const fileMatch = (v.evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
-        const elementLabel = componentMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || `Body text element ${idx + 1}`;
-        const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
-        
-        // For GitHub: deterministic items confirmed; heuristic items are borderline (below recommended)
-        const elSubtype = isDeterministic ? undefined : 'borderline' as const;
-        
-        return {
-          elementLabel,
-          textSnippet: undefined,
-          location,
-          computedFontSize: isDeterministic ? computedSize : undefined,
-          fontSizeSource: isDeterministic ? (v.evidence || '').match(/(text-xs|text-sm|font-size:\s*\d+px)/i)?.[1] : undefined,
-          detectionMethod: isDeterministic ? 'deterministic' as const : 'heuristic' as const,
-          thresholdPx: 16,
-          explanation: v.diagnosis || 'Body text size is below the recommended 16px baseline.',
-          confidence: v.confidence || 0.6,
-          potentialSubtype: elSubtype,
-          correctivePrompt: isDeterministic
-            ? `body text '${(elementLabel || 'Body text element').substring(0, 60)}' (${location || 'Source file'})\n\nIssue reason: Computed font-size ${computedSize}px is below the recommended readability baseline of 16px.\n\nRecommended fix: Increase the font size of all primary body text elements in this group (currently ${computedSize}px${(v.evidence || '').match(/(text-xs|text-sm)/i)?.[1] ? ` / ${(v.evidence || '').match(/(text-xs|text-sm)/i)?.[1]}` : ''}) to at least 16px (text-base). Ensure this update is applied consistently across all screens and components where this text style is reused. Adjust line-height to approximately 1.4–1.6 to preserve readability.`
-            : undefined,
-          deduplicationKey: `${location}|${elementLabel}`,
-        };
-      });
-      
-      const hasConfirmed = a2Elements.some((el: any) => el.detectionMethod === 'deterministic');
-      const a2Status = hasConfirmed ? 'confirmed' : 'potential';
-      const avgConf = a2Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a2Elements.length;
-      
-      const a2Rule = [...rules.accessibility].find(r => r.id === 'A2');
-      
-      aggregatedA2GitHub = {
-        ruleId: 'A2',
-        ruleName: 'Small body font size',
-        category: 'accessibility',
-        status: a2Status,
-        potentialSubtype: a2Status === 'potential' ? 'borderline' : undefined,
-        blocksConvergence: a2Status === 'confirmed',
-        inputType: 'github',
-        isA2Aggregated: true,
-        a2Elements,
-        diagnosis: a2Status === 'confirmed'
-          ? `${a2Elements.length} body text element${a2Elements.length !== 1 ? 's' : ''} with confirmed insufficient font size detected.`
-          : `${a2Elements.length} text element${a2Elements.length !== 1 ? 's' : ''} with potential font size issues detected. These require manual verification due to measurement uncertainty.`,
-        contextualHint: 'Increase body text to at least 16px (text-base) for primary content areas.',
-        correctivePrompt: a2Rule?.correctivePrompt || '',
-        confidence: Math.round(avgConf * 100) / 100,
-        ...(a2Status === 'potential' ? {
-          advisoryGuidance: 'Font size meets the technical minimum but is below the recommended 16px baseline for comfortable reading. Consider increasing body text to at least 16px for improved readability.',
-        } : {}),
-        typeBadge: a2Status === 'confirmed' ? 'Confirmed (static)' : 'Heuristic (requires runtime verification)',
-      };
-      
-      console.log(`A2 aggregated (GitHub): ${filteredA2.length} → 1 card with ${a2Elements.length} elements (${a2Status})`);
-      } // end filteredA2.length > 0
-    }
-    
-    // ========== A3 AGGREGATION LOGIC (GitHub) ==========
-    const TAILWIND_LEADING_GH: Record<string, number> = {
-      'leading-none': 1.0, 'leading-tight': 1.25, 'leading-snug': 1.375,
-      'leading-normal': 1.5, 'leading-relaxed': 1.625, 'leading-loose': 2.0,
-    };
-    
-    let aggregatedA3GitHub: any = null;
-    if (a3AiViolations.length > 0) {
-      // Scope enforcement — same filters as A2
-      const filteredA3 = a3AiViolations.filter((v: any) => {
-        const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
-        if (/\bbadge\b|\bchip\b|\bpill\b|\btag\b|\bstatus/i.test(combined)) return false;
-        if (/\bheading\b|\btitle\b|\bsubtitle\b|\bh[1-6]\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
-        if (/\bnavigation\b|\bnav[-\s]|\bmenu\s*item\b|\bbreadcrumb\b|\btab\s*label\b/i.test(combined)) return false;
-        if (/\bbutton\b|\bbtn\b|\bcta\b/i.test(combined) && !/description|body\s*text|paragraph/i.test(combined)) return false;
-        if (/\bmetadata\b|\btimestamp\b|\bauthor\b/i.test(combined)) return false;
-        if (/\bcaption\b|\btooltip\b|\bmonospace\b|\bplaceholder\b/i.test(combined)) return false;
-        return true;
-      });
-      
-      if (filteredA3.length > 0) {
-        const a3Elements = filteredA3.map((v: any, idx: number) => {
-          const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
-          
-          // Extract line-height info
-          const leadingMatch = combined.match(/leading-(none|tight|snug|normal|relaxed|loose)/);
-          const lineHeightCssMatch = combined.match(/line-height:\s*([\d.]+)/);
-          const ratioMatch = combined.match(/(?:ratio|line[- ]height)[:\s]*([\d.]+)/);
-          
-          let lineHeightRatio: number | undefined;
-          let lineHeightToken = '';
-          
-          if (leadingMatch) {
-            const key = `leading-${leadingMatch[1]}`;
-            lineHeightRatio = TAILWIND_LEADING_GH[key];
-            lineHeightToken = key;
-          } else if (lineHeightCssMatch) {
-            lineHeightRatio = parseFloat(lineHeightCssMatch[1]);
-            lineHeightToken = `line-height: ${lineHeightCssMatch[1]}`;
-          } else if (ratioMatch) {
-            lineHeightRatio = parseFloat(ratioMatch[1]);
-            lineHeightToken = `ratio ${ratioMatch[1]}`;
-          }
-          
-          // Skip if pass
-          if (lineHeightRatio !== undefined && lineHeightRatio >= 1.45) return null;
-          
-          const isDeterministic = lineHeightRatio !== undefined && lineHeightRatio < 1.3 && /leading-|line-height:/i.test(combined);
-          
-          const componentMatch = (v.evidence || '').match(/([A-Z][a-zA-Z0-9]*(?:Description|Content|Text)?)/);
-          const fileMatch = (v.evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
-          const elementLabel = componentMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || `Body text element ${idx + 1}`;
+      if (validA2.length > 0) {
+        const a2Elements = validA2.map((v: any, idx: number) => {
+          const evidence = v.evidence || '';
+          const combined = ((v.diagnosis || '') + ' ' + evidence).toLowerCase();
+          const componentMatch = evidence.match(/([A-Z][a-zA-Z0-9]*(?:Button|Link|Input|Select|Card|Dialog|Nav|Toggle|Trigger)?)/);
+          const fileMatch = (evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
+          const elementLabel = componentMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || `Interactive element ${idx + 1}`;
           const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
           
-          const fontSizeMatch = combined.match(/(\d+)px/);
-          const fontSizePx = fontSizeMatch ? parseInt(fontSizeMatch[1]) : undefined;
+          // Determine element type
+          let elementType = 'interactive element';
+          if (/\bbutton\b/i.test(combined)) elementType = 'button';
+          else if (/\blink\b|\ba\b/i.test(combined)) elementType = 'link';
+          else if (/\binput\b/i.test(combined)) elementType = 'input';
           
-          // For GitHub: confirmed (<1.30) have no subtype; potential (1.30-1.45) are 'borderline'
-          const elSubtype = isDeterministic ? undefined : 'borderline' as const;
+          // Check if borderline (bg-only, ring-1, :focus without :focus-visible)
+          const isBorderline = /focus:bg-|focus-visible:bg-|focus:text-|focus:ring-1\b/.test(combined) ||
+            (/\bfocus:/.test(combined) && !/focus-visible:/.test(combined));
+          
+          const isConfirmed = !isBorderline;
+          const confidence = isConfirmed ? 0.92 : 0.75;
+          
+          const focusClasses = (combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|bg-\w+|ring-\w+|border-\w+|text-\w+)/g) || []);
+          const detection = isBorderline 
+            ? `Focus styling may be too subtle (${focusClasses.join(', ') || 'bg/text change only'})`
+            : `Focus indicator removed without visible replacement`;
           
           return {
             elementLabel,
-            textSnippet: undefined,
+            elementType,
             location,
-            computedLineHeight: isDeterministic && lineHeightRatio !== undefined ? lineHeightRatio : undefined,
-            estimatedLineHeight: !isDeterministic ? lineHeightRatio : undefined,
-            computedFontSize: fontSizePx,
-            lineHeightSource: lineHeightToken || undefined,
-            detectionMethod: isDeterministic ? 'deterministic' as const : 'heuristic' as const,
-            thresholdRatio: 1.3,
-            explanation: v.diagnosis || 'Line-height ratio is below the recommended readability baseline.',
-            confidence: v.confidence || 0.7,
-            potentialSubtype: elSubtype,
-            correctivePrompt: isDeterministic && lineHeightRatio !== undefined
-              ? `body text '${elementLabel.substring(0, 60)}' (${location})\n\nIssue reason: Computed line-height ratio ${lineHeightRatio.toFixed(2)} is below the recommended readability baseline of 1.3.\n\nRecommended fix: Increase the line-height of all primary body text elements in this group (currently ${lineHeightToken || lineHeightRatio}) to at least 1.5 (leading-normal). Ensure this update is applied consistently across all screens and components where this text style is reused.`
+            detection,
+            focusClasses: [...new Set(focusClasses)],
+            classification: isConfirmed ? 'confirmed' as const : 'potential' as const,
+            potentialSubtype: isConfirmed ? undefined : 'borderline' as const,
+            explanation: v.diagnosis || (isConfirmed 
+              ? 'Element removes the default browser outline without providing a visible focus replacement.'
+              : 'Focus indication relies only on background/text color change, which may be insufficient.'),
+            confidence,
+            correctivePrompt: isConfirmed
+              ? `[${elementLabel} ${elementType}] — ${location}\n\nIssue reason:\nFocus indicator is removed without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2) and apply consistently across all instances.`
               : undefined,
             deduplicationKey: `${location}|${elementLabel}`,
           };
-        }).filter(Boolean);
+        });
         
-        if (a3Elements.length > 0) {
-          const hasConfirmed = a3Elements.some((el: any) => el.detectionMethod === 'deterministic');
-          const a3Status = hasConfirmed ? 'confirmed' : 'potential';
-          const avgConf = a3Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a3Elements.length;
-          const a3Rule = [...rules.accessibility].find(r => r.id === 'A3');
-          
-          aggregatedA3GitHub = {
-            ruleId: 'A3',
-            ruleName: 'Insufficient line spacing',
-            category: 'accessibility',
-            status: a3Status,
-            potentialSubtype: a3Status === 'potential' ? 'borderline' : undefined,
-            blocksConvergence: a3Status === 'confirmed',
-            inputType: 'github',
-            isA3Aggregated: true,
-            a3Elements,
-            diagnosis: a3Status === 'confirmed'
-              ? `${a3Elements.length} body text element${a3Elements.length !== 1 ? 's' : ''} with confirmed insufficient line spacing detected.`
-              : `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected.`,
-            contextualHint: 'Increase line-height to at least 1.5 (leading-normal) for primary body text.',
-            correctivePrompt: a3Rule?.correctivePrompt || '',
-            confidence: Math.round(avgConf * 100) / 100,
-            ...(a3Status === 'potential' ? {
-              advisoryGuidance: 'Line spacing is near the lower bound. Consider increasing line-height to ~1.45–1.6 for improved readability.',
-            } : {}),
-          };
-          
-          console.log(`A3 aggregated (GitHub): ${filteredA3.length} → 1 card with ${a3Elements.length} elements (${a3Status})`);
-        }
-      }
-    }
-    
-    // ========== A4 AGGREGATION LOGIC (GitHub — Desktop thresholds) ==========
-    const a4SecondaryGH = /^(Breadcrumb|DropdownMenu|DropdownMenuItem|NavigationMenu|NavigationMenuTrigger|NavLink|PaginationLink|PaginationPrevious|PaginationNext|Pagination|ContextMenu|ContextMenuItem|Menubar|MenubarItem|Badge|Tag|Chip|Label|Toolbar|ToolbarButton|TableAction)$/i;
-    const a4SecondaryContainerGH = /\b(breadcrumb|dropdown|navigation|pagination|toolbar|sidebar|menu|menubar|context-menu|nav\b)/i;
-    
-    let aggregatedA4GitHub: any = null;
-    if (a4AiViolations.length > 0) {
-      const filteredA4 = a4AiViolations.filter((v: any) => {
-        const evidence = v.evidence || '';
-        const combined = ((v.diagnosis || '') + ' ' + evidence).toLowerCase();
-        const compMatch = evidence.match(/([A-Z][a-zA-Z0-9]*)/);
-        const compName = compMatch?.[1] || '';
+        const hasConfirmed = a2Elements.some((el: any) => el.classification === 'confirmed');
+        const a2Status = hasConfirmed ? 'confirmed' : 'potential';
+        const avgConf = a2Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a2Elements.length;
         
-        // Exclude secondary components
-        if (a4SecondaryGH.test(compName)) {
-          console.log(`A4 SKIP (secondary component "${compName}"): ${evidence.substring(0, 80)}`);
-          return false;
-        }
-        // Exclude if inside secondary container
-        if (a4SecondaryContainerGH.test(combined)) {
-          console.log(`A4 SKIP (inside secondary container): ${evidence.substring(0, 80)}`);
-          return false;
-        }
-        return true;
-      });
-      
-      if (filteredA4.length > 0) {
-        const a4Elements = filteredA4.map((v: any) => {
-          const evidence = v.evidence || '';
-          const combined = ((v.diagnosis || '') + ' ' + evidence).toLowerCase();
-          const compMatch = evidence.match(/([A-Z][a-zA-Z0-9]*)/);
-          const fileMatch = evidence.match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
-          const elementLabel = compMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || 'Interactive element';
-          const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
-          
-          // Extract approx px from tokens — support arbitrary px values
-          let approxPxNum = 0;
-          if (/h-3\b|w-3\b|size-3\b/.test(combined)) approxPxNum = 12;
-          else if (/h-4\b|w-4\b|size-4\b/.test(combined)) approxPxNum = 16;
-          else if (/h-5\b|w-5\b|size-5\b/.test(combined)) approxPxNum = 20;
-          else if (/h-\[(\d+(?:\.\d+)?)px\]/.test(combined) || /w-\[(\d+(?:\.\d+)?)px\]/.test(combined)) {
-            const hMatch = combined.match(/h-\[(\d+(?:\.\d+)?)px\]/);
-            const wMatch = combined.match(/w-\[(\d+(?:\.\d+)?)px\]/);
-            const hVal = hMatch ? parseFloat(hMatch[1]) : Infinity;
-            const wVal = wMatch ? parseFloat(wMatch[1]) : Infinity;
-            approxPxNum = Math.min(hVal, wVal);
-          }
-          else if (/h-6\b|w-6\b|size-6\b/.test(combined)) approxPxNum = 24;
-          else if (/h-7\b|w-7\b|size-7\b/.test(combined)) approxPxNum = 28;
-          else if (/h-8\b|w-8\b|size-8\b/.test(combined)) approxPxNum = 32;
-          else if (/(\d+(?:\.\d+)?)px/.test(combined)) {
-            const pxMatch = combined.match(/(\d+(?:\.\d+)?)px/);
-            if (pxMatch) approxPxNum = parseFloat(pxMatch[1]);
-          }
-          else if (/~16px|1rem(?!\.)/.test(combined)) approxPxNum = 16;
-          else if (/~20px|1\.25rem/.test(combined)) approxPxNum = 20;
-          else if (/~22px|1\.375rem/.test(combined)) approxPxNum = 22;
-          else if (/~24px|1\.5rem/.test(combined)) approxPxNum = 24;
-          
-          // Skip if unable to determine size
-          if (approxPxNum === 0) return null;
-          
-          // ≥ 24px → Pass
-          if (approxPxNum >= 24) return null;
-          
-          // minDimension = approxPxNum (width and height treated as same from token)
-          const isConfirmed = approxPxNum < 20;
-          
-          return {
-            elementLabel,
-            location,
-            approxPx: `~${approxPxNum}px`,
-            approxPxNum,
-            detectionMethod: 'deterministic' as const,
-            confidence: isConfirmed ? 0.80 : 0.65,
-            explanation: v.diagnosis || `Element may be below the desktop minimum click target size of 24×24 CSS px.`,
-          };
-        }).filter(Boolean);
+        aggregatedA2GitHub = {
+          ruleId: 'A2',
+          ruleName: 'Poor focus visibility',
+          category: 'accessibility',
+          status: a2Status,
+          potentialSubtype: a2Status === 'potential' ? 'borderline' : undefined,
+          blocksConvergence: a2Status === 'confirmed',
+          inputType: 'github',
+          isA2Aggregated: true,
+          a2Elements,
+          diagnosis: `${a2Elements.length} interactive element${a2Elements.length !== 1 ? 's' : ''} with focus visibility issues detected.`,
+          contextualHint: 'Add visible focus-visible indicators for keyboard accessibility.',
+          correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline.',
+          confidence: Math.round(avgConf * 100) / 100,
+          ...(a2Status === 'potential' ? {
+            advisoryGuidance: 'Focus styling exists but may be too subtle. Consider using a clearer focus-visible indicator (e.g., ring-2 with offset) and ensure it is visually distinct.',
+          } : {}),
+        };
         
-        if (a4Elements.length > 0) {
-          const hasConfirmed = a4Elements.some((el: any) => el.detectionMethod === 'deterministic');
-          const a4Status = hasConfirmed ? 'confirmed' : 'potential';
-          const avgConf = a4Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a4Elements.length;
-          const a4Rule = [...rules.accessibility].find(r => r.id === 'A4');
-          
-          // Build proper a4Elements for aggregated card UI with structured corrective prompts
-          const a4ElementsForUI = a4Elements.map((el: any) => {
-            const w = el.approxPxNum;
-            const h = el.approxPxNum;
-            const minSide = Math.min(w, h);
-            const label = el.elementLabel || 'Interactive element';
-            const fileName = (el.location || 'Unknown file').split('/').pop() || el.location || 'Unknown file';
-            const role = 'button';
-            const isConfirmedEl = el.detectionMethod === 'deterministic' && w < 20;
-            
-            let elementCorrectivePrompt: string | undefined = undefined;
-            if (isConfirmedEl) {
-              elementCorrectivePrompt = 
-                `[${label} ${role}] — ${fileName}\n\n` +
-                `Issue reason:\n` +
-                `Clickable area is ${w}×${h}px (min side: ${minSide}px), below the 20px desktop minimum.\n\n` +
-                `Recommended fix:\n` +
-                `Increase the clickable area of the "${label}" ${role} to at least 20×20px (preferably 24×24px) using min-width/min-height or additional padding. Ensure the full interactive hit area meets the minimum size.`;
-            }
-            
-            // For GitHub: <20px confirmed (no subtype), 20-23px borderline
-            const elSubtype = isConfirmedEl ? undefined : 'borderline' as const;
-            
-            return {
-              elementLabel: label,
-              textSnippet: undefined,
-              location: el.location || 'Unknown file',
-              computedWidth: w < 24 ? w : undefined,
-              computedHeight: h < 24 ? h : undefined,
-              estimatedWidth: undefined,
-              estimatedHeight: undefined,
-              sizeSource: undefined,
-              detectionMethod: el.detectionMethod || 'deterministic',
-              thresholdPx: 20,
-              explanation: isConfirmedEl
-                ? `This control's computed clickable area is ${w}×${h}px (min side: ${minSide}px), below the confirmed desktop minimum of 20×20px.`
-                : `This control's computed clickable area is ${w}×${h}px (min side: ${minSide}px), below the recommended 24×24px desktop baseline but above the 20px confirmed minimum.`,
-              confidence: el.confidence || 0.80,
-              potentialSubtype: elSubtype,
-              correctivePrompt: elementCorrectivePrompt,
-              deduplicationKey: `${el.location}|${label}`,
-            };
-          });
-
-          aggregatedA4GitHub = {
-            ruleId: 'A4',
-            ruleName: 'Small tap / click targets',
-            category: 'accessibility',
-            status: a4Status,
-            potentialSubtype: a4Status === 'potential' ? 'borderline' : undefined,
-            blocksConvergence: a4Status === 'confirmed',
-            inputType: 'github',
-            isA4Aggregated: true,
-            a4Elements: a4ElementsForUI,
-            diagnosis: `${a4ElementsForUI.length} interactive element${a4ElementsForUI.length !== 1 ? 's' : ''} with target size issues detected.`,
-            contextualHint: 'Ensure primary interactive controls meet the 24×24 CSS px desktop minimum.',
-            correctivePrompt: a4Rule?.correctivePrompt || '',
-            confidence: Math.round(avgConf * 100) / 100,
-            ...(a4Status === 'potential' ? {
-              advisoryGuidance: 'Target size meets the minimum 20px threshold but is below the recommended 24×24px comfort size. Consider increasing for easier clicking.',
-            } : {}),
-          };
-          
-          console.log(`A4 aggregated (GitHub): ${filteredA4.length} → 1 card (${a4Status}, ${a4Elements.length} elements)`);
-        }
+        console.log(`A2 aggregated (GitHub): ${validA2.length} → 1 card with ${a2Elements.length} elements (${a2Status})`);
       }
     }
     
     // Combine all violations
     const allViolations = [
       ...aggregatedA1Violations,
-      ...nonA2A3A4AiViolations,
+      ...nonA2AiViolations,
+      ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
     ];
     
     // Deduplicate by ruleId
