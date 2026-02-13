@@ -71,6 +71,7 @@ export interface Violation {
   confidence: number;
   // A1 contrast-specific fields
   status?: 'confirmed' | 'potential' | 'informational'; // confirmed (blocking), potential (non-blocking), informational (no risk, summary only)
+  potentialSubtype?: 'accuracy' | 'borderline'; // Only when status='potential': accuracy = measurement uncertainty, borderline = below recommended but above minimum
   samplingMethod?: 'pixel' | 'inferred'; // How colors were obtained: pixel-sampled or inferred from tokens/classes
   elementRole?: string; // Semantic role: caption, badge, metadata, heading, etc.
   inputType?: 'screenshots' | 'zip' | 'github'; // Which input type was used for this finding
@@ -176,6 +177,7 @@ export interface A2ElementSubItem {
   // Classification
   explanation: string;
   confidence: number; // 0-1
+  potentialSubtype?: 'accuracy' | 'borderline'; // Subtype for potential findings
 
   // Corrective prompt (confirmed only)
   correctivePrompt?: string;
@@ -205,6 +207,7 @@ export interface A3ElementSubItem {
   // Classification
   explanation: string;
   confidence: number; // 0-1
+  potentialSubtype?: 'accuracy' | 'borderline'; // Subtype for potential findings
 
   // Corrective prompt (confirmed only)
   correctivePrompt?: string;
@@ -234,6 +237,7 @@ export interface A4ElementSubItem {
   // Classification
   explanation: string;
   confidence: number; // 0-1
+  potentialSubtype?: 'accuracy' | 'borderline'; // Subtype for potential findings
 
   // Corrective prompt (confirmed only)
   correctivePrompt?: string;

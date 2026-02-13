@@ -4170,11 +4170,15 @@ serve(async (req) => {
         };
       });
 
+      // Tag each element with potentialSubtype for screenshot: always 'accuracy'
+      a2Elements.forEach((el: any) => { el.potentialSubtype = 'accuracy'; });
+
       aggregatedA2UI = {
         ruleId: 'A2',
         ruleName: 'Small body font size',
         category: 'accessibility',
         status: 'potential', // Screenshot-based A2 is ALWAYS potential (visual estimation)
+        potentialSubtype: 'accuracy',
         blocksConvergence: false, // Never blocks convergence for screenshot input
         inputType: 'screenshots',
         isA2Aggregated: true,
@@ -4375,11 +4379,15 @@ serve(async (req) => {
         };
       });
 
+      // Tag each element with potentialSubtype for screenshot: always 'accuracy'
+      a4Elements.forEach((el: any) => { el.potentialSubtype = 'accuracy'; });
+
       aggregatedA4UI = {
         ruleId: 'A4',
         ruleName: 'Small tap / click targets',
         category: 'accessibility',
         status: 'potential',
+        potentialSubtype: 'accuracy',
         blocksConvergence: false,
         inputType: 'screenshots',
         isA4Aggregated: true,
@@ -4945,11 +4953,15 @@ serve(async (req) => {
       if (isRisk && a3Elements.length > 0) {
         const a3Diagnosis = `${a3Elements.length} text element${a3Elements.length !== 1 ? 's' : ''} with potential line spacing issues detected. These require manual verification due to measurement uncertainty.`;
         
+        // Tag each element with potentialSubtype for screenshot: always 'accuracy'
+        a3Elements.forEach((el: any) => { el.potentialSubtype = 'accuracy'; });
+
         aggregatedA3UI = {
           ruleId: 'A3',
           ruleName: 'Insufficient line spacing',
           category: 'accessibility',
           status: 'potential',
+          potentialSubtype: 'accuracy',
           blocksConvergence: false,
           inputType: 'screenshots',
           isA3Aggregated: true,

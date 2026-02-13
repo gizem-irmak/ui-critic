@@ -2060,6 +2060,8 @@ ${codeContent}`,
       const a2Elements = affectedItems.map((item, idx) => {
         const computedSize = parseFloat((item.approx_px || '').replace(/[≈~px]/g, ''));
         const isDeterministic = a2Status === 'confirmed' && !isNaN(computedSize);
+        // For ZIP: confirmed items have no subtype; potential items are 'borderline' (deterministic value near threshold)
+        const elSubtype = isDeterministic ? undefined : 'borderline' as const;
         return {
           elementLabel: item.component_name || `Body text element ${idx + 1}`,
           textSnippet: undefined,
@@ -2070,6 +2072,7 @@ ${codeContent}`,
           thresholdPx: 16,
           explanation: item.rationale,
           confidence: item.confidence,
+          potentialSubtype: elSubtype,
           correctivePrompt: isDeterministic
             ? `body text '${(item.component_name || 'Body text element').substring(0, 60)}' (${item.file_path || 'Source file'})\n\nIssue reason: Computed font-size ${item.approx_px} is below the recommended readability baseline of 16px.\n\nRecommended fix: Increase the font size of all primary body text elements in this group (currently ${item.approx_px}${item.size_token ? ` / ${item.size_token}` : ''}) to at least 16px (text-base). Ensure this update is applied consistently across all screens and components where this text style is reused. Adjust line-height to approximately 1.4–1.6 to preserve readability.`
             : undefined,
@@ -2082,6 +2085,7 @@ ${codeContent}`,
         ruleName: 'Small body font size',
         category: 'accessibility',
         status: a2Status,
+        potentialSubtype: a2Status === 'potential' ? 'borderline' : undefined,
         blocksConvergence: a2Status === 'confirmed',
         inputType: 'zip',
         isA2Aggregated: true,
@@ -2107,7 +2111,7 @@ ${codeContent}`,
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
         ...(a2Status === 'potential' ? {
-          advisoryGuidance: 'Static visual estimation cannot determine exact computed font sizes. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
+          advisoryGuidance: 'Font size meets the technical minimum but is below the recommended 16px baseline for comfortable reading. Consider increasing body text to at least 16px for improved readability.',
         } : {}),
       };
       
@@ -2263,6 +2267,8 @@ ${codeContent}`,
       
       const a3Elements = a3AffectedItems.map((item, idx) => {
         const isDeterministic = a3Status === 'confirmed' && item.severity === 'violation';
+        // For ZIP: confirmed (<1.30) have no subtype; potential (1.30-1.45) are 'borderline'
+        const elSubtype = isDeterministic ? undefined : 'borderline' as const;
         return {
           elementLabel: item.component_name || `Body text element ${idx + 1}`,
           textSnippet: undefined,
@@ -2275,6 +2281,7 @@ ${codeContent}`,
           thresholdRatio: 1.3,
           explanation: item.rationale,
           confidence: item.confidence,
+          potentialSubtype: elSubtype,
           correctivePrompt: isDeterministic
             ? `body text '${(item.component_name || 'Body text element').substring(0, 60)}' (${item.file_path || 'Source file'})\n\nIssue reason: Computed line-height ratio ${item.line_height_ratio.toFixed(2)} is below the recommended readability baseline of 1.3.\n\nRecommended fix: Increase the line-height of all primary body text elements in this group (currently ${item.line_height_token || item.line_height_ratio}) to at least 1.5 (leading-normal). Ensure this update is applied consistently across all screens and components where this text style is reused.`
             : undefined,
@@ -2287,6 +2294,7 @@ ${codeContent}`,
         ruleName: 'Insufficient line spacing',
         category: 'accessibility',
         status: a3Status,
+        potentialSubtype: a3Status === 'potential' ? 'borderline' : undefined,
         blocksConvergence: a3Status === 'confirmed',
         inputType: 'zip',
         isA3Aggregated: true,
@@ -2298,7 +2306,7 @@ ${codeContent}`,
         correctivePrompt: a3Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
         ...(a3Status === 'potential' ? {
-          advisoryGuidance: 'Static analysis cannot fully resolve CSS cascade for line-height. For deterministic measurement, verify with browser DevTools after rendering.',
+          advisoryGuidance: 'Line spacing is near the lower bound. Consider increasing line-height to ~1.45–1.6 for improved readability.',
         } : {}),
       };
       
@@ -2542,6 +2550,9 @@ ${codeContent}`,
             `Increase the clickable area of the "${cleanLabel}" ${role} to at least 20×20px (preferably 24×24px) using min-width/min-height or additional padding. Ensure the full interactive hit area meets the minimum size.`;
         }
         
+        // For ZIP: <20px confirmed (no subtype), 20-23px is borderline
+        const elSubtype = isConfirmedItem ? undefined : 'borderline' as const;
+        
         return {
           elementLabel: cleanLabel,
           textSnippet: undefined,
@@ -2555,6 +2566,7 @@ ${codeContent}`,
           thresholdPx: 20,
           explanation: item.rationale || `Element's clickable area is ${item.approx_px}×${item.approx_px}, ${isConfirmedItem ? 'below the confirmed desktop minimum of 20×20px' : 'below the recommended 24×24px desktop baseline'}.`,
           confidence: item.confidence,
+          potentialSubtype: elSubtype,
           correctivePrompt: elementCorrectivePrompt,
           deduplicationKey: `${item.file_path}|${item.component_name}`,
         };
@@ -2565,6 +2577,7 @@ ${codeContent}`,
         ruleName: 'Small tap / click targets',
         category: 'accessibility',
         status: a4Status,
+        potentialSubtype: a4Status === 'potential' ? 'borderline' : undefined,
         blocksConvergence: a4Status === 'confirmed',
         inputType: 'zip',
         isA4Aggregated: true,
@@ -2575,7 +2588,7 @@ ${codeContent}`,
         correctivePrompt: a4Rule?.correctivePrompt || '',
         confidence: Math.round(overallConfidence * 100) / 100,
         ...(a4Status === 'potential' ? {
-          advisoryGuidance: 'Code-level analysis estimates dimensions from size tokens. Verify rendered dimensions with browser DevTools.',
+          advisoryGuidance: 'Target size meets the minimum 20px threshold but is below the recommended 24×24px comfort size. Consider increasing for easier clicking.',
         } : {}),
       };
       

@@ -1263,6 +1263,9 @@ serve(async (req) => {
         const elementLabel = componentMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || `Body text element ${idx + 1}`;
         const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
         
+        // For GitHub: deterministic items confirmed; heuristic items are borderline (below recommended)
+        const elSubtype = isDeterministic ? undefined : 'borderline' as const;
+        
         return {
           elementLabel,
           textSnippet: undefined,
@@ -1273,6 +1276,7 @@ serve(async (req) => {
           thresholdPx: 16,
           explanation: v.diagnosis || 'Body text size is below the recommended 16px baseline.',
           confidence: v.confidence || 0.6,
+          potentialSubtype: elSubtype,
           correctivePrompt: isDeterministic
             ? `body text '${(elementLabel || 'Body text element').substring(0, 60)}' (${location || 'Source file'})\n\nIssue reason: Computed font-size ${computedSize}px is below the recommended readability baseline of 16px.\n\nRecommended fix: Increase the font size of all primary body text elements in this group (currently ${computedSize}px${(v.evidence || '').match(/(text-xs|text-sm)/i)?.[1] ? ` / ${(v.evidence || '').match(/(text-xs|text-sm)/i)?.[1]}` : ''}) to at least 16px (text-base). Ensure this update is applied consistently across all screens and components where this text style is reused. Adjust line-height to approximately 1.4–1.6 to preserve readability.`
             : undefined,
@@ -1291,6 +1295,7 @@ serve(async (req) => {
         ruleName: 'Small body font size',
         category: 'accessibility',
         status: a2Status,
+        potentialSubtype: a2Status === 'potential' ? 'borderline' : undefined,
         blocksConvergence: a2Status === 'confirmed',
         inputType: 'github',
         isA2Aggregated: true,
@@ -1302,7 +1307,7 @@ serve(async (req) => {
         correctivePrompt: a2Rule?.correctivePrompt || '',
         confidence: Math.round(avgConf * 100) / 100,
         ...(a2Status === 'potential' ? {
-          advisoryGuidance: 'Static visual estimation cannot determine exact computed font sizes. For deterministic measurement, upload the rendered source code (ZIP file) or provide a GitHub repository.',
+          advisoryGuidance: 'Font size meets the technical minimum but is below the recommended 16px baseline for comfortable reading. Consider increasing body text to at least 16px for improved readability.',
         } : {}),
         typeBadge: a2Status === 'confirmed' ? 'Confirmed (static)' : 'Heuristic (requires runtime verification)',
       };
@@ -1368,6 +1373,9 @@ serve(async (req) => {
           const fontSizeMatch = combined.match(/(\d+)px/);
           const fontSizePx = fontSizeMatch ? parseInt(fontSizeMatch[1]) : undefined;
           
+          // For GitHub: confirmed (<1.30) have no subtype; potential (1.30-1.45) are 'borderline'
+          const elSubtype = isDeterministic ? undefined : 'borderline' as const;
+          
           return {
             elementLabel,
             textSnippet: undefined,
@@ -1380,6 +1388,7 @@ serve(async (req) => {
             thresholdRatio: 1.3,
             explanation: v.diagnosis || 'Line-height ratio is below the recommended readability baseline.',
             confidence: v.confidence || 0.7,
+            potentialSubtype: elSubtype,
             correctivePrompt: isDeterministic && lineHeightRatio !== undefined
               ? `body text '${elementLabel.substring(0, 60)}' (${location})\n\nIssue reason: Computed line-height ratio ${lineHeightRatio.toFixed(2)} is below the recommended readability baseline of 1.3.\n\nRecommended fix: Increase the line-height of all primary body text elements in this group (currently ${lineHeightToken || lineHeightRatio}) to at least 1.5 (leading-normal). Ensure this update is applied consistently across all screens and components where this text style is reused.`
               : undefined,
@@ -1398,6 +1407,7 @@ serve(async (req) => {
             ruleName: 'Insufficient line spacing',
             category: 'accessibility',
             status: a3Status,
+            potentialSubtype: a3Status === 'potential' ? 'borderline' : undefined,
             blocksConvergence: a3Status === 'confirmed',
             inputType: 'github',
             isA3Aggregated: true,
@@ -1409,7 +1419,7 @@ serve(async (req) => {
             correctivePrompt: a3Rule?.correctivePrompt || '',
             confidence: Math.round(avgConf * 100) / 100,
             ...(a3Status === 'potential' ? {
-              advisoryGuidance: 'Static analysis cannot fully resolve CSS cascade for line-height. For deterministic measurement, verify with browser DevTools after rendering.',
+              advisoryGuidance: 'Line spacing is near the lower bound. Consider increasing line-height to ~1.45–1.6 for improved readability.',
             } : {}),
           };
           
@@ -1502,6 +1512,9 @@ serve(async (req) => {
                 `Increase the clickable area of the "${label}" ${role} to at least 20×20px (preferably 24×24px) using min-width/min-height or additional padding. Ensure the full interactive hit area meets the minimum size.`;
             }
             
+            // For GitHub: <20px confirmed (no subtype), 20-23px borderline
+            const elSubtype = isConfirmedEl ? undefined : 'borderline' as const;
+            
             return {
               elementLabel: label,
               textSnippet: undefined,
@@ -1515,6 +1528,7 @@ serve(async (req) => {
               thresholdPx: 20,
               explanation: el.explanation || `Element may be below the desktop minimum click target size.`,
               confidence: el.confidence || 0.80,
+              potentialSubtype: elSubtype,
               correctivePrompt: elementCorrectivePrompt,
               deduplicationKey: `${el.location}|${label}`,
             };
@@ -1525,6 +1539,7 @@ serve(async (req) => {
             ruleName: 'Small tap / click targets',
             category: 'accessibility',
             status: a4Status,
+            potentialSubtype: a4Status === 'potential' ? 'borderline' : undefined,
             blocksConvergence: a4Status === 'confirmed',
             inputType: 'github',
             isA4Aggregated: true,
@@ -1534,7 +1549,7 @@ serve(async (req) => {
             correctivePrompt: a4Rule?.correctivePrompt || '',
             confidence: Math.round(avgConf * 100) / 100,
             ...(a4Status === 'potential' ? {
-              advisoryGuidance: 'Static analysis cannot fully determine rendered dimensions. Verify with browser DevTools.',
+              advisoryGuidance: 'Target size meets the minimum 20px threshold but is below the recommended 24×24px comfort size. Consider increasing for easier clicking.',
             } : {}),
           };
           
