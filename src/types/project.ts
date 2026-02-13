@@ -137,6 +137,14 @@ export interface Violation {
   a1Elements?: A1ElementSubItem[];
   // "near-threshold" tag for elements within small margin of threshold
   nearThreshold?: boolean;
+  
+  // ============================================================
+  // A2 AGGREGATED ELEMENT REPORTING (Focus Visibility)
+  // ============================================================
+  // When isA2Aggregated = true, this violation represents an aggregated
+  // A2 report with multiple element sub-items stored in a2Elements.
+  isA2Aggregated?: boolean;
+  a2Elements?: A2ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -182,6 +190,33 @@ export interface A1ElementSubItem {
   
   // Deduplication key
   deduplicationKey: string; // screenId + bbox + textSnippet
+}
+
+// A2 Element sub-item for aggregated focus visibility reporting
+export interface A2ElementSubItem {
+  // Element identification
+  elementLabel: string; // e.g., "Submit button", "Navigation link"
+  elementType?: string; // button, link, input, select, etc.
+  textSnippet?: string; // Visible text if available
+  location: string; // file path (ZIP/GitHub) or "Screenshot #n — …"
+  
+  // Detection data
+  detection?: string; // e.g., "Tailwind/CSS: focus:outline-none without replacement"
+  focusClasses?: string[]; // Focus-related classes found
+  
+  // Classification
+  classification: 'confirmed' | 'potential';
+  potentialSubtype?: 'accuracy' | 'borderline'; // Only when classification='potential'
+  
+  // Explanation
+  explanation: string; // Why this element is flagged
+  confidence: number;
+  
+  // Corrective prompt (ONLY for confirmed violations)
+  correctivePrompt?: string;
+  
+  // Deduplication key
+  deduplicationKey: string;
 }
 
 // A1 Reason codes explaining why a finding is classified as "potential"
