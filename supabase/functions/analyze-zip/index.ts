@@ -2001,7 +2001,7 @@ ${codeContent}`,
     const a5ValidViolations: any[] = [];
     
     // First pass: filter A5 violations to only include actual violations
-    for (const v of a5Violations) {
+    for (const v of a2Violations) {
       const evidence = (v.evidence || '');
       const evidenceLower = evidence.toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
@@ -2256,9 +2256,9 @@ ${codeContent}`,
         confidence: Math.round(overallConfidence * 100) / 100,
       };
       
-      console.log(`A5 aggregated: ${a5Violations.length} findings → ${a5AffectedItems.length} valid violations → 1 result (${confirmedCount} confirmed, ${heuristicCount} heuristic)`);
+      console.log(`A5 aggregated: ${a2Violations.length} findings → ${a5AffectedItems.length} valid violations → 1 result (${confirmedCount} confirmed, ${heuristicCount} heuristic)`);
     } else {
-      console.log(`A5: No valid violations found (${a5Violations.length} filtered out as PASS or NOT APPLICABLE)`);
+      console.log(`A5: No valid violations found (${a2Violations.length} filtered out as PASS or NOT APPLICABLE)`);
     }
     
     // Combine all violations
