@@ -11,10 +11,7 @@ const corsHeaders = {
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px (text-base / 1rem) across all screens and components where this body-text style is reused. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy.' },
-    { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Primary body text elements use line-height ratios below the recommended 1.3 minimum for readability. WCAG 1.4.12 (Text Spacing) recommends adequate line spacing to support users with cognitive or visual impairments.', correctivePrompt: 'Increase line-height of primary body text (paragraphs, descriptions, main content text) to at least 1.5 (leading-normal) across all screens and components. Do not change headings, badges, navigation text, metadata, timestamps, button labels, or intentional microcopy. Adjust paragraph spacing proportionally.' },
-    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Primary interactive controls (buttons, submit inputs, role="button" elements) do not meet the minimum desktop click target size of 24×24 CSS px. Elements below 20×20px are confirmed violations; elements between 20–23px are potential risks. This evaluation uses desktop-appropriate thresholds — the 44px mobile recommendation does not apply.', correctivePrompt: 'Increase primary interactive element dimensions to at least 24×24 CSS px using min-width and min-height constraints or equivalent padding. Apply only to primary actionable controls (buttons, submit inputs). Do not modify navigation menus, dropdowns, breadcrumbs, pagination, toolbar icons, or secondary UI chrome.' },
-    { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
+    { id: 'A2', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
   ],
   usability: [
     { id: 'U1', name: 'Unclear primary action', diagnosis: 'Users may struggle to identify the main action.', correctivePrompt: 'Ensure exactly one primary action per action group uses a filled/default variant (e.g., variant="default" or bg-primary). Demote other actions to outline, ghost, or link variants. If more than two secondary actions exist, consider grouping them into an overflow menu ("More" or "..."). Do not alter layout structure.' },
@@ -714,136 +711,11 @@ function buildCodeAnalysisPrompt(selectedRules: string[]) {
 NOTE: A1 (text contrast) is analyzed separately with computed ratios. Do NOT report A1 violations.
 
 Examine the code for other accessibility issues:
-- Font-size declarations (check for values below 16px or 1rem)
-- Line-height and spacing values
 - Focus styles (:focus, :focus-visible, outline declarations)
 - ARIA attributes and semantic HTML usage
 - Alt text for images
 
-### A2 (Small body font size) — CLASSIFICATION RULES:
-
-**SCOPE:** Body-level text elements: <p>, .description, .content, .article, main text areas,
-dialog descriptions, alert bodies, form descriptions, card descriptions.
-
-**DO NOT APPLY to:** Badges, metadata, timestamps, intentional microcopy, labels, tags,
-chips, status indicators, keyboard shortcuts, breadcrumbs, navigation items, button labels.
-
-**CLASSIFICATION (Confirmed vs Potential):**
-
-1. **CONFIRMED VIOLATION** (status: "confirmed", blocksConvergence: true):
-   - Font size < 16px is EXPLICITLY defined in pixels (e.g., font-size: 14px, font-size: 12px)
-   - OR mapped Tailwind class equivalent to < 16px: text-xs (12px), text-sm (14px), text-[0.75rem], text-[0.875rem]
-   - AND the computed size can be deterministically resolved from the source code
-   - AND the semantic role is confidently classified as primary body text
-   - Confidence: 70-85%
-
-2. **HEURISTIC / POTENTIAL RISK** (status: "potential", blocksConvergence: false):
-   - Font size is defined in relative units (rem, em, %) where final computed size cannot be guaranteed
-   - OR the semantic role cannot confidently be classified as primary body text
-   - OR the size mapping is ambiguous (e.g., custom CSS variables, dynamic values)
-   - Confidence: 45-60%
-   - Display with advisory label
-
-**SEMANTIC ROLE CLASSIFICATION:**
-**PRIMARY BODY TEXT (A2 targets — must use ≥16px):**
-- DialogDescription, AlertDescription, FormDescription, CardDescription
-- Paragraph text, article content, main content blocks
-- Description text, help text, instructional text
-
-**EXCLUDED (DO NOT EVALUATE for A2):**
-- Badge, Tag, Chip, StatusBadge, StatusIndicator
-- Metadata, Timestamp, DateDisplay, TimeAgo
-- Shortcut, KeyboardShortcut, Kbd
-- Navigation items, button labels, icon labels
-- Tooltip content, popover content
-- Breadcrumb items, code/pre elements
-- Caption text under images/figures
-
-**OUTPUT FORMAT FOR A2 FINDINGS:**
-\`\`\`json
-{
-  "ruleId": "A2",
-  "ruleName": "Small body font size",
-  "category": "accessibility",
-  "status": "confirmed" or "potential",
-  "typeBadge": "VIOLATION" or "WARNING",
-  "sizeCategory": "<16px",
-  "evidence": "text-sm used in DialogDescription.tsx, CardDescription.tsx",
-  "diagnosis": "Body text in [components] uses [size] which is below the recommended 16px minimum for primary readable content.",
-  "contextualHint": "Increase body text to at least 16px (text-base) for primary content areas.",
-  "confidence": 0.75,
-  "semanticRole": "body-text"
-}
-\`\`\`
-
-**STRICT RULES:**
-- Only report text that serves as PRIMARY BODY TEXT (not badges, metadata, timestamps, microcopy)
-- text-base (16px) or larger → DO NOT report
-- text-sm (14px) for body text → CONFIRMED violation if deterministically resolved
-- text-xs (12px) for body text → CONFIRMED violation if deterministically resolved
-- Relative units (rem/em/%) without deterministic resolution → POTENTIAL
-- Frame as best-practice concern, never WCAG violation
-
-**DO NOT:**
-- Flag badges, metadata, timestamps, or microcopy
-- Flag text-base or larger
-- Use "fails", "violates WCAG", or compliance language
-- Evaluate aria-labels (screen reader only)
-- Flag interactive elements (buttons, links)
-- Speculate about runtime rendering
-### A4 (Small tap / click targets) — DESKTOP WEB UI EVALUATION:
-
-**SCOPE:**
-A4 applies ONLY to primary actionable controls:
-- \`<button>\`, \`<a>\` styled as button, \`<input type="button|submit">\`
-- Elements with \`role="button"\`
-- Primary actionable controls (e.g., submit, save, delete buttons)
-
-**EXPLICITLY EXCLUDE from A4 (never report):**
-- Breadcrumb links
-- Dropdown menu items (DropdownMenuItem, MenubarItem, ContextMenuItem)
-- Navigation menu triggers (NavigationMenuTrigger, NavLink)
-- Pagination controls (PaginationLink, PaginationPrevious, PaginationNext)
-- Compact toolbar icons
-- Table row action icons
-- Secondary UI chrome elements (Badge, Tag, Chip, Label)
-- Elements inside navigation/menu systems → at most Potential, never Confirmed
-
-**DESKTOP THRESHOLDS (NOT mobile 44px):**
-- width < 20px OR height < 20px → Confirmed (Blocking) — only if primary actionable control
-- 20px ≤ size < 24px → Potential Risk (Non-blocking)
-- ≥ 24px → Pass (no finding)
-
-**SIZE TOKEN TO APPROXIMATE PX MAPPING:**
-- h-4/w-4/size-4 → ~16px (below 20px → Confirmed if primary control)
-- h-5/w-5/size-5 → ~20px (borderline → Potential Risk)
-- h-6/w-6/size-6 → ~24px (meets desktop threshold → Pass)
-- h-7/w-7/size-7 → ~28px (Pass)
-- h-8/w-8/size-8 → ~32px (Pass)
-
-**CLASSIFICATION:**
-- Confirmed: width OR height < 20px AND element is a primary actionable control (not in nav/menu/dropdown)
-- Potential Risk: 20px ≤ size < 24px, OR element is inside navigation/menu systems regardless of size
-- Pass: ≥ 24px AND primary control
-
-**EVIDENCE REQUIREMENTS:**
-For each A4 finding, report:
-- Element name
-- File path
-- Computed width × height (from Tailwind tokens)
-- Which threshold applies (20px or 24px)
-- Detection method: deterministic (from CSS/Tailwind classes)
-- Confidence level
-
-**DO NOT:**
-- Use 44px as the threshold — this evaluates desktop web UI only
-- Report large groups of unrelated components
-- Report elements inside dropdowns, breadcrumbs, navigation, pagination, or toolbars as Confirmed
-- Mention internal glyphs, spans, or icon characters
-
-**Report each potentially undersized primary control SEPARATELY** — do not merge into one violation
-
-### A5 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
+### A2 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
 **ABSOLUTE RULE:**
 If an element does NOT remove the default browser focus outline, it MUST NOT be reported under A5.
@@ -1425,22 +1297,15 @@ ${codeContent}`,
     
     console.log(`Filtered ${(analysisResult.violations || []).length - filteredBySelection.length} violations from unselected rules`);
     
-    // Separate A2, A3, A4, and A5 violations for aggregation (only from selected rules)
-    const a2Violations: any[] = [];
-    const a3Violations: any[] = [];
-    const a4Violations: any[] = [];
-    const a5Violations: any[] = [];
+    // Separate A2 (focus) violations for aggregation (only from selected rules)
+    const a2Violations: any[] = []; // A2 = Poor focus visibility (formerly A5)
     const otherViolations: any[] = [];
     
     filteredBySelection.forEach((v: any) => {
-      if (v.ruleId === 'A2') {
+      if (v.ruleId === 'A2' || v.ruleId === 'A5') {
+        // Accept both old A5 and new A2 IDs during transition
+        v.ruleId = 'A2';
         a2Violations.push(v);
-      } else if (v.ruleId === 'A3') {
-        a3Violations.push(v);
-      } else if (v.ruleId === 'A4') {
-        a4Violations.push(v);
-      } else if (v.ruleId === 'A5') {
-        a5Violations.push(v);
       } else {
         otherViolations.push(v);
       }
@@ -1753,7 +1618,7 @@ ${codeContent}`,
       console.log(`U1: No valid violations found (${u1Violations.length} filtered out as speculative or lacking evidence)`);
     }
     
-    // Process non-A2/A3/A4/A5/U1 violations
+    // Process non-A2/U1 violations
     const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRules.find(r => r.id === v.ruleId);
@@ -2899,10 +2764,7 @@ ${codeContent}`,
     // Combine all violations
     let aiViolations = [
       ...filteredOtherViolations,
-      ...(aggregatedA2 ? [aggregatedA2] : []),
-      ...(aggregatedA3 ? [aggregatedA3] : []),
-      ...(aggregatedA4 ? [aggregatedA4] : []),
-      ...(aggregatedA5 ? [aggregatedA5] : []),
+      ...(aggregatedA5 ? [{ ...aggregatedA5, ruleId: 'A2', ruleName: 'Poor focus visibility' }] : []),
     ];
 
     // ========== Deterministic U1 (competing primary actions) ==========

@@ -18,27 +18,6 @@ export const rules: Rule[] = [
   {
     id: 'A2',
     category: 'accessibility',
-    name: 'Small body font size',
-    diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.',
-    correctivePrompt: 'Increase body text below 16px to at least 16px (text-base / 1rem). This applies to paragraphs, descriptions, article content, and main text areas. Do not apply to badges, metadata, timestamps, or intentional microcopy. Do not alter layout structure, spacing, or component hierarchy.'
-  },
-  {
-    id: 'A3',
-    category: 'accessibility',
-    name: 'Insufficient line spacing',
-    diagnosis: 'Primary body text elements use line-height ratios below the recommended 1.3 minimum for readability. WCAG 1.4.12 (Text Spacing) recommends adequate line spacing to support users with cognitive or visual impairments.',
-    correctivePrompt: 'Increase line-height of primary body text (paragraphs, descriptions, main content text) to at least 1.5 (leading-normal) across all screens and components. Do not change headings, badges, navigation text, metadata, timestamps, button labels, or intentional microcopy. Adjust paragraph spacing proportionally.'
-  },
-  {
-    id: 'A4',
-    category: 'accessibility',
-    name: 'Small tap / click targets',
-    diagnosis: 'Interactive elements do not explicitly enforce minimum tap target size (44×44 CSS px), which is commonly recommended in usability and accessibility guidelines (WCAG 2.1 Target Size is AAA, not AA). Padding or box sizing at runtime may increase the clickable area, but static analysis cannot confirm rendered dimensions.',
-    correctivePrompt: 'Increase interactive element dimensions to at least 44×44 CSS px using min-width and min-height constraints or equivalent padding. Apply only to elements intended for user input (buttons, icon buttons). Do not modify layout structure, visual hierarchy, or component behavior beyond interactive sizing.'
-  },
-  {
-    id: 'A5',
-    category: 'accessibility',
     name: 'Poor focus visibility',
     diagnosis: 'The default browser focus outline is removed without providing a visible replacement focus indicator, reducing keyboard accessibility.',
     correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline. Do not alter layout structure or component behavior beyond focus styling.'

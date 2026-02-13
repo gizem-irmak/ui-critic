@@ -4,9 +4,6 @@ import { cn } from '@/lib/utils';
 import type { Analysis, Violation } from '@/types/project';
 import { PotentialRisksSection } from './PotentialRiskItem';
 import { A1AggregatedCard } from './A1AggregatedCard';
-import { A2AggregatedCard } from './A2AggregatedCard';
-import { A3AggregatedCard } from './A3AggregatedCard';
-import { A4AggregatedCard } from './A4AggregatedCard';
 
 const categoryColors: Record<string, string> = {
   accessibility: 'category-accessibility',
@@ -60,26 +57,12 @@ function GenericViolationCard({ violation, isConfirmed, compact = false }: {
 }
 
 function isAggregated(v: Violation): boolean {
-  return !!(
-    (v.ruleId === 'A1' && v.isA1Aggregated) ||
-    (v.ruleId === 'A2' && v.isA2Aggregated) ||
-    (v.ruleId === 'A3' && v.isA3Aggregated) ||
-    (v.ruleId === 'A4' && v.isA4Aggregated)
-  );
+  return !!(v.ruleId === 'A1' && v.isA1Aggregated);
 }
 
 function AggregatedCard({ violation, compact }: { violation: Violation; compact?: boolean }) {
   if (violation.ruleId === 'A1' && violation.isA1Aggregated) {
     return <A1AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'A2' && violation.isA2Aggregated) {
-    return <A2AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'A3' && violation.isA3Aggregated) {
-    return <A3AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'A4' && violation.isA4Aggregated) {
-    return <A4AggregatedCard violation={violation} compact={compact} />;
   }
   return null;
 }

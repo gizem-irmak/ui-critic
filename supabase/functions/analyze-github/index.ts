@@ -9,10 +9,7 @@ const corsHeaders = {
 const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
-    { id: 'A2', name: 'Small body font size', diagnosis: 'Body-level text elements use font sizes below the recommended 16px minimum for primary readable content. WCAG 2.1 does not mandate a minimum font size; however, 16px is widely adopted as the baseline for body text readability.', correctivePrompt: 'Increase primary body text (paragraphs, descriptions, main content text, dialog/alert/form descriptions) to at least 16px (text-base / 1rem) across all screens and components where this body-text style is reused. Do not change badges, headings, subtitles, navigation text, metadata, timestamps, button labels, or intentional microcopy.' },
-    { id: 'A3', name: 'Insufficient line spacing', diagnosis: 'Primary body text elements use line-height ratios below the recommended 1.3 minimum for readability. WCAG 1.4.12 (Text Spacing) recommends adequate line spacing to support users with cognitive or visual impairments.', correctivePrompt: 'Increase line-height of primary body text (paragraphs, descriptions, main content text) to at least 1.5 (leading-normal) across all screens and components. Do not change headings, badges, navigation text, metadata, timestamps, button labels, or intentional microcopy. Adjust paragraph spacing proportionally.' },
-    { id: 'A4', name: 'Small tap / click targets', diagnosis: 'Primary interactive controls (buttons, submit inputs, role="button" elements) do not meet the minimum desktop click target size of 24×24 CSS px. Elements below 20×20px are confirmed violations; elements between 20–23px are potential risks. This evaluation uses desktop-appropriate thresholds — the 44px mobile recommendation does not apply.', correctivePrompt: 'Increase primary interactive element dimensions to at least 24×24 CSS px using min-width and min-height constraints or equivalent padding. Apply only to primary actionable controls (buttons, submit inputs). Do not modify navigation menus, dropdowns, breadcrumbs, pagination, toolbar icons, or secondary UI chrome.' },
-    { id: 'A5', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
+    { id: 'A2', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
   ],
   usability: [
     { id: 'U1', name: 'Unclear primary action', diagnosis: 'Users may struggle to identify the main action.', correctivePrompt: 'Ensure exactly one primary action per action group uses a filled/default variant (e.g., variant="default" or bg-primary). Demote other actions to outline, ghost, or link variants. If more than two secondary actions exist, consider grouping them into an overflow menu ("More" or "..."). Do not alter layout structure.' },
@@ -1144,9 +1141,8 @@ serve(async (req) => {
       console.log(`A1 aggregated (GitHub): ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
     
-    // ========== A2 AGGREGATION LOGIC (GitHub) ==========
-    const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2');
-    const a4AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A4');
+    // ========== A2/A3/A4 rules removed — skip to other violations ==========
+    const nonA2A3A4AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4');
     const nonA2A3A4AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4');
     
     let aggregatedA2GitHub: any = null;
@@ -1583,10 +1579,6 @@ serve(async (req) => {
     // Combine all violations
     const allViolations = [
       ...aggregatedA1Violations,
-      ...(u1Violation ? [u1Violation] : []),
-      ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
-      ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
-      ...(aggregatedA4GitHub ? [aggregatedA4GitHub] : []),
       ...nonA2A3A4AiViolations,
     ];
     
