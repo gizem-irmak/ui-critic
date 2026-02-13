@@ -1482,23 +1482,43 @@ serve(async (req) => {
           const avgConf = a4Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a4Elements.length;
           const a4Rule = [...rules.accessibility].find(r => r.id === 'A4');
           
-          // Build proper a4Elements for aggregated card UI
-          const a4ElementsForUI = a4Elements.map((el: any) => ({
-            elementLabel: el.elementLabel || 'Interactive element',
-            textSnippet: undefined,
-            location: el.location || 'Unknown file',
-            computedWidth: el.approxPxNum < 24 ? el.approxPxNum : undefined,
-            computedHeight: el.approxPxNum < 24 ? el.approxPxNum : undefined,
-            estimatedWidth: undefined,
-            estimatedHeight: undefined,
-            sizeSource: undefined,
-            detectionMethod: el.detectionMethod || 'deterministic',
-            thresholdPx: 20,
-            explanation: el.explanation || `Element may be below the desktop minimum click target size.`,
-            confidence: el.confidence || 0.80,
-            correctivePrompt: el.detectionMethod === 'deterministic' ? `Increase this element's clickable area to at least 24×24 CSS px.` : undefined,
-            deduplicationKey: `${el.location}|${el.elementLabel}`,
-          }));
+          // Build proper a4Elements for aggregated card UI with structured corrective prompts
+          const a4ElementsForUI = a4Elements.map((el: any) => {
+            const w = el.approxPxNum;
+            const h = el.approxPxNum;
+            const minSide = Math.min(w, h);
+            const label = el.elementLabel || 'Interactive element';
+            const fileName = (el.location || 'Unknown file').split('/').pop() || el.location || 'Unknown file';
+            const role = 'button';
+            const isConfirmedEl = el.detectionMethod === 'deterministic' && w < 20;
+            
+            let elementCorrectivePrompt: string | undefined = undefined;
+            if (isConfirmedEl) {
+              elementCorrectivePrompt = 
+                `[${label} ${role}] — ${fileName}\n\n` +
+                `Issue reason:\n` +
+                `Clickable area is ${w}×${h}px (min side: ${minSide}px), below the 20px desktop minimum.\n\n` +
+                `Recommended fix:\n` +
+                `Increase the clickable area of the "${label}" ${role} to at least 20×20px (preferably 24×24px) using min-width/min-height or additional padding. Ensure the full interactive hit area meets the minimum size.`;
+            }
+            
+            return {
+              elementLabel: label,
+              textSnippet: undefined,
+              location: el.location || 'Unknown file',
+              computedWidth: w < 24 ? w : undefined,
+              computedHeight: h < 24 ? h : undefined,
+              estimatedWidth: undefined,
+              estimatedHeight: undefined,
+              sizeSource: undefined,
+              detectionMethod: el.detectionMethod || 'deterministic',
+              thresholdPx: 20,
+              explanation: el.explanation || `Element may be below the desktop minimum click target size.`,
+              confidence: el.confidence || 0.80,
+              correctivePrompt: elementCorrectivePrompt,
+              deduplicationKey: `${el.location}|${label}`,
+            };
+          });
 
           aggregatedA4GitHub = {
             ruleId: 'A4',

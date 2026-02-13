@@ -2525,12 +2525,29 @@ ${codeContent}`,
         const location = item.file_path || 'Unknown file';
         const isConfirmedItem = item.approx_px_num < 20 && !item.isInsideSecondaryContainer;
         
+        // Build per-element corrective prompt using structured template (deterministic only)
+        const w = item.approx_px_num;
+        const h = item.approx_px_num;
+        const minSide = Math.min(w, h);
+        const fileName = (item.file_path || '').split('/').pop() || 'Unknown file';
+        const role = 'button'; // default role for interactive elements
+        
+        let elementCorrectivePrompt: string | undefined = undefined;
+        if (isConfirmedItem) {
+          elementCorrectivePrompt = 
+            `[${cleanLabel} ${role}] — ${fileName}\n\n` +
+            `Issue reason:\n` +
+            `Clickable area is ${w}×${h}px (min side: ${minSide}px), below the 20px desktop minimum.\n\n` +
+            `Recommended fix:\n` +
+            `Increase the clickable area of the "${cleanLabel}" ${role} to at least 20×20px (preferably 24×24px) using min-width/min-height or additional padding. Ensure the full interactive hit area meets the minimum size.`;
+        }
+        
         return {
           elementLabel: cleanLabel,
           textSnippet: undefined,
           location,
-          computedWidth: item.approx_px_num,
-          computedHeight: item.approx_px_num,
+          computedWidth: w,
+          computedHeight: h,
           estimatedWidth: undefined,
           estimatedHeight: undefined,
           sizeSource: item.size_token || undefined,
@@ -2538,7 +2555,7 @@ ${codeContent}`,
           thresholdPx: 20,
           explanation: item.rationale || `Element's clickable area is ${item.approx_px}×${item.approx_px}, ${isConfirmedItem ? 'below the confirmed desktop minimum of 20×20px' : 'below the recommended 24×24px desktop baseline'}.`,
           confidence: item.confidence,
-          correctivePrompt: isConfirmedItem ? `Increase this element's clickable area to at least 24×24 CSS px using min-width/min-height or padding.` : undefined,
+          correctivePrompt: elementCorrectivePrompt,
           deduplicationKey: `${item.file_path}|${item.component_name}`,
         };
       });

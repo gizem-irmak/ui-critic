@@ -4370,7 +4370,7 @@ serve(async (req) => {
           thresholdPx: 20,
           explanation: item.rationale,
           confidence: item.confidence,
-          correctivePrompt: undefined,
+          correctivePrompt: undefined, // Heuristic findings never get corrective prompts
           deduplicationKey: `${item.location}|${item.component_name}`,
         };
       });
