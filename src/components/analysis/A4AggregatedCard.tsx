@@ -6,16 +6,13 @@ import { cn } from '@/lib/utils';
 import type { Violation, A4ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { PotentialSubtypeBadge, SubtypeAdvisoryGuidance } from './PotentialSubtypeUI';
 
 interface A4AggregatedCardProps {
   violation: Violation;
   compact?: boolean;
 }
 
-/**
- * Single element finding card — identical structure to A2ElementItem.
- * Renders: elementLabel, location, width, height, threshold, detection, confidence, reasoning.
- */
 function A4ElementItem({ element, isConfirmed, compact = false }: {
   element: A4ElementSubItem;
   isConfirmed: boolean;
@@ -33,7 +30,7 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
-        {/* Header row — element label + optional text snippet */}
+        {/* Header row — element label + optional text snippet + subtype badge */}
         <CollapsibleTrigger className="w-full">
           <div className="flex items-start justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
@@ -47,6 +44,9 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
                 )}>
                   "{element.textSnippet}"
                 </span>
+              )}
+              {!isConfirmed && element.potentialSubtype && (
+                <PotentialSubtypeBadge subtype={element.potentialSubtype} compact={compact} />
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -150,10 +150,6 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
   );
 }
 
-/**
- * A4 aggregated card — mirrors A2AggregatedCard exactly.
- * Renders nothing if no a4Elements exist.
- */
 export function A4AggregatedCard({ violation, compact = false }: A4AggregatedCardProps) {
   if (!violation.isA4Aggregated || !violation.a4Elements || violation.a4Elements.length === 0) {
     return null;
@@ -199,19 +195,14 @@ export function A4AggregatedCard({ violation, compact = false }: A4AggregatedCar
           />
         ))}
 
-        {/* Advisory guidance for potential findings */}
-        {!isConfirmed && violation.advisoryGuidance && (
-          <div className={cn(
-            'rounded-lg bg-muted/30 border border-border mt-3',
-            compact ? 'p-2' : 'p-3'
-          )}>
-            <p className={cn('font-medium text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-              💡 Advisory Guidance
-            </p>
-            <p className={cn('text-muted-foreground mt-1', compact ? 'text-xs' : 'text-sm')}>
-              {violation.advisoryGuidance}
-            </p>
-          </div>
+        {/* Subtype-aware advisory guidance */}
+        {!isConfirmed && (
+          <SubtypeAdvisoryGuidance
+            ruleId="A4"
+            potentialSubtype={violation.potentialSubtype}
+            fallbackGuidance={violation.advisoryGuidance}
+            compact={compact}
+          />
         )}
       </CardContent>
     </Card>

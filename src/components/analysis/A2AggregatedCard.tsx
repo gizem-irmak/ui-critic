@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import type { Violation, A2ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { PotentialSubtypeBadge, SubtypeAdvisoryGuidance } from './PotentialSubtypeUI';
 
 interface A2AggregatedCardProps {
   violation: Violation;
@@ -43,7 +44,9 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                   "{element.textSnippet}"
                 </span>
               )}
-              
+              {!isConfirmed && element.potentialSubtype && (
+                <PotentialSubtypeBadge subtype={element.potentialSubtype} compact={compact} />
+              )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               {isOpen ? (
@@ -196,19 +199,14 @@ export function A2AggregatedCard({ violation, compact = false }: A2AggregatedCar
           />
         ))}
 
-        {/* Advisory guidance for potential findings */}
-        {!isConfirmed && violation.advisoryGuidance && (
-          <div className={cn(
-            'rounded-lg bg-muted/30 border border-border mt-3',
-            compact ? 'p-2' : 'p-3'
-          )}>
-            <p className={cn('font-medium text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-              💡 Advisory Guidance
-            </p>
-            <p className={cn('text-muted-foreground mt-1', compact ? 'text-xs' : 'text-sm')}>
-              {violation.advisoryGuidance}
-            </p>
-          </div>
+        {/* Subtype-aware advisory guidance */}
+        {!isConfirmed && (
+          <SubtypeAdvisoryGuidance
+            ruleId="A2"
+            potentialSubtype={violation.potentialSubtype}
+            fallbackGuidance={violation.advisoryGuidance}
+            compact={compact}
+          />
         )}
       </CardContent>
     </Card>
