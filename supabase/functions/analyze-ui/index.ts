@@ -4372,9 +4372,7 @@ serve(async (req) => {
           sizeSource: undefined,
           detectionMethod: 'heuristic' as const,
           thresholdPx: 20,
-          explanation: estimatedWidth !== undefined
-            ? `Estimated clickable area is approximately ${estimatedWidth}×${estimatedHeight}px. Verify with ZIP or GitHub for exact computed dimensions.`
-            : (item.rationale || 'Estimated target size could not be reliably determined. Upload ZIP or provide GitHub for deterministic measurement.'),
+          explanation: item.rationale,
           confidence: item.confidence,
           correctivePrompt: undefined, // Heuristic findings never get corrective prompts
           deduplicationKey: `${item.location}|${item.component_name}`,
