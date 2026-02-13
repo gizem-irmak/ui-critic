@@ -1462,17 +1462,37 @@ serve(async (req) => {
           const elementLabel = compMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || 'Interactive element';
           const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
           
-          // Extract approx px from tokens
-          let approxPxNum = 16;
-          if (/h-4\b|w-4\b|size-4\b|~16px/.test(combined)) approxPxNum = 16;
-          else if (/h-5\b|w-5\b|size-5\b|~20px/.test(combined)) approxPxNum = 20;
-          else if (/h-6\b|w-6\b|size-6\b|~24px/.test(combined)) approxPxNum = 24;
-          else if (/h-7\b|w-7\b|size-7\b|~28px/.test(combined)) approxPxNum = 28;
-          else if (/h-8\b|w-8\b|size-8\b|~32px/.test(combined)) approxPxNum = 32;
+          // Extract approx px from tokens — support arbitrary px values
+          let approxPxNum = 0;
+          if (/h-3\b|w-3\b|size-3\b/.test(combined)) approxPxNum = 12;
+          else if (/h-4\b|w-4\b|size-4\b/.test(combined)) approxPxNum = 16;
+          else if (/h-5\b|w-5\b|size-5\b/.test(combined)) approxPxNum = 20;
+          else if (/h-\[(\d+(?:\.\d+)?)px\]/.test(combined) || /w-\[(\d+(?:\.\d+)?)px\]/.test(combined)) {
+            const hMatch = combined.match(/h-\[(\d+(?:\.\d+)?)px\]/);
+            const wMatch = combined.match(/w-\[(\d+(?:\.\d+)?)px\]/);
+            const hVal = hMatch ? parseFloat(hMatch[1]) : Infinity;
+            const wVal = wMatch ? parseFloat(wMatch[1]) : Infinity;
+            approxPxNum = Math.min(hVal, wVal);
+          }
+          else if (/h-6\b|w-6\b|size-6\b/.test(combined)) approxPxNum = 24;
+          else if (/h-7\b|w-7\b|size-7\b/.test(combined)) approxPxNum = 28;
+          else if (/h-8\b|w-8\b|size-8\b/.test(combined)) approxPxNum = 32;
+          else if (/(\d+(?:\.\d+)?)px/.test(combined)) {
+            const pxMatch = combined.match(/(\d+(?:\.\d+)?)px/);
+            if (pxMatch) approxPxNum = parseFloat(pxMatch[1]);
+          }
+          else if (/~16px|1rem(?!\.)/.test(combined)) approxPxNum = 16;
+          else if (/~20px|1\.25rem/.test(combined)) approxPxNum = 20;
+          else if (/~22px|1\.375rem/.test(combined)) approxPxNum = 22;
+          else if (/~24px|1\.5rem/.test(combined)) approxPxNum = 24;
+          
+          // Skip if unable to determine size
+          if (approxPxNum === 0) return null;
           
           // ≥ 24px → Pass
           if (approxPxNum >= 24) return null;
           
+          // minDimension = approxPxNum (width and height treated as same from token)
           const isConfirmed = approxPxNum < 20;
           
           return {
@@ -1480,8 +1500,8 @@ serve(async (req) => {
             location,
             approxPx: `~${approxPxNum}px`,
             approxPxNum,
-            detectionMethod: isConfirmed ? 'deterministic' as const : 'heuristic' as const,
-            confidence: isConfirmed ? 0.80 : 0.60,
+            detectionMethod: 'deterministic' as const,
+            confidence: isConfirmed ? 0.80 : 0.65,
             explanation: v.diagnosis || `Element may be below the desktop minimum click target size of 24×24 CSS px.`,
           };
         }).filter(Boolean);
