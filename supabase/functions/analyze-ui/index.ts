@@ -4372,7 +4372,9 @@ serve(async (req) => {
           sizeSource: undefined,
           detectionMethod: 'heuristic' as const,
           thresholdPx: 20,
-          explanation: item.rationale,
+          explanation: estimatedWidth !== undefined
+            ? `Estimated clickable area is approximately ${estimatedWidth}×${estimatedHeight}px. ${estimatedWidth < 20 ? 'This appears below the 20px desktop minimum.' : 'This is below the recommended 24×24px desktop baseline.'} Verify with ZIP or GitHub for computed size.`
+            : (item.rationale || 'Estimated clickable area appears below recommended desktop target size. Verify with ZIP or GitHub for computed size.'),
           confidence: item.confidence,
           correctivePrompt: undefined, // Heuristic findings never get corrective prompts
           deduplicationKey: `${item.location}|${item.component_name}`,
