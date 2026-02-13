@@ -2400,17 +2400,39 @@ ${codeContent}`,
       if (/h-3\b|w-3\b|size-3\b/.test(combined)) { sizeToken = 'h-3/w-3'; approxPx = '~12px'; approxPxNum = 12; }
       else if (/h-4\b|w-4\b|size-4\b/.test(combined)) { sizeToken = 'h-4/w-4'; approxPx = '~16px'; approxPxNum = 16; }
       else if (/h-5\b|w-5\b|size-5\b/.test(combined)) { sizeToken = 'h-5/w-5'; approxPx = '~20px'; approxPxNum = 20; }
+      else if (/h-\[(\d+(?:\.\d+)?)px\]/.test(combined) || /w-\[(\d+(?:\.\d+)?)px\]/.test(combined)) {
+        const hMatch = combined.match(/h-\[(\d+(?:\.\d+)?)px\]/);
+        const wMatch = combined.match(/w-\[(\d+(?:\.\d+)?)px\]/);
+        const hVal = hMatch ? parseFloat(hMatch[1]) : Infinity;
+        const wVal = wMatch ? parseFloat(wMatch[1]) : Infinity;
+        approxPxNum = Math.min(hVal, wVal);
+        sizeToken = `${approxPxNum}px (arbitrary)`;
+        approxPx = `~${approxPxNum}px`;
+      }
       else if (/h-6\b|w-6\b|size-6\b/.test(combined)) { sizeToken = 'h-6/w-6'; approxPx = '~24px'; approxPxNum = 24; }
       else if (/h-7\b|w-7\b|size-7\b/.test(combined)) { sizeToken = 'h-7/w-7'; approxPx = '~28px'; approxPxNum = 28; }
       else if (/h-8\b|w-8\b|size-8\b/.test(combined)) { sizeToken = 'h-8/w-8'; approxPx = '~32px'; approxPxNum = 32; }
       else if (/h-9\b|w-9\b|size-9\b/.test(combined)) { sizeToken = 'h-9/w-9'; approxPx = '~36px'; approxPxNum = 36; }
       else if (/h-10\b|w-10\b|size-10\b/.test(combined)) { sizeToken = 'h-10/w-10'; approxPx = '~40px'; approxPxNum = 40; }
-      else if (/16px|1rem(?!\.)/.test(combined)) { sizeToken = '16px'; approxPx = '~16px'; approxPxNum = 16; }
-      else if (/20px|1\.25rem/.test(combined)) { sizeToken = '20px'; approxPx = '~20px'; approxPxNum = 20; }
-      else if (/24px|1\.5rem/.test(combined)) { sizeToken = '24px'; approxPx = '~24px'; approxPxNum = 24; }
-      else { sizeToken = 'implicit sizing'; approxPx = '<20px'; approxPxNum = 16; }
+      else if (/(\d+(?:\.\d+)?)px/.test(combined)) {
+        // Match any explicit px value (e.g., 22px, 18px, 30px)
+        const pxMatch = combined.match(/(\d+(?:\.\d+)?)px/);
+        if (pxMatch) { approxPxNum = parseFloat(pxMatch[1]); sizeToken = `${approxPxNum}px`; approxPx = `~${approxPxNum}px`; }
+        else { sizeToken = 'implicit sizing'; approxPx = '<20px'; approxPxNum = 16; }
+      }
+      else if (/1\.25rem/.test(combined)) { sizeToken = '1.25rem'; approxPx = '~20px'; approxPxNum = 20; }
+      else if (/1\.375rem/.test(combined)) { sizeToken = '1.375rem'; approxPx = '~22px'; approxPxNum = 22; }
+      else if (/1\.5rem/.test(combined)) { sizeToken = '1.5rem'; approxPx = '~24px'; approxPxNum = 24; }
+      else if (/1rem(?!\.)/.test(combined)) { sizeToken = '1rem'; approxPx = '~16px'; approxPxNum = 16; }
+      else { sizeToken = 'implicit sizing'; approxPx = 'unknown'; approxPxNum = 0; }
       
       detectedSizeRanges.add(approxPx);
+      
+      // Skip if size could not be determined
+      if (approxPxNum === 0) {
+        console.log(`A4 SKIP (unable to determine size): ${componentName}`);
+        continue;
+      }
       
       // Desktop threshold classification:
       // ≥ 24px → Pass (skip)
