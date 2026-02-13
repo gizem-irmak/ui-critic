@@ -2564,7 +2564,9 @@ ${codeContent}`,
           sizeSource: item.size_token || undefined,
           detectionMethod: 'deterministic' as const,
           thresholdPx: 20,
-          explanation: item.rationale || `Element's clickable area is ${item.approx_px}×${item.approx_px}, ${isConfirmedItem ? 'below the confirmed desktop minimum of 20×20px' : 'below the recommended 24×24px desktop baseline'}.`,
+          explanation: isConfirmedItem
+            ? `This control's computed clickable area is ${w}×${h}px (min side: ${Math.min(w, h)}px), below the confirmed desktop minimum of 20×20px.`
+            : `This control's computed clickable area is ${w}×${h}px (min side: ${Math.min(w, h)}px), below the recommended 24×24px desktop baseline but above the 20px confirmed minimum.`,
           confidence: item.confidence,
           potentialSubtype: elSubtype,
           correctivePrompt: elementCorrectivePrompt,
