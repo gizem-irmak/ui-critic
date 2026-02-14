@@ -4180,13 +4180,44 @@ serve(async (req) => {
       console.log(`A1 aggregated: ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
     
-    // (A3/A4 rules removed — only A1 and A2 remain as accessibility rules)
+    // ========== A3 Screenshot Mode (advisory only) ==========
+    let aggregatedA3UI: any = null;
+    if (selectedRulesSet.has('A3')) {
+      aggregatedA3UI = {
+        ruleId: 'A3',
+        ruleName: 'Incomplete keyboard operability',
+        category: 'accessibility',
+        status: 'potential',
+        potentialSubtype: 'accuracy',
+        blocksConvergence: false,
+        inputType: 'screenshots',
+        isA3Aggregated: true,
+        a3Elements: [{
+          elementLabel: 'Keyboard operability cannot be verified from screenshot',
+          elementType: 'screenshot limitation',
+          location: 'Screenshot analysis',
+          detection: 'Screenshot limitation',
+          classification: 'potential' as const,
+          classificationCode: 'A3-Screenshot',
+          potentialSubtype: 'accuracy' as const,
+          explanation: 'Keyboard operability cannot be verified from screenshots. Upload ZIP/GitHub for deterministic keyboard checks.',
+          confidence: 0.55,
+          deduplicationKey: 'a3-screenshot-advisory',
+        }],
+        diagnosis: 'Keyboard operability cannot be assessed from screenshot input alone.',
+        contextualHint: 'Upload ZIP or GitHub source for deterministic keyboard accessibility checks.',
+        correctivePrompt: '',
+        confidence: 0.55,
+        advisoryGuidance: 'Keyboard operability cannot be verified from screenshots. Upload ZIP/GitHub for deterministic keyboard checks.',
+      };
+    }
     
     // Combine all violations - A1 uses aggregated cards (max 2), A2 uses aggregated card
     const enhancedViolations = [
       ...filteredOtherViolations,
       ...aggregatedA1Violations,
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
+      ...(aggregatedA3UI ? [aggregatedA3UI] : []),
     ];
 
     console.log(`Analysis complete: ${enhancedViolations.length} violations found`);

@@ -22,6 +22,13 @@ export const rules: Rule[] = [
     diagnosis: 'The default browser focus outline is removed without providing a visible replacement focus indicator, reducing keyboard accessibility.',
     correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline. Do not alter layout structure or component behavior beyond focus styling.'
   },
+  {
+    id: 'A3',
+    category: 'accessibility',
+    name: 'Incomplete keyboard operability',
+    diagnosis: 'Interactive elements are not fully operable via keyboard or have broken keyboard semantics, preventing keyboard-only users from accessing functionality.',
+    correctivePrompt: 'Ensure all interactive elements are keyboard accessible: use native <button>/<a href> elements, or add role, tabIndex=0, and Enter/Space key handlers to custom interactive elements.'
+  },
   // Usability (HCI)
   {
     id: 'U1',

@@ -10,6 +10,7 @@ const rules = {
   accessibility: [
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
     { id: 'A2', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
+    { id: 'A3', name: 'Incomplete keyboard operability', diagnosis: 'Interactive elements not fully operable via keyboard.', correctivePrompt: 'Ensure all interactive elements are keyboard accessible using native elements or ARIA + key handlers.' },
   ],
   usability: [
     { id: 'U1', name: 'Unclear primary action', diagnosis: 'Users may struggle to identify the main action.', correctivePrompt: 'Ensure exactly one primary action per action group uses a filled/default variant (e.g., variant="default" or bg-primary). Demote other actions to outline, ghost, or link variants. If more than two secondary actions exist, consider grouping them into an overflow menu ("More" or "..."). Do not alter layout structure.' },
@@ -746,6 +747,152 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   }];
 }
 
+// ========== A3 DETERMINISTIC DETECTION (Keyboard Operability) ==========
+interface A3Finding {
+  elementLabel: string;
+  elementType: string;
+  role?: string;
+  sourceLabel: string;
+  filePath: string;
+  componentName?: string;
+  classificationCode: string;
+  classification: 'confirmed' | 'potential';
+  detection: string;
+  evidence: string;
+  explanation: string;
+  confidence: number;
+  correctivePrompt?: string;
+  deduplicationKey: string;
+}
+
+function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[] {
+  const findings: A3Finding[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx)$/.test(filePath)) continue;
+    if (filePath.includes('components/ui/')) continue;
+
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+    else if (exportedConst?.[1]) componentName = exportedConst[1];
+
+    // A3-C1: Non-focusable custom interactive
+    const divClickRegex = /<(div|span|li|section|article)\b([^>]*onClick[^>]*)>/gi;
+    let match;
+    while ((match = divClickRegex.exec(content)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      if (/role\s*=/.test(attrs) || /tabIndex\s*=\s*\{?\s*[0-9]/.test(attrs) || /tabindex\s*=\s*["'][0-9]/.test(attrs) || /onKeyDown|onKeyUp|onKeyPress/.test(attrs)) continue;
+
+      const contextEnd = Math.min(content.length, match.index + match[0].length + 200);
+      const context = content.slice(Math.max(0, match.index - 20), contextEnd);
+      const ariaLabel = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const titleAttr = attrs.match(/title\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const childTextMatch = context.match(new RegExp(`>([^<]{1,60})<`));
+      const label = ariaLabel?.[1] || ariaLabel?.[2] || titleAttr?.[1] || titleAttr?.[2] || childTextMatch?.[1]?.trim() || `<${tag}> element`;
+
+      const dedupeKey = `${filePath}|${tag}|${label}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      findings.push({
+        elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
+        classificationCode: 'A3-C1', classification: 'confirmed',
+        detection: `<${tag}> with onClick but no role, tabIndex, or key handler`,
+        evidence: `<${tag} onClick=...> in ${filePath}`,
+        explanation: `This <${tag}> has onClick but is not keyboard accessible — no role, tabIndex, or key handler.`,
+        confidence: 0.92,
+        correctivePrompt: `[A3] Make '${label}' keyboard accessible by using <button> or adding role='button', tabIndex=0, and Enter/Space handlers.`,
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // A3-C2: tabindex="-1" on primary interactive
+    const negTabIndexRegex = /<(button|a|input|select|textarea)\b([^>]*tabIndex\s*=\s*\{?\s*-1[^>]*)>/gi;
+    while ((match = negTabIndexRegex.exec(content)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      if (/aria-hidden\s*=\s*["']?true/i.test(attrs) || /hidden\b/.test(attrs) || /sr-only|visually-hidden/i.test(attrs)) continue;
+
+      const ariaLabel = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const label = ariaLabel?.[1] || ariaLabel?.[2] || `<${tag}> element`;
+      const dedupeKey = `${filePath}|tabindex-neg|${label}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      findings.push({
+        elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
+        classificationCode: 'A3-C2', classification: 'confirmed',
+        detection: `tabIndex={-1} on <${tag}>`,
+        evidence: `<${tag} tabIndex={-1}> in ${filePath}`,
+        explanation: `Primary interactive <${tag}> has tabIndex={-1}, removing it from keyboard tab order.`,
+        confidence: 0.90,
+        correctivePrompt: `[A3] Remove tabIndex={-1} from '${label}' or provide an alternative keyboard-accessible control.`,
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // A3-P1: role="button" with tabIndex but no key handler
+    const roleButtonRegex = /<(div|span)\b([^>]*role\s*=\s*["']button["'][^>]*)>/gi;
+    while ((match = roleButtonRegex.exec(content)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      const hasTabIndex = /tabIndex\s*=\s*\{?\s*[0-9]/.test(attrs) || /tabindex\s*=\s*["'][0-9]/.test(attrs);
+      if (!hasTabIndex) continue;
+      if (/onKeyDown|onKeyUp|onKeyPress/.test(attrs)) continue;
+
+      const ariaLabel = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const label = ariaLabel?.[1] || ariaLabel?.[2] || `<${tag} role="button">`;
+      const dedupeKey = `${filePath}|role-nokey|${label}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      findings.push({
+        elementLabel: label, elementType: tag, role: 'button', sourceLabel: label, filePath, componentName,
+        classificationCode: 'A3-P1', classification: 'potential',
+        detection: `role="button" + tabIndex but no key handler`,
+        evidence: `<${tag} role="button" tabIndex=0> in ${filePath}`,
+        explanation: `Has role="button" and tabIndex but no key handler — Enter/Space may not activate it.`,
+        confidence: 0.72,
+        correctivePrompt: `[A3] Verify '${label}' activates with Enter/Space. Prefer native <button> or add key handling.`,
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // A3-P1: <a> without href used as button
+    const anchorNoHrefRegex = /<a\b([^>]*onClick[^>]*)>/gi;
+    while ((match = anchorNoHrefRegex.exec(content)) !== null) {
+      const attrs = match[1];
+      if (/href\s*=\s*(?:"(?!#")(?![^"]*javascript:)[^"]+"|'(?!#')[^']+')/.test(attrs)) continue;
+      const hasHref = /href\s*=/.test(attrs);
+      if (hasHref && !/href\s*=\s*["']#["']/.test(attrs)) continue;
+
+      const ariaLabel = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const label = ariaLabel?.[1] || ariaLabel?.[2] || '<a> as button';
+      const dedupeKey = `${filePath}|a-nohref|${label}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      findings.push({
+        elementLabel: label, elementType: 'a', role: 'link', sourceLabel: label, filePath, componentName,
+        classificationCode: 'A3-P1', classification: 'potential',
+        detection: `<a> with onClick but no valid href`,
+        evidence: `<a onClick=...${hasHref ? ' href="#"' : ''}> in ${filePath}`,
+        explanation: `<a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. Use <button> or add role="button".`,
+        confidence: 0.68,
+        correctivePrompt: `[A3] Replace <a> with <button> for '${label}', or add role="button" and key handlers.`,
+        deduplicationKey: dedupeKey,
+      });
+    }
+  }
+
+  return findings;
+}
+
 function detectStack(files: Map<string, string>): string {
   const fileNames = Array.from(files.keys());
   
@@ -1003,7 +1150,38 @@ serve(async (req) => {
       console.log(`U1 analysis: ${u1Violation ? '1 violation' : 'no violations'}`);
     }
     
-    // Build code content for AI analysis
+    // A3 - Keyboard operability
+    let aggregatedA3GitHub: any = null;
+    if (selectedRulesSet.has('A3')) {
+      const a3Findings = detectA3KeyboardOperability(allFiles);
+      if (a3Findings.length > 0) {
+        const confirmedCount = a3Findings.filter(f => f.classification === 'confirmed').length;
+        const potentialCount = a3Findings.filter(f => f.classification === 'potential').length;
+        const hasConfirmed = confirmedCount > 0;
+        const overallConfidence = Math.max(...a3Findings.map(f => f.confidence));
+        const a3Elements = a3Findings.map(f => ({
+          elementLabel: f.sourceLabel, elementType: f.elementType, role: f.role, sourceLabel: f.sourceLabel,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          classification: f.classification, classificationCode: f.classificationCode,
+          potentialSubtype: f.classification === 'potential' ? 'borderline' as const : undefined,
+          explanation: f.explanation, confidence: f.confidence, correctivePrompt: f.correctivePrompt,
+          deduplicationKey: f.deduplicationKey,
+        }));
+        aggregatedA3GitHub = {
+          ruleId: 'A3', ruleName: 'Incomplete keyboard operability', category: 'accessibility',
+          status: hasConfirmed ? 'confirmed' : 'potential',
+          potentialSubtype: hasConfirmed ? undefined : 'borderline',
+          blocksConvergence: hasConfirmed, inputType: 'github', isA3Aggregated: true, a3Elements,
+          diagnosis: `Keyboard operability issues: ${confirmedCount} confirmed, ${potentialCount} potential.`,
+          contextualHint: 'Ensure all interactive elements are keyboard accessible.',
+          correctivePrompt: 'Use native <button>/<a href> or add role, tabIndex=0, and Enter/Space key handlers.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+          ...(hasConfirmed ? {} : { advisoryGuidance: 'Keyboard support may be incomplete. Ensure custom controls are reachable via Tab and activate with Enter/Space.' }),
+        };
+        console.log(`A3 aggregated (GitHub): ${a3Findings.length} findings`);
+      }
+    }
+
     let codeContent = '';
     for (const [filepath, content] of allFiles) {
       if (codeContent.length + content.length > MAX_TOTAL_SIZE) break;
@@ -1351,6 +1529,7 @@ serve(async (req) => {
       ...aggregatedA1Violations,
       ...nonA2AiViolations,
       ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
+      ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
     ];
     
     // Deduplicate by ruleId

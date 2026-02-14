@@ -36,11 +36,13 @@ export function PotentialSubtypeBadge({ subtype, compact = false }: {
 const ACCURACY_GUIDANCE: Record<string, string> = {
   A1: 'Static analysis cannot determine exact rendered contrast. For deterministic verification, upload screenshots of the rendered UI.',
   A2: 'Focus visibility cannot be verified reliably without a captured focused state or source styles. For deterministic verification, upload ZIP source code or provide a GitHub repository.',
+  A3: 'Keyboard operability cannot be verified from screenshots. Upload ZIP/GitHub for deterministic keyboard checks.',
 };
 
 const BORDERLINE_GUIDANCE: Record<string, string> = {
   A1: 'Contrast is near the threshold. Consider increasing contrast for improved readability.',
   A2: 'Focus styling exists but may be too subtle. Consider using a clearer focus-visible indicator (e.g., ring-2 with offset) and ensure it is visually distinct.',
+  A3: 'Keyboard support may be incomplete. Ensure custom controls are reachable via Tab and activate with Enter/Space.',
 };
 
 export function SubtypeAdvisoryGuidance({ ruleId, potentialSubtype, fallbackGuidance, compact = false }: {

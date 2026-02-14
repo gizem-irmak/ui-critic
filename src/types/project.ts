@@ -145,6 +145,14 @@ export interface Violation {
   // A2 report with multiple element sub-items stored in a2Elements.
   isA2Aggregated?: boolean;
   a2Elements?: A2ElementSubItem[];
+  
+  // ============================================================
+  // A3 AGGREGATED ELEMENT REPORTING (Keyboard Operability)
+  // ============================================================
+  // When isA3Aggregated = true, this violation represents an aggregated
+  // A3 report with multiple element sub-items stored in a3Elements.
+  isA3Aggregated?: boolean;
+  a3Elements?: A3ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -210,6 +218,38 @@ export interface A2ElementSubItem {
   
   // Classification
   classification: 'confirmed' | 'potential';
+  potentialSubtype?: 'accuracy' | 'borderline'; // Only when classification='potential'
+  
+  // Explanation
+  explanation: string; // Why this element is flagged
+  confidence: number;
+  
+  // Corrective prompt (ONLY for confirmed violations)
+  correctivePrompt?: string;
+  
+  // Deduplication key
+  deduplicationKey: string;
+}
+
+// A3 Element sub-item for aggregated keyboard operability reporting
+export interface A3ElementSubItem {
+  // Element identification
+  elementLabel: string; // Best human-readable label (e.g., "Add to cart", "Menu trigger")
+  elementType?: string; // div, span, button, a, etc.
+  role?: string; // ARIA role or HTML tag role
+  accessibleName?: string; // Computed accessible name
+  sourceLabel?: string; // Best human label
+  selectorHint?: string; // data-testid, id, class fragment, or component path
+  textSnippet?: string; // Visible text if available
+  location: string; // file path (ZIP/GitHub) or "Screenshot" label
+  
+  // Detection data
+  detection?: string; // e.g., "onClick without role/tabIndex"
+  evidence?: string; // Specific code evidence
+  
+  // Classification
+  classification: 'confirmed' | 'potential';
+  classificationCode?: string; // A3-C1, A3-C2, A3-C3, A3-P1, A3-P2
   potentialSubtype?: 'accuracy' | 'borderline'; // Only when classification='potential'
   
   // Explanation
