@@ -782,31 +782,65 @@ NOTE: A1 (text contrast) is analyzed separately. Do NOT report A1 violations.
 Accessibility rules to check:
 ${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name} - ${r.diagnosis}`).join('\n')}
 
-### A2 (Small body font size) Detection:
-- **Confirmed**: Body text with explicitly defined font-size < 16px in pixels or deterministic Tailwind classes (text-xs, text-sm) → status: "confirmed"
-- **Potential**: Body text with relative units (rem/em/%) or ambiguous semantic role → status: "potential"
-- **Exclude**: Badges, metadata, timestamps, intentional microcopy, labels, tags, chips
-- Skip text-base (16px) and larger
-- Only evaluate primary body text elements (paragraphs, descriptions, content blocks)
+### A2 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
-### A4 (Small tap / click targets) — DESKTOP WEB UI EVALUATION:
+**ABSOLUTE RULE:**
+If an element does NOT remove the default browser focus outline, it MUST NOT be reported under A2.
+Lack of a custom focus-visible style alone is NOT an accessibility issue — browser defaults are acceptable.
 
-**SCOPE:** Only primary actionable controls: \`<button>\`, \`<input type="button|submit">\`, \`role="button"\`.
-**EXCLUDE:** Breadcrumb links, DropdownMenuItem, NavigationMenuTrigger, PaginationLink, toolbar icons, table row actions, Badge, Tag, Chip, Label, elements inside nav/menu systems.
+**PREREQUISITE — OUTLINE REMOVAL CHECK:**
+ONLY evaluate an element for A2 if it explicitly removes the default focus outline:
+- \`outline-none\`, \`focus:outline-none\`, or \`focus-visible:outline-none\` is present in the class list
+If the element does NOT remove the outline → SKIP (do not report)
 
-**DESKTOP THRESHOLDS (NOT mobile 44px):**
-- width < 20px OR height < 20px → Confirmed (Blocking) — only if primary control
-- 20px ≤ size < 24px → Potential Risk (Non-blocking)
-- ≥ 24px → Pass (no finding)
-- Elements inside navigation/menu → at most Potential, never Confirmed
+**FOCUSABILITY DETERMINATION:**
+An element is ONLY considered focusable if it matches ONE of:
+1. Native focusable: \`<button>\`, \`<a href="...">\`, \`<input>\`, \`<select>\`, \`<textarea>\`
+2. Explicit tabIndex >= 0
+3. Interactive ARIA role WITH tabIndex: \`role="button"\`, \`role="link"\`, etc.
+4. onClick handler WITH keyboard handler
 
-**SIZE TOKENS:** h-4 (~16px), h-5 (~20px), h-6 (~24px Pass), h-8 (~32px Pass)
+**CLASSIFICATION:**
+- **PASS (SKIP)**: outline removed BUT has visible replacement (ring, border, shadow, outline replacement)
+- **HEURISTIC RISK**: outline removed AND focus indication relies ONLY on bg-*/text-* change, or ring-1 only, or :focus without :focus-visible
+- **CONFIRMED**: outline removed AND NO visible replacement at all
 
-Report: element name, file, computed width × height, threshold, detection method, confidence.
+**FOCUS REPLACEMENT PRIORITY:**
+1. Ring: \`focus:ring-*\`, \`focus-visible:ring-*\` (not ring-0) → PASS
+2. Border: \`focus:border-*\`, \`focus-visible:border-*\` → PASS
+3. Outline: \`focus-visible:outline-*\` (not outline-none) → PASS
+4. Shadow: \`focus:shadow-*\`, \`focus-visible:shadow-*\` → PASS
+5. Background/text ONLY → HEURISTIC RISK
+6. NONE → CONFIRMED
 
-### A5 Detection:
-- Only flag elements that REMOVE default outline (outline-none)
-- AND lack visible focus replacement (ring, border, shadow)
+**ELEMENT IDENTITY (MANDATORY for every A2 finding):**
+Each finding MUST include:
+- "role": HTML tag name or ARIA role (e.g., "button", "link", "input", "menuitem")
+- "accessibleName": from aria-label, aria-labelledby, or visible text content. Use "" if none.
+- "sourceLabel": best human-readable label (e.g., "3-dot menu", "Submit", "Close dialog")
+- "selectorHint": data-testid (preferred), then id, then class fragment, then JSX snippet (e.g., \`<Button aria-label="More options">\`)
+- "filePath": full file path
+- "componentName": PascalCase component name
+
+**OUTPUT FORMAT FOR A2:**
+\`\`\`json
+{
+  "ruleId": "A2",
+  "ruleName": "Poor focus visibility",
+  "category": "accessibility",
+  "typeBadge": "CONFIRMED" or "HEURISTIC",
+  "evidence": "focus:outline-none without replacement in Header.tsx",
+  "diagnosis": "Button removes focus outline without visible replacement.",
+  "contextualHint": "Add focus ring or border for keyboard accessibility.",
+  "confidence": 0.60,
+  "role": "button",
+  "accessibleName": "More options",
+  "sourceLabel": "More options (kebab menu)",
+  "selectorHint": "<Button aria-label=\\"More options\\">",
+  "filePath": "src/components/Header.tsx",
+  "componentName": "Header"
+}
+\`\`\`
 
 ## PASS 2 — Usability
 ${rules.usability.filter(r => selectedRulesSet.has(r.id) && r.id !== 'U1').map(r => `- ${r.id}: ${r.name}`).join('\n')}
@@ -820,13 +854,19 @@ Return ONLY valid JSON:
   "violations": [
     {
       "ruleId": "A2",
-      "ruleName": "Small informational text size",
+      "ruleName": "Poor focus visibility",
       "category": "accessibility",
-      "typeBadge": "Confirmed (static)" or "Heuristic (requires runtime verification)",
+      "typeBadge": "CONFIRMED" or "HEURISTIC",
       "diagnosis": "...",
       "evidence": "...",
       "contextualHint": "...",
-      "confidence": 0.0-1.0
+      "confidence": 0.0-1.0,
+      "role": "button",
+      "accessibleName": "Submit",
+      "sourceLabel": "Submit button",
+      "selectorHint": "<Button type=\\"submit\\">",
+      "filePath": "src/components/Form.tsx",
+      "componentName": "Form"
     }
   ],
   "passNotes": {
@@ -1191,9 +1231,20 @@ serve(async (req) => {
             ? `Focus styling may be too subtle (${focusClasses.join(', ') || 'bg/text change only'})`
             : `Focus indicator removed without visible replacement`;
           
+          // Derive identity fields from AI output
+          const role = v.role || elementType;
+          const accessibleName = v.accessibleName ?? '';
+          const sourceLabel = v.sourceLabel || elementLabel;
+          const selectorHint = v.selectorHint || 
+            (location !== 'Unknown file' ? `<${elementType || 'element'}> in ${location}` : undefined);
+          
           return {
-            elementLabel,
+            elementLabel: sourceLabel,
             elementType,
+            role,
+            accessibleName,
+            sourceLabel,
+            selectorHint,
             location,
             detection,
             focusClasses: [...new Set(focusClasses)],
@@ -1204,7 +1255,7 @@ serve(async (req) => {
               : 'Focus indication relies only on background/text color change, which may be insufficient.'),
             confidence,
             correctivePrompt: isConfirmed
-              ? `[${elementLabel} ${elementType}] — ${location}\n\nIssue reason:\nFocus indicator is removed without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2) and apply consistently across all instances.`
+              ? `[${sourceLabel} ${elementType}] — ${location}\n\nIssue reason:\nFocus indicator is removed without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2) and apply consistently across all instances.`
               : undefined,
             deduplicationKey: `${location}|${elementLabel}`,
           };

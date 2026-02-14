@@ -781,19 +781,32 @@ Group identical background-only focus patterns into a SINGLE A2 finding with mul
 Example: If 5 buttons all use \`focus:bg-primary\` without ring/border, report ONE violation listing all 5 locations.
 
 **OUTPUT FORMAT FOR A2 VIOLATIONS ONLY:**
+Each A2 finding MUST include rich element identity fields so users can locate the exact element:
 \`\`\`json
 {
   "ruleId": "A2",
   "ruleName": "Poor focus visibility",
   "category": "accessibility",
   "typeBadge": "CONFIRMED" or "HEURISTIC",
-  "evidence": "focus:outline-none with only focus:bg-accent in Button.tsx, Card.tsx, Link.tsx",
-  "diagnosis": "Multiple components rely only on background color change for focus indication.",
+  "evidence": "focus:outline-none with only focus:bg-accent in Button.tsx",
+  "diagnosis": "Button removes focus outline without visible replacement.",
   "contextualHint": "Add visible focus ring or border for keyboard accessibility.",
   "confidence": 0.50,
-  "occurrences": ["Button.tsx", "Card.tsx", "Link.tsx"]
+  "role": "button",
+  "accessibleName": "More options",
+  "sourceLabel": "More options (kebab menu)",
+  "selectorHint": "<Button aria-label=\"More options\" className=\"...outline-none\">",
+  "filePath": "src/components/Header.tsx",
+  "componentName": "Header"
 }
 \`\`\`
+**Element identity fields (MANDATORY for every A2 finding):**
+- "role": The HTML tag name or ARIA role (e.g., "button", "link", "input", "menuitem", "tab")
+- "accessibleName": Computed accessible name from aria-label, aria-labelledby, or visible text content. Use "" (empty string) if none found.
+- "sourceLabel": Best human-readable label describing the element (e.g., "3-dot menu", "Submit", "Close dialog"). Use visible text, aria-label, or contextual description.
+- "selectorHint": The most useful selector to find the element — prefer data-testid if present, then id, then a class fragment, then component path with nearest JSX snippet (e.g., \`<Button aria-label="More options">\`)
+- "filePath": Full file path where the element is defined
+- "componentName": PascalCase component name if identifiable
 
 **OUTPUT CONSTRAINT — MANDATORY:**
 - The "violations" array must contain ONLY categories 3 and 4 (HEURISTIC RISK and CONFIRMED)
@@ -1641,6 +1654,11 @@ ${codeContent}`,
       confidence: number;
       rationale: string;
       occurrence_count?: number;
+      // Identity fields from AI
+      role?: string;
+      accessibleName?: string;
+      sourceLabel?: string;
+      selectorHint?: string;
     }
     
     const a2FocusDedupeMap = new Map<string, A2FocusItem>();
@@ -1812,6 +1830,13 @@ ${codeContent}`,
           }
         });
       } else {
+        // Extract identity fields from AI output
+        const aiRole = v.role || elementType;
+        const aiAccessibleName = v.accessibleName ?? '';
+        const aiSourceLabel = v.sourceLabel || componentName || 'Interactive element';
+        const aiSelectorHint = v.selectorHint || 
+          (filePath ? `<${elementType || 'element'}> in ${filePath}` : undefined);
+        
         const item: A2FocusItem = {
           component_name: componentName,
           file_path: filePath,
@@ -1822,6 +1847,10 @@ ${codeContent}`,
           confidence: Math.round(confidence * 100) / 100,
           rationale,
           occurrence_count: 1,
+          role: aiRole,
+          accessibleName: aiAccessibleName,
+          sourceLabel: aiSourceLabel,
+          selectorHint: aiSelectorHint,
         };
         a2FocusDedupeMap.set(dedupeKey, item);
       }
@@ -1847,9 +1876,20 @@ ${codeContent}`,
         const isConfirmed = item.typeBadge === 'Confirmed Violation';
         const elSubtype = isConfirmed ? undefined : 'borderline' as const;
         
+        // Derive accessible name from component name / evidence
+        const accessibleName = (item as any).accessibleName || '';
+        const sourceLabel = (item as any).sourceLabel || item.component_name || 'Interactive element';
+        const role = (item as any).role || item.element_type || 'interactive element';
+        const selectorHint = (item as any).selectorHint || 
+          (item.file_path ? `<${item.element_type || 'element'}> in ${item.file_path}` : undefined);
+        
         return {
-          elementLabel: item.component_name || 'Interactive element',
+          elementLabel: sourceLabel,
           elementType: item.element_type,
+          role,
+          accessibleName,
+          sourceLabel,
+          selectorHint,
           textSnippet: undefined,
           location: item.file_path || 'Unknown file',
           detection: item.detection,
@@ -1859,7 +1899,7 @@ ${codeContent}`,
           explanation: item.rationale,
           confidence: item.confidence,
           correctivePrompt: isConfirmed
-            ? `[${(item.component_name || 'Interactive element').substring(0, 60)} ${item.element_type}] — ${item.file_path || 'Source file'}\n\nIssue reason:\nFocus indicator is removed (${item.focus_classes.filter(c => /outline-none|ring-0/.test(c)).join(', ') || 'outline-none'}) without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2 or an outline/border/underline) and apply consistently across all instances.`
+            ? `[${sourceLabel} ${item.element_type}] — ${item.file_path || 'Source file'}\n\nIssue reason:\nFocus indicator is removed (${item.focus_classes.filter(c => /outline-none|ring-0/.test(c)).join(', ') || 'outline-none'}) without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2 or an outline/border/underline) and apply consistently across all instances.`
             : undefined,
           deduplicationKey: `${item.file_path}|${item.component_name}`,
         };
