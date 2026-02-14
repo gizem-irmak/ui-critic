@@ -1849,7 +1849,12 @@ ${codeContent}`,
         const hasNoOff = !(/ring-offset-[1-9]/.test(subtleDetails));
         const hasShadowSm = /shadow-sm/.test(subtleDetails);
         
-        if (hasRing1 && hasMuted && hasNoOff) {
+        const hasBgTextOnly = /(?:focus|focus-visible):(?:bg-|text-)/.test(subtleDetails) && 
+                               !/ring-[1-9]|border-|shadow-|outline-(?!none)/.test(subtleDetails);
+        
+        if (hasBgTextOnly) {
+          detection = `Focus indicated only by background/text color change (${subtleDetails}) after outline removal — contrast not verifiable statically`;
+        } else if (hasRing1 && hasMuted && hasNoOff) {
           detection = `Subtle focus ring (${subtleDetails}) without offset after outline removal — may be hard to perceive`;
         } else if (hasShadowSm) {
           detection = `Focus uses shadow-sm only (${subtleDetails}) without ring/outline/border — may be too subtle`;
@@ -1875,9 +1880,18 @@ ${codeContent}`,
         confidence = Math.max(confidence, 0.90);
       }
       
-      const rationale = v.isBorderline 
-        ? 'Focus indication relies on a subtle or low-contrast indicator (e.g., ring-1 with muted color, shadow-sm only, or bg/text change only), which may be insufficient for users with visual impairments.'
-        : 'Element removes the default browser outline without providing a visible focus replacement.';
+      let rationale: string;
+      if (!v.isBorderline) {
+        rationale = 'Element removes the default browser outline without providing a visible focus replacement.';
+      } else {
+        const hasBgTextOnly = /(?:focus|focus-visible):(?:bg-|text-)/.test(focusClasses.join(' ')) && 
+                               !/ring-[1-9]|border-|shadow-|outline-(?!none)/.test(focusClasses.join(' '));
+        if (hasBgTextOnly) {
+          rationale = 'Focus is indicated only by a background or text color change. Without a ring, outline, or border, the focus state may lack sufficient contrast for users with visual impairments.';
+        } else {
+          rationale = 'Focus indication relies on a subtle or low-contrast indicator (e.g., ring-1 with muted color, shadow-sm only), which may be insufficient for users with visual impairments.';
+        }
+      }
       
       // Deduplication key
       const dedupeKey = componentName || filePath || 'unknown';

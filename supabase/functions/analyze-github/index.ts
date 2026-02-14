@@ -1260,7 +1260,12 @@ serve(async (req) => {
             const hasRing1 = /ring-1\b/.test(subtleDetails);
             const hasMuted = /(?:gray|slate|zinc)-(?:100|200)/.test(subtleDetails);
             const hasShadowSm = /shadow-sm/.test(subtleDetails);
-            if (hasRing1 && hasMuted) {
+          const hasBgTextOnly = /(?:focus|focus-visible):(?:bg-|text-)/.test(subtleDetails) && 
+                                 !/ring-[1-9]|border-|shadow-|outline-(?!none)/.test(subtleDetails);
+          
+          if (hasBgTextOnly) {
+              detection = `Focus indicated only by background/text color change (${subtleDetails}) after outline removal — contrast not verifiable statically`;
+            } else if (hasRing1 && hasMuted) {
               detection = `Subtle focus ring (${subtleDetails}) without offset after outline removal — may be hard to perceive`;
             } else if (hasShadowSm) {
               detection = `Focus uses shadow-sm only (${subtleDetails}) without ring/outline/border — may be too subtle`;
