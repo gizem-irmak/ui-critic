@@ -194,9 +194,13 @@ export interface A1ElementSubItem {
 
 // A2 Element sub-item for aggregated focus visibility reporting
 export interface A2ElementSubItem {
-  // Element identification
-  elementLabel: string; // e.g., "Submit button", "Navigation link"
+  // Element identification — unique identity block
+  elementLabel: string; // Best human-readable "source label" (e.g., "More options (kebab menu)")
   elementType?: string; // button, link, input, select, etc.
+  role?: string; // ARIA role or HTML tag role (e.g., "button", "link", "menuitem")
+  accessibleName?: string; // Computed accessible name (aria-label / button text). Empty string = "(no accessible name)"
+  sourceLabel?: string; // Best human label (e.g., "3-dot menu", "Enroll Now")
+  selectorHint?: string; // data-testid, id, class fragment, or component path + JSX snippet
   textSnippet?: string; // Visible text if available
   location: string; // file path (ZIP/GitHub) or "Screenshot #n — …"
   

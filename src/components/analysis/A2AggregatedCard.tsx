@@ -1,4 +1,3 @@
-import { AlertTriangle, AlertCircle, Info } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -20,6 +19,9 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
+  const displayLabel = element.sourceLabel || element.elementLabel;
+  const isBorderline = element.potentialSubtype === 'borderline';
+
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <div className={cn(
@@ -34,15 +36,20 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
           <div className="flex items-start justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
               <span className={cn('font-medium', compact ? 'text-sm' : '')}>
-                {element.elementLabel}
+                {displayLabel}
               </span>
               {element.elementType && (
                 <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
                   {element.elementType}
                 </span>
               )}
-              {element.potentialSubtype && (
-                <PotentialSubtypeBadge subtype={element.potentialSubtype} compact={compact} />
+              {isBorderline && (
+                <Badge variant="outline" className="text-xs font-normal border-warning/50 text-warning">
+                  Borderline
+                </Badge>
+              )}
+              {element.potentialSubtype === 'accuracy' && (
+                <PotentialSubtypeBadge subtype="accuracy" compact={compact} />
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -67,10 +74,52 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+            {/* ── Element Identity Block ── */}
+            <div className="space-y-1.5">
+              <span className="text-muted-foreground font-semibold text-xs uppercase tracking-wide">Element</span>
+
+              {/* Role */}
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-28">Role:</span>
+                <span className="font-mono text-xs">{element.role || element.elementType || 'unknown'}</span>
+              </div>
+
+              {/* Accessible name */}
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-28">Accessible name:</span>
+                <span className={cn('text-xs', element.accessibleName ? 'font-mono' : 'italic text-muted-foreground')}>
+                  {element.accessibleName ? `"${element.accessibleName}"` : '(no accessible name)'}
+                </span>
+              </div>
+
+              {/* Source label */}
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-28">Source label:</span>
+                <span className="text-xs">{element.sourceLabel || element.elementLabel || '—'}</span>
+              </div>
+
+              {/* Selector hint */}
+              {element.selectorHint && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground font-medium w-28">Selector hint:</span>
+                  <span className="font-mono text-xs break-all">{element.selectorHint}</span>
+                </div>
+              )}
+
+              {/* Location (repeated in identity block for completeness) */}
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-28">Location:</span>
+                <span className="text-xs break-all">{element.location}</span>
+              </div>
+            </div>
+
+            {/* Spacing separator */}
+            <div className="h-1" />
+
             {/* Evidence / Trigger */}
             {element.detection && (
               <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Detection:</span>
+                <span className="text-muted-foreground font-medium w-28">Detection:</span>
                 <span className="font-mono text-xs">{element.detection}</span>
               </div>
             )}
@@ -78,7 +127,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
             {/* Focus classes found */}
             {element.focusClasses && element.focusClasses.length > 0 && (
               <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Classes:</span>
+                <span className="text-muted-foreground font-medium w-28">Classes:</span>
                 <div className="flex flex-wrap gap-1">
                   {element.focusClasses.map((cls, i) => (
                     <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
@@ -91,7 +140,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
 
             {/* Confidence */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Confidence:</span>
+              <span className="text-muted-foreground font-medium w-28">Confidence:</span>
               <span className={cn(
                 'font-mono font-medium',
                 isConfirmed ? 'text-destructive' : 'text-warning'
@@ -102,7 +151,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
 
             {/* Requirement */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Requirement:</span>
+              <span className="text-muted-foreground font-medium w-28">Requirement:</span>
               <span>WCAG 2.4.7 Focus Visible</span>
             </div>
 
