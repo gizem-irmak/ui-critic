@@ -722,9 +722,11 @@ If an element does NOT remove the default browser focus outline, it MUST NOT be 
 Lack of a custom focus-visible style alone is NOT an accessibility issue — browser defaults are acceptable.
 
 **PREREQUISITE — OUTLINE REMOVAL CHECK:**
-ONLY evaluate an element for A2 if it explicitly removes the default focus outline:
+ONLY evaluate an element for A2 if it explicitly removes the default focus outline or zeroes the ring:
 - \`outline-none\`, \`focus:outline-none\`, or \`focus-visible:outline-none\` is present in the class list
-If the element does NOT remove the outline → SKIP (do not report)
+- OR \`ring-0\`, \`focus:ring-0\`, or \`focus-visible:ring-0\` is present
+- OR \`focus:border-0\`, \`focus-visible:border-0\` is present
+If the element does NOT remove the outline AND does not zero the ring/border → SKIP (do not report)
 
 **FOCUSABILITY DETERMINATION — STRICT CRITERIA:**
 An element is ONLY considered focusable if it matches ONE of these criteria:
@@ -746,40 +748,61 @@ An element is ONLY considered focusable if it matches ONE of these criteria:
 
 1. **NOT APPLICABLE — SKIP ENTIRELY:**
    - Element does NOT remove the default outline (no \`outline-none\`, \`focus:outline-none\`, \`focus-visible:outline-none\`)
+   - AND does NOT zero the ring (\`ring-0\`, \`focus:ring-0\`, \`focus-visible:ring-0\`)
    - OR element does NOT meet focusability criteria above
    - DO NOT REPORT — do not include in violations array
 
 2. **PASS — SKIP ENTIRELY:**
-   - Element IS focusable AND removes outline BUT has visible replacement focus indicator
-   - Valid replacements: \`focus:ring-*\`, \`focus-visible:ring-*\`, \`focus:border-*\`, \`focus-visible:border-*\`, \`focus-visible:outline-*\` (not none), \`focus:shadow-*\`, \`focus-visible:shadow-*\`, \`ring-offset-*\`
+   - Element IS focusable AND removes outline BUT has a STRONG visible replacement:
+   - Valid PASS replacements (clear focus indicator):
+     * \`focus:ring-2\` or higher, \`focus-visible:ring-2\` or higher → PASS
+     * \`ring-offset-2\` or higher → PASS
+     * \`focus:border-*\` or \`focus-visible:border-*\` with strong color token (not gray-100/200) → PASS
+     * \`focus-visible:outline-*\` (not \`outline-none\`) → PASS
+     * Outline explicitly retained (no outline-none) → PASS
    - DO NOT REPORT — do not include in violations array
 
-3. **HEURISTIC RISK — REPORT:**
-   - Element IS focusable AND outline is removed AND some focus styling exists BUT is too subtle:
-     - Focus indicator is ONLY a background/text color change (\`focus:bg-*\`, \`focus:text-*\`)
-     - OR ring width < 2px (\`ring-1\` only)
-     - OR focus ring contrast < 3:1 against adjacent background
-     - OR styles exist only on \`:focus\` without \`:focus-visible\` (keyboard perception risk)
+3. **HEURISTIC RISK (Borderline) — REPORT:**
+   - Element IS focusable AND outline is removed AND replacement exists but is LIKELY TOO SUBTLE:
+   - Specific borderline patterns (ANY of these → HEURISTIC):
+     a) \`ring-1\` or \`focus:ring-1\` or \`focus-visible:ring-1\` (ring thickness < 2px)
+     b) Muted ring color: \`ring-gray-100\`, \`ring-gray-200\`, \`ring-slate-100\`, \`ring-slate-200\`, \`ring-zinc-200\` (low-contrast ring)
+     c) No ring offset: missing any \`ring-offset-*\` OR explicitly \`ring-offset-0\` (ring merges with element border)
+     d) \`ring-1\` + muted color + no offset combination (very subtle)
+     e) Focus indicator is ONLY a background/text color change (\`focus:bg-*\`, \`focus:text-*\`, \`focus-visible:bg-*\`) without ring/outline/border/shadow
+     f) "Shadow only" focus: \`focus:shadow-sm\` or \`focus-visible:shadow-sm\` without ring/outline/border
+     g) Styles exist only on \`:focus\` without \`:focus-visible\` (keyboard perception risk)
    - Set \`typeBadge: "HEURISTIC"\`
    - Set confidence to 60-75% (deterministic but subtle)
-   - Evidence: list the exact subtle focus classes found
+   - Evidence: list the exact subtle focus classes found. Use detection text like:
+     "Subtle focus ring (ring-1 gray-200) without offset after outline removal — may be hard to perceive"
 
 4. **CONFIRMED VIOLATION — REPORT:**
-   - Element IS focusable AND outline is removed AND NO visible replacement exists at all
-   - No ring (≥ 2), no border change, no outline replacement, no shadow, no bg/text change
+   - Element IS focusable AND outline is removed AND replacement is NONE OR ZERO:
+   - Confirmed patterns:
+     * \`outline-none\` + \`ring-0\` or no ring/border/shadow/bg/text at all
+     * \`focus:outline-none\` + no replacement classes whatsoever
+     * \`focus-visible:outline-none\` + only \`ring-0\` or \`focus:ring-0\`
    - IMPORTANT: If focus is removed AND no replacement → ALWAYS Confirmed, NEVER Borderline/Heuristic
    - Set \`typeBadge: "CONFIRMED"\`
-   - Set confidence to 85-95% (deterministic)
+   - Set confidence to 90-95% (deterministic)
    - Evidence: list the outline-removal class and note complete absence of replacement
 
+**VARIANT HANDLING — IMPORTANT:**
+- Treat \`focus:*\` and \`focus-visible:*\` equally as valid focus styling signals
+- Do NOT require \`focus-visible:\` exclusively — \`focus:\` variants are valid indicators
+- A \`focus:ring-2\` is equally valid as \`focus-visible:ring-2\` for PASS classification
+
 **FOCUS STYLE CHECK — PRIORITY ORDER:**
-When \`focus:outline-none\` or \`outline-none\` is present, check for VISIBLE REPLACEMENTS:
-1. Ring styles: \`focus:ring-*\`, \`focus-visible:ring-*\`, \`focus:ring-offset-*\` → PASS
-2. Border styles: \`focus:border-*\`, \`focus-visible:border-*\` → PASS
+When \`focus:outline-none\` or \`outline-none\` or \`ring-0\` is present, check for VISIBLE REPLACEMENTS:
+1. Strong ring: \`focus:ring-2\` or higher, \`focus-visible:ring-2\` or higher → PASS
+2. Border change: \`focus:border-*\`, \`focus-visible:border-*\` with distinct color → PASS
 3. Outline replacement: \`focus-visible:outline-*\` (not \`outline-none\`) → PASS
-4. Shadow styles: \`focus:shadow-*\`, \`focus-visible:shadow-*\` → PASS
-5. Background/text ONLY: \`focus:bg-*\`, \`focus-visible:bg-*\`, \`focus:text-*\` with no other → HEURISTIC RISK
-6. NONE of the above → CONFIRMED VIOLATION
+4. Strong shadow: \`focus:shadow-md\` or larger → PASS
+5. Subtle ring: \`ring-1\` / \`focus:ring-1\` with muted color (gray-100/200) and no offset → HEURISTIC RISK
+6. Shadow-sm only: \`focus:shadow-sm\` without ring/outline/border → HEURISTIC RISK
+7. Background/text ONLY: \`focus:bg-*\`, \`focus-visible:bg-*\`, \`focus:text-*\` with no other → HEURISTIC RISK
+8. NONE of the above → CONFIRMED VIOLATION
 
 **GROUPING RULE:**
 Group identical background-only focus patterns into a SINGLE A2 finding with multiple occurrences listed.
@@ -1676,8 +1699,8 @@ ${codeContent}`,
       const diagnosis = (v.diagnosis || '').toLowerCase();
       const combined = evidenceLower + ' ' + diagnosis;
       
-      // ABSOLUTE RULE: Only evaluate elements that explicitly remove the browser outline
-      const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none|ring-0|focus:ring-0|focus-visible:ring-0/.test(combined);
+      // ABSOLUTE RULE: Only evaluate elements that explicitly remove the browser outline or zero the ring/border
+      const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none|ring-0|focus:ring-0|focus-visible:ring-0|focus:border-0|focus-visible:border-0/.test(combined);
       if (!mentionsOutlineRemoval) {
         console.log(`A2 SKIP (no outline removal): ${evidence}`);
         continue;
@@ -1686,19 +1709,20 @@ ${codeContent}`,
       // Extract actual focus-related class tokens from the evidence
       const focusClassTokens: string[] = evidence.match(/focus(?:-visible)?:(?:ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?|bg-\w+|text-\w+)/gi) || [];
       
-      // Check for visible focus replacement indicators (actual class tokens)
-      const hasRingToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:ring-[^0]/i.test(t));
-      const hasBorderToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:border/i.test(t));
-      const hasShadowToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:shadow(?!-none)/i.test(t));
+      // Check for STRONG visible focus replacement indicators (actual class tokens)
+      // IMPORTANT: ring-1 is NOT a strong replacement — only ring-2 or higher counts as PASS
+      const hasStrongRingToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:ring-[2-9]/i.test(t));
+      const hasBorderToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:border(?!-0)/i.test(t));
+      const hasShadowToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:shadow-(?!none|sm\b)/i.test(t));
       const hasOutlineToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:outline-(?!none)/i.test(t));
       
       // Also check in diagnosis for class mentions
-      const hasRingInDiagnosis = /focus:ring-[^0]|focus-visible:ring-[^0]|ring-offset-\d/.test(combined);
-      const hasBorderInDiagnosis = /focus:border-|focus-visible:border-/.test(combined);
-      const hasShadowInDiagnosis = /focus:shadow-(?!none)|focus-visible:shadow-(?!none)/.test(combined);
+      const hasStrongRingInDiagnosis = /focus(?:-visible)?:ring-[2-9]|ring-offset-[2-9]/.test(combined);
+      const hasBorderInDiagnosis = /focus(?:-visible)?:border-(?!0)/.test(combined);
+      const hasShadowInDiagnosis = /focus(?:-visible)?:shadow-(?!none|sm\b)/.test(combined);
       
-      const hasVisibleReplacement = hasRingToken || hasBorderToken || hasShadowToken || hasOutlineToken ||
-                                     hasRingInDiagnosis || hasBorderInDiagnosis || hasShadowInDiagnosis;
+      const hasVisibleReplacement = hasStrongRingToken || hasBorderToken || hasShadowToken || hasOutlineToken ||
+                                     hasStrongRingInDiagnosis || hasBorderInDiagnosis || hasShadowInDiagnosis;
       
       // Check if explicitly marked as pass/acceptable
       const mentionsAcceptable = /(?<!no\s)(?<!without\s)(?<!lacks?\s)(?<!missing\s)(?:acceptable|compliant|has visible|proper focus|adequate focus|valid focus)/i.test(combined);
@@ -1706,7 +1730,7 @@ ${codeContent}`,
       
       // If evidence shows valid replacement or acceptable, this is a PASS - skip entirely
       if (hasVisibleReplacement) {
-        console.log(`A2 PASS (has focus replacement tokens): ${evidence} [tokens: ${focusClassTokens.join(', ')}]`);
+        console.log(`A2 PASS (has strong focus replacement): ${evidence} [tokens: ${focusClassTokens.join(', ')}]`);
         continue;
       }
       
@@ -1717,24 +1741,34 @@ ${codeContent}`,
       
       // ── Borderline vs Confirmed classification ──
       // Borderline = focus styling EXISTS but is too subtle
-      // Confirmed = focus removed with NO replacement at all
+      // Confirmed = focus removed with NO replacement at all (or only zeros)
       // IMPORTANT: If outline is removed AND no replacement → always Confirmed, NEVER borderline
       
       const hasBgToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:bg-/i.test(t));
       const hasTextToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:text-/i.test(t));
       const hasBackgroundOnlyFocus = (hasBgToken || hasTextToken || /focus:bg-|focus-visible:bg-|focus:text-|focus-visible:text-/.test(combined)) && 
-                                      !hasRingToken && !hasBorderToken && !hasShadowToken && !hasOutlineToken;
+                                      !hasStrongRingToken && !hasBorderToken && !hasShadowToken && !hasOutlineToken;
       
       // Check for ring-1 only (too subtle — width < 2px)
-      const hasRing1Only = /focus(?:-visible)?:ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]|ring-offset/.test(combined);
+      const hasRing1Only = /(?:focus(?:-visible)?:)?ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]/.test(combined);
+      
+      // Check for muted ring colors (low-contrast ring)
+      const hasMutedRingColor = /ring-(?:gray|slate|zinc)-(?:100|200)\b/.test(combined);
+      
+      // Check for missing ring offset or ring-offset-0
+      const hasNoOffset = !/ring-offset-[1-9]/.test(combined) || /ring-offset-0\b/.test(combined);
+      
+      // Check for "shadow only" focus: focus:shadow-sm without ring/outline/border
+      const hasShadowSmOnly = /focus(?:-visible)?:shadow-sm\b/.test(combined) && 
+                               !hasStrongRingToken && !hasBorderToken && !hasOutlineToken;
       
       // Check for :focus only without :focus-visible (keyboard perception risk)
-      const hasFocusOnlyStyles = /\bfocus:(?:ring-[^0]|border-|shadow-(?!none)|outline-(?!none))/.test(combined) && !/focus-visible:/.test(combined);
+      const hasFocusOnlyStyles = /\bfocus:(?:ring-[^0]|border-(?!0)|shadow-(?!none)|outline-(?!none))/.test(combined) && !/focus-visible:/.test(combined);
       
       // Borderline requires at least SOME visible focus styling that is merely too subtle
       // If NO focus styling exists at all, it's Confirmed (blocking), not borderline
-      const hasAnyFocusStyling = hasBackgroundOnlyFocus || hasRing1Only || hasFocusOnlyStyles;
-      const isBorderline = hasAnyFocusStyling;
+      const hasAnySubtleFocusStyling = hasBackgroundOnlyFocus || hasRing1Only || hasMutedRingColor || hasShadowSmOnly || hasFocusOnlyStyles;
+      const isBorderline = hasAnySubtleFocusStyling;
       
       // This is a valid violation - add it
       console.log(`A2 VIOLATION: ${evidence} [borderline: ${isBorderline}]`);
@@ -1805,10 +1839,26 @@ ${codeContent}`,
         focusClasses.push(...new Set(classMatches));
       }
       
-      // Build detection string
-      const detection = v.isBorderline
-        ? `Focus styling exists but may be too subtle (${focusClasses.filter(c => /focus|ring|border|bg-|text-/.test(c)).join(', ') || 'background/text change only'})`
-        : `Focus indicator removed (${focusClasses.filter(c => /outline-none|ring-0/.test(c)).join(', ') || 'outline-none'}) without visible replacement`;
+      // Build detection string with descriptive text
+      let detection: string;
+      if (v.isBorderline) {
+        const subtleDetails = focusClasses.filter(c => /focus|ring|border|bg-|text-|shadow/.test(c)).join(', ') || 'background/text change only';
+        // Build a specific detection description
+        const hasRing1 = /ring-1\b/.test(subtleDetails);
+        const hasMuted = /(?:gray|slate|zinc)-(?:100|200)/.test(subtleDetails);
+        const hasNoOff = !(/ring-offset-[1-9]/.test(subtleDetails));
+        const hasShadowSm = /shadow-sm/.test(subtleDetails);
+        
+        if (hasRing1 && hasMuted && hasNoOff) {
+          detection = `Subtle focus ring (${subtleDetails}) without offset after outline removal — may be hard to perceive`;
+        } else if (hasShadowSm) {
+          detection = `Focus uses shadow-sm only (${subtleDetails}) without ring/outline/border — may be too subtle`;
+        } else {
+          detection = `Focus styling exists but may be too subtle (${subtleDetails})`;
+        }
+      } else {
+        detection = `Focus indicator removed (${focusClasses.filter(c => /outline-none|ring-0|border-0/.test(c)).join(', ') || 'outline-none'}) without visible replacement`;
+      }
       
       // Determine classification
       const typeBadge: 'Confirmed Violation' | 'Heuristic Risk' = v.isBorderline ? 'Heuristic Risk' : 'Confirmed Violation';
@@ -1820,13 +1870,13 @@ ${codeContent}`,
         confidence = Math.min(confidence, 0.75);
         confidence = Math.max(confidence, 0.60);
       } else {
-        // Confirmed (blocking): ≥ 85% deterministic
+        // Confirmed (blocking): 90–95% deterministic
         confidence = Math.min(confidence, 0.95);
-        confidence = Math.max(confidence, 0.85);
+        confidence = Math.max(confidence, 0.90);
       }
       
       const rationale = v.isBorderline 
-        ? 'Focus indication relies only on background/text color change or subtle ring, which may be insufficient for users with color vision deficiencies.'
+        ? 'Focus indication relies on a subtle or low-contrast indicator (e.g., ring-1 with muted color, shadow-sm only, or bg/text change only), which may be insufficient for users with visual impairments.'
         : 'Element removes the default browser outline without providing a visible focus replacement.';
       
       // Deduplication key

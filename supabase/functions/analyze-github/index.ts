@@ -789,9 +789,11 @@ If an element does NOT remove the default browser focus outline, it MUST NOT be 
 Lack of a custom focus-visible style alone is NOT an accessibility issue — browser defaults are acceptable.
 
 **PREREQUISITE — OUTLINE REMOVAL CHECK:**
-ONLY evaluate an element for A2 if it explicitly removes the default focus outline:
+ONLY evaluate an element for A2 if it explicitly removes the default focus outline or zeroes the ring:
 - \`outline-none\`, \`focus:outline-none\`, or \`focus-visible:outline-none\` is present in the class list
-If the element does NOT remove the outline → SKIP (do not report)
+- OR \`ring-0\`, \`focus:ring-0\`, or \`focus-visible:ring-0\` is present
+- OR \`focus:border-0\`, \`focus-visible:border-0\` is present
+If the element does NOT remove the outline AND does not zero the ring/border → SKIP (do not report)
 
 **FOCUSABILITY DETERMINATION:**
 An element is ONLY considered focusable if it matches ONE of:
@@ -801,18 +803,34 @@ An element is ONLY considered focusable if it matches ONE of:
 4. onClick handler WITH keyboard handler
 
 **CLASSIFICATION:**
-- **PASS (SKIP)**: outline removed BUT has visible replacement (ring ≥ 2, border, shadow, outline replacement)
-- **HEURISTIC RISK (Borderline)**: outline removed AND some focus styling exists BUT is too subtle (bg-*/text-* only, ring-1 only, :focus without :focus-visible, or ring contrast < 3:1)
-- **CONFIRMED**: outline removed AND NO visible replacement at all. IMPORTANT: If focus is removed AND no replacement exists → ALWAYS Confirmed, NEVER Heuristic/Borderline.
+- **PASS (SKIP)**: outline removed BUT has a STRONG visible replacement:
+  * \`focus:ring-2\` or higher, \`focus-visible:ring-2\` or higher → PASS
+  * \`ring-offset-2\` or higher → PASS
+  * Border change with distinct color → PASS
+  * Outline replacement (not outline-none) → PASS
+- **HEURISTIC RISK (Borderline)**: outline removed AND replacement exists but is LIKELY TOO SUBTLE:
+  * \`ring-1\` / \`focus:ring-1\` / \`focus-visible:ring-1\` (< 2px) → HEURISTIC
+  * Muted ring color: \`ring-gray-100/200\`, \`ring-slate-100/200\`, \`ring-zinc-200\` → HEURISTIC
+  * No ring offset (missing \`ring-offset-*\` or \`ring-offset-0\`) → HEURISTIC
+  * \`ring-1\` + muted color + no offset → HEURISTIC
+  * Background/text ONLY (\`focus:bg-*\`, \`focus:text-*\`) without ring/outline/border → HEURISTIC
+  * Shadow-sm only: \`focus:shadow-sm\` without ring/outline/border → HEURISTIC
+  * \`:focus\` without \`:focus-visible\` (keyboard perception risk) → HEURISTIC
+  * Detection text example: "Subtle focus ring (ring-1 gray-200) without offset after outline removal — may be hard to perceive"
+- **CONFIRMED**: outline removed AND NO visible replacement at all (or only ring-0/border-0). IMPORTANT: If focus is removed AND no replacement exists → ALWAYS Confirmed, NEVER Heuristic/Borderline.
+
+**VARIANT HANDLING:**
+Treat \`focus:*\` and \`focus-visible:*\` equally as valid focus styling signals. Do NOT require \`focus-visible:\` exclusively.
 
 **FOCUS REPLACEMENT PRIORITY:**
-1. Ring ≥ 2: \`focus:ring-2\`, \`focus-visible:ring-*\` (not ring-0 or ring-1) → PASS
-2. Border: \`focus:border-*\`, \`focus-visible:border-*\` → PASS
+1. Strong ring: \`focus:ring-2\` or higher, \`focus-visible:ring-2\` or higher → PASS
+2. Border: \`focus:border-*\`, \`focus-visible:border-*\` with distinct color → PASS
 3. Outline: \`focus-visible:outline-*\` (not outline-none) → PASS
-4. Shadow: \`focus:shadow-*\`, \`focus-visible:shadow-*\` → PASS
-5. Ring-1 only (< 2px) → HEURISTIC RISK
-6. Background/text ONLY → HEURISTIC RISK
-7. NONE of the above → CONFIRMED (blocking)
+4. Strong shadow: \`focus:shadow-md\` or larger → PASS
+5. Subtle ring: \`ring-1\` with muted color and no offset → HEURISTIC RISK
+6. Shadow-sm only without ring/outline/border → HEURISTIC RISK
+7. Background/text ONLY → HEURISTIC RISK
+8. NONE of the above → CONFIRMED (blocking)
 
 **ELEMENT IDENTITY (MANDATORY for every A2 finding):**
 Each finding MUST include:
@@ -1191,15 +1209,15 @@ serve(async (req) => {
       // Filter valid focus violations
       const validA2 = a2AiViolations.filter((v: any) => {
         const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
-        const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none|ring-0/.test(combined);
+        const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none|ring-0|focus:ring-0|focus-visible:ring-0|focus:border-0|focus-visible:border-0/.test(combined);
         if (!mentionsOutlineRemoval) {
           console.log(`A2 SKIP (no outline removal): ${(v.evidence || '').substring(0, 80)}`);
           return false;
         }
-        // Check for visible replacement = PASS
-        const hasReplacement = /focus(?:-visible)?:ring-[^0]|focus(?:-visible)?:border|focus(?:-visible)?:shadow(?!-none)|focus(?:-visible)?:outline-(?!none)/.test(combined);
-        if (hasReplacement) {
-          console.log(`A2 PASS (has replacement): ${(v.evidence || '').substring(0, 80)}`);
+        // Check for STRONG visible replacement = PASS (ring-2+, border, strong shadow, outline)
+        const hasStrongReplacement = /focus(?:-visible)?:ring-[2-9]|ring-offset-[2-9]|focus(?:-visible)?:border(?!-0)|focus(?:-visible)?:shadow-(?!none|sm\b)|focus(?:-visible)?:outline-(?!none)/.test(combined);
+        if (hasStrongReplacement) {
+          console.log(`A2 PASS (has strong replacement): ${(v.evidence || '').substring(0, 80)}`);
           return false;
         }
         return true;
@@ -1220,23 +1238,38 @@ serve(async (req) => {
           else if (/\blink\b|\ba\b/i.test(combined)) elementType = 'link';
           else if (/\binput\b/i.test(combined)) elementType = 'input';
           
-          // ── Borderline vs Confirmed classification ──
-          // Borderline = some focus styling EXISTS but is too subtle
-          // Confirmed = focus removed with NO replacement at all → NEVER borderline
+          // ── Borderline vs Confirmed classification (expanded patterns) ──
           const hasSubtleFocusStyling = 
             /focus(?:-visible)?:bg-|focus(?:-visible)?:text-/.test(combined) || // bg/text only
-            (/focus(?:-visible)?:ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]|ring-offset/.test(combined)) || // ring-1 only
-            (/\bfocus:(?:ring-[^0]|border-|shadow-(?!none)|outline-(?!none))/.test(combined) && !/focus-visible:/.test(combined)); // :focus without :focus-visible
+            (/(?:focus(?:-visible)?:)?ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]/.test(combined)) || // ring-1 only
+            /ring-(?:gray|slate|zinc)-(?:100|200)\b/.test(combined) || // muted ring color
+            (/focus(?:-visible)?:shadow-sm\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]|focus(?:-visible)?:border(?!-0)|focus(?:-visible)?:outline-(?!none)/.test(combined)) || // shadow-sm only
+            (/\bfocus:(?:ring-[^0]|border-(?!0)|shadow-(?!none)|outline-(?!none))/.test(combined) && !/focus-visible:/.test(combined)); // :focus without :focus-visible
           
           const isBorderline = hasSubtleFocusStyling;
           const isConfirmed = !isBorderline;
-          // Confirmed: ≥85% deterministic; Borderline: 60-75%
-          const confidence = isConfirmed ? 0.90 : 0.68;
+          // Confirmed: 90-95% deterministic; Borderline: 60-75%
+          const confidence = isConfirmed ? 0.92 : 0.68;
           
-          const focusClasses = (combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|bg-\w+|ring-\w+|border-\w+|text-\w+)/g) || []);
-          const detection = isBorderline 
-            ? `Focus styling may be too subtle (${focusClasses.join(', ') || 'bg/text change only'})`
-            : `Focus indicator removed without visible replacement`;
+          const focusClasses = (combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-\w+|ring-\w+|border-\w+|text-\w+|shadow-\w+)/g) || []);
+          
+          // Build descriptive detection text
+          let detection: string;
+          if (isBorderline) {
+            const subtleDetails = focusClasses.join(', ') || 'bg/text change only';
+            const hasRing1 = /ring-1\b/.test(subtleDetails);
+            const hasMuted = /(?:gray|slate|zinc)-(?:100|200)/.test(subtleDetails);
+            const hasShadowSm = /shadow-sm/.test(subtleDetails);
+            if (hasRing1 && hasMuted) {
+              detection = `Subtle focus ring (${subtleDetails}) without offset after outline removal — may be hard to perceive`;
+            } else if (hasShadowSm) {
+              detection = `Focus uses shadow-sm only (${subtleDetails}) without ring/outline/border — may be too subtle`;
+            } else {
+              detection = `Focus styling may be too subtle (${subtleDetails})`;
+            }
+          } else {
+            detection = `Focus indicator removed without visible replacement`;
+          }
           
           // Derive identity fields from AI output
           const role = v.role || elementType;
