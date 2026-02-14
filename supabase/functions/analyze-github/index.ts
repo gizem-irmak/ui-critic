@@ -1292,12 +1292,25 @@ serve(async (req) => {
             selectorHint,
             location,
             detection,
-            focusClasses: [...new Set(focusClasses)],
+            focusClasses: [...new Set(focusClasses)].filter((cls, _i, arr) => {
+              if (cls === 'outline-none' && arr.includes('focus:outline-none')) return false;
+              if (cls === 'outline-none' && arr.includes('focus-visible:outline-none')) return false;
+              if (cls === 'ring-0' && arr.includes('focus:ring-0')) return false;
+              if (cls === 'border-0' && arr.includes('focus:border-0')) return false;
+              return true;
+            }),
             classification: isConfirmed ? 'confirmed' as const : 'potential' as const,
             potentialSubtype: isConfirmed ? undefined : 'borderline' as const,
-            explanation: v.diagnosis || (isConfirmed 
-              ? 'Element removes the default browser outline without providing a visible focus replacement.'
-              : 'Focus indication relies only on background/text color change, which may be insufficient.'),
+            explanation: (() => {
+              if (isConfirmed) return v.diagnosis || 'Element removes the default browser outline without providing a visible focus replacement.';
+              const classStr = focusClasses.join(' ');
+              const hasBgTextOnly = /(?:focus|focus-visible):(?:bg-|text-)/.test(classStr) && 
+                                     !/ring-[1-9]|border-|shadow-|outline-(?!none)/.test(classStr);
+              if (hasBgTextOnly) {
+                return 'Issue reason: Outline removed; focus relies only on bg/text change; contrast can\'t be verified statically.\n\nRecommended fix: Add a clear focus-visible indicator (e.g., focus-visible:ring-2 + focus-visible:ring-offset-2) or restore outline.';
+              }
+              return v.diagnosis || 'Focus indication relies on a subtle or low-contrast indicator (e.g., ring-1 with muted color, shadow-sm only), which may be insufficient for users with visual impairments.';
+            })(),
             confidence,
             correctivePrompt: isConfirmed
               ? `[${sourceLabel} ${elementType}] — ${location}\n\nIssue reason:\nFocus indicator is removed without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2) and apply consistently across all instances.`
