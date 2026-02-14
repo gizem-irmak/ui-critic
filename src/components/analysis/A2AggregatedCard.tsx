@@ -139,7 +139,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
             </div>
 
             {/* Explanation — render structured if it contains Issue reason / Recommended fix */}
-            <div className="pt-1 space-y-1.5">
+            <div className="pt-1">
               {element.explanation.includes('Issue reason:') && element.explanation.includes('Recommended fix:') ? (
                 <>
                   {element.explanation.split('\n').filter(Boolean).map((line, i) => {
