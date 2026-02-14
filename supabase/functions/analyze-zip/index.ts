@@ -1881,16 +1881,16 @@ ${codeContent}`,
       }
       
       // Deduplicate focus classes (avoid listing both outline-none and focus:outline-none unless both genuinely exist)
-      const deduplicatedClasses = [...new Set(focusClasses)].filter((cls, _i, arr) => {
-        // If we have focus:outline-none, drop bare outline-none (it's implied)
-        if (cls === 'outline-none' && arr.includes('focus:outline-none')) return false;
-        if (cls === 'outline-none' && arr.includes('focus-visible:outline-none')) return false;
-        if (cls === 'ring-0' && arr.includes('focus:ring-0')) return false;
-        if (cls === 'ring-0' && arr.includes('focus-visible:ring-0')) return false;
-        if (cls === 'border-0' && arr.includes('focus:border-0')) return false;
-        return true;
+      const classesToRemove = focusClasses.filter((cls) => {
+        if (cls === 'outline-none' && (focusClasses.includes('focus:outline-none') || focusClasses.includes('focus-visible:outline-none'))) return true;
+        if (cls === 'ring-0' && (focusClasses.includes('focus:ring-0') || focusClasses.includes('focus-visible:ring-0'))) return true;
+        if (cls === 'border-0' && focusClasses.includes('focus:border-0')) return true;
+        return false;
       });
-      focusClasses = deduplicatedClasses;
+      for (const cls of classesToRemove) {
+        const idx = focusClasses.indexOf(cls);
+        if (idx !== -1) focusClasses.splice(idx, 1);
+      }
       
       let rationale: string;
       if (!v.isBorderline) {
