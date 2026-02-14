@@ -1880,14 +1880,27 @@ ${codeContent}`,
         confidence = Math.max(confidence, 0.90);
       }
       
+      // Deduplicate focus classes (avoid listing both outline-none and focus:outline-none unless both genuinely exist)
+      const deduplicatedClasses = [...new Set(focusClasses)].filter((cls, _i, arr) => {
+        // If we have focus:outline-none, drop bare outline-none (it's implied)
+        if (cls === 'outline-none' && arr.includes('focus:outline-none')) return false;
+        if (cls === 'outline-none' && arr.includes('focus-visible:outline-none')) return false;
+        if (cls === 'ring-0' && arr.includes('focus:ring-0')) return false;
+        if (cls === 'ring-0' && arr.includes('focus-visible:ring-0')) return false;
+        if (cls === 'border-0' && arr.includes('focus:border-0')) return false;
+        return true;
+      });
+      focusClasses = deduplicatedClasses;
+      
       let rationale: string;
       if (!v.isBorderline) {
         rationale = 'Element removes the default browser outline without providing a visible focus replacement.';
       } else {
-        const hasBgTextOnly = /(?:focus|focus-visible):(?:bg-|text-)/.test(focusClasses.join(' ')) && 
-                               !/ring-[1-9]|border-|shadow-|outline-(?!none)/.test(focusClasses.join(' '));
+        const classStr = focusClasses.join(' ');
+        const hasBgTextOnly = /(?:focus|focus-visible):(?:bg-|text-)/.test(classStr) && 
+                               !/ring-[1-9]|border-|shadow-|outline-(?!none)/.test(classStr);
         if (hasBgTextOnly) {
-          rationale = 'Focus is indicated only by a background or text color change. Without a ring, outline, or border, the focus state may lack sufficient contrast for users with visual impairments.';
+          rationale = 'Issue reason: Outline removed; focus relies only on bg/text change; contrast can\'t be verified statically.\n\nRecommended fix: Add a clear focus-visible indicator (e.g., focus-visible:ring-2 + focus-visible:ring-offset-2) or restore outline.';
         } else {
           rationale = 'Focus indication relies on a subtle or low-contrast indicator (e.g., ring-1 with muted color, shadow-sm only), which may be insufficient for users with visual impairments.';
         }

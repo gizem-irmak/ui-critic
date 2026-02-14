@@ -138,9 +138,25 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <span>WCAG 2.4.7 Focus Visible</span>
             </div>
 
-            {/* Explanation */}
-            <div className="pt-1">
-              <p className="text-foreground leading-relaxed">{element.explanation}</p>
+            {/* Explanation — render structured if it contains Issue reason / Recommended fix */}
+            <div className="pt-1 space-y-1.5">
+              {element.explanation.includes('Issue reason:') && element.explanation.includes('Recommended fix:') ? (
+                <>
+                  {element.explanation.split('\n').filter(Boolean).map((line, i) => {
+                    const isLabel = /^(Issue reason|Recommended fix):/.test(line.trim());
+                    return (
+                      <p key={i} className={cn(
+                        'leading-relaxed',
+                        isLabel ? 'font-medium text-foreground' : 'text-foreground'
+                      )}>
+                        {line.trim()}
+                      </p>
+                    );
+                  })}
+                </>
+              ) : (
+                <p className="text-foreground leading-relaxed">{element.explanation}</p>
+              )}
             </div>
           </div>
         </CollapsibleContent>
