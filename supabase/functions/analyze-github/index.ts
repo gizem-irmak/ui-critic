@@ -1251,7 +1251,7 @@ serve(async (req) => {
           // Confirmed: 90-95% deterministic; Borderline: 60-75%
           const confidence = isConfirmed ? 0.92 : 0.68;
           
-          const focusClasses = (combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-\w+|ring-\w+|border-\w+|text-\w+|shadow-\w+)/g) || []);
+          const focusClasses = (combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+)/g) || []);
           
           // Build descriptive detection text
           let detection: string;

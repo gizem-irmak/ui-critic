@@ -1834,7 +1834,7 @@ ${codeContent}`,
       
       // Extract focus-related classes mentioned
       const focusClasses: string[] = [];
-      const classMatches = combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|bg-\w+|ring-\w+|border-\w+|text-\w+)/g);
+      const classMatches = combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+)/g);
       if (classMatches) {
         focusClasses.push(...new Set(classMatches));
       }

@@ -82,6 +82,31 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               </div>
             )}
 
+            {/* Reason line for borderline findings */}
+            {isBorderline && element.focusClasses && element.focusClasses.length > 0 && (() => {
+              const classes = element.focusClasses.join(' ');
+              const hasOutlineRemoval = /outline-none|ring-0|border-0/.test(classes);
+              const hasRing1 = /ring-1\b/.test(classes);
+              const hasMutedColor = /ring-(?:gray|slate|zinc)-(?:100|200)/.test(classes);
+              const hasNoOffset = !/ring-offset-[1-9]/.test(classes) || /ring-offset-0/.test(classes);
+              
+              if (hasOutlineRemoval && (hasRing1 || hasMutedColor)) {
+                const parts: string[] = [];
+                if (hasOutlineRemoval) parts.push('outline removed');
+                if (hasRing1) parts.push('ring-1');
+                if (hasMutedColor) parts.push('muted color');
+                if (hasNoOffset && (hasRing1 || hasMutedColor)) parts.push('no ring-offset');
+                
+                return (
+                  <div className="flex items-start gap-2">
+                    <span className="text-muted-foreground font-medium w-20">Reason:</span>
+                    <span className="text-warning">{parts.join(' + ')}</span>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+
             {/* Focus classes found */}
             {element.focusClasses && element.focusClasses.length > 0 && (
               <div className="flex items-start gap-2">
