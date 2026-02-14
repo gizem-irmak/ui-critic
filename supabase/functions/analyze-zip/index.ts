@@ -755,17 +755,22 @@ An element is ONLY considered focusable if it matches ONE of these criteria:
    - DO NOT REPORT — do not include in violations array
 
 3. **HEURISTIC RISK — REPORT:**
-   - Element IS focusable AND outline is removed AND focus indication relies ONLY on \`focus:bg-*\` or \`focus-visible:bg-*\` or \`focus:text-*\`
+   - Element IS focusable AND outline is removed AND some focus styling exists BUT is too subtle:
+     - Focus indicator is ONLY a background/text color change (\`focus:bg-*\`, \`focus:text-*\`)
+     - OR ring width < 2px (\`ring-1\` only)
+     - OR focus ring contrast < 3:1 against adjacent background
+     - OR styles exist only on \`:focus\` without \`:focus-visible\` (keyboard perception risk)
    - Set \`typeBadge: "HEURISTIC"\`
-   - Set confidence to 45-55%
-   - Evidence: list the exact focus:bg-* or focus:text-* classes found
-   - Rationale: "Focus indication relies only on background/text color change, which may be insufficient for users with low vision."
+   - Set confidence to 60-75% (deterministic but subtle)
+   - Evidence: list the exact subtle focus classes found
 
 4. **CONFIRMED VIOLATION — REPORT:**
-   - Element IS focusable AND outline is removed AND NO visible replacement exists (no ring, border, shadow, bg, text change)
+   - Element IS focusable AND outline is removed AND NO visible replacement exists at all
+   - No ring (≥ 2), no border change, no outline replacement, no shadow, no bg/text change
+   - IMPORTANT: If focus is removed AND no replacement → ALWAYS Confirmed, NEVER Borderline/Heuristic
    - Set \`typeBadge: "CONFIRMED"\`
-   - Set confidence to 60-70%
-   - Evidence: list the outline-removal class and note absence of replacement
+   - Set confidence to 85-95% (deterministic)
+   - Evidence: list the outline-removal class and note complete absence of replacement
 
 **FOCUS STYLE CHECK — PRIORITY ORDER:**
 When \`focus:outline-none\` or \`outline-none\` is present, check for VISIBLE REPLACEMENTS:
@@ -1710,19 +1715,26 @@ ${codeContent}`,
         continue;
       }
       
-      // Check for weak indicators (background-only or text-only focus)
+      // ── Borderline vs Confirmed classification ──
+      // Borderline = focus styling EXISTS but is too subtle
+      // Confirmed = focus removed with NO replacement at all
+      // IMPORTANT: If outline is removed AND no replacement → always Confirmed, NEVER borderline
+      
       const hasBgToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:bg-/i.test(t));
       const hasTextToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:text-/i.test(t));
       const hasBackgroundOnlyFocus = (hasBgToken || hasTextToken || /focus:bg-|focus-visible:bg-|focus:text-|focus-visible:text-/.test(combined)) && 
                                       !hasRingToken && !hasBorderToken && !hasShadowToken && !hasOutlineToken;
       
-      // Check for ring-1 only (too subtle)
+      // Check for ring-1 only (too subtle — width < 2px)
       const hasRing1Only = /focus(?:-visible)?:ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]|ring-offset/.test(combined);
       
-      // Check for :focus only without :focus-visible
-      const hasFocusOnly = /\bfocus:/.test(combined) && !/focus-visible:/.test(combined) && !hasBackgroundOnlyFocus;
+      // Check for :focus only without :focus-visible (keyboard perception risk)
+      const hasFocusOnlyStyles = /\bfocus:(?:ring-[^0]|border-|shadow-(?!none)|outline-(?!none))/.test(combined) && !/focus-visible:/.test(combined);
       
-      const isBorderline = hasBackgroundOnlyFocus || hasRing1Only || hasFocusOnly;
+      // Borderline requires at least SOME visible focus styling that is merely too subtle
+      // If NO focus styling exists at all, it's Confirmed (blocking), not borderline
+      const hasAnyFocusStyling = hasBackgroundOnlyFocus || hasRing1Only || hasFocusOnlyStyles;
+      const isBorderline = hasAnyFocusStyling;
       
       // This is a valid violation - add it
       console.log(`A2 VIOLATION: ${evidence} [borderline: ${isBorderline}]`);
@@ -1801,14 +1813,16 @@ ${codeContent}`,
       // Determine classification
       const typeBadge: 'Confirmed Violation' | 'Heuristic Risk' = v.isBorderline ? 'Heuristic Risk' : 'Confirmed Violation';
       
-      // Calculate confidence
+      // Calculate confidence per classification
       let confidence = v.confidence || 0.90;
       if (v.isBorderline) {
-        confidence = Math.min(confidence, 0.80);
-        confidence = Math.max(confidence, 0.70);
+        // Potential Risk (borderline): 60–75% deterministic
+        confidence = Math.min(confidence, 0.75);
+        confidence = Math.max(confidence, 0.60);
       } else {
+        // Confirmed (blocking): ≥ 85% deterministic
         confidence = Math.min(confidence, 0.95);
-        confidence = Math.max(confidence, 0.90);
+        confidence = Math.max(confidence, 0.85);
       }
       
       const rationale = v.isBorderline 
