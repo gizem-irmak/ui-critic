@@ -31,7 +31,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
-        {/* Header row */}
+        {/* Header row — matches A1 typography */}
         <CollapsibleTrigger className="w-full">
           <div className="flex items-start justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
@@ -39,12 +39,15 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 {displayLabel}
               </span>
               {element.elementType && (
-                <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                <span className={cn(
+                  'text-muted-foreground italic truncate max-w-48',
+                  compact ? 'text-xs' : 'text-sm'
+                )}>
                   {element.elementType}
                 </span>
               )}
               {isBorderline && (
-                <Badge variant="outline" className="text-xs font-normal border-warning/50 text-warning">
+                <Badge variant="outline" className="text-xs border-warning/50 text-warning">
                   Borderline
                 </Badge>
               )}
@@ -53,9 +56,6 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded">
-                {Math.round(element.confidence * 100)}%
-              </span>
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
@@ -74,18 +74,18 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Evidence / Trigger */}
+            {/* Detection */}
             {element.detection && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-28">Detection:</span>
-                <span className="font-mono text-xs">{element.detection}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-20">Detection:</span>
+                <span className="font-mono">{element.detection}</span>
               </div>
             )}
 
             {/* Focus classes found */}
             {element.focusClasses && element.focusClasses.length > 0 && (
               <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-28">Classes:</span>
+                <span className="text-muted-foreground font-medium w-20">Classes:</span>
                 <div className="flex flex-wrap gap-1">
                   {element.focusClasses.map((cls, i) => (
                     <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
@@ -98,7 +98,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
 
             {/* Confidence */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-28">Confidence:</span>
+              <span className="text-muted-foreground font-medium w-20">Confidence:</span>
               <span className={cn(
                 'font-mono font-medium',
                 isConfirmed ? 'text-destructive' : 'text-warning'
@@ -109,7 +109,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
 
             {/* Requirement */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-28">Requirement:</span>
+              <span className="text-muted-foreground font-medium w-20">Requirement:</span>
               <span>WCAG 2.4.7 Focus Visible</span>
             </div>
 
