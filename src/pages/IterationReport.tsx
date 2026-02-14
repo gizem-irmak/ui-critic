@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { 
-  ArrowLeft, CheckCircle, XCircle, Copy, Check, TrendingDown, 
+  ArrowLeft, CheckCircle, XCircle, TrendingDown, 
   FileText, Printer 
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 import { useProjectStore } from '@/stores/projectStore';
 import type { Iteration, Project } from '@/types/project';
 import { ViolationsRenderer } from '@/components/analysis/ViolationsRenderer';
-
+import { CorrectivePromptsSection } from '@/components/analysis/CorrectivePromptsSection';
 const categoryColors: Record<string, string> = {
   accessibility: 'category-accessibility',
   usability: 'category-usability',
@@ -38,7 +38,7 @@ export default function IterationReport() {
   const navigate = useNavigate();
   const { getProject } = useProjectStore();
   
-  const [copied, setCopied] = useState(false);
+  
 
   const project = getProject(projectId || '');
   const iteration = project?.iterations.find(i => i.id === iterationId);
@@ -66,76 +66,9 @@ export default function IterationReport() {
   const violationsFixed = violationDiff !== null && violationDiff > 0 ? violationDiff : 0;
   const violationsAdded = violationDiff !== null && violationDiff < 0 ? Math.abs(violationDiff) : 0;
 
-  // Deduplicate prompts - ONLY for confirmed violations
-  const confirmedViolations = analysis.violations.filter(v => v.status !== 'potential');
-  
-  const deduplicatedPrompts = (() => {
-    const promptMap = new Map<string, { 
-      prompt: string; 
-      hints: Set<string>; 
-      ruleIds: Set<string>;
-      ruleNames: Set<string>;
-      category: string;
-    }>();
-    
-    for (const v of confirmedViolations) {
-      const key = v.correctivePrompt;
-      if (!promptMap.has(key)) {
-        promptMap.set(key, {
-          prompt: v.correctivePrompt,
-          hints: new Set(),
-          ruleIds: new Set([v.ruleId]),
-          ruleNames: new Set([v.ruleName]),
-          category: v.category,
-        });
-      }
-      const entry = promptMap.get(key)!;
-      if (v.contextualHint) {
-        entry.hints.add(v.contextualHint);
-      }
-      entry.ruleIds.add(v.ruleId);
-      entry.ruleNames.add(v.ruleName);
-    }
-    
-    return Array.from(promptMap.values());
-  })();
 
-  const copyPrompt = async () => {
-    if (!confirmedViolations.length) return;
-    
-    const grouped: Record<string, typeof deduplicatedPrompts> = {};
-    for (const item of deduplicatedPrompts) {
-      if (!grouped[item.category]) grouped[item.category] = [];
-      grouped[item.category].push(item);
-    }
-    
-    let text = 'Please revise the UI design to address the following issues:\n';
-    const categoryOrder = ['accessibility', 'usability', 'ethics'];
-    
-    for (const cat of categoryOrder) {
-      if (!grouped[cat]?.length) continue;
-      text += `\n${categoryLabels[cat]}:\n`;
-      for (const item of grouped[cat]) {
-        text += `- ${item.prompt}\n`;
-        const hintsArray = Array.from(item.hints);
-        if (hintsArray.length === 1) {
-          text += `  Context: ${hintsArray[0]}\n`;
-        } else if (hintsArray.length > 1) {
-          for (const hint of hintsArray) {
-            text += `  • ${hint}\n`;
-          }
-        }
-      }
-    }
-    
-    try {
-      await navigator.clipboard.writeText(text.trim());
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy:', err);
-    }
-  };
+
+
 
   const isConverged = project.iterations[project.iterations.length - 1]?.analysis?.isAcceptable;
   const isFinalIteration = iteration.id === project.iterations[project.iterations.length - 1]?.id && analysis.isAcceptable;
@@ -358,69 +291,8 @@ export default function IterationReport() {
       {/* Violations — single source of truth renderer */}
       <ViolationsRenderer violations={analysis.violations} />
 
-      {/* Corrective Prompt - ONLY for confirmed violations */}
-      {confirmedViolations.length > 0 && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-sm">Corrective Prompts</CardTitle>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={copyPrompt}
-              className="gap-2 h-8 print:hidden"
-            >
-              {copied ? (
-                <>
-                  <Check className="h-3 w-3" />
-                  Copied
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3 w-3" />
-                  Copy All
-                </>
-              )}
-            </Button>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {deduplicatedPrompts.map((item, idx) => {
-              const hintsArray = Array.from(item.hints);
-              const ruleIdsArray = Array.from(item.ruleIds);
-              const ruleNamesArray = Array.from(item.ruleNames);
-              
-              return (
-                <div key={idx} className="space-y-1 pb-3 border-b border-border last:border-0 last:pb-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {ruleIdsArray.map((ruleId) => (
-                      <span key={ruleId} className={cn('category-badge text-xs', categoryColors[item.category])}>
-                        {ruleId}
-                      </span>
-                    ))}
-                    <span className="text-xs font-medium text-muted-foreground">
-                      {ruleNamesArray.length === 1 
-                        ? ruleNamesArray[0] 
-                        : `${ruleNamesArray[0]} (+${ruleNamesArray.length - 1} more)`}
-                    </span>
-                  </div>
-                  <p className="text-sm bg-primary/5 p-2 rounded border-l-2 border-primary">
-                    {item.prompt}
-                  </p>
-                  {hintsArray.length === 1 && (
-                    <p className="text-xs text-muted-foreground italic">💡 {hintsArray[0]}</p>
-                  )}
-                  {hintsArray.length > 1 && (
-                    <ul className="text-xs text-muted-foreground italic space-y-0.5">
-                      {hintsArray.map((hint, hIdx) => (
-                        <li key={hIdx}>💡 {hint}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              );
-            })}
-          </CardContent>
-        </Card>
-      )}
+      {/* Corrective Prompts — shared component */}
+      <CorrectivePromptsSection violations={analysis.violations} />
 
       {/* Action Buttons */}
       <div className="flex justify-center gap-4 pt-4 print:hidden">
