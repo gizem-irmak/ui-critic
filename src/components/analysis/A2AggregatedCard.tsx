@@ -74,48 +74,6 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* ── Element Identity Block ── */}
-            <div className="space-y-1.5">
-              <span className="text-muted-foreground font-semibold text-xs uppercase tracking-wide">Element</span>
-
-              {/* Role */}
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-28">Role:</span>
-                <span className="font-mono text-xs">{element.role || element.elementType || 'unknown'}</span>
-              </div>
-
-              {/* Accessible name */}
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-28">Accessible name:</span>
-                <span className={cn('text-xs', element.accessibleName ? 'font-mono' : 'italic text-muted-foreground')}>
-                  {element.accessibleName ? `"${element.accessibleName}"` : '(no accessible name)'}
-                </span>
-              </div>
-
-              {/* Source label */}
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-28">Source label:</span>
-                <span className="text-xs">{element.sourceLabel || element.elementLabel || '—'}</span>
-              </div>
-
-              {/* Selector hint */}
-              {element.selectorHint && (
-                <div className="flex items-start gap-2">
-                  <span className="text-muted-foreground font-medium w-28">Selector hint:</span>
-                  <span className="font-mono text-xs break-all">{element.selectorHint}</span>
-                </div>
-              )}
-
-              {/* Location (repeated in identity block for completeness) */}
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-28">Location:</span>
-                <span className="text-xs break-all">{element.location}</span>
-              </div>
-            </div>
-
-            {/* Spacing separator */}
-            <div className="h-1" />
-
             {/* Evidence / Trigger */}
             {element.detection && (
               <div className="flex items-start gap-2">
