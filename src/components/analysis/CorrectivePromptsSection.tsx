@@ -64,7 +64,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             });
           }
         }
-      } else if (v.ruleId === 'A2' && v.isA2Aggregated && v.a2Elements) {
+    } else if (v.ruleId === 'A2' && v.isA2Aggregated && v.a2Elements) {
         if (!ruleGroups.has('A2')) {
           ruleGroups.set('A2', {
             ruleId: 'A2',
@@ -75,6 +75,29 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
         }
         const group = ruleGroups.get('A2')!;
         for (const el of v.a2Elements) {
+          if (el.correctivePrompt) {
+            const elementRef = [
+              el.elementLabel,
+              el.elementType ? `(${el.elementType})` : null,
+              el.location ? `— ${el.location}` : null,
+            ].filter(Boolean).join(' ');
+            group.prompts.push({
+              prompt: el.correctivePrompt,
+              elementRef: elementRef || el.elementLabel,
+            });
+          }
+        }
+      } else if (v.ruleId === 'A3' && v.isA3Aggregated && v.a3Elements) {
+        if (!ruleGroups.has('A3')) {
+          ruleGroups.set('A3', {
+            ruleId: 'A3',
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+          });
+        }
+        const group = ruleGroups.get('A3')!;
+        for (const el of v.a3Elements) {
           if (el.correctivePrompt) {
             const elementRef = [
               el.elementLabel,

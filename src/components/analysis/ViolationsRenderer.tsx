@@ -5,6 +5,7 @@ import type { Analysis, Violation } from '@/types/project';
 import { PotentialRisksSection } from './PotentialRiskItem';
 import { A1AggregatedCard } from './A1AggregatedCard';
 import { A2AggregatedCard } from './A2AggregatedCard';
+import { A3AggregatedCard } from './A3AggregatedCard';
 
 const categoryColors: Record<string, string> = {
   accessibility: 'category-accessibility',
@@ -58,7 +59,7 @@ function GenericViolationCard({ violation, isConfirmed, compact = false }: {
 }
 
 function isAggregated(v: Violation): boolean {
-  return !!(v.ruleId === 'A1' && v.isA1Aggregated) || !!(v.ruleId === 'A2' && v.isA2Aggregated);
+  return !!(v.ruleId === 'A1' && v.isA1Aggregated) || !!(v.ruleId === 'A2' && v.isA2Aggregated) || !!(v.ruleId === 'A3' && v.isA3Aggregated);
 }
 
 function AggregatedCard({ violation, compact }: { violation: Violation; compact?: boolean }) {
@@ -67,6 +68,9 @@ function AggregatedCard({ violation, compact }: { violation: Violation; compact?
   }
   if (violation.ruleId === 'A2' && violation.isA2Aggregated) {
     return <A2AggregatedCard violation={violation} compact={compact} />;
+  }
+  if (violation.ruleId === 'A3' && violation.isA3Aggregated) {
+    return <A3AggregatedCard violation={violation} compact={compact} />;
   }
   return null;
 }
