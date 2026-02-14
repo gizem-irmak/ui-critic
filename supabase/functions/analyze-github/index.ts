@@ -801,17 +801,18 @@ An element is ONLY considered focusable if it matches ONE of:
 4. onClick handler WITH keyboard handler
 
 **CLASSIFICATION:**
-- **PASS (SKIP)**: outline removed BUT has visible replacement (ring, border, shadow, outline replacement)
-- **HEURISTIC RISK**: outline removed AND focus indication relies ONLY on bg-*/text-* change, or ring-1 only, or :focus without :focus-visible
-- **CONFIRMED**: outline removed AND NO visible replacement at all
+- **PASS (SKIP)**: outline removed BUT has visible replacement (ring ≥ 2, border, shadow, outline replacement)
+- **HEURISTIC RISK (Borderline)**: outline removed AND some focus styling exists BUT is too subtle (bg-*/text-* only, ring-1 only, :focus without :focus-visible, or ring contrast < 3:1)
+- **CONFIRMED**: outline removed AND NO visible replacement at all. IMPORTANT: If focus is removed AND no replacement exists → ALWAYS Confirmed, NEVER Heuristic/Borderline.
 
 **FOCUS REPLACEMENT PRIORITY:**
-1. Ring: \`focus:ring-*\`, \`focus-visible:ring-*\` (not ring-0) → PASS
+1. Ring ≥ 2: \`focus:ring-2\`, \`focus-visible:ring-*\` (not ring-0 or ring-1) → PASS
 2. Border: \`focus:border-*\`, \`focus-visible:border-*\` → PASS
 3. Outline: \`focus-visible:outline-*\` (not outline-none) → PASS
 4. Shadow: \`focus:shadow-*\`, \`focus-visible:shadow-*\` → PASS
-5. Background/text ONLY → HEURISTIC RISK
-6. NONE → CONFIRMED
+5. Ring-1 only (< 2px) → HEURISTIC RISK
+6. Background/text ONLY → HEURISTIC RISK
+7. NONE of the above → CONFIRMED (blocking)
 
 **ELEMENT IDENTITY (MANDATORY for every A2 finding):**
 Each finding MUST include:
@@ -1219,12 +1220,18 @@ serve(async (req) => {
           else if (/\blink\b|\ba\b/i.test(combined)) elementType = 'link';
           else if (/\binput\b/i.test(combined)) elementType = 'input';
           
-          // Check if borderline (bg-only, ring-1, :focus without :focus-visible)
-          const isBorderline = /focus:bg-|focus-visible:bg-|focus:text-|focus:ring-1\b/.test(combined) ||
-            (/\bfocus:/.test(combined) && !/focus-visible:/.test(combined));
+          // ── Borderline vs Confirmed classification ──
+          // Borderline = some focus styling EXISTS but is too subtle
+          // Confirmed = focus removed with NO replacement at all → NEVER borderline
+          const hasSubtleFocusStyling = 
+            /focus(?:-visible)?:bg-|focus(?:-visible)?:text-/.test(combined) || // bg/text only
+            (/focus(?:-visible)?:ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]|ring-offset/.test(combined)) || // ring-1 only
+            (/\bfocus:(?:ring-[^0]|border-|shadow-(?!none)|outline-(?!none))/.test(combined) && !/focus-visible:/.test(combined)); // :focus without :focus-visible
           
+          const isBorderline = hasSubtleFocusStyling;
           const isConfirmed = !isBorderline;
-          const confidence = isConfirmed ? 0.92 : 0.75;
+          // Confirmed: ≥85% deterministic; Borderline: 60-75%
+          const confidence = isConfirmed ? 0.90 : 0.68;
           
           const focusClasses = (combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|bg-\w+|ring-\w+|border-\w+|text-\w+)/g) || []);
           const detection = isBorderline 
