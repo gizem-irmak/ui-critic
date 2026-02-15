@@ -769,44 +769,66 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
   const findings: A3Finding[] = [];
   const seenKeys = new Set<string>();
 
+  const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
+  const INTERACTIVE_ROLES = /\brole\s*=\s*["'](button|link|menuitem|tab|option|checkbox|radio|switch|combobox|listbox|slider|treeitem|gridcell)["']/i;
+  const CLICK_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
+
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
-    if (!/\.(tsx|jsx)$/.test(filePath)) continue;
+    if (!/\.(tsx|jsx|ts|js)$/.test(filePath)) continue;
+    if (!filePath.startsWith('src/') && !filePath.startsWith('components/') && !filePath.startsWith('app/') && !filePath.startsWith('pages/')) continue;
     if (filePath.includes('components/ui/')) continue;
+    if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
 
-    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || '';
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js)$/i, '') || '';
     const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
     const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
     // A3-C1: Non-focusable custom interactive
-    const divClickRegex = /<(div|span|li|section|article)\b([^>]*onClick[^>]*)>/gi;
+    const tagRegex = new RegExp(`<(${NON_INTERACTIVE_TAGS})\\b([^>]*)>`, 'gi');
     let match;
-    while ((match = divClickRegex.exec(content)) !== null) {
+    while ((match = tagRegex.exec(content)) !== null) {
       const tag = match[1];
       const attrs = match[2];
-      if (/role\s*=/.test(attrs) || /tabIndex\s*=\s*\{?\s*[0-9]/.test(attrs) || /tabindex\s*=\s*["'][0-9]/.test(attrs) || /onKeyDown|onKeyUp|onKeyPress/.test(attrs)) continue;
+      if (!CLICK_HANDLER_RE.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+      if (INTERACTIVE_ROLES.test(attrs)) continue;
+      if (/tabIndex\s*=\s*\{?\s*(\d+)\s*\}?/i.test(attrs) || /tabindex\s*=\s*["'](\d+)["']/i.test(attrs)) continue;
+      if (/\b(onKeyDown|onKeyUp|onKeyPress)\s*=/.test(attrs)) continue;
+      if (/tabIndex\s*=\s*\{?\s*-1\s*\}?/i.test(attrs) || /tabindex\s*=\s*["']-1["']/i.test(attrs)) continue;
 
-      const contextEnd = Math.min(content.length, match.index + match[0].length + 200);
-      const context = content.slice(Math.max(0, match.index - 20), contextEnd);
-      const ariaLabel = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const titleAttr = attrs.match(/title\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const childTextMatch = context.match(new RegExp(`>([^<]{1,60})<`));
-      const label = ariaLabel?.[1] || ariaLabel?.[2] || titleAttr?.[1] || titleAttr?.[2] || childTextMatch?.[1]?.trim() || `<${tag}> element`;
+      const testIdMatch = attrs.match(/data-testid\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
+      const ariaLabelMatch = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const titleMatch = attrs.match(/title\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const afterTag = content.slice(match.index + match[0].length, Math.min(content.length, match.index + match[0].length + 300));
+      const childTextMatch = afterTag.match(/^([^<]{1,80})/);
+      const innerText = childTextMatch?.[1]?.trim();
 
-      const dedupeKey = `${filePath}|${tag}|${label}`;
+      const label = testIdMatch?.[1] || testIdMatch?.[2] || testIdMatch?.[3]
+        || ariaLabelMatch?.[1] || ariaLabelMatch?.[2]
+        || titleMatch?.[1] || titleMatch?.[2]
+        || (innerText && innerText.length > 0 && innerText.length <= 60 ? innerText : null)
+        || `<${tag}> (clickable container)`;
+
+      const linesBefore = content.slice(0, match.index).split('\n');
+      const lineNumber = linesBefore.length;
+      const handlerMatch = attrs.match(/\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/);
+      const triggerHandler = handlerMatch?.[1] || 'onClick';
+
+      const dedupeKey = `${filePath}|${tag}|${label}|${lineNumber}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
       findings.push({
         elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
         classificationCode: 'A3-C1', classification: 'confirmed',
-        detection: `<${tag}> with onClick but no role, tabIndex, or key handler`,
-        evidence: `<${tag} onClick=...> in ${filePath}`,
-        explanation: `This <${tag}> has onClick but is not keyboard accessible — no role, tabIndex, or key handler.`,
+        detection: `${triggerHandler} on non-semantic <${tag}> element`,
+        evidence: `<${tag} ${triggerHandler}=...> at ${filePath}:${lineNumber} — missing role, tabIndex, keyboard handlers`,
+        explanation: `This <${tag}> has ${triggerHandler} but lacks role, tabIndex, and keyboard event handlers. Keyboard users cannot reach or activate it.`,
         confidence: 0.92,
-        correctivePrompt: `[A3] Make '${label}' keyboard accessible by using <button> or adding role='button', tabIndex=0, and Enter/Space handlers.`,
+        correctivePrompt: `[A3] Make '${label}' keyboard accessible by using <button> or adding role='button', tabIndex=0, and Enter/Space handlers. File: ${filePath}:${lineNumber}`,
         deduplicationKey: dedupeKey,
       });
     }
@@ -816,11 +838,13 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
     while ((match = negTabIndexRegex.exec(content)) !== null) {
       const tag = match[1];
       const attrs = match[2];
-      if (/aria-hidden\s*=\s*["']?true/i.test(attrs) || /hidden\b/.test(attrs) || /sr-only|visually-hidden/i.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']?true/i.test(attrs) || /hidden\b/.test(attrs) || /sr-only|visually-hidden|clip-path/i.test(attrs)) continue;
 
       const ariaLabel = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const label = ariaLabel?.[1] || ariaLabel?.[2] || `<${tag}> element`;
-      const dedupeKey = `${filePath}|tabindex-neg|${label}`;
+      const linesBefore = content.slice(0, match.index).split('\n');
+      const lineNumber = linesBefore.length;
+      const dedupeKey = `${filePath}|tabindex-neg|${label}|${lineNumber}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
@@ -828,26 +852,28 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
         classificationCode: 'A3-C2', classification: 'confirmed',
         detection: `tabIndex={-1} on <${tag}>`,
-        evidence: `<${tag} tabIndex={-1}> in ${filePath}`,
+        evidence: `<${tag} tabIndex={-1}> at ${filePath}:${lineNumber} — removed from tab order`,
         explanation: `Primary interactive <${tag}> has tabIndex={-1}, removing it from keyboard tab order.`,
         confidence: 0.90,
-        correctivePrompt: `[A3] Remove tabIndex={-1} from '${label}' or provide an alternative keyboard-accessible control.`,
+        correctivePrompt: `[A3] Remove tabIndex={-1} from '${label}' or provide an alternative. File: ${filePath}:${lineNumber}`,
         deduplicationKey: dedupeKey,
       });
     }
 
     // A3-P1: role="button" with tabIndex but no key handler
-    const roleButtonRegex = /<(div|span)\b([^>]*role\s*=\s*["']button["'][^>]*)>/gi;
+    const roleButtonRegex = new RegExp(`<(${NON_INTERACTIVE_TAGS})\\b([^>]*role\\s*=\\s*["']button["'][^>]*)>`, 'gi');
     while ((match = roleButtonRegex.exec(content)) !== null) {
       const tag = match[1];
       const attrs = match[2];
-      const hasTabIndex = /tabIndex\s*=\s*\{?\s*[0-9]/.test(attrs) || /tabindex\s*=\s*["'][0-9]/.test(attrs);
-      if (!hasTabIndex) continue;
+      if (!/tabIndex\s*=\s*\{?\s*[0-9]/.test(attrs) && !/tabindex\s*=\s*["'][0-9]/.test(attrs)) continue;
       if (/onKeyDown|onKeyUp|onKeyPress/.test(attrs)) continue;
 
+      const testIdMatch = attrs.match(/data-testid\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const ariaLabel = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const label = ariaLabel?.[1] || ariaLabel?.[2] || `<${tag} role="button">`;
-      const dedupeKey = `${filePath}|role-nokey|${label}`;
+      const label = testIdMatch?.[1] || testIdMatch?.[2] || ariaLabel?.[1] || ariaLabel?.[2] || `<${tag} role="button">`;
+      const linesBefore = content.slice(0, match.index).split('\n');
+      const lineNumber = linesBefore.length;
+      const dedupeKey = `${filePath}|role-nokey|${label}|${lineNumber}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
@@ -855,25 +881,28 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         elementLabel: label, elementType: tag, role: 'button', sourceLabel: label, filePath, componentName,
         classificationCode: 'A3-P1', classification: 'potential',
         detection: `role="button" + tabIndex but no key handler`,
-        evidence: `<${tag} role="button" tabIndex=0> in ${filePath}`,
-        explanation: `Has role="button" and tabIndex but no key handler — Enter/Space may not activate it.`,
+        evidence: `<${tag} role="button" tabIndex=0> at ${filePath}:${lineNumber} — missing Enter/Space activation`,
+        explanation: `Has role="button" and tabIndex but no onKeyDown/onKeyUp handler. Keyboard users can focus but may not activate.`,
         confidence: 0.72,
-        correctivePrompt: `[A3] Verify '${label}' activates with Enter/Space. Prefer native <button> or add key handling.`,
+        correctivePrompt: `[A3] Verify '${label}' activates with Enter/Space. Prefer native <button> or add key handling. File: ${filePath}:${lineNumber}`,
         deduplicationKey: dedupeKey,
       });
     }
 
     // A3-P1: <a> without href used as button
-    const anchorNoHrefRegex = /<a\b([^>]*onClick[^>]*)>/gi;
+    const anchorNoHrefRegex = /<a\b([^>]*(?:onClick|onMouseDown|onPointerDown)[^>]*)>/gi;
     while ((match = anchorNoHrefRegex.exec(content)) !== null) {
       const attrs = match[1];
       if (/href\s*=\s*(?:"(?!#")(?![^"]*javascript:)[^"]+"|'(?!#')[^']+')/.test(attrs)) continue;
       const hasHref = /href\s*=/.test(attrs);
       if (hasHref && !/href\s*=\s*["']#["']/.test(attrs)) continue;
 
+      const testIdMatch = attrs.match(/data-testid\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const ariaLabel = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const label = ariaLabel?.[1] || ariaLabel?.[2] || '<a> as button';
-      const dedupeKey = `${filePath}|a-nohref|${label}`;
+      const label = testIdMatch?.[1] || testIdMatch?.[2] || ariaLabel?.[1] || ariaLabel?.[2] || '<a> as button';
+      const linesBefore = content.slice(0, match.index).split('\n');
+      const lineNumber = linesBefore.length;
+      const dedupeKey = `${filePath}|a-nohref|${label}|${lineNumber}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
@@ -881,10 +910,10 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         elementLabel: label, elementType: 'a', role: 'link', sourceLabel: label, filePath, componentName,
         classificationCode: 'A3-P1', classification: 'potential',
         detection: `<a> with onClick but no valid href`,
-        evidence: `<a onClick=...${hasHref ? ' href="#"' : ''}> in ${filePath}`,
+        evidence: `<a onClick=...${hasHref ? ' href="#"' : ''}> at ${filePath}:${lineNumber}`,
         explanation: `<a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. Use <button> or add role="button".`,
         confidence: 0.68,
-        correctivePrompt: `[A3] Replace <a> with <button> for '${label}', or add role="button" and key handlers.`,
+        correctivePrompt: `[A3] Replace <a> with <button> for '${label}', or add role="button" and key handlers. File: ${filePath}:${lineNumber}`,
         deduplicationKey: dedupeKey,
       });
     }
