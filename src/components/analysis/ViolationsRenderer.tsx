@@ -1,4 +1,4 @@
-import { AlertTriangle, AlertCircle } from 'lucide-react';
+import { AlertTriangle, AlertCircle, Info } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import type { Analysis, Violation } from '@/types/project';
@@ -6,6 +6,7 @@ import { PotentialRisksSection } from './PotentialRiskItem';
 import { A1AggregatedCard } from './A1AggregatedCard';
 import { A2AggregatedCard } from './A2AggregatedCard';
 import { A3AggregatedCard } from './A3AggregatedCard';
+import { getRuleById } from '@/data/rules';
 
 const categoryColors: Record<string, string> = {
   accessibility: 'category-accessibility',
@@ -80,9 +81,10 @@ function AggregatedCard({ violation, compact }: { violation: Violation; compact?
  * Used by AnalysisResults, IterationReport, and IterationReportModal.
  */
 export function ViolationsRenderer({ violations, compact = false }: ViolationsRendererProps) {
-  // Split into confirmed vs potential
+  // Split into confirmed vs potential vs informational (not evaluated)
   const confirmedViolations = violations.filter(v => v.status !== 'potential' && v.status !== 'informational');
   const potentialViolations = violations.filter(v => v.status === 'potential');
+  const informationalViolations = violations.filter(v => v.status === 'informational');
 
   // Separate aggregated from non-aggregated
   const confirmedAggregated = confirmedViolations.filter(isAggregated);
@@ -93,6 +95,7 @@ export function ViolationsRenderer({ violations, compact = false }: ViolationsRe
 
   const hasConfirmed = confirmedViolations.length > 0;
   const hasPotential = potentialViolations.length > 0;
+  const hasNotEvaluated = informationalViolations.length > 0;
   const totalPotential = potentialAggregated.length + potentialOther.length;
 
   return (
@@ -155,6 +158,64 @@ export function ViolationsRenderer({ violations, compact = false }: ViolationsRe
               </CardContent>
             </Card>
           )}
+        </div>
+      )}
+
+      {/* Rules Not Evaluated (Input Limitation) */}
+      {hasNotEvaluated && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 pt-2">
+            <Info className="h-5 w-5 text-muted-foreground" />
+            <h3 className="text-xl font-bold text-foreground">Rules Not Evaluated (Input Limitation)</h3>
+            <span className="text-sm text-muted-foreground">
+              — {informationalViolations.length} rule{informationalViolations.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {informationalViolations.map((v, idx) => {
+            const rule = getRuleById(v.ruleId);
+            return (
+              <Card key={`not-eval-${v.ruleId}-${idx}`} className="border-muted-foreground/20 bg-muted/5">
+                <CardContent className={cn('space-y-3', compact ? 'pt-3 pb-3' : 'pt-4 pb-4')}>
+                  {/* Rule ID + Title */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="category-badge flex-shrink-0 text-xs category-accessibility">
+                      {v.ruleId}
+                    </span>
+                    <span className="font-bold text-base">{v.ruleName || rule?.name || v.ruleId}</span>
+                  </div>
+
+                  <div className="h-1" />
+
+                  {/* Status */}
+                  <div className={cn('flex items-center gap-2', compact ? 'text-xs' : 'text-sm')}>
+                    <span className="text-muted-foreground font-medium w-24">Status:</span>
+                    <span className="text-muted-foreground">Not evaluated</span>
+                  </div>
+
+                  {/* Input type */}
+                  <div className={cn('flex items-center gap-2', compact ? 'text-xs' : 'text-sm')}>
+                    <span className="text-muted-foreground font-medium w-24">Input type:</span>
+                    <span className="text-foreground">{v.inputType === 'screenshots' ? 'Screenshot' : v.inputType || 'Unknown'}</span>
+                  </div>
+
+                  {/* Reason */}
+                  <div className={cn(compact ? 'text-xs' : 'text-sm')}>
+                    <span className="text-muted-foreground font-medium">Reason:</span>
+                    <p className="text-foreground leading-relaxed mt-1">{v.diagnosis}</p>
+                  </div>
+
+                  {/* Advisory */}
+                  {v.contextualHint && (
+                    <div className={cn('bg-muted/30 rounded-md p-3 border border-muted-foreground/10', compact ? 'text-xs' : 'text-sm')}>
+                      <span className="text-muted-foreground font-medium">Advisory:</span>
+                      <p className="text-foreground leading-relaxed mt-1">{v.contextualHint}</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
 
