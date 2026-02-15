@@ -30,7 +30,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
-        {/* Header row — matches A1 typography */}
+        {/* Header row — matches A1/A2 typography */}
         <CollapsibleTrigger className="w-full">
           <div className="flex items-start justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
@@ -46,7 +46,9 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
                 </span>
               )}
               {element.potentialSubtype === 'borderline' && (
-                <PotentialSubtypeBadge subtype="borderline" compact={compact} />
+                <Badge variant="outline" className="text-xs border-warning/50 text-warning">
+                  Borderline
+                </Badge>
               )}
               {element.potentialSubtype === 'accuracy' && (
                 <PotentialSubtypeBadge subtype="accuracy" compact={compact} />
@@ -67,13 +69,13 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
 
-        {/* Location (always visible) */}
+        {/* Location (always visible) — matches A1/A2 */}
         <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
           <span className="font-medium">📍 </span>
           {element.location}
         </div>
 
-        {/* Expandable details */}
+        {/* Expandable details — matches A2 field order */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
             {/* Detection */}
@@ -109,9 +111,25 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               <span>WCAG 2.1.1 Keyboard</span>
             </div>
 
-            {/* Explanation */}
+            {/* Explanation — render structured if it contains Issue reason / Recommended fix */}
             <div className="pt-1">
-              <p className="text-foreground leading-relaxed">{element.explanation}</p>
+              {element.explanation.includes('Issue reason:') && element.explanation.includes('Recommended fix:') ? (
+                <>
+                  {element.explanation.split('\n').filter(Boolean).map((line, i) => {
+                    const isLabel = /^(Issue reason|Recommended fix):/.test(line.trim());
+                    return (
+                      <p key={i} className={cn(
+                        'leading-relaxed',
+                        isLabel ? 'font-medium text-foreground' : 'text-foreground'
+                      )}>
+                        {line.trim()}
+                      </p>
+                    );
+                  })}
+                </>
+              ) : (
+                <p className="text-foreground leading-relaxed">{element.explanation}</p>
+              )}
             </div>
           </div>
         </CollapsibleContent>
@@ -165,7 +183,7 @@ export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCar
           />
         ))}
 
-        {/* Advisory guidance for potential findings */}
+        {/* Advisory guidance for potential findings — matches A2 */}
         {!isConfirmed && (
           <SubtypeAdvisoryGuidance
             ruleId="A3"
