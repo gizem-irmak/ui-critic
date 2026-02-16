@@ -87,22 +87,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             });
           }
         }
-      } else if (v.ruleId === 'A3') {
-        // A3 from screenshot mode: skip corrective prompts entirely
-        if (v.status === 'informational') continue;
-
-        const a3Els = (v.isA3Aggregated && v.a3Elements) ? v.a3Elements : [{
-          elementLabel: v.evidence || 'Element',
-          elementType: undefined as string | undefined,
-          location: v.evidence || '',
-          evidence: v.evidence,
-          explanation: v.diagnosis || '',
-          correctivePrompt: v.correctivePrompt,
-          deduplicationKey: `${v.ruleId}-fallback`,
-          classification: 'confirmed' as const,
-          confidence: v.confidence,
-        }];
-
+      } else if (v.ruleId === 'A3' && v.isA3Aggregated && v.a3Elements) {
         if (!ruleGroups.has('A3')) {
           ruleGroups.set('A3', {
             ruleId: 'A3',
@@ -112,37 +97,18 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
           });
         }
         const group = ruleGroups.get('A3')!;
-        for (const el of a3Els) {
-          const label = el.elementLabel || 'Element';
-          const tag = el.elementType || 'div';
-          const loc = el.location || '';
-
-          // Build structured per-element prompt
-          const reasonParts: string[] = [];
-          const src = (el.evidence || '') + ' ' + (el.explanation || '');
-          if (/onClick/i.test(src)) reasonParts.push('onClick handler present');
-          if (/missing.*tabIndex|no\s+tabIndex|not\s+focusable/i.test(src)) reasonParts.push('missing tabIndex');
-          if (/missing.*onKeyDown|no\s+onKeyDown|missing.*key\s*handler/i.test(src)) reasonParts.push('missing onKeyDown for Enter/Space');
-          if (/missing\s+role|lacks?\s+role/i.test(src)) reasonParts.push('missing semantic role');
-          if (/non.?semantic|div.*instead|clickable\s+<?(div|span)/i.test(src)) reasonParts.push('non-semantic element used as interactive control');
-          if (reasonParts.length === 0) reasonParts.push('not keyboard-operable');
-
-          const reason = `${tag} with ${reasonParts.join(', ')}`;
-          const prompt = [
-            `Preferred fix: Replace <${tag}> with <button type="button"> (or <a href="…"> if it navigates).`,
-            `Fallback (ARIA): Add role="button", tabIndex={0}, and onKeyDown handling Enter + Space. Add aria-label if no visible text.`,
-            `Ensure focus-visible styles remain present after the fix (e.g., focus-visible:ring-2 ring-offset-2).`,
-          ].join('\n');
-
-          const elementRef = [
-            label,
-            loc ? `— ${loc}` : null,
-          ].filter(Boolean).join(' ');
-
-          group.prompts.push({
-            prompt: `Why: ${reason}\n${prompt}`,
-            elementRef,
-          });
+        for (const el of v.a3Elements) {
+          if (el.correctivePrompt) {
+            const elementRef = [
+              el.elementLabel,
+              el.elementType ? `(${el.elementType})` : null,
+              el.location ? `— ${el.location}` : null,
+            ].filter(Boolean).join(' ');
+            group.prompts.push({
+              prompt: el.correctivePrompt,
+              elementRef: elementRef || el.elementLabel,
+            });
+          }
         }
       } else if (v.correctivePrompt) {
         const key = v.ruleId;
