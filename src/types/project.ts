@@ -157,10 +157,14 @@ export interface Violation {
   // ============================================================
   // A4 AGGREGATED ELEMENT REPORTING (Semantic Structure)
   // ============================================================
-  // When isA4Aggregated = true, this violation represents an aggregated
-  // A4 report with multiple element sub-items stored in a4Elements.
   isA4Aggregated?: boolean;
   a4Elements?: A4ElementSubItem[];
+  
+  // ============================================================
+  // A5 AGGREGATED ELEMENT REPORTING (Missing Form Labels)
+  // ============================================================
+  isA5Aggregated?: boolean;
+  a5Elements?: A5ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -301,6 +305,33 @@ export interface A4ElementSubItem {
   correctivePrompt?: string;
   
   // Deduplication key
+  deduplicationKey: string;
+}
+
+// A5 Element sub-item for aggregated form label reporting
+export interface A5ElementSubItem {
+  elementLabel: string;
+  elementType?: string; // input, select, textarea, etc.
+  inputSubtype?: string; // text, email, password, etc.
+  role?: string;
+  accessibleName?: string;
+  sourceLabel?: string;
+  selectorHint?: string;
+  textSnippet?: string;
+  location: string;
+  
+  detection?: string;
+  evidence?: string;
+  subCheck: 'A5.1' | 'A5.2' | 'A5.3';
+  subCheckLabel: string;
+  
+  classification: 'confirmed' | 'potential';
+  potentialSubtype?: 'accuracy' | 'borderline';
+  
+  explanation: string;
+  confidence: number;
+  
+  correctivePrompt?: string;
   deduplicationKey: string;
 }
 

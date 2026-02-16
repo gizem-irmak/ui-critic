@@ -14,6 +14,7 @@ const rules = {
     { id: 'A2', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
     { id: 'A3', name: 'Incomplete keyboard operability', diagnosis: 'Interactive elements not fully operable via keyboard.', correctivePrompt: 'Ensure all interactive elements are keyboard accessible using native elements or ARIA + key handlers.' },
     { id: 'A4', name: 'Missing semantic structure', diagnosis: 'Page lacks proper semantic HTML structure (headings, landmarks, lists, interactive roles).', correctivePrompt: 'Use semantic HTML elements to represent page hierarchy and structure.' },
+    { id: 'A5', name: 'Missing form labels (Input clarity)', diagnosis: 'Form controls lack programmatic labels, reducing accessibility.', correctivePrompt: 'Add visible <label> elements associated with form controls, or provide accessible names via aria-label/aria-labelledby.' },
   ],
   usability: [
     { id: 'U1', name: 'Unclear primary action', diagnosis: 'Users may struggle to identify the main action.', correctivePrompt: 'Ensure exactly one primary action per action group uses a filled/default variant (e.g., variant="default" or bg-primary). Demote other actions to outline, ghost, or link variants. If more than two secondary actions exist, consider grouping them into an overflow menu ("More" or "..."). Do not alter layout structure.' },
@@ -1501,6 +1502,254 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   return findings;
 }
 
+// ========== A5 DETERMINISTIC DETECTION (Missing Form Labels) ==========
+interface A5Finding {
+  elementLabel: string;
+  elementType: string;
+  inputSubtype?: string;
+  role?: string;
+  sourceLabel: string;
+  filePath: string;
+  componentName?: string;
+  subCheck: 'A5.1' | 'A5.2' | 'A5.3';
+  subCheckLabel: string;
+  classification: 'confirmed';
+  detection: string;
+  evidence: string;
+  explanation: string;
+  confidence: number;
+  correctivePrompt?: string;
+  deduplicationKey: string;
+}
+
+function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
+  const findings: A5Finding[] = [];
+  const seenKeys = new Set<string>();
+
+  // Collect all ids defined by controls and all label[for] targets across files
+  // For simplicity, we scan per-file since most label+control pairs are co-located.
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx|ts|js|html|htm)$/.test(filePath)) continue;
+    if (!filePath.startsWith('src/') && !filePath.startsWith('components/') && !filePath.startsWith('app/') && !filePath.startsWith('pages/')) continue;
+    if (filePath.includes('components/ui/')) continue;
+    if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js|html|htm)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+    else if (exportedConst?.[1]) componentName = exportedConst[1];
+
+    // Collect all id= attributes from controls
+    const controlIds = new Set<string>();
+    const controlIdRegex = /(?:id)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
+    let idMatch;
+    while ((idMatch = controlIdRegex.exec(content)) !== null) {
+      const id = idMatch[1] || idMatch[2] || idMatch[3];
+      if (id) controlIds.add(id);
+    }
+
+    // Count id occurrences for duplicate detection
+    const idCounts = new Map<string, number>();
+    for (const id of controlIds) {
+      const idRegex = new RegExp(`id\\s*=\\s*(?:"|'|\\{["'])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:"|'|["']\\})`, 'g');
+      const matches = content.match(idRegex);
+      if (matches) idCounts.set(id, matches.length);
+    }
+
+    // Collect label[for] / htmlFor targets
+    const labelForTargets = new Set<string>();
+    const labelForRegex = /(?:htmlFor|for)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
+    let labelForMatch;
+    while ((labelForMatch = labelForRegex.exec(content)) !== null) {
+      const target = labelForMatch[1] || labelForMatch[2] || labelForMatch[3];
+      if (target) labelForTargets.add(target);
+    }
+
+    // Find form controls: <input>, <textarea>, <select>, and ARIA input roles
+    const CONTROL_TAGS = 'input|textarea|select';
+    const ARIA_INPUT_ROLES = /\brole\s*=\s*["'](textbox|combobox|searchbox|spinbutton)["']/i;
+    const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
+
+    const controlRegex = new RegExp(`<(${CONTROL_TAGS})\\b([^>]*)(?:>|\\/>)`, 'gi');
+    let match;
+    while ((match = controlRegex.exec(content)) !== null) {
+      const tag = match[1].toLowerCase();
+      const attrs = match[2];
+
+      // Exclude hidden, submit, reset, button types
+      if (tag === 'input') {
+        const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+        const inputType = (typeMatch?.[1] || typeMatch?.[2] || 'text').toLowerCase();
+        if (EXCLUDED_INPUT_TYPES.has(inputType)) continue;
+      }
+
+      // Exclude disabled controls
+      if (/\bdisabled\b/.test(attrs)) continue;
+      // Exclude aria-hidden="true"
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+
+      const linesBefore = content.slice(0, match.index).split('\n');
+      const lineNumber = linesBefore.length;
+
+      // Extract input type for display
+      const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+      const inputSubtype = tag === 'input' ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
+
+      // Check for valid label sources
+      const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
+      const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
+      const controlIdMatch = attrs.match(/(?:^|\s)id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
+      const controlId = controlIdMatch?.[1] || controlIdMatch?.[2] || controlIdMatch?.[3];
+      const hasExplicitLabel = controlId ? labelForTargets.has(controlId) : false;
+
+      // Check if wrapped in <label>
+      // Simple heuristic: search backwards for unclosed <label> before this control
+      const beforeControl = content.slice(Math.max(0, match.index - 500), match.index);
+      const lastLabelOpen = beforeControl.lastIndexOf('<label');
+      const lastLabelClose = beforeControl.lastIndexOf('</label');
+      const isWrappedInLabel = lastLabelOpen > lastLabelClose && lastLabelOpen !== -1;
+
+      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel;
+
+      // Extract placeholder
+      const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2];
+      const hasPlaceholder = !!placeholder && placeholder.trim().length > 0;
+
+      // Build a label for the finding
+      const nameMatch = attrs.match(/(?:name|id)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const elementName = nameMatch?.[1] || nameMatch?.[2] || '';
+      const ariaLabelVal = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const label = ariaLabelVal?.[1] || ariaLabelVal?.[2] || placeholder || elementName || `<${tag}> control`;
+      const fileName = filePath.split('/').pop() || filePath;
+
+      // A5.3: Broken label association — label[for] targets a non-existent or duplicate id
+      if (controlId && hasExplicitLabel) {
+        const idCount = idCounts.get(controlId) || 0;
+        if (idCount > 1) {
+          const dedupeKey = `A5.3|${filePath}|${controlId}|duplicate`;
+          if (!seenKeys.has(dedupeKey)) {
+            seenKeys.add(dedupeKey);
+            findings.push({
+              elementLabel: label, elementType: tag, inputSubtype, sourceLabel: label, filePath, componentName,
+              subCheck: 'A5.3', subCheckLabel: 'Broken label association',
+              classification: 'confirmed',
+              detection: `Duplicate id="${controlId}" — ambiguous label association`,
+              evidence: `<${tag} id="${controlId}"> at ${filePath}:${lineNumber} — ${idCount} elements share this id`,
+              explanation: `Multiple elements share id="${controlId}", creating ambiguous label-control association.`,
+              confidence: 0.92,
+              correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nMultiple elements share id="${controlId}". The <label for="${controlId}"> cannot uniquely target the correct control.\n\nRecommended fix:\nAssign unique ids to each form control and update the corresponding <label for> attributes.`,
+              deduplicationKey: dedupeKey,
+            });
+          }
+          continue; // Don't double-report
+        }
+      }
+
+      // Check for labels with for= pointing to non-existent id
+      for (const forTarget of labelForTargets) {
+        if (!controlIds.has(forTarget)) {
+          const dedupeKey = `A5.3|${filePath}|${forTarget}|missing`;
+          if (!seenKeys.has(dedupeKey)) {
+            seenKeys.add(dedupeKey);
+            findings.push({
+              elementLabel: `label[for="${forTarget}"]`, elementType: 'label', sourceLabel: `Orphan label for="${forTarget}"`, filePath, componentName,
+              subCheck: 'A5.3', subCheckLabel: 'Broken label association',
+              classification: 'confirmed',
+              detection: `<label for="${forTarget}"> references non-existent id`,
+              evidence: `label for="${forTarget}" in ${filePath} — no element with id="${forTarget}" found`,
+              explanation: `A <label for="${forTarget}"> exists but no form control with id="${forTarget}" was found in this file.`,
+              confidence: 0.90,
+              correctivePrompt: `[label for="${forTarget}"] — ${fileName}\n\nIssue reason:\nThe label references id="${forTarget}" but no form control with that id exists.\n\nRecommended fix:\nEnsure the target form control has id="${forTarget}", or update the label's for attribute to match the control's actual id.`,
+              deduplicationKey: dedupeKey,
+            });
+          }
+        }
+      }
+
+      if (hasValidLabel) continue; // Properly labeled — skip
+
+      // A5.2: Placeholder-only labeling
+      if (hasPlaceholder && !hasValidLabel) {
+        const dedupeKey = `A5.2|${filePath}|${tag}|${label}|${lineNumber}`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          findings.push({
+            elementLabel: label, elementType: tag, inputSubtype, sourceLabel: label, filePath, componentName,
+            subCheck: 'A5.2', subCheckLabel: 'Placeholder used as label',
+            classification: 'confirmed',
+            detection: `<${tag}> has placeholder="${placeholder}" but no label/aria-label/aria-labelledby`,
+            evidence: `<${tag} placeholder="${placeholder}"> at ${filePath}:${lineNumber} — missing label association`,
+            explanation: `Placeholder text "${placeholder}" is the only label. Placeholders disappear on input and are not reliably announced by all screen readers.`,
+            confidence: 0.95,
+            correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nPlaceholder text is the only label for this control. Placeholders are not sufficient labels per WCAG 3.3.2.\n\nRecommended fix:\nAdd a persistent <label> associated with this input using for/id, or provide an accessible name via aria-label or aria-labelledby.`,
+            deduplicationKey: dedupeKey,
+          });
+        }
+        continue; // Don't double-report as A5.1
+      }
+
+      // A5.1: Missing accessible label entirely
+      const dedupeKey = `A5.1|${filePath}|${tag}|${label}|${lineNumber}`;
+      if (!seenKeys.has(dedupeKey)) {
+        seenKeys.add(dedupeKey);
+        findings.push({
+          elementLabel: label, elementType: tag, inputSubtype, sourceLabel: label, filePath, componentName,
+          subCheck: 'A5.1', subCheckLabel: 'Missing label association',
+          classification: 'confirmed',
+          detection: `<${tag}> has no label, aria-label, or aria-labelledby`,
+          evidence: `<${tag}> at ${filePath}:${lineNumber} — no programmatic label source found`,
+          explanation: `Form control <${tag}> has no accessible name. Screen readers cannot identify what this control is for.`,
+          confidence: 0.97,
+          correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nThis form control has no programmatic label (no <label>, aria-label, or aria-labelledby).\n\nRecommended fix:\nAdd a visible <label> associated with this input using for + id, or provide an accessible name via aria-label or aria-labelledby.`,
+          deduplicationKey: dedupeKey,
+        });
+      }
+    }
+
+    // Also detect ARIA input roles on non-form elements
+    const ariaInputRegex = new RegExp(`<(div|span|p|section)\\b([^>]*role\\s*=\\s*["'](?:textbox|combobox|searchbox|spinbutton)["'][^>]*)>`, 'gi');
+    while ((match = ariaInputRegex.exec(content)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      if (/\bdisabled\b/.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+
+      const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
+      const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
+      if (hasAriaLabel || hasAriaLabelledBy) continue;
+
+      const roleMatch = attrs.match(/role\s*=\s*["']([^"']+)["']/i);
+      const role = roleMatch?.[1] || 'textbox';
+      const linesBefore = content.slice(0, match.index).split('\n');
+      const lineNumber = linesBefore.length;
+      const label = `<${tag} role="${role}">`;
+
+      const dedupeKey = `A5.1|${filePath}|${tag}|${role}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      const fileName = filePath.split('/').pop() || filePath;
+      findings.push({
+        elementLabel: label, elementType: tag, role, sourceLabel: label, filePath, componentName,
+        subCheck: 'A5.1', subCheckLabel: 'Missing label association',
+        classification: 'confirmed',
+        detection: `<${tag} role="${role}"> has no aria-label or aria-labelledby`,
+        evidence: `<${tag} role="${role}"> at ${filePath}:${lineNumber} — no programmatic label`,
+        explanation: `Custom input (role="${role}") has no accessible name. Screen readers cannot identify what this control is for.`,
+        confidence: 0.95,
+        correctivePrompt: `[${label}] — ${fileName}\n\nIssue reason:\nCustom input with role="${role}" has no programmatic label.\n\nRecommended fix:\nAdd aria-label or aria-labelledby to provide an accessible name for this control.`,
+        deduplicationKey: dedupeKey,
+      });
+    }
+  }
+
+  return findings;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -2549,97 +2798,50 @@ ${codeContent}`,
       }
     }
 
-    // Aggregate per-element A1 findings into at most 2 cards:
-    // - One for Confirmed (Blocking) findings - N/A for ZIP, all are potential
-    // - One for Potential (Non-blocking) findings
-    // Each card contains element sub-items with full details.
-    // Deduplication by (filePath + colorClass)
-    
-    const confirmedA1Elements = contrastViolations.filter((v: any) => v.status === 'confirmed');
-    const potentialA1Elements = contrastViolations.filter((v: any) => v.status === 'potential');
-    
-    // Helper to build A1ElementSubItem from raw violation
-    const buildA1SubItem = (v: any): any => {
-      const dedupeKey = `${v.evidence || ''}-${v.foregroundHex || ''}`.toLowerCase().replace(/\s+/g, '');
-      
-      return {
-        elementLabel: v.elementDescription || v.elementIdentifier || 'Text element',
-        textSnippet: undefined,
-        location: v.evidence || v.elementIdentifier || 'Unknown location',
-        foregroundHex: v.foregroundHex,
-        foregroundConfidence: v.confidence,
-        backgroundStatus: v.backgroundStatus || 'unmeasurable',
-        backgroundHex: v.backgroundHex,
-        backgroundCandidates: undefined,
-        contrastRatio: v.contrastRatio,
-        contrastRange: undefined,
-        contrastNotMeasurable: v.backgroundStatus === 'unmeasurable',
-        thresholdUsed: v.thresholdUsed || 4.5,
-        explanation: v.diagnosis,
-        reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
-        nearThreshold: false,
-        deduplicationKey: dedupeKey,
-      };
-    };
-    
-    // Deduplicate elements by key
-    const deduplicateElements = (elements: any[]): any[] => {
-      const seen = new Map<string, any>();
-      for (const el of elements) {
-        const key = el.deduplicationKey;
-        if (seen.has(key)) {
-          const existing = seen.get(key);
-          if (el.reasonCodes) {
-            existing.reasonCodes = [...new Set([...(existing.reasonCodes || []), ...el.reasonCodes])];
-          }
-        } else {
-          seen.set(key, el);
-        }
+    // ========== Deterministic A5 (form labels) ==========
+    let aggregatedA5: any = null;
+    if (selectedRulesSet.has('A5')) {
+      const a5Findings = detectA5FormLabels(allFiles);
+      if (a5Findings.length > 0) {
+        const confirmedCount = a5Findings.length; // All A5 findings are confirmed
+        const overallConfidence = Math.max(...a5Findings.map(f => f.confidence));
+
+        const a5Elements = a5Findings.map(f => ({
+          elementLabel: f.sourceLabel, elementType: f.elementType, inputSubtype: f.inputSubtype,
+          role: f.role, sourceLabel: f.sourceLabel,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
+          classification: f.classification,
+          explanation: f.explanation, confidence: f.confidence, correctivePrompt: f.correctivePrompt,
+          deduplicationKey: f.deduplicationKey,
+        }));
+
+        const subCheckBreakdown = [
+          a5Findings.filter(f => f.subCheck === 'A5.1').length > 0 ? `${a5Findings.filter(f => f.subCheck === 'A5.1').length} missing labels` : '',
+          a5Findings.filter(f => f.subCheck === 'A5.2').length > 0 ? `${a5Findings.filter(f => f.subCheck === 'A5.2').length} placeholder-only` : '',
+          a5Findings.filter(f => f.subCheck === 'A5.3').length > 0 ? `${a5Findings.filter(f => f.subCheck === 'A5.3').length} broken associations` : '',
+        ].filter(Boolean).join(', ');
+
+        aggregatedA5 = {
+          ruleId: 'A5', ruleName: 'Missing form labels (Input clarity)', category: 'accessibility',
+          status: 'confirmed',
+          blocksConvergence: true, inputType: 'zip', isA5Aggregated: true, a5Elements,
+          diagnosis: `Form label issues detected: ${confirmedCount} confirmed (${subCheckBreakdown}). WCAG 1.3.1 and 3.3.2 require form controls to have programmatic labels.`,
+          contextualHint: 'Add visible <label> elements or aria-label/aria-labelledby for all form controls.',
+          correctivePrompt: 'Add visible <label> elements associated with form controls using for/id, or provide accessible names via aria-label/aria-labelledby. Do not rely on placeholder text as the sole label.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        };
+        console.log(`A5 aggregated: ${a5Findings.length} findings (all confirmed)`);
+      } else {
+        console.log('A5: No form label issues found');
       }
-      return Array.from(seen.values());
-    };
-    
-    const aggregatedA1Violations: any[] = [];
-    
-    // For ZIP: All findings are potential (no confirmed)
-    if (potentialA1Elements.length > 0) {
-      const elements = deduplicateElements(potentialA1Elements.map(buildA1SubItem));
-      const avgConfidence = potentialA1Elements.reduce((sum: number, v: any) => sum + (v.confidence || 0.55), 0) / potentialA1Elements.length;
-      
-      // Collect all unique reason codes across elements
-      const allReasonCodes = new Set<string>(['STATIC_ANALYSIS']);
-      for (const el of elements) {
-        if (el.reasonCodes) {
-          for (const code of el.reasonCodes) {
-            allReasonCodes.add(code);
-          }
-        }
-      }
-      
-      aggregatedA1Violations.push({
-        ruleId: 'A1',
-        ruleName: 'Insufficient text contrast',
-        category: 'accessibility',
-        status: 'potential',
-        isA1Aggregated: true,
-        a1Elements: elements,
-        diagnosis: `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast issues detected via static code analysis. Background colors cannot be determined without runtime rendering.`,
-        correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools after rendering.',
-        contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools after rendering.',
-        confidence: Math.round(avgConfidence * 100) / 100,
-        reasonCodes: Array.from(allReasonCodes),
-        potentialRiskReason: Array.from(allReasonCodes).join(', '),
-        advisoryGuidance: 'Upload screenshots of the rendered UI for higher-confidence verification.',
-        blocksConvergence: false,
-        inputType: 'zip',
-        samplingMethod: 'inferred',
-      });
-      
-      console.log(`A1 aggregated (ZIP): ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
+
+    // Aggregate per-element A1 findings into at most 2 cards:
+...
     
     // Merge aggregated A1 with AI violations (no raw contrast violations)
-    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : [])];
+    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : [])];
 
     console.log(`Code analysis complete: ${allViolations.length} violations found`);
 

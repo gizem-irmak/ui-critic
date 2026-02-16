@@ -36,6 +36,13 @@ export const rules: Rule[] = [
     diagnosis: 'Page lacks proper semantic HTML structure (headings, landmarks, lists, interactive roles), reducing accessibility for screen reader and keyboard users.',
     correctivePrompt: 'Use semantic HTML elements (<h1>–<h6>, <main>, <nav>, <header>, <footer>, <ul>/<ol>, <button>, <a>) to represent page hierarchy and structure so assistive technologies can navigate effectively.'
   },
+  {
+    id: 'A5',
+    category: 'accessibility',
+    name: 'Missing form labels (Input clarity)',
+    diagnosis: 'Form controls lack programmatic labels, reducing accessibility for screen reader users and failing WCAG 2.1 1.3.1 and 3.3.2.',
+    correctivePrompt: 'Add visible <label> elements associated with form controls using for/id, or provide accessible names via aria-label/aria-labelledby. Do not rely on placeholder text as the sole label.'
+  },
   // Usability (HCI)
   {
     id: 'U1',
