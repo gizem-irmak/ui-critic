@@ -99,14 +99,10 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
         const group = ruleGroups.get('A3')!;
         for (const el of v.a3Elements) {
           if (el.correctivePrompt) {
-            const elementRef = [
-              el.elementLabel,
-              el.elementType ? `(${el.elementType})` : null,
-              el.location ? `— ${el.location}` : null,
-            ].filter(Boolean).join(' ');
+            // A3 correctivePrompt already contains the full formatted block
+            // (header line, issue reason, recommended fix) — no separate elementRef needed
             group.prompts.push({
               prompt: el.correctivePrompt,
-              elementRef: elementRef || el.elementLabel,
             });
           }
         }
@@ -152,10 +148,15 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       for (const ruleGroup of grouped[cat]) {
         text += `\n[${ruleGroup.ruleId}] ${ruleGroup.ruleName}:\n`;
         for (const item of ruleGroup.prompts) {
-          if (item.elementRef) {
-            text += `  • ${item.elementRef}\n`;
+          if (ruleGroup.ruleId === 'A3' && !item.elementRef) {
+            // A3 prompts are self-contained blocks — render directly
+            text += `\n${item.prompt}\n`;
+          } else {
+            if (item.elementRef) {
+              text += `  • ${item.elementRef}\n`;
+            }
+            text += `    ${item.prompt.replace(/\n/g, '\n    ')}\n`;
           }
-          text += `    ${item.prompt.replace(/\n/g, '\n    ')}\n`;
         }
       }
     }
