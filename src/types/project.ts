@@ -153,6 +153,14 @@ export interface Violation {
   // A3 report with multiple element sub-items stored in a3Elements.
   isA3Aggregated?: boolean;
   a3Elements?: A3ElementSubItem[];
+  
+  // ============================================================
+  // A4 AGGREGATED ELEMENT REPORTING (Semantic Structure)
+  // ============================================================
+  // When isA4Aggregated = true, this violation represents an aggregated
+  // A4 report with multiple element sub-items stored in a4Elements.
+  isA4Aggregated?: boolean;
+  a4Elements?: A4ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -251,6 +259,39 @@ export interface A3ElementSubItem {
   classification: 'confirmed' | 'potential';
   classificationCode?: string; // A3-C1, A3-C2, A3-C3, A3-P1, A3-P2
   potentialSubtype?: 'accuracy' | 'borderline'; // Only when classification='potential'
+  
+  // Explanation
+  explanation: string; // Why this element is flagged
+  confidence: number;
+  
+  // Corrective prompt (ONLY for confirmed violations)
+  correctivePrompt?: string;
+  
+  // Deduplication key
+  deduplicationKey: string;
+}
+
+// A4 Element sub-item for aggregated semantic structure reporting
+export interface A4ElementSubItem {
+  // Element identification
+  elementLabel: string; // Best human-readable label (e.g., "Clickable div container", "Missing <h1>")
+  elementType?: string; // div, span, nav, section, etc.
+  role?: string; // ARIA role or HTML tag role
+  accessibleName?: string; // Computed accessible name
+  sourceLabel?: string; // Best human label
+  selectorHint?: string; // data-testid, id, class fragment, or component path
+  textSnippet?: string; // Visible text if available
+  location: string; // file path (ZIP/GitHub) or "Screenshot" label
+  
+  // Detection data
+  detection?: string; // e.g., "Clickable div without role/semantics"
+  evidence?: string; // Specific code evidence
+  subCheck: 'A4.1' | 'A4.2' | 'A4.3' | 'A4.4'; // Which sub-check triggered
+  subCheckLabel: string; // "Heading semantics", "Interactive elements", "Landmark regions", "Lists"
+  
+  // Classification
+  classification: 'confirmed' | 'potential';
+  potentialSubtype?: 'accuracy' | 'borderline';
   
   // Explanation
   explanation: string; // Why this element is flagged

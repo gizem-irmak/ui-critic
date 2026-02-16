@@ -29,6 +29,13 @@ export const rules: Rule[] = [
     diagnosis: 'Interactive elements are not fully operable via keyboard or have broken keyboard semantics, preventing keyboard-only users from accessing functionality.',
     correctivePrompt: 'Ensure all interactive elements are keyboard accessible: use native <button>/<a href> elements, or add role, tabIndex=0, and Enter/Space key handlers to custom interactive elements.'
   },
+  {
+    id: 'A4',
+    category: 'accessibility',
+    name: 'Missing semantic structure',
+    diagnosis: 'Page lacks proper semantic HTML structure (headings, landmarks, lists, interactive roles), reducing accessibility for screen reader and keyboard users.',
+    correctivePrompt: 'Use semantic HTML elements (<h1>–<h6>, <main>, <nav>, <header>, <footer>, <ul>/<ol>, <button>, <a>) to represent page hierarchy and structure so assistive technologies can navigate effectively.'
+  },
   // Usability (HCI)
   {
     id: 'U1',

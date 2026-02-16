@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { Violation, A3ElementSubItem } from '@/types/project';
+import type { Violation, A3ElementSubItem, A4ElementSubItem } from '@/types/project';
 import { CorrectivePromptItem } from './CorrectivePromptItem';
 
 const categoryColors: Record<string, string> = {
@@ -39,6 +39,31 @@ function buildA3PromptBody(el: A3ElementSubItem): { issueReason: string; recomme
   return { issueReason, recommendedFix };
 }
 
+const A4_CORRECTIVE_TEMPLATES: Record<string, { issueReason: string; recommendedFix: string }> = {
+  'A4.1': {
+    issueReason: 'Page lacks semantic heading structure, reducing screen reader navigation.',
+    recommendedFix: 'Use semantic headings (<h1>–<h6>) to represent page hierarchy. Ensure exactly one <h1> for the page title and avoid skipping heading levels.',
+  },
+  'A4.2': {
+    issueReason: 'Clickable non-semantic element is not keyboard operable and lacks ARIA role.',
+    recommendedFix: 'Replace clickable non-semantic elements with <button> or <a>. If a non-button must be used, add role="button", tabIndex="0", and keyboard handlers for Enter/Space, plus visible focus styles.',
+  },
+  'A4.3': {
+    issueReason: 'Page lacks semantic landmark regions, reducing assistive technology navigation.',
+    recommendedFix: 'Add semantic landmarks (<main>, <nav>, <header>, <footer>, <aside>) so assistive technologies can navigate the page structure.',
+  },
+  'A4.4': {
+    issueReason: 'Repeated items use purely visual repetition instead of semantic list elements.',
+    recommendedFix: 'Represent repeated items using <ul>/<ol>/<li> (or role="list"/role="listitem") instead of purely visual repetition.',
+  },
+};
+
+function buildA4PromptBody(el: A4ElementSubItem): { issueReason: string; recommendedFix: string } {
+  const template = A4_CORRECTIVE_TEMPLATES[el.subCheck];
+  if (template) return template;
+  return { issueReason: el.explanation, recommendedFix: el.correctivePrompt || 'Use semantic HTML elements to represent page structure.' };
+}
+
 interface CorrectivePromptsSectionProps {
   violations: Violation[];
 }
@@ -60,6 +85,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
         elementRef?: string;
       }>;
       a3Items?: A3ElementSubItem[];
+      a4Items?: A4ElementSubItem[];
     }>();
 
     for (const v of confirmedViolations) {
@@ -144,6 +170,38 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             textSnippet: '',
           } as A3ElementSubItem);
         }
+      } else if (v.ruleId === 'A4') {
+        // A4 ALWAYS uses per-element rendering — never the generic correctivePrompt string
+        if (!ruleGroups.has('A4')) {
+          ruleGroups.set('A4', {
+            ruleId: 'A4',
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+            a4Items: [],
+          });
+        }
+        const group = ruleGroups.get('A4')!;
+        if (v.isA4Aggregated && v.a4Elements) {
+          for (const el of v.a4Elements) {
+            if (el.classification === 'confirmed') {
+              group.a4Items!.push(el);
+            }
+          }
+        } else if (v.status === 'confirmed' || v.status !== 'potential') {
+          group.a4Items!.push({
+            elementLabel: v.contextualHint || v.evidence || v.ruleName,
+            elementType: 'div',
+            location: v.evidence || '',
+            explanation: v.diagnosis || '',
+            confidence: v.confidence,
+            correctivePrompt: v.correctivePrompt,
+            deduplicationKey: `${v.ruleId}-${v.evidence || 'fallback'}`,
+            classification: 'confirmed',
+            subCheck: 'A4.1',
+            subCheckLabel: 'Heading semantics',
+          } as A4ElementSubItem);
+        }
       } else if (v.correctivePrompt) {
         const key = v.ruleId;
         if (!ruleGroups.has(key)) {
@@ -165,7 +223,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       }
     }
 
-    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a3Items && g.a3Items.length > 0));
+    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a3Items && g.a3Items.length > 0) || (g.a4Items && g.a4Items.length > 0));
   })();
 
   const copyPrompt = async () => {
@@ -191,6 +249,14 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             const tag = el.elementType || el.role || 'div';
             const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
             const { issueReason, recommendedFix } = buildA3PromptBody(el);
+            text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+          }
+        } else if (ruleGroup.ruleId === 'A4' && ruleGroup.a4Items?.length) {
+          for (const el of ruleGroup.a4Items) {
+            const label = el.elementLabel || el.sourceLabel || 'Element';
+            const tag = el.elementType || 'element';
+            const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+            const { issueReason, recommendedFix } = buildA4PromptBody(el);
             text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
           }
         } else {
@@ -266,6 +332,24 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
                   const tag = el.elementType || el.role || 'div';
                   const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
                   const { issueReason, recommendedFix } = buildA3PromptBody(el);
+                  return (
+                    <CorrectivePromptItem
+                      key={pIdx}
+                      elementLabel={label}
+                      roleOrTag={tag}
+                      fileName={fileName}
+                      issueReason={issueReason}
+                      recommendedFix={recommendedFix}
+                    />
+                  );
+                })
+              ) : group.ruleId === 'A4' && group.a4Items ? (
+                // A4: use CorrectivePromptItem per element
+                group.a4Items.map((el, pIdx) => {
+                  const label = el.elementLabel || el.sourceLabel || 'Element';
+                  const tag = el.elementType || 'element';
+                  const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+                  const { issueReason, recommendedFix } = buildA4PromptBody(el);
                   return (
                     <CorrectivePromptItem
                       key={pIdx}
