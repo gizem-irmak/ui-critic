@@ -98,10 +98,16 @@ function AggregatedCard({ violation, compact }: { violation: Violation; compact?
  * Used by AnalysisResults, IterationReport, and IterationReportModal.
  */
 export function ViolationsRenderer({ violations, compact = false }: ViolationsRendererProps) {
+  // Deduplicate A6: if an aggregated A6 card exists, drop non-aggregated A6 violations
+  const hasAggregatedA6 = violations.some(v => v.ruleId === 'A6' && v.isA6Aggregated);
+  const deduped = hasAggregatedA6
+    ? violations.filter(v => v.ruleId !== 'A6' || v.isA6Aggregated)
+    : violations;
+
   // Split into confirmed vs potential vs informational (not evaluated)
-  const confirmedViolations = violations.filter(v => v.status !== 'potential' && v.status !== 'informational');
-  const potentialViolations = violations.filter(v => v.status === 'potential');
-  const informationalViolations = violations.filter(v => v.status === 'informational');
+  const confirmedViolations = deduped.filter(v => v.status !== 'potential' && v.status !== 'informational');
+  const potentialViolations = deduped.filter(v => v.status === 'potential');
+  const informationalViolations = deduped.filter(v => v.status === 'informational');
 
   // Separate aggregated from non-aggregated
   const confirmedAggregated = confirmedViolations.filter(isAggregated);
