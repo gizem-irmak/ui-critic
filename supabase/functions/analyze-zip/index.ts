@@ -744,11 +744,19 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
       const childTextMatch = afterTag.match(/^([^<]{1,80})/);
       const innerText = childTextMatch?.[1]?.trim();
 
-      const label = testIdMatch?.[1] || testIdMatch?.[2] || testIdMatch?.[3]
-        || ariaLabelMatch?.[1] || ariaLabelMatch?.[2]
-        || titleMatch?.[1] || titleMatch?.[2]
-        || (innerText && innerText.length > 0 && innerText.length <= 60 ? innerText : null)
-        || `<${tag}> (clickable container)`;
+      const ariaLabelValue = ariaLabelMatch?.[1] || ariaLabelMatch?.[2];
+      const titleValue = titleMatch?.[1] || titleMatch?.[2];
+      const testIdValue = testIdMatch?.[1] || testIdMatch?.[2] || testIdMatch?.[3];
+      const visibleText = (innerText && innerText.length > 0 && innerText.length <= 60 ? innerText : null);
+      const handlerNameMatch = attrs.match(/\b(?:onClick|onMouseDown|onPointerDown|onTouchStart)\s*=\s*\{?\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\}?/);
+      const handlerName = handlerNameMatch?.[1] || '';
+      // Priority: aria-label → visible text → title → data-testid → fallback
+      const label = ariaLabelValue
+        || visibleText
+        || titleValue
+        || testIdValue
+        || `Clickable ${tag} (${triggerHandler}${handlerName ? ' ' + handlerName : ''})`;
+      const fileName = filePath.split('/').pop() || filePath;
 
       const linesBefore = content.slice(0, match.index).split('\n');
       const lineNumber = linesBefore.length;
@@ -766,7 +774,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         evidence: `<${tag} ${triggerHandler}=...> at ${filePath}:${lineNumber} — missing role, tabIndex, keyboard handlers`,
         explanation: `This <${tag}> has ${triggerHandler} but lacks role, tabIndex, and keyboard event handlers. Keyboard users cannot reach or activate it.`,
         confidence: 0.92,
-        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <${tag}> (no interactive role)\n\n  Issue reason: Clickable <${tag}> with ${triggerHandler} is not focusable (no tabIndex) and has no keyboard activation handlers for Enter/Space.\n\n  Recommended fix: Replace the clickable <${tag}> with a semantic <button> or <a> element, OR add role="button", tabIndex={0}, and an onKeyDown handler that activates on Enter and Space.`,
+        correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nThis ${tag} uses ${triggerHandler} but is not keyboard operable because it lacks tabIndex${!/\brole\s*=/.test(attrs) ? ', role' : ''} and does not handle Enter/Space via onKeyDown.\n\nRecommended fix:\nReplace it with a <button type="button"> (or <a href> if navigation). If you must keep a ${tag}, add role="button", tabIndex={0}, and an onKeyDown handler for Enter/Space, and ensure :focus-visible styling.`,
         deduplicationKey: dedupeKey,
       });
     }
@@ -793,7 +801,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         evidence: `<${tag} tabIndex={-1}> at ${filePath}:${lineNumber} — removed from tab order`,
         explanation: `Primary interactive <${tag}> has tabIndex={-1}, removing it from keyboard tab order.`,
         confidence: 0.90,
-        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <${tag}> (${tag})\n\n  Issue reason: Primary interactive <${tag}> has tabIndex={-1}, removing it from keyboard tab order.\n\n  Recommended fix: Remove tabIndex={-1} from the <${tag}> or provide an alternative keyboard-accessible path.`,
+        correctivePrompt: (() => { const fn = filePath.split('/').pop() || filePath; return `[${label} (${tag})] — ${fn}\n\nIssue reason:\nThis ${tag} has tabIndex={-1}, removing it from keyboard tab order. Keyboard users cannot reach it via Tab.\n\nRecommended fix:\nRemove tabIndex={-1} to restore default focusability. If the element must be removed from tab order, provide an alternative keyboard-accessible path.`; })(),
         deduplicationKey: dedupeKey,
       });
     }
@@ -822,7 +830,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         evidence: `<${tag} role="button" tabIndex=0> at ${filePath}:${lineNumber} — missing Enter/Space activation`,
         explanation: `Has role="button" and tabIndex but no onKeyDown/onKeyUp handler. Keyboard users can focus but may not activate.`,
         confidence: 0.72,
-        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <${tag}> (role="button")\n\n  Issue reason: Has role="button" and tabIndex but no onKeyDown/onKeyUp handler. Keyboard users can focus but may not activate.\n\n  Recommended fix: Prefer native <button> or add an onKeyDown handler that activates on Enter and Space.`,
+        correctivePrompt: (() => { const fn = filePath.split('/').pop() || filePath; return `[${label} (${tag})] — ${fn}\n\nIssue reason:\nThis ${tag} has role="button" and tabIndex but missing keyboard activation handler (onKeyDown/onKeyUp). Keyboard users can focus but cannot activate it with Enter or Space.\n\nRecommended fix:\nReplace it with a native <button type="button">. If you must keep a ${tag}, add an onKeyDown handler that triggers on Enter and Space, and ensure :focus-visible styling.`; })(),
         deduplicationKey: dedupeKey,
       });
     }
@@ -851,7 +859,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         evidence: `<a onClick=...${hasHref ? ' href="#"' : ''}> at ${filePath}:${lineNumber}`,
         explanation: `<a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. Use <button> or add role="button".`,
         confidence: 0.68,
-        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <a> (role="link")\n\n  Issue reason: <a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. Not a valid navigation link.\n\n  Recommended fix: Replace the <a> with a semantic <button>, or add a valid href for navigation and role="button" with key handlers.`,
+        correctivePrompt: (() => { const fn = filePath.split('/').pop() || filePath; return `[${label} (a)] — ${fn}\n\nIssue reason:\nThis <a> is used as a button with onClick${hasHref ? ' and href="#"' : ' but no href'}. It is not a valid navigation link and may confuse assistive technology.\n\nRecommended fix:\nReplace it with a <button type="button"> if it triggers an action. If it navigates, add a valid href. Ensure :focus-visible styling is present.`; })(),
         deduplicationKey: dedupeKey,
       });
     }
