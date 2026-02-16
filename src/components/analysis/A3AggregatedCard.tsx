@@ -13,9 +13,14 @@ interface A3AggregatedCardProps {
 }
 
 /** Derive missing-requirement chips from evidence/explanation */
-function getMissingChips(evidence?: string, explanation?: string): string[] {
+function getEvidenceChips(evidence?: string, explanation?: string): string[] {
   const chips: string[] = [];
   const src = (evidence || '') + ' ' + (explanation || '');
+  // Trigger handlers present
+  if (/onClick/i.test(src)) chips.push('onClick');
+  if (/onPointerDown/i.test(src)) chips.push('onPointerDown');
+  if (/onMouseDown/i.test(src)) chips.push('onMouseDown');
+  // Missing requirements
   if (/missing\s+role|lacks?\s+role/i.test(src)) chips.push('missing role');
   if (/missing.*tabIndex|lacks?.*tabIndex|no\s+tabIndex|not\s+focusable/i.test(src)) chips.push('missing tabIndex');
   if (/missing.*onKeyDown|no\s+onKeyDown|missing.*key\s*handler/i.test(src)) chips.push('missing onKeyDown');
@@ -55,10 +60,10 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
   const [isOpen, setIsOpen] = useState(false);
 
   const displayLabel = element.sourceLabel || element.elementLabel;
-  const missingChips = getMissingChips(element.evidence, element.explanation);
+  const evidenceChips = getEvidenceChips(element.evidence, element.explanation);
   const detection = getDetection(element);
-  const shortExplanation = getShortExplanation(element);
-  const needsNameRole = missingChips.some(c => c === 'missing role');
+  const impact = getShortExplanation(element);
+  const needsNameRole = evidenceChips.some(c => c === 'missing role');
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -127,7 +132,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
             <div className="flex items-start gap-2">
               <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Evidence:</span>
               <div className="flex flex-wrap gap-1">
-                {missingChips.map((chip, i) => (
+                {evidenceChips.map((chip, i) => (
                   <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
                     {chip}
                   </span>
@@ -156,9 +161,10 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               </span>
             </div>
 
-            {/* Short explanation */}
-            <div className="pt-1">
-              <p className="text-foreground leading-relaxed">{shortExplanation}</p>
+            {/* Impact — labeled row, not a bare paragraph */}
+            <div className="flex items-start gap-2">
+              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Impact:</span>
+              <span className="text-foreground leading-relaxed">{impact}</span>
             </div>
           </div>
         </CollapsibleContent>
