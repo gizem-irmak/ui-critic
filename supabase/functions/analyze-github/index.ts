@@ -828,7 +828,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         evidence: `<${tag} ${triggerHandler}=...> at ${filePath}:${lineNumber} — missing role, tabIndex, keyboard handlers`,
         explanation: `This <${tag}> has ${triggerHandler} but lacks role, tabIndex, and keyboard event handlers. Keyboard users cannot reach or activate it.`,
         confidence: 0.92,
-        correctivePrompt: `[A3] Make '${label}' keyboard accessible by using <button> or adding role='button', tabIndex=0, and Enter/Space handlers. File: ${filePath}:${lineNumber}`,
+        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <${tag}> (no interactive role)\n\n  Issue reason: Clickable <${tag}> with ${triggerHandler} is not focusable (no tabIndex) and has no keyboard activation handlers for Enter/Space.\n\n  Recommended fix: Replace the clickable <${tag}> with a semantic <button> or <a> element, OR add role="button", tabIndex={0}, and an onKeyDown handler that activates on Enter and Space.`,
         deduplicationKey: dedupeKey,
       });
     }
@@ -855,7 +855,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         evidence: `<${tag} tabIndex={-1}> at ${filePath}:${lineNumber} — removed from tab order`,
         explanation: `Primary interactive <${tag}> has tabIndex={-1}, removing it from keyboard tab order.`,
         confidence: 0.90,
-        correctivePrompt: `[A3] Remove tabIndex={-1} from '${label}' or provide an alternative. File: ${filePath}:${lineNumber}`,
+        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <${tag}> (${tag})\n\n  Issue reason: Primary interactive <${tag}> has tabIndex={-1}, removing it from keyboard tab order.\n\n  Recommended fix: Remove tabIndex={-1} from the <${tag}> or provide an alternative keyboard-accessible path.`,
         deduplicationKey: dedupeKey,
       });
     }
@@ -884,7 +884,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         evidence: `<${tag} role="button" tabIndex=0> at ${filePath}:${lineNumber} — missing Enter/Space activation`,
         explanation: `Has role="button" and tabIndex but no onKeyDown/onKeyUp handler. Keyboard users can focus but may not activate.`,
         confidence: 0.72,
-        correctivePrompt: `[A3] Verify '${label}' activates with Enter/Space. Prefer native <button> or add key handling. File: ${filePath}:${lineNumber}`,
+        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <${tag}> (role="button")\n\n  Issue reason: Has role="button" and tabIndex but no onKeyDown/onKeyUp handler. Keyboard users can focus but may not activate.\n\n  Recommended fix: Prefer native <button> or add an onKeyDown handler that activates on Enter and Space.`,
         deduplicationKey: dedupeKey,
       });
     }
@@ -913,7 +913,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
         evidence: `<a onClick=...${hasHref ? ' href="#"' : ''}> at ${filePath}:${lineNumber}`,
         explanation: `<a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. Use <button> or add role="button".`,
         confidence: 0.68,
-        correctivePrompt: `[A3] Replace <a> with <button> for '${label}', or add role="button" and key handlers. File: ${filePath}:${lineNumber}`,
+        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <a> (role="link")\n\n  Issue reason: <a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. Not a valid navigation link.\n\n  Recommended fix: Replace the <a> with a semantic <button>, or add a valid href for navigation and role="button" with key handlers.`,
         deduplicationKey: dedupeKey,
       });
     }
