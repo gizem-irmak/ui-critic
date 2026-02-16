@@ -30,10 +30,11 @@ function inferA4SubCheck(violation: Violation): 'A4.1' | 'A4.2' | 'A4.3' | 'A4.4
   return 'A4.1'; // Default to heading semantics
 }
 
-function A4ElementItem({ element, isConfirmed, compact = false }: {
+function A4ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }: {
   element: A4ElementSubItem;
   isConfirmed: boolean;
   compact?: boolean;
+  cardDiagnosis?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -133,10 +134,12 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
               <span>WCAG 2.1 — 1.3.1 Info and Relationships (Level A)</span>
             </div>
 
-            {/* Explanation */}
-            <div className="pt-1">
-              <p className="text-foreground leading-relaxed">{element.explanation}</p>
-            </div>
+        {/* Explanation — only if different from card-level diagnosis */}
+            {element.explanation && element.explanation !== cardDiagnosis && (
+              <div className="pt-1">
+                <p className="text-foreground leading-relaxed">{element.explanation}</p>
+              </div>
+            )}
           </div>
         </CollapsibleContent>
       </div>
@@ -198,6 +201,7 @@ export function A4AggregatedCard({ violation, compact = false }: A4AggregatedCar
             element={element}
             isConfirmed={isConfirmed}
             compact={compact}
+            cardDiagnosis={violation.diagnosis}
           />
         ))}
 
