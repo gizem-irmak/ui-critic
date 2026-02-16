@@ -4218,6 +4218,25 @@ serve(async (req) => {
       };
     }
     
+    // ========== A5 Screenshot Mode (NOT EVALUATED) ==========
+    let aggregatedA5UI: any = null;
+    if (selectedRulesSet.has('A5')) {
+      aggregatedA5UI = {
+        ruleId: 'A5',
+        ruleName: 'Missing form labels (Input clarity)',
+        category: 'accessibility',
+        status: 'informational',
+        blocksConvergence: false,
+        inputType: 'screenshots',
+        isA5Aggregated: false,
+        diagnosis: 'Form label associations require DOM/HTML analysis; screenshot-only input cannot be evaluated reliably.',
+        contextualHint: 'Upload source code (ZIP file or GitHub repository) to enable form label evaluation.',
+        correctivePrompt: '',
+        confidence: 0,
+        evidence: 'Input type: Screenshot',
+      };
+    }
+    
     // Combine all violations - A1 uses aggregated cards (max 2), A2 uses aggregated card
     const enhancedViolations = [
       ...filteredOtherViolations,
@@ -4225,6 +4244,7 @@ serve(async (req) => {
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
       ...(aggregatedA3UI ? [aggregatedA3UI] : []),
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),
+      ...(aggregatedA5UI ? [aggregatedA5UI] : []),
     ];
 
     console.log(`Analysis complete: ${enhancedViolations.length} violations found`);

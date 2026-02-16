@@ -7,6 +7,7 @@ import { A1AggregatedCard } from './A1AggregatedCard';
 import { A2AggregatedCard } from './A2AggregatedCard';
 import { A3AggregatedCard } from './A3AggregatedCard';
 import { A4AggregatedCard } from './A4AggregatedCard';
+import { A5AggregatedCard } from './A5AggregatedCard';
 import { getRuleById } from '@/data/rules';
 
 const categoryColors: Record<string, string> = {
@@ -61,9 +62,10 @@ function GenericViolationCard({ violation, isConfirmed, compact = false }: {
 }
 
 function isAggregated(v: Violation): boolean {
-  // A3 and A4 are ALWAYS routed to the aggregated card — no fallback to GenericViolationCard
+  // A3, A4, A5 are ALWAYS routed to the aggregated card
   if (v.ruleId === 'A3') return true;
   if (v.ruleId === 'A4') return true;
+  if (v.ruleId === 'A5') return true;
   return !!(v.ruleId === 'A1' && v.isA1Aggregated) || !!(v.ruleId === 'A2' && v.isA2Aggregated);
 }
 
@@ -79,6 +81,9 @@ function AggregatedCard({ violation, compact }: { violation: Violation; compact?
   }
   if (violation.ruleId === 'A4') {
     return <A4AggregatedCard violation={violation} compact={compact} />;
+  }
+  if (violation.ruleId === 'A5') {
+    return <A5AggregatedCard violation={violation} compact={compact} />;
   }
   return null;
 }
