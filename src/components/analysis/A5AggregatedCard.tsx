@@ -16,6 +16,9 @@ const SUB_CHECK_LABELS: Record<string, string> = {
   'A5.1': 'Missing label association',
   'A5.2': 'Placeholder used as label',
   'A5.3': 'Broken label association',
+  'A5.4': 'Generic label text',
+  'A5.5': 'Duplicate label text',
+  'A5.6': 'Noisy aria-labelledby',
 };
 
 function A5ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }: {

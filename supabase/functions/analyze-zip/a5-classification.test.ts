@@ -2,7 +2,7 @@ import { assertEquals, assert } from "https://deno.land/std@0.168.0/testing/asse
 
 // Inline the detection function for testing
 interface A5Finding {
-  subCheck: 'A5.1' | 'A5.2' | 'A5.3' | 'A5.P1' | 'A5.P2' | 'A5.P3' | 'A5.P4';
+  subCheck: 'A5.1' | 'A5.2' | 'A5.3' | 'A5.4' | 'A5.5' | 'A5.6';
   subCheckLabel: string;
   classification: 'confirmed' | 'potential';
   confidence: number;
@@ -96,14 +96,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const elementName = nameMatch?.[1] || nameMatch?.[2] || '';
       const label = placeholder || elementName || `<${tag}> control`;
 
-      // Check for title attribute — if present, skip confirmed (A5.P3 handles it)
-      const titleCheckMatch = attrs.match(/title\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const hasTitleAttr = !!(titleCheckMatch?.[1] || titleCheckMatch?.[2])?.trim();
+      // title is NOT a valid label source — title-only inputs remain A5.1 Confirmed
 
       if (hasValidLabel) continue;
-
-      // Skip if title-only — A5.P3 will handle it in potential checks
-      if (hasTitleAttr && !hasPlaceholder) continue;
 
       if (hasPlaceholder && !hasValidLabel) {
         const dedupeKey = `A5.2|${filePath}|${tag}|${label}|${lineNumber}`;
@@ -207,7 +202,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     return true;
   });
 
-  // ========== Potential sub-checks (A5.P1–P4) ==========
+  // ========== Potential sub-checks (A5.4, A5.5, A5.6) ==========
   const confirmedKeys = new Set(deduped.map(f => `${f.filePath}|${f.elementType}|${f.elementLabel}`));
   const potentialFindings: A5Finding[] = [];
   const GENERIC_LABELS = new Set(['input', 'field', 'value', 'text', 'enter here', 'type here', 'select', 'option']);
@@ -274,10 +269,6 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel;
 
-      const titleMatch = attrs.match(/title\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const titleVal = titleMatch?.[1] || titleMatch?.[2] || '';
-      const hasTitle = titleVal.trim().length > 0;
-
       const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2] || '';
       const nameMatch2 = attrs.match(/(?:name|id)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
@@ -286,24 +277,6 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const controlKey = `${filePath}|${tag}|${label}`;
       if (confirmedKeys.has(controlKey)) continue;
-
-      if (!hasValidLabel && hasTitle) {
-        const dedupeKey = `A5.P3|${filePath}|${tag}|${titleVal}|${lineNumber}`;
-        if (!seenKeys.has(dedupeKey)) {
-          seenKeys.add(dedupeKey);
-          potentialFindings.push({
-            elementLabel: titleVal, elementType: tag, sourceLabel: titleVal, filePath, componentName,
-            subCheck: 'A5.P3', subCheckLabel: 'Title-only labeling',
-            classification: 'potential', potentialSubtype: 'borderline',
-            detection: `<${tag}> relies on title="${titleVal}" as only accessible name`,
-            evidence: `<${tag} title="${titleVal}"> at ${filePath}:${lineNumber}`,
-            explanation: `The title attribute provides a weak accessible name.`,
-            confidence: 0.85, deduplicationKey: dedupeKey,
-            advisoryGuidance: 'Add a visible <label> or aria-label instead of relying on the title attribute.',
-          });
-        }
-        continue;
-      }
 
       if (!hasValidLabel) continue;
 
@@ -330,13 +303,14 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         fileLabels.get(normalizedName)!.push({ tag, label: accessibleName, line: lineNumber, filePath, componentName });
       }
 
+      // A5.4: Generic label text
       if (accessibleName && GENERIC_LABELS.has(accessibleName.trim().toLowerCase())) {
-        const dedupeKey = `A5.P1|${filePath}|${tag}|${accessibleName}|${lineNumber}`;
+        const dedupeKey = `A5.4|${filePath}|${tag}|${accessibleName}|${lineNumber}`;
         if (!seenKeys.has(dedupeKey)) {
           seenKeys.add(dedupeKey);
           potentialFindings.push({
             elementLabel: accessibleName, elementType: tag, sourceLabel: accessibleName, filePath, componentName,
-            subCheck: 'A5.P1', subCheckLabel: 'Generic label text',
+            subCheck: 'A5.4', subCheckLabel: 'Generic label text',
             classification: 'potential', potentialSubtype: 'borderline',
             detection: `<${tag}> label "${accessibleName}" is generic`,
             evidence: `label text "${accessibleName}" at ${filePath}:${lineNumber}`,
@@ -347,15 +321,16 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         }
       }
 
+      // A5.6: Noisy aria-labelledby
       if (hasAriaLabelledBy && accessibleName) {
-        const NOISY_TOKENS = /\b(optional|required|hint|note|help|info)\b/i;
+        const NOISY_TOKENS = /\b(optional|required|hint|note|help|info|used for)\b/i;
         if (accessibleName.length > 60 || NOISY_TOKENS.test(accessibleName)) {
-          const dedupeKey = `A5.P4|${filePath}|${tag}|${lineNumber}`;
+          const dedupeKey = `A5.6|${filePath}|${tag}|${lineNumber}`;
           if (!seenKeys.has(dedupeKey)) {
             seenKeys.add(dedupeKey);
             potentialFindings.push({
               elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
-              subCheck: 'A5.P4', subCheckLabel: 'Noisy aria-labelledby',
+              subCheck: 'A5.6', subCheckLabel: 'Noisy aria-labelledby',
               classification: 'potential', potentialSubtype: 'borderline',
               detection: `<${tag}> aria-labelledby resolves to noisy/long text`,
               evidence: `Resolved text: "${accessibleName.slice(0, 80)}" at ${filePath}:${lineNumber}`,
@@ -369,16 +344,17 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     }
   }
 
+  // A5.5: Duplicate label text (per file)
   for (const [, fileLabels] of labelsByFile) {
     for (const [normalizedName, controls] of fileLabels) {
       if (controls.length < 2) continue;
-      const dedupeKey = `A5.P2|${controls[0].filePath}|${normalizedName}`;
+      const dedupeKey = `A5.5|${controls[0].filePath}|${normalizedName}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
       potentialFindings.push({
         elementLabel: controls[0].label, elementType: controls[0].tag, sourceLabel: controls[0].label,
         filePath: controls[0].filePath, componentName: controls[0].componentName,
-        subCheck: 'A5.P2', subCheckLabel: 'Duplicate label text',
+        subCheck: 'A5.5', subCheckLabel: 'Duplicate label text',
         classification: 'potential', potentialSubtype: 'borderline',
         detection: `${controls.length} controls share label "${controls[0].label}"`,
         evidence: `Duplicate label "${controls[0].label}"`,
@@ -392,7 +368,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
   return [...deduped, ...potentialFindings];
 }
 
-// ===== TESTS =====
+// ===== CONFIRMED TESTS =====
 
 Deno.test("A5.1: input with no label triggers missing label", () => {
   const files = new Map([["src/Form.tsx", `<input type="text" name="email" />`]]);
@@ -420,7 +396,6 @@ Deno.test("A5.3: label for mismatch triggers broken association, suppresses A5.1
     <input type="text" id="email-field" />
   `]]);
   const results = detectA5FormLabels(files);
-  // The orphan label triggers A5.3, and the input's A5.1 is suppressed by dedup
   const a53 = results.find(r => r.subCheck === 'A5.3');
   assert(a53 !== undefined, "Should find A5.3 for orphan label");
   const a51 = results.find(r => r.subCheck === 'A5.1');
@@ -540,8 +515,6 @@ Deno.test("Multi-control HTML fixture triggers findings with A5.1 suppressed by 
     </form>
   `]]);
   const results = detectA5FormLabels(files);
-  // A5.3 orphan label suppresses all A5.1 in same file
-  // Expect: A5.2 (email placeholder) + A5.3 (orphan label) = 2 findings
   assert(results.some(r => r.subCheck === 'A5.2'), "Should have A5.2");
   assert(results.some(r => r.subCheck === 'A5.3'), "Should have A5.3");
   assertEquals(results.filter(r => r.subCheck === 'A5.1').length, 0, "A5.1 should be suppressed by A5.3 dedup");
@@ -591,10 +564,8 @@ Deno.test("HTML fixture file: a5_form_labels_fail.html triggers A5.1, A5.2, A5.3
   const a51 = results1.filter(r => r.subCheck === 'A5.1');
   assert(a51.length >= 1, "Should find A5.1 for textarea without label");
 
-  // No A5.3 in this file, so A5.1 should not be suppressed
   assertEquals(results1.filter(r => r.subCheck === 'A5.3').length, 0, "No A5.3 expected in clean file");
 
-  // Correctly labeled controls should produce NO findings
   const usernameFindings = results1.filter(r => r.elementLabel === 'username');
   assertEquals(usernameFindings.length, 0, "Correctly labeled username should not trigger");
 
@@ -609,85 +580,93 @@ Deno.test("HTML fixture file: a5_form_labels_fail.html triggers A5.1, A5.2, A5.3
   assertEquals(a51suppressed.length, 0, "A5.1 should be suppressed when A5.3 exists");
 });
 
-// ===== POTENTIAL SUB-CHECK TESTS =====
+// ===== TITLE-ONLY REMAINS A5.1 CONFIRMED =====
 
-Deno.test("A5.P1: Generic label text triggers potential finding", () => {
+Deno.test("Title-only input triggers A5.1 Confirmed (not potential)", () => {
+  const files = new Map([["src/Form.tsx", `<input type="text" title="Promo code" />`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "Should have a finding for title-only input");
+  assertEquals(results[0].subCheck, "A5.1", "Title-only should be A5.1 Confirmed");
+  assertEquals(results[0].classification, "confirmed");
+});
+
+// ===== POTENTIAL SUB-CHECK TESTS (A5.4, A5.5, A5.6) =====
+
+Deno.test("A5.4: Generic label text triggers potential finding", () => {
   const files = new Map([["src/Form.tsx", `<label for="f1">Input</label><input type="text" id="f1" />`]]);
   const results = detectA5FormLabels(files);
-  const p1 = results.filter(r => r.subCheck === 'A5.P1');
-  assert(p1.length >= 1, "Should find A5.P1 for generic label 'Input'");
+  const p1 = results.filter(r => r.subCheck === 'A5.4');
+  assert(p1.length >= 1, "Should find A5.4 for generic label 'Input'");
   assertEquals(p1[0].classification, "potential");
   assertEquals(p1[0].subCheckLabel, "Generic label text");
-  assert(p1[0].confidence >= 0.85);
+  assert(p1[0].confidence >= 0.80 && p1[0].confidence <= 0.90, "Confidence should be 80-90%");
   assert(p1[0].potentialSubtype === 'borderline');
 });
 
-Deno.test("A5.P1: Non-generic label does NOT trigger", () => {
+Deno.test("A5.4: Non-generic label does NOT trigger", () => {
   const files = new Map([["src/Form.tsx", `<label for="email">Email Address</label><input type="text" id="email" />`]]);
   const results = detectA5FormLabels(files);
-  const p1 = results.filter(r => r.subCheck === 'A5.P1');
-  assertEquals(p1.length, 0, "Descriptive label should not trigger A5.P1");
+  const p1 = results.filter(r => r.subCheck === 'A5.4');
+  assertEquals(p1.length, 0, "Descriptive label should not trigger A5.4");
 });
 
-Deno.test("A5.P2: Duplicate label text triggers potential finding", () => {
+Deno.test("A5.5: Duplicate label text triggers potential finding", () => {
   const files = new Map([["src/Form.tsx", `
     <label for="n1">Name</label><input type="text" id="n1" />
     <label for="n2">Name</label><input type="text" id="n2" />
   `]]);
   const results = detectA5FormLabels(files);
-  const p2 = results.filter(r => r.subCheck === 'A5.P2');
-  assert(p2.length >= 1, "Should find A5.P2 for duplicate label 'Name'");
+  const p2 = results.filter(r => r.subCheck === 'A5.5');
+  assert(p2.length >= 1, "Should find A5.5 for duplicate label 'Name'");
   assertEquals(p2[0].classification, "potential");
   assertEquals(p2[0].subCheckLabel, "Duplicate label text");
+  assert(p2[0].confidence >= 0.85 && p2[0].confidence <= 0.95, "Confidence should be 85-95%");
 });
 
-Deno.test("A5.P2: Unique labels do NOT trigger", () => {
+Deno.test("A5.5: Unique labels do NOT trigger", () => {
   const files = new Map([["src/Form.tsx", `
     <label for="fn">First Name</label><input type="text" id="fn" />
     <label for="ln">Last Name</label><input type="text" id="ln" />
   `]]);
   const results = detectA5FormLabels(files);
-  const p2 = results.filter(r => r.subCheck === 'A5.P2');
-  assertEquals(p2.length, 0, "Unique labels should not trigger A5.P2");
+  const p2 = results.filter(r => r.subCheck === 'A5.5');
+  assertEquals(p2.length, 0, "Unique labels should not trigger A5.5");
 });
 
-Deno.test("A5.P3: Title-only labeling triggers potential finding", () => {
-  const files = new Map([["src/Form.tsx", `<input type="text" title="Promo code" />`]]);
-  const results = detectA5FormLabels(files);
-  const p3 = results.filter(r => r.subCheck === 'A5.P3');
-  assert(p3.length >= 1, "Should find A5.P3 for title-only input");
-  assertEquals(p3[0].classification, "potential");
-  assertEquals(p3[0].subCheckLabel, "Title-only labeling");
-  assertEquals(p3[0].elementLabel, "Promo code");
-  // Should NOT also trigger A5.1
-  const a51 = results.filter(r => r.subCheck === 'A5.1');
-  assertEquals(a51.length, 0, "A5.P3 should prevent A5.1 from firing");
-});
-
-Deno.test("A5.P4: Noisy aria-labelledby triggers potential finding", () => {
+Deno.test("A5.6: Noisy aria-labelledby triggers potential finding", () => {
   const files = new Map([["src/Form.tsx", `
-    <span id="addr-label">Billing Address (optional) Hidden note that is very long and contains extra context beyond what is needed</span>
+    <span id="addr-label">Billing Address (optional) — used for invoices and shipping documentation that exceeds normal label length</span>
     <input type="text" aria-labelledby="addr-label" />
   `]]);
   const results = detectA5FormLabels(files);
-  const p4 = results.filter(r => r.subCheck === 'A5.P4');
-  assert(p4.length >= 1, "Should find A5.P4 for noisy aria-labelledby");
+  const p4 = results.filter(r => r.subCheck === 'A5.6');
+  assert(p4.length >= 1, "Should find A5.6 for noisy aria-labelledby");
   assertEquals(p4[0].classification, "potential");
   assertEquals(p4[0].subCheckLabel, "Noisy aria-labelledby");
+  assert(p4[0].confidence >= 0.70 && p4[0].confidence <= 0.85, "Confidence should be 70-85%");
 });
 
-Deno.test("A5.P4: Short clean aria-labelledby does NOT trigger", () => {
+Deno.test("A5.6: 'used for' token triggers noisy finding", () => {
+  const files = new Map([["src/Form.tsx", `
+    <span id="promo-label">Promo code used for discounts</span>
+    <input type="text" aria-labelledby="promo-label" />
+  `]]);
+  const results = detectA5FormLabels(files);
+  const p4 = results.filter(r => r.subCheck === 'A5.6');
+  assert(p4.length >= 1, "Should find A5.6 for 'used for' token in aria-labelledby");
+});
+
+Deno.test("A5.6: Short clean aria-labelledby does NOT trigger", () => {
   const files = new Map([["src/Form.tsx", `
     <span id="addr-label">Billing Address</span>
     <input type="text" aria-labelledby="addr-label" />
   `]]);
   const results = detectA5FormLabels(files);
-  const p4 = results.filter(r => r.subCheck === 'A5.P4');
-  assertEquals(p4.length, 0, "Short clean aria-labelledby should not trigger A5.P4");
+  const p4 = results.filter(r => r.subCheck === 'A5.6');
+  assertEquals(p4.length, 0, "Short clean aria-labelledby should not trigger A5.6");
 });
 
 Deno.test("Potential findings do NOT fire for controls with confirmed findings", () => {
-  // Input with placeholder-only (A5.2 confirmed) should not also get potential checks
   const files = new Map([["src/Form.tsx", `<input type="text" placeholder="Input" />`]]);
   const results = detectA5FormLabels(files);
   const confirmed = results.filter(r => r.classification === 'confirmed');
@@ -697,7 +676,6 @@ Deno.test("Potential findings do NOT fire for controls with confirmed findings",
 });
 
 Deno.test("Existing confirmed tests still pass - mixed file", () => {
-  // Verify existing confirmed logic is unaffected
   const files = new Map([["src/Form.tsx", `<input type="text" name="email" />`]]);
   const results = detectA5FormLabels(files);
   assert(results.length >= 1);
