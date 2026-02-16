@@ -128,9 +128,9 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               <span className="font-mono">{detection}</span>
             </div>
 
-            {/* Evidence — chips (like A2 Classes row) */}
+            {/* Evidence — chips (identical to A2 Classes row) */}
             <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Evidence:</span>
+              <span className="text-muted-foreground font-medium w-20">Evidence:</span>
               <div className="flex flex-wrap gap-1">
                 {evidenceChips.map((chip, i) => (
                   <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
@@ -140,7 +140,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               </div>
             </div>
 
-            {/* Confidence */}
+            {/* Confidence — matches A2 format */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-20">Confidence:</span>
               <span className={cn(
@@ -148,7 +148,6 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
                 isConfirmed ? 'text-destructive' : 'text-warning'
               )}>
                 {Math.round(element.confidence * 100)}%
-                {isConfirmed ? ' — deterministic' : ' — heuristic'}
               </span>
             </div>
 
@@ -161,10 +160,9 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               </span>
             </div>
 
-            {/* Impact — labeled row, not a bare paragraph */}
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Impact:</span>
-              <span className="text-foreground leading-relaxed">{impact}</span>
+            {/* Explanation — matches A2 Explanation row */}
+            <div className="pt-1">
+              <p className="text-foreground leading-relaxed">{impact}</p>
             </div>
           </div>
         </CollapsibleContent>
