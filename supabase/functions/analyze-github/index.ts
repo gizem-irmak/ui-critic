@@ -11,6 +11,7 @@ const rules = {
     { id: 'A1', name: 'Insufficient text contrast', diagnosis: 'Low contrast may reduce readability and fail WCAG AA compliance.', correctivePrompt: 'Use a high-contrast color palette compliant with WCAG AA (minimum 4.5:1 for normal text).' },
     { id: 'A2', name: 'Poor focus visibility', diagnosis: 'Lack of visible focus reduces keyboard accessibility.', correctivePrompt: 'Ensure all interactive elements have clearly visible focus states.' },
     { id: 'A3', name: 'Incomplete keyboard operability', diagnosis: 'Interactive elements not fully operable via keyboard.', correctivePrompt: 'Ensure all interactive elements are keyboard accessible using native elements or ARIA + key handlers.' },
+    { id: 'A4', name: 'Missing semantic structure', diagnosis: 'Page lacks proper semantic HTML structure (headings, landmarks, lists, interactive roles).', correctivePrompt: 'Use semantic HTML elements to represent page hierarchy and structure.' },
   ],
   usability: [
     { id: 'U1', name: 'Unclear primary action', diagnosis: 'Users may struggle to identify the main action.', correctivePrompt: 'Ensure exactly one primary action per action group uses a filled/default variant (e.g., variant="default" or bg-primary). Demote other actions to outline, ghost, or link variants. If more than two secondary actions exist, consider grouping them into an overflow menu ("More" or "..."). Do not alter layout structure.' },
@@ -1553,12 +1554,46 @@ serve(async (req) => {
       }
     }
     
+    // A4 - Semantic structure (reuse same detector)
+    let aggregatedA4GitHub: any = null;
+    if (selectedRulesSet.has('A4')) {
+      const a4Findings = detectA4SemanticStructure(allFiles);
+      if (a4Findings.length > 0) {
+        const confirmedCount = a4Findings.filter(f => f.classification === 'confirmed').length;
+        const potentialCount = a4Findings.filter(f => f.classification === 'potential').length;
+        const hasConfirmed = confirmedCount > 0;
+        const overallConfidence = Math.max(...a4Findings.map(f => f.confidence));
+        const a4Elements = a4Findings.map(f => ({
+          elementLabel: f.sourceLabel, elementType: f.elementType, role: f.role, sourceLabel: f.sourceLabel,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
+          classification: f.classification,
+          potentialSubtype: f.classification === 'potential' ? 'borderline' as const : undefined,
+          explanation: f.explanation, confidence: f.confidence, correctivePrompt: f.correctivePrompt,
+          deduplicationKey: f.deduplicationKey,
+        }));
+        aggregatedA4GitHub = {
+          ruleId: 'A4', ruleName: 'Missing semantic structure', category: 'accessibility',
+          status: hasConfirmed ? 'confirmed' : 'potential',
+          potentialSubtype: hasConfirmed ? undefined : 'borderline',
+          blocksConvergence: hasConfirmed, inputType: 'github', isA4Aggregated: true, a4Elements,
+          diagnosis: `Semantic structure issues: ${confirmedCount} confirmed, ${potentialCount} potential.`,
+          contextualHint: 'Use semantic HTML elements to represent page hierarchy and structure.',
+          correctivePrompt: 'Use semantic HTML (<h1>–<h6>, <main>, <nav>, <button>, <ul>/<ol>) for structure.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+          ...(hasConfirmed ? {} : { advisoryGuidance: 'Semantic structure may be incomplete.' }),
+        };
+        console.log(`A4 aggregated (GitHub): ${a4Findings.length} findings`);
+      }
+    }
+
     // Combine all violations
     const allViolations = [
       ...aggregatedA1Violations,
       ...nonA2AiViolations,
       ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
       ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
+      ...(aggregatedA4GitHub ? [aggregatedA4GitHub] : []),
     ];
     
     // Deduplicate by ruleId
