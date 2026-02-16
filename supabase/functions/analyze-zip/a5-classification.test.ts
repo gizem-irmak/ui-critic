@@ -121,6 +121,74 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         });
       }
     }
+
+    // ARIA input roles
+    const ariaInputRegex = new RegExp(`<(div|span|p|section)\\b([^>]*role\\s*=\\s*["'](?:textbox|combobox|searchbox|spinbutton)["'][^>]*)>`, 'gi');
+    while ((match = ariaInputRegex.exec(content)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      if (/\bdisabled\b/.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+      const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
+      const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
+      if (hasAriaLabel || hasAriaLabelledBy) continue;
+      const roleMatch = attrs.match(/role\s*=\s*["']([^"']+)["']/i);
+      const role = roleMatch?.[1] || 'textbox';
+      const linesBefore = content.slice(0, match.index).split('\n');
+      const lineNumber = linesBefore.length;
+      const label = `<${tag} role="${role}">`;
+      const dedupeKey = `A5.1|${filePath}|${tag}|${role}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      findings.push({
+        elementLabel: label, elementType: tag, sourceLabel: label, filePath,
+        subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
+        detection: `<${tag} role="${role}"> no label`, evidence: `no programmatic label`,
+        explanation: `Custom input (role="${role}") has no accessible name.`, confidence: 0.95, deduplicationKey: dedupeKey,
+      });
+    }
+
+    // Contenteditable elements
+    const contenteditableRegex = /<(\w+)\b([^>]*contenteditable\s*=\s*["']true["'][^>]*)>/gi;
+    while ((match = contenteditableRegex.exec(content)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      if (/\bdisabled\b/.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+      const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
+      const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
+      if (hasAriaLabel || hasAriaLabelledBy) continue;
+      const roleMatch2 = attrs.match(/role\s*=\s*["']([^"']+)["']/i);
+      const role = roleMatch2?.[1] || 'textbox';
+      const linesBefore2 = content.slice(0, match.index).split('\n');
+      const lineNumber2 = linesBefore2.length;
+      const label2 = `<${tag} contenteditable role="${role}">`;
+      const dedupeKey = `A5.1|${filePath}|${tag}|contenteditable|${lineNumber2}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      findings.push({
+        elementLabel: label2, elementType: tag, sourceLabel: label2, filePath,
+        subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
+        detection: `<${tag} contenteditable="true"> no label`, evidence: `no programmatic label`,
+        explanation: `Contenteditable element has no accessible name.`, confidence: 0.95, deduplicationKey: dedupeKey,
+      });
+    }
+
+    // A5.3: Orphan labels (run once per file, after control loop)
+    for (const forTarget of labelForTargets) {
+      if (!controlIds.has(forTarget)) {
+        const dedupeKey = `A5.3|${filePath}|${forTarget}|missing`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          findings.push({
+            elementLabel: `label[for="${forTarget}"]`, elementType: 'label', sourceLabel: `Orphan label for="${forTarget}"`, filePath,
+            subCheck: 'A5.3', subCheckLabel: 'Broken label association', classification: 'confirmed',
+            detection: `<label for="${forTarget}"> references non-existent id`, evidence: `label for="${forTarget}" — no matching id`,
+            explanation: `Label references non-existent id="${forTarget}".`, confidence: 0.90, deduplicationKey: dedupeKey,
+          });
+        }
+      }
+    }
   }
   return findings;
 }
@@ -221,4 +289,64 @@ Deno.test("Wrapped in <label> is valid", () => {
   const files = new Map([["src/Form.tsx", `<label>Email <input type="text" /></label>`]]);
   const results = detectA5FormLabels(files);
   assertEquals(results.length, 0);
+});
+
+Deno.test("Plain HTML fixture: placeholder-only triggers A5.2", () => {
+  const files = new Map([["index.html", `<input type="email" placeholder="Enter email" />`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1);
+  const a52 = results.find(r => r.subCheck === 'A5.2');
+  assert(a52 !== undefined, "Should find A5.2 for placeholder-only input");
+});
+
+Deno.test("Plain HTML fixture: unlabeled password triggers A5.1", () => {
+  const files = new Map([["index.html", `<input type="password" name="pass" />`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1);
+  const a51 = results.find(r => r.subCheck === 'A5.1');
+  assert(a51 !== undefined, "Should find A5.1 for unlabeled password");
+});
+
+Deno.test("Plain HTML fixture: label for mismatch triggers A5.3", () => {
+  const files = new Map([["index.html", `
+    <label for="country">Country</label>
+    <select id="countrySelect"><option>US</option></select>
+  `]]);
+  const results = detectA5FormLabels(files);
+  // label for="country" is orphaned (no id="country"), select has no label pointing to it
+  const a53 = results.find(r => r.subCheck === 'A5.3');
+  assert(a53 !== undefined, "Should find A5.3 for label/id mismatch");
+  const a51 = results.find(r => r.subCheck === 'A5.1');
+  assert(a51 !== undefined, "Should find A5.1 for select without matching label");
+});
+
+Deno.test("Contenteditable without label triggers A5.1", () => {
+  const files = new Map([["index.html", `<div contenteditable="true" role="textbox"></div>`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1);
+  assertEquals(results[0].subCheck, "A5.1");
+});
+
+Deno.test("Contenteditable with aria-label is valid", () => {
+  const files = new Map([["index.html", `<div contenteditable="true" role="textbox" aria-label="Notes"></div>`]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0);
+});
+
+Deno.test("Multi-control HTML fixture triggers multiple findings", () => {
+  const files = new Map([["form.html", `
+    <form>
+      <input type="email" placeholder="Enter email" />
+      <input type="password" name="pass" />
+      <label for="country">Country</label>
+      <select id="countrySelect"><option>US</option></select>
+      <div contenteditable="true" role="textbox"></div>
+    </form>
+  `]]);
+  const results = detectA5FormLabels(files);
+  // Expect: A5.2 (email placeholder), A5.1 (password), A5.3 (orphan label), A5.1 (select), A5.1 (contenteditable)
+  assert(results.length >= 4, `Expected at least 4 findings, got ${results.length}`);
+  assert(results.some(r => r.subCheck === 'A5.2'), "Should have A5.2");
+  assert(results.some(r => r.subCheck === 'A5.1'), "Should have A5.1");
+  assert(results.some(r => r.subCheck === 'A5.3'), "Should have A5.3");
 });

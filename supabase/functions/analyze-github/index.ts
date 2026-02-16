@@ -1158,7 +1158,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
     if (!/\.(tsx|jsx|ts|js|html|htm)$/.test(filePath)) continue;
-    if (!filePath.startsWith('src/') && !filePath.startsWith('components/') && !filePath.startsWith('app/') && !filePath.startsWith('pages/')) continue;
+    if (filePath.includes('node_modules/')) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
 
@@ -1286,9 +1286,90 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         });
       }
     }
-  }
 
-  return findings;
+    // ARIA input roles on non-form elements
+    const ariaInputRegex = new RegExp(`<(div|span|p|section)\\b([^>]*role\\s*=\\s*["'](?:textbox|combobox|searchbox|spinbutton)["'][^>]*)>`, 'gi');
+    while ((match = ariaInputRegex.exec(content)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      if (/\bdisabled\b/.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+      const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
+      const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
+      if (hasAriaLabel || hasAriaLabelledBy) continue;
+      const roleMatch = attrs.match(/role\s*=\s*["']([^"']+)["']/i);
+      const role = roleMatch?.[1] || 'textbox';
+      const linesBefore = content.slice(0, match.index).split('\n');
+      const lineNumber = linesBefore.length;
+      const label = `<${tag} role="${role}">`;
+      const dedupeKey = `A5.1|${filePath}|${tag}|${role}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      const fileName = filePath.split('/').pop() || filePath;
+      findings.push({
+        elementLabel: label, elementType: tag, role, sourceLabel: label, filePath, componentName,
+        subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
+        detection: `<${tag} role="${role}"> has no aria-label or aria-labelledby`,
+        evidence: `<${tag} role="${role}"> at ${filePath}:${lineNumber}`,
+        explanation: `Custom input (role="${role}") has no accessible name.`,
+        confidence: 0.95,
+        correctivePrompt: `[${label}] — ${fileName}\n\nRecommended fix:\nAdd aria-label or aria-labelledby.`,
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // Contenteditable elements
+    const contenteditableRegex = /<(\w+)\b([^>]*contenteditable\s*=\s*["']true["'][^>]*)>/gi;
+    while ((match = contenteditableRegex.exec(content)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      if (/\bdisabled\b/.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+      const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
+      const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
+      if (hasAriaLabel || hasAriaLabelledBy) continue;
+      const roleMatch2 = attrs.match(/role\s*=\s*["']([^"']+)["']/i);
+      const role = roleMatch2?.[1] || 'textbox';
+      const linesBefore2 = content.slice(0, match.index).split('\n');
+      const lineNumber2 = linesBefore2.length;
+      const label2 = `<${tag} contenteditable role="${role}">`;
+      const dedupeKey = `A5.1|${filePath}|${tag}|contenteditable|${lineNumber2}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      const fileName2 = filePath.split('/').pop() || filePath;
+      findings.push({
+        elementLabel: label2, elementType: tag, role, sourceLabel: label2, filePath, componentName,
+        subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
+        detection: `<${tag} contenteditable="true"> has no label`,
+        evidence: `<${tag} contenteditable="true"> at ${filePath}:${lineNumber2}`,
+        explanation: `Contenteditable element has no accessible name.`,
+        confidence: 0.95,
+        correctivePrompt: `[${label2}] — ${fileName2}\n\nRecommended fix:\nAdd aria-label or aria-labelledby.`,
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // A5.3: Orphan labels (run once per file, after control loop)
+    for (const forTarget of labelForTargets) {
+      if (!controlIds.has(forTarget)) {
+        const dedupeKey = `A5.3|${filePath}|${forTarget}|missing`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          const fileName3 = filePath.split('/').pop() || filePath;
+          findings.push({
+            elementLabel: `label[for="${forTarget}"]`, elementType: 'label', sourceLabel: `Orphan label for="${forTarget}"`, filePath, componentName,
+            subCheck: 'A5.3', subCheckLabel: 'Broken label association', classification: 'confirmed',
+            detection: `<label for="${forTarget}"> references non-existent id`,
+            evidence: `label for="${forTarget}" in ${filePath} — no matching id`,
+            explanation: `Label references non-existent id="${forTarget}".`,
+            confidence: 0.90,
+            correctivePrompt: `[label for="${forTarget}"] — ${fileName3}\n\nRecommended fix:\nEnsure the control has id="${forTarget}" or update the label's for attribute.`,
+            deduplicationKey: dedupeKey,
+          });
+        }
+      }
+    }
+  }
 }
 
 function detectStack(files: Map<string, string>): string {
