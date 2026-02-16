@@ -109,7 +109,8 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             });
           }
         }
-      } else if (v.ruleId === 'A3' && v.isA3Aggregated && v.a3Elements) {
+      } else if (v.ruleId === 'A3') {
+        // A3 ALWAYS uses per-element rendering — never the generic correctivePrompt string
         if (!ruleGroups.has('A3')) {
           ruleGroups.set('A3', {
             ruleId: 'A3',
@@ -120,10 +121,28 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
           });
         }
         const group = ruleGroups.get('A3')!;
-        for (const el of v.a3Elements) {
-          if (el.classification === 'confirmed') {
-            group.a3Items!.push(el);
+        if (v.isA3Aggregated && v.a3Elements) {
+          for (const el of v.a3Elements) {
+            if (el.classification === 'confirmed') {
+              group.a3Items!.push(el);
+            }
           }
+        } else if (v.status === 'confirmed' || v.status !== 'potential') {
+          // Non-aggregated A3: synthesize a single element from top-level fields
+          group.a3Items!.push({
+            elementLabel: v.contextualHint || v.evidence || v.ruleName,
+            elementType: 'div',
+            role: '',
+            location: v.evidence || '',
+            explanation: v.diagnosis || '',
+            confidence: v.confidence,
+            correctivePrompt: v.correctivePrompt,
+            deduplicationKey: `${v.ruleId}-${v.evidence || 'fallback'}`,
+            classification: 'confirmed',
+            detection: v.diagnosis || '',
+            sourceLabel: v.contextualHint || '',
+            textSnippet: '',
+          } as A3ElementSubItem);
         }
       } else if (v.correctivePrompt) {
         const key = v.ruleId;
