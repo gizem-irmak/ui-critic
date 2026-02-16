@@ -355,3 +355,65 @@ Deno.test("Multi-control HTML fixture triggers findings with A5.1 suppressed by 
   assert(results.some(r => r.subCheck === 'A5.3'), "Should have A5.3");
   assertEquals(results.filter(r => r.subCheck === 'A5.1').length, 0, "A5.1 should be suppressed by A5.3 dedup");
 });
+
+Deno.test("HTML fixture file: a5_form_labels_fail.html triggers A5.1, A5.2, A5.3", () => {
+  const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head><title>A5 Test Fixture</title></head>
+<body>
+  <form>
+    <!-- A5.2: placeholder-only, no label -->
+    <input type="email" placeholder="Enter your email" />
+
+    <!-- A5.1: no label at all (separate file, no A5.3 interference) -->
+    <textarea name="comments"></textarea>
+
+    <!-- Correctly labeled: should NOT trigger -->
+    <label for="username">Username</label>
+    <input type="text" id="username" />
+
+    <!-- Correctly labeled via aria-label: should NOT trigger -->
+    <input type="search" aria-label="Search site" />
+
+    <!-- Correctly labeled via wrapping: should NOT trigger -->
+    <label>Phone <input type="tel" /></label>
+  </form>
+</body>
+</html>`;
+
+  const htmlWithBrokenLabel = `<!DOCTYPE html>
+<html><body>
+  <form>
+    <!-- A5.3: label for="city" but control has id="citySelect" -->
+    <label for="city">City</label>
+    <select id="citySelect"><option>NYC</option></select>
+  </form>
+</body></html>`;
+
+  // Test file WITHOUT orphan labels — A5.1 should fire
+  const results1 = detectA5FormLabels(new Map([["a5_form_labels_fail.html", htmlContent]]));
+
+  const a52 = results1.filter(r => r.subCheck === 'A5.2');
+  assert(a52.length >= 1, "Should find A5.2 for email placeholder-only");
+  assertEquals(a52[0].filePath, "a5_form_labels_fail.html");
+
+  const a51 = results1.filter(r => r.subCheck === 'A5.1');
+  assert(a51.length >= 1, "Should find A5.1 for textarea without label");
+
+  // No A5.3 in this file, so A5.1 should not be suppressed
+  assertEquals(results1.filter(r => r.subCheck === 'A5.3').length, 0, "No A5.3 expected in clean file");
+
+  // Correctly labeled controls should produce NO findings
+  const usernameFindings = results1.filter(r => r.elementLabel === 'username');
+  assertEquals(usernameFindings.length, 0, "Correctly labeled username should not trigger");
+
+  // Test file WITH orphan label — A5.3 fires, A5.1 suppressed
+  const results2 = detectA5FormLabels(new Map([["a5_broken_labels.html", htmlWithBrokenLabel]]));
+
+  const a53 = results2.filter(r => r.subCheck === 'A5.3');
+  assert(a53.length >= 1, "Should find A5.3 for broken label association");
+  assertEquals(a53[0].filePath, "a5_broken_labels.html");
+
+  const a51suppressed = results2.filter(r => r.subCheck === 'A5.1');
+  assertEquals(a51suppressed.length, 0, "A5.1 should be suppressed when A5.3 exists");
+});
