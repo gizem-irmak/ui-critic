@@ -99,10 +99,24 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
         const group = ruleGroups.get('A3')!;
         for (const el of v.a3Elements) {
           if (el.correctivePrompt) {
-            // A3 correctivePrompt already contains the full formatted block
-            // (header line, issue reason, recommended fix) — no separate elementRef needed
+            // Build per-element header: [Label (tag)] — FileName
+            const fileName = el.location
+              ? el.location.split('/').pop()?.split(':')[0] || el.location
+              : 'Unknown file';
+            const tag = el.elementType || 'div';
+            const label = el.sourceLabel || el.accessibleName || el.elementLabel || 'Interactive element';
+            const elementRef = `[${label} (${tag})] — ${fileName}`;
+
+            // Strip any existing header line from the backend prompt
+            let promptBody = el.correctivePrompt;
+            const headerMatch = promptBody.match(/^\[.*?\]\s*—\s*\S+.*?\n\n?/);
+            if (headerMatch) {
+              promptBody = promptBody.slice(headerMatch[0].length);
+            }
+
             group.prompts.push({
-              prompt: el.correctivePrompt,
+              prompt: promptBody.trim(),
+              elementRef,
             });
           }
         }
@@ -148,15 +162,10 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       for (const ruleGroup of grouped[cat]) {
         text += `\n[${ruleGroup.ruleId}] ${ruleGroup.ruleName}:\n`;
         for (const item of ruleGroup.prompts) {
-          if (ruleGroup.ruleId === 'A3' && !item.elementRef) {
-            // A3 prompts are self-contained blocks — render directly
-            text += `\n${item.prompt}\n`;
-          } else {
-            if (item.elementRef) {
-              text += `  • ${item.elementRef}\n`;
-            }
-            text += `    ${item.prompt.replace(/\n/g, '\n    ')}\n`;
+          if (item.elementRef) {
+            text += `  • 📍 ${item.elementRef}\n`;
           }
+          text += `    ${item.prompt.replace(/\n/g, '\n    ')}\n`;
         }
       }
     }
