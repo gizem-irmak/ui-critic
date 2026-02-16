@@ -12,13 +12,14 @@ interface A3AggregatedCardProps {
   compact?: boolean;
 }
 
-/** Parse "missing X, Y, Z" from evidence into a list */
+/** Parse missing requirements from evidence/explanation */
 function parseMissing(evidence?: string, explanation?: string): string[] {
   const missing: string[] = [];
   const src = evidence || explanation || '';
   if (/missing\s+role/i.test(src) || /lacks?\s+role/i.test(src)) missing.push('role (e.g., role="button")');
-  if (/missing.*tabIndex/i.test(src) || /lacks?.*tabIndex/i.test(src) || /no\s+tabIndex/i.test(src)) missing.push('tabIndex={0} for keyboard focusability');
-  if (/missing.*keyboard/i.test(src) || /lacks?.*keyboard/i.test(src) || /no\s+onKeyDown/i.test(src) || /missing.*key\s*handler/i.test(src)) missing.push('onKeyDown handler for Enter/Space activation');
+  if (/missing.*tabIndex/i.test(src) || /lacks?.*tabIndex/i.test(src) || /no\s+tabIndex/i.test(src) || /not\s+focusable/i.test(src)) missing.push('Not focusable (no tabIndex)');
+  if (/missing.*keyboard/i.test(src) || /lacks?.*keyboard/i.test(src) || /no\s+onKeyDown/i.test(src) || /missing.*key\s*handler/i.test(src)) missing.push('No keyboard activation handler (onKeyDown / onKeyPress)');
+  if (/non.?semantic/i.test(src) || /div.*instead/i.test(src) || /clickable\s+<?(div|span|li)/i.test(src)) missing.push('Non-semantic interactive element (<div> used instead of <button>)');
   if (/tabIndex.*-1/i.test(src)) missing.push('tabIndex removed from tab order (tabIndex={-1})');
   if (/no\s+valid\s+href/i.test(src) || /no\s+href/i.test(src)) missing.push('Valid href attribute or role="button"');
   if (missing.length === 0) missing.push('Keyboard accessibility support');
@@ -50,6 +51,13 @@ function getRecommendedFix(element: A3ElementSubItem): string {
   return `Replace the clickable <${tag}> with a semantic <button> or <a> element, OR add role="button", tabIndex={0}, and an onKeyDown handler that activates on Enter and Space.`;
 }
 
+/** Get detection summary */
+function getDetectionSummary(element: A3ElementSubItem): string {
+  if (element.detection) return element.detection;
+  const tag = element.elementType || 'element';
+  return `Clickable non-semantic <${tag}> without keyboard support`;
+}
+
 function A3ElementItem({ element, isConfirmed, compact = false }: {
   element: A3ElementSubItem;
   isConfirmed: boolean;
@@ -61,6 +69,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
   const missingItems = parseMissing(element.evidence, element.explanation);
   const issueReason = getIssueReason(element);
   const recommendedFix = getRecommendedFix(element);
+  const detectionSummary = getDetectionSummary(element);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -71,7 +80,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
-        {/* Header row — matches A1/A2 typography */}
+        {/* Header row — identical to A1/A2 */}
         <CollapsibleTrigger className="w-full">
           <div className="flex items-start justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
@@ -110,38 +119,24 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
 
-        {/* Location (always visible) — matches A1/A2 */}
+        {/* Location (always visible) — identical to A1/A2 */}
         <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
           <span className="font-medium">📍 </span>
           {element.location}
         </div>
 
-        {/* Expandable details — structured rows matching A1/A2 field order */}
+        {/* Expandable details — field order matches user spec */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Element */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-28">Element:</span>
-              <span className="font-mono">{element.elementType || 'unknown'}{element.role ? ` (role="${element.role}")` : ''}</span>
-            </div>
-
-            {/* Location */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-28">Location:</span>
-              <span className="font-mono text-foreground">{element.location}</span>
-            </div>
-
             {/* Trigger */}
-            {element.detection && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-28">Trigger:</span>
-                <span className="font-mono">{element.detection}</span>
-              </div>
-            )}
+            <div className="flex items-start gap-2">
+              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Trigger:</span>
+              <span className="font-mono">{element.evidence || 'onClick handler'}</span>
+            </div>
 
             {/* Missing */}
             <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-28 flex-shrink-0">Missing:</span>
+              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Missing:</span>
               <ul className="list-disc list-inside space-y-0.5">
                 {missingItems.map((item, i) => (
                   <li key={i} className="text-foreground">{item}</li>
@@ -149,33 +144,40 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               </ul>
             </div>
 
-            {/* Requirement */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-28">Requirement:</span>
-              <span>WCAG 2.1.1 — Keyboard</span>
-            </div>
-
-            {/* Impact */}
+            {/* Detection */}
             <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-28 flex-shrink-0">Impact:</span>
-              <span className="text-foreground leading-relaxed">{issueReason}</span>
-            </div>
-
-            {/* Recommended fix */}
-            <div className="flex items-start gap-2 pt-1">
-              <span className="text-muted-foreground font-medium w-28 flex-shrink-0">Fix:</span>
-              <span className="text-foreground leading-relaxed">{recommendedFix}</span>
+              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Detection:</span>
+              <span className="text-foreground">{detectionSummary}</span>
             </div>
 
             {/* Confidence */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-28">Confidence:</span>
+              <span className="text-muted-foreground font-medium w-20">Confidence:</span>
               <span className={cn(
                 'font-mono font-medium',
                 isConfirmed ? 'text-destructive' : 'text-warning'
               )}>
                 {Math.round(element.confidence * 100)}%
+                {isConfirmed && ' — deterministic'}
               </span>
+            </div>
+
+            {/* Requirement */}
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground font-medium w-20">Requirement:</span>
+              <span>WCAG 2.1.1 Keyboard</span>
+            </div>
+
+            {/* Impact */}
+            <div className="flex items-start gap-2">
+              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Impact:</span>
+              <span className="text-foreground leading-relaxed">{issueReason}</span>
+            </div>
+
+            {/* Recommended fix */}
+            <div className="flex items-start gap-2 pt-1">
+              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Fix:</span>
+              <span className="text-foreground leading-relaxed">{recommendedFix}</span>
             </div>
           </div>
         </CollapsibleContent>
@@ -216,7 +218,7 @@ export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCar
           </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {elements.length} interactive element{elements.length !== 1 ? 's' : ''} with {isConfirmed ? 'confirmed' : 'potential'} keyboard operability issues detected.
+          {elements.length} interactive element{elements.length !== 1 ? 's' : ''} with {isConfirmed ? 'confirmed' : 'potential'} keyboard operability issue{elements.length !== 1 ? 's' : ''} detected.
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -229,7 +231,7 @@ export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCar
           />
         ))}
 
-        {/* Advisory guidance for potential findings — matches A2 */}
+        {/* Advisory guidance for potential findings — matches A1/A2 */}
         {!isConfirmed && (
           <SubtypeAdvisoryGuidance
             ruleId="A3"
