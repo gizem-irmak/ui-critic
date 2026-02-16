@@ -1140,15 +1140,17 @@ interface A5Finding {
   sourceLabel: string;
   filePath: string;
   componentName?: string;
-  subCheck: 'A5.1' | 'A5.2' | 'A5.3';
+  subCheck: 'A5.1' | 'A5.2' | 'A5.3' | 'A5.P1' | 'A5.P2' | 'A5.P3' | 'A5.P4';
   subCheckLabel: string;
-  classification: 'confirmed';
+  classification: 'confirmed' | 'potential';
   detection: string;
   evidence: string;
   explanation: string;
   confidence: number;
   correctivePrompt?: string;
+  advisoryGuidance?: string;
   deduplicationKey: string;
+  potentialSubtype?: 'accuracy' | 'borderline';
 }
 
 function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
@@ -1254,6 +1256,11 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       }
 
       if (hasValidLabel) continue;
+
+      // Check for title attribute — if present, skip confirmed (A5.P3 handles it in potential checks)
+      const titleCheckMatch = attrs.match(/title\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const hasTitleAttr = !!(titleCheckMatch?.[1] || titleCheckMatch?.[2])?.trim();
+      if (hasTitleAttr && !hasPlaceholder) continue;
 
       if (hasPlaceholder && !hasValidLabel) {
         const dedupeKey = `A5.2|${filePath}|${tag}|${label}|${lineNumber}`;
@@ -1378,7 +1385,203 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     return true;
   });
 
-  return deduped;
+  // ========== Potential sub-checks (A5.P1–P4) ==========
+  const confirmedKeys = new Set(deduped.map(f => `${f.filePath}|${f.elementType}|${f.elementLabel}`));
+  const potentialFindings: A5Finding[] = [];
+  const GENERIC_LABELS = new Set(['input', 'field', 'value', 'text', 'enter here', 'type here', 'select', 'option']);
+  const labelsByFile = new Map<string, Map<string, { tag: string; label: string; line: number; filePath: string; componentName: string }[]>>();
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx|ts|js|html|htm)$/.test(filePath)) continue;
+    if (filePath.includes('node_modules/') || filePath.includes('components/ui/')) continue;
+    if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js|html|htm)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+    else if (exportedConst?.[1]) componentName = exportedConst[1];
+
+    const labelForTargets = new Set<string>();
+    const labelForRegex2 = /(?:htmlFor|for)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
+    let lfm;
+    while ((lfm = labelForRegex2.exec(content)) !== null) {
+      const t = lfm[1] || lfm[2] || lfm[3];
+      if (t) labelForTargets.add(t);
+    }
+
+    const idTextMap = new Map<string, string>();
+    const idTextRegex = /<(\w+)\b[^>]*id\s*=\s*["']([^"']+)["'][^>]*>([^<]*)</g;
+    let itm;
+    while ((itm = idTextRegex.exec(content)) !== null) {
+      idTextMap.set(itm[2], itm[3].trim());
+    }
+
+    if (!labelsByFile.has(filePath)) labelsByFile.set(filePath, new Map());
+    const fileLabels = labelsByFile.get(filePath)!;
+
+    const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
+    const controlRegex2 = /<(input|textarea|select)\b([^>]*)(?:>|\/>)/gi;
+    let match2;
+    while ((match2 = controlRegex2.exec(content)) !== null) {
+      const tag = match2[1].toLowerCase();
+      const attrs = match2[2];
+
+      if (tag === 'input') {
+        const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+        const inputType = (typeMatch?.[1] || typeMatch?.[2] || 'text').toLowerCase();
+        if (EXCLUDED_INPUT_TYPES.has(inputType)) continue;
+      }
+      if (/\bdisabled\b/.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+
+      const linesBefore = content.slice(0, match2.index).split('\n');
+      const lineNumber = linesBefore.length;
+
+      const ariaLabelMatch = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const ariaLabelVal = ariaLabelMatch?.[1] || ariaLabelMatch?.[2] || '';
+      const hasAriaLabel = ariaLabelVal.trim().length > 0;
+
+      const ariaLabelledByMatch = attrs.match(/aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const ariaLabelledByVal = ariaLabelledByMatch?.[1] || ariaLabelledByMatch?.[2] || '';
+      const hasAriaLabelledBy = ariaLabelledByVal.trim().length > 0;
+
+      const controlIdMatch = attrs.match(/(?:^|\s)id\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const controlId = controlIdMatch?.[1] || controlIdMatch?.[2];
+      const hasExplicitLabel = controlId ? labelForTargets.has(controlId) : false;
+
+      const beforeControl = content.slice(Math.max(0, match2.index - 500), match2.index);
+      const lastLabelOpen = beforeControl.lastIndexOf('<label');
+      const lastLabelClose = beforeControl.lastIndexOf('</label');
+      const isWrappedInLabel = lastLabelOpen > lastLabelClose && lastLabelOpen !== -1;
+
+      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel;
+
+      const titleMatch = attrs.match(/title\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const titleVal = titleMatch?.[1] || titleMatch?.[2] || '';
+      const hasTitle = titleVal.trim().length > 0;
+
+      const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2] || '';
+
+      const nameMatch = attrs.match(/(?:name|id)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const elementName = nameMatch?.[1] || nameMatch?.[2] || '';
+      const label = ariaLabelVal || placeholder || elementName || `<${tag}> control`;
+
+      const controlKey = `${filePath}|${tag}|${label}`;
+      if (confirmedKeys.has(controlKey)) continue;
+
+      const fileName = filePath.split('/').pop() || filePath;
+
+      if (!hasValidLabel && hasTitle) {
+        const dedupeKey = `A5.P3|${filePath}|${tag}|${titleVal}|${lineNumber}`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          potentialFindings.push({
+            elementLabel: titleVal, elementType: tag, sourceLabel: titleVal, filePath, componentName,
+            subCheck: 'A5.P3', subCheckLabel: 'Title-only labeling',
+            classification: 'potential', potentialSubtype: 'borderline',
+            detection: `<${tag}> relies on title="${titleVal}" as only accessible name`,
+            evidence: `<${tag} title="${titleVal}"> at ${filePath}:${lineNumber}`,
+            explanation: `The title attribute provides a weak accessible name that is not visible and may not be announced by all screen readers.`,
+            confidence: 0.85,
+            advisoryGuidance: 'Add a visible <label> or aria-label instead of relying on the title attribute.',
+            deduplicationKey: dedupeKey,
+          });
+        }
+        continue;
+      }
+
+      if (!hasValidLabel) continue;
+
+      let accessibleName = '';
+      if (hasAriaLabel) {
+        accessibleName = ariaLabelVal;
+      } else if (hasAriaLabelledBy) {
+        const ids = ariaLabelledByVal.split(/\s+/);
+        accessibleName = ids.map(id => idTextMap.get(id) || '').join(' ').trim();
+      } else if (isWrappedInLabel) {
+        const labelStart = beforeControl.lastIndexOf('<label');
+        const labelContent = beforeControl.slice(labelStart);
+        const labelTextMatch = labelContent.match(/>([^<]*)</);
+        accessibleName = labelTextMatch?.[1]?.trim() || '';
+      } else if (hasExplicitLabel && controlId) {
+        const labelTextRegex = new RegExp(`<label[^>]*(?:for|htmlFor)\\s*=\\s*["']${controlId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*>([^<]*)`, 'i');
+        const ltm = content.match(labelTextRegex);
+        accessibleName = ltm?.[1]?.trim() || '';
+      }
+
+      if (accessibleName) {
+        const normalizedName = accessibleName.trim().toLowerCase();
+        if (!fileLabels.has(normalizedName)) fileLabels.set(normalizedName, []);
+        fileLabels.get(normalizedName)!.push({ tag, label: accessibleName, line: lineNumber, filePath, componentName });
+      }
+
+      if (accessibleName && GENERIC_LABELS.has(accessibleName.trim().toLowerCase())) {
+        const dedupeKey = `A5.P1|${filePath}|${tag}|${accessibleName}|${lineNumber}`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          potentialFindings.push({
+            elementLabel: accessibleName, elementType: tag, sourceLabel: accessibleName, filePath, componentName,
+            subCheck: 'A5.P1', subCheckLabel: 'Generic label text',
+            classification: 'potential', potentialSubtype: 'borderline',
+            detection: `<${tag}> label "${accessibleName}" is generic`,
+            evidence: `label text "${accessibleName}" at ${filePath}:${lineNumber}`,
+            explanation: `The label "${accessibleName}" is too generic to be meaningful.`,
+            confidence: 0.88,
+            advisoryGuidance: 'Use a descriptive label that explains the purpose of this control.',
+            deduplicationKey: dedupeKey,
+          });
+        }
+      }
+
+      if (hasAriaLabelledBy && accessibleName) {
+        const NOISY_TOKENS = /\b(optional|required|hint|note|help|info)\b/i;
+        if (accessibleName.length > 60 || NOISY_TOKENS.test(accessibleName)) {
+          const dedupeKey = `A5.P4|${filePath}|${tag}|${lineNumber}`;
+          if (!seenKeys.has(dedupeKey)) {
+            seenKeys.add(dedupeKey);
+            potentialFindings.push({
+              elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
+              subCheck: 'A5.P4', subCheckLabel: 'Noisy aria-labelledby',
+              classification: 'potential', potentialSubtype: 'borderline',
+              detection: `<${tag}> aria-labelledby resolves to noisy/long text`,
+              evidence: `Resolved text: "${accessibleName.slice(0, 80)}${accessibleName.length > 80 ? '…' : ''}" at ${filePath}:${lineNumber}`,
+              explanation: `The aria-labelledby resolves to text that is too long (${accessibleName.length} chars) or contains advisory tokens.`,
+              confidence: 0.82,
+              advisoryGuidance: 'Simplify the referenced label text. Move hints to aria-describedby.',
+              deduplicationKey: dedupeKey,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  for (const [, fileLabels] of labelsByFile) {
+    for (const [normalizedName, controls] of fileLabels) {
+      if (controls.length < 2) continue;
+      const dedupeKey = `A5.P2|${controls[0].filePath}|${normalizedName}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      const controlList = controls.map(c => `<${c.tag}> at line ${c.line}`).join(', ');
+      potentialFindings.push({
+        elementLabel: controls[0].label, elementType: controls[0].tag, sourceLabel: controls[0].label,
+        filePath: controls[0].filePath, componentName: controls[0].componentName,
+        subCheck: 'A5.P2', subCheckLabel: 'Duplicate label text',
+        classification: 'potential', potentialSubtype: 'borderline',
+        detection: `${controls.length} controls share label "${controls[0].label}"`,
+        evidence: `Duplicate label "${controls[0].label}": ${controlList}`,
+        explanation: `Multiple controls share the same accessible name "${controls[0].label}".`,
+        confidence: 0.90,
+        advisoryGuidance: 'Give each control a unique, descriptive label.',
+        deduplicationKey: dedupeKey,
+      });
+    }
+  }
+
+  return [...deduped, ...potentialFindings];
 }
 
 function detectStack(files: Map<string, string>): string {
@@ -2050,6 +2253,8 @@ serve(async (req) => {
     if (selectedRulesSet.has('A5')) {
       const a5Findings = detectA5FormLabels(allFiles);
       if (a5Findings.length > 0) {
+        const confirmedFindings = a5Findings.filter(f => f.classification === 'confirmed');
+        const potentialFindings = a5Findings.filter(f => f.classification === 'potential');
         const overallConfidence = Math.max(...a5Findings.map(f => f.confidence));
         const a5Elements = a5Findings.map(f => ({
           elementLabel: f.sourceLabel, elementType: f.elementType, inputSubtype: f.inputSubtype,
@@ -2057,18 +2262,24 @@ serve(async (req) => {
           location: f.filePath, detection: f.detection, evidence: f.evidence,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           classification: f.classification,
-          explanation: f.explanation, confidence: f.confidence, correctivePrompt: f.correctivePrompt,
+          explanation: f.explanation, confidence: f.confidence,
+          correctivePrompt: f.correctivePrompt,
+          advisoryGuidance: f.advisoryGuidance,
+          potentialSubtype: f.potentialSubtype,
           deduplicationKey: f.deduplicationKey,
         }));
+        const hasConfirmed = confirmedFindings.length > 0;
         aggregatedA5GitHub = {
           ruleId: 'A5', ruleName: 'Missing form labels (Input clarity)', category: 'accessibility',
-          status: 'confirmed', blocksConvergence: true, inputType: 'github', isA5Aggregated: true, a5Elements,
-          diagnosis: `Form label issues: ${a5Findings.length} confirmed. WCAG 1.3.1/3.3.2 require programmatic labels.`,
+          status: hasConfirmed ? 'confirmed' : 'potential',
+          blocksConvergence: hasConfirmed, inputType: 'github', isA5Aggregated: true, a5Elements,
+          diagnosis: `Form label issues: ${confirmedFindings.length} confirmed, ${potentialFindings.length} potential. WCAG 1.3.1/3.3.2 require programmatic labels.`,
           contextualHint: 'Add <label> or aria-label/aria-labelledby for form controls.',
-          correctivePrompt: 'Add visible <label> elements or aria-label/aria-labelledby for all form controls.',
+          correctivePrompt: hasConfirmed ? 'Add visible <label> elements or aria-label/aria-labelledby for all form controls.' : undefined,
+          advisoryGuidance: potentialFindings.length > 0 ? 'Review label quality: avoid generic text, duplicate labels, title-only naming, and noisy aria-labelledby.' : undefined,
           confidence: Math.round(overallConfidence * 100) / 100,
         };
-        console.log(`A5 aggregated (GitHub): ${a5Findings.length} findings`);
+        console.log(`A5 aggregated (GitHub): ${a5Findings.length} findings (${confirmedFindings.length} confirmed, ${potentialFindings.length} potential)`);
       }
     }
 
