@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { Violation, A3ElementSubItem, A4ElementSubItem, A5ElementSubItem } from '@/types/project';
+import type { Violation, A3ElementSubItem, A4ElementSubItem, A5ElementSubItem, A6ElementSubItem } from '@/types/project';
 import { CorrectivePromptItem } from './CorrectivePromptItem';
 
 const categoryColors: Record<string, string> = {
@@ -85,6 +85,23 @@ function buildA5PromptBody(el: A5ElementSubItem): { issueReason: string; recomme
   return { issueReason: el.explanation, recommendedFix: el.correctivePrompt || 'Add a visible <label> or accessible name for this form control.' };
 }
 
+const A6_CORRECTIVE_TEMPLATES: Record<string, { issueReason: string; recommendedFix: string }> = {
+  'A6.1': {
+    issueReason: 'This interactive element has no programmatic accessible name (no text, aria-label, or valid aria-labelledby). Screen readers cannot identify its purpose.',
+    recommendedFix: 'Add visible text content, or provide an accessible name using aria-label or aria-labelledby. For icon-only buttons/links, add an aria-label (e.g., "Edit profile", "Open settings") or include screen-reader-only text.',
+  },
+  'A6.2': {
+    issueReason: 'This element uses aria-labelledby, but the referenced ID(s) are missing or resolve to empty text, so no accessible name is exposed.',
+    recommendedFix: 'Ensure aria-labelledby references existing element IDs that contain the intended label text. Alternatively, replace with a clear aria-label or visible text content.',
+  },
+};
+
+function buildA6PromptBody(el: A6ElementSubItem): { issueReason: string; recommendedFix: string } {
+  const template = A6_CORRECTIVE_TEMPLATES[el.subCheck];
+  if (template) return template;
+  return { issueReason: el.explanation, recommendedFix: el.correctivePrompt || 'Add an accessible name to this interactive element.' };
+}
+
 interface CorrectivePromptsSectionProps {
   violations: Violation[];
 }
@@ -108,6 +125,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       a3Items?: A3ElementSubItem[];
       a4Items?: A4ElementSubItem[];
       a5Items?: A5ElementSubItem[];
+      a6Items?: A6ElementSubItem[];
     }>();
 
     for (const v of confirmedViolations) {
@@ -256,6 +274,38 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             subCheckLabel: 'Missing label association',
           } as A5ElementSubItem);
         }
+      } else if (v.ruleId === 'A6') {
+        // A6 uses per-element rendering — only confirmed sub-checks (A6.1–A6.2)
+        if (!ruleGroups.has('A6')) {
+          ruleGroups.set('A6', {
+            ruleId: 'A6',
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+            a6Items: [],
+          });
+        }
+        const group = ruleGroups.get('A6')!;
+        if (v.isA6Aggregated && v.a6Elements) {
+          for (const el of v.a6Elements) {
+            if (el.classification === 'confirmed') {
+              group.a6Items!.push(el);
+            }
+          }
+        } else if (v.status === 'confirmed' || v.status !== 'potential') {
+          group.a6Items!.push({
+            elementLabel: v.contextualHint || v.evidence || v.ruleName,
+            elementType: 'button',
+            location: v.evidence || '',
+            explanation: v.diagnosis || '',
+            confidence: v.confidence,
+            correctivePrompt: v.correctivePrompt,
+            deduplicationKey: `${v.ruleId}-${v.evidence || 'fallback'}`,
+            classification: 'confirmed',
+            subCheck: 'A6.1',
+            subCheckLabel: 'Missing accessible name',
+          } as A6ElementSubItem);
+        }
       } else if (v.correctivePrompt) {
         const key = v.ruleId;
         if (!ruleGroups.has(key)) {
@@ -277,7 +327,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       }
     }
 
-    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a3Items && g.a3Items.length > 0) || (g.a4Items && g.a4Items.length > 0) || (g.a5Items && g.a5Items.length > 0));
+    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a3Items && g.a3Items.length > 0) || (g.a4Items && g.a4Items.length > 0) || (g.a5Items && g.a5Items.length > 0) || (g.a6Items && g.a6Items.length > 0));
   })();
 
   const copyPrompt = async () => {
@@ -319,6 +369,14 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             const tag = el.elementType || 'input';
             const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
             const { issueReason, recommendedFix } = buildA5PromptBody(el);
+            text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+          }
+        } else if (ruleGroup.ruleId === 'A6' && ruleGroup.a6Items?.length) {
+          for (const el of ruleGroup.a6Items) {
+            const label = el.elementLabel || el.sourceLabel || 'Interactive element';
+            const tag = el.elementType || 'button';
+            const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+            const { issueReason, recommendedFix } = buildA6PromptBody(el);
             text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
           }
         } else {
@@ -430,6 +488,24 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
                   const tag = el.elementType || 'input';
                   const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
                   const { issueReason, recommendedFix } = buildA5PromptBody(el);
+                  return (
+                    <CorrectivePromptItem
+                      key={pIdx}
+                      elementLabel={label}
+                      roleOrTag={tag}
+                      fileName={fileName}
+                      issueReason={issueReason}
+                      recommendedFix={recommendedFix}
+                    />
+                  );
+                })
+              ) : group.ruleId === 'A6' && group.a6Items ? (
+                // A6: use CorrectivePromptItem per confirmed element
+                group.a6Items.map((el, pIdx) => {
+                  const label = el.elementLabel || el.sourceLabel || 'Interactive element';
+                  const tag = el.elementType || 'button';
+                  const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+                  const { issueReason, recommendedFix } = buildA6PromptBody(el);
                   return (
                     <CorrectivePromptItem
                       key={pIdx}

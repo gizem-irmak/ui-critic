@@ -43,6 +43,13 @@ export const rules: Rule[] = [
     diagnosis: 'Form controls lack programmatic labels, reducing accessibility for screen reader users and failing WCAG 2.1 1.3.1 and 3.3.2.',
     correctivePrompt: 'Add visible <label> elements associated with form controls using for/id, or provide accessible names via aria-label/aria-labelledby. Do not rely on placeholder text as the sole label.'
   },
+  {
+    id: 'A6',
+    category: 'accessibility',
+    name: 'Missing accessible names (Name, Role, Value)',
+    diagnosis: 'Interactive elements lack programmatic accessible names, preventing screen readers from identifying their purpose (WCAG 2.1 — 4.1.2 Level A).',
+    correctivePrompt: 'Add visible text content, aria-label, or aria-labelledby to interactive elements. For icon-only buttons/links, add an aria-label describing the action.'
+  },
   // Usability (HCI)
   {
     id: 'U1',

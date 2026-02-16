@@ -165,6 +165,12 @@ export interface Violation {
   // ============================================================
   isA5Aggregated?: boolean;
   a5Elements?: A5ElementSubItem[];
+  
+  // ============================================================
+  // A6 AGGREGATED ELEMENT REPORTING (Missing Accessible Names)
+  // ============================================================
+  isA6Aggregated?: boolean;
+  a6Elements?: A6ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -327,6 +333,31 @@ export interface A5ElementSubItem {
   
   classification: 'confirmed' | 'potential';
   potentialSubtype?: 'accuracy' | 'borderline';
+  
+  explanation: string;
+  confidence: number;
+  
+  correctivePrompt?: string;
+  deduplicationKey: string;
+}
+
+// A6 Element sub-item for aggregated accessible name reporting
+export interface A6ElementSubItem {
+  elementLabel: string;
+  elementType?: string; // button, a, div, etc.
+  role?: string; // ARIA role or HTML tag role
+  accessibleName?: string;
+  sourceLabel?: string;
+  selectorHint?: string;
+  textSnippet?: string;
+  location: string; // file path or "Screenshot" label
+  
+  detection?: string;
+  evidence?: string;
+  subCheck: 'A6.1' | 'A6.2';
+  subCheckLabel: string;
+  
+  classification: 'confirmed';
   
   explanation: string;
   confidence: number;
