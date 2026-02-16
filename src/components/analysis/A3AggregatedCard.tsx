@@ -174,12 +174,25 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
 }
 
 export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCardProps) {
-  if (!violation.isA3Aggregated || !violation.a3Elements) {
-    return null;
-  }
+  const isConfirmed = violation.status !== 'potential';
 
-  const isConfirmed = violation.status === 'confirmed';
-  const elements = violation.a3Elements;
+  // If aggregated with a3Elements, use them directly.
+  // Otherwise, synthesize a single element from the top-level violation fields
+  // so non-aggregated A3 violations still render with the per-element card layout.
+  const elements: A3ElementSubItem[] = (violation.isA3Aggregated && violation.a3Elements)
+    ? violation.a3Elements
+    : [{
+        elementLabel: violation.evidence || violation.diagnosis?.split('.')[0] || 'Element',
+        elementType: undefined,
+        location: violation.evidence || '',
+        detection: undefined,
+        evidence: violation.evidence,
+        classification: isConfirmed ? 'confirmed' : 'potential',
+        explanation: violation.diagnosis || '',
+        confidence: violation.confidence,
+        correctivePrompt: violation.correctivePrompt,
+        deduplicationKey: `${violation.ruleId}-fallback`,
+      }];
 
   return (
     <Card className={cn(
