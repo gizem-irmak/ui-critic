@@ -1370,6 +1370,15 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       }
     }
   }
+
+  // Post-process: suppress A5.1 for controls in the same file where an A5.3 orphan label exists
+  const a53Files = new Set(findings.filter(f => f.subCheck === 'A5.3').map(f => f.filePath));
+  const deduped = findings.filter(f => {
+    if (f.subCheck === 'A5.1' && a53Files.has(f.filePath)) return false;
+    return true;
+  });
+
+  return deduped;
 }
 
 function detectStack(files: Map<string, string>): string {
