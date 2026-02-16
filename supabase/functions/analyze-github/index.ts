@@ -923,6 +923,212 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
   return findings;
 }
 
+// ========== A4 DETERMINISTIC DETECTION (Missing Semantic Structure) ==========
+interface A4Finding {
+  elementLabel: string;
+  elementType: string;
+  role?: string;
+  sourceLabel: string;
+  filePath: string;
+  componentName?: string;
+  subCheck: 'A4.1' | 'A4.2' | 'A4.3' | 'A4.4';
+  subCheckLabel: string;
+  classification: 'confirmed' | 'potential';
+  detection: string;
+  evidence: string;
+  explanation: string;
+  confidence: number;
+  correctivePrompt?: string;
+  deduplicationKey: string;
+}
+
+function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
+  const findings: A4Finding[] = [];
+  const seenKeys = new Set<string>();
+
+  let hasH1 = false;
+  let hasMainLandmark = false;
+  let hasNavLandmark = false;
+  const headingLevelsUsed = new Set<number>();
+  const clickableNonSemantics: A4Finding[] = [];
+  const headingIssues: A4Finding[] = [];
+  const landmarkIssues: A4Finding[] = [];
+  const listIssues: A4Finding[] = [];
+
+  const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
+  const CLICK_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
+  const INTERACTIVE_ROLES = /\brole\s*=\s*["'](button|link|menuitem|tab|option|checkbox|radio|switch|combobox|listbox|slider|treeitem|gridcell)["']/i;
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx|ts|js|html)$/.test(filePath)) continue;
+    if (!filePath.startsWith('src/') && !filePath.startsWith('components/') && !filePath.startsWith('app/') && !filePath.startsWith('pages/')) continue;
+    if (filePath.includes('components/ui/')) continue;
+    if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js|html)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+    else if (exportedConst?.[1]) componentName = exportedConst[1];
+
+    // A4.1: Heading semantics
+    const h1Match = content.match(/<h1\b/gi);
+    if (h1Match) hasH1 = true;
+    for (let i = 1; i <= 6; i++) {
+      if (new RegExp(`<h${i}\\b`, 'i').test(content)) headingLevelsUsed.add(i);
+    }
+
+    // A4.2: Interactive elements are semantic
+    const tagRegex = new RegExp(`<(${NON_INTERACTIVE_TAGS})\\b([^>]*)>`, 'gi');
+    let match;
+    while ((match = tagRegex.exec(content)) !== null) {
+      const tag = match[1];
+      const attrs = match[2];
+      if (!CLICK_HANDLER_RE.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+      if (INTERACTIVE_ROLES.test(attrs)) continue;
+      if (/tabIndex\s*=\s*\{?\s*0\s*\}?/i.test(attrs) && INTERACTIVE_ROLES.test(attrs)) continue;
+
+      const linesBefore = content.slice(0, match.index).split('\n');
+      const lineNumber = linesBefore.length;
+      const handlerMatch = attrs.match(/\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/);
+      const triggerHandler = handlerMatch?.[1] || 'onClick';
+
+      const afterTag = content.slice(match.index + match[0].length, Math.min(content.length, match.index + match[0].length + 300));
+      const childTextMatch = afterTag.match(/^([^<]{1,80})/);
+      const innerText = childTextMatch?.[1]?.trim();
+      const ariaLabelMatch = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const label = ariaLabelMatch?.[1] || ariaLabelMatch?.[2] || (innerText && innerText.length <= 60 ? innerText : null) || `Clickable <${tag}>`;
+
+      const dedupeKey = `A4.2|${filePath}|${tag}|${label}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      clickableNonSemantics.push({
+        elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
+        subCheck: 'A4.2', subCheckLabel: 'Interactive elements',
+        classification: 'confirmed',
+        detection: `${triggerHandler} on non-semantic <${tag}> without ARIA role`,
+        evidence: `<${tag} ${triggerHandler}=...> at ${filePath}:${lineNumber}`,
+        explanation: `Clickable <${tag}> with ${triggerHandler} but no semantic role (button/link). Screen readers cannot identify this as interactive.`,
+        confidence: 0.95,
+        correctivePrompt: `Replace clickable <${tag}> with <button> or <a>. If non-button must be used, add role="button", tabIndex="0", and Enter/Space handlers.`,
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // A4.3: Landmark detection
+    if (/<main\b/i.test(content) || /role\s*=\s*["']main["']/i.test(content)) hasMainLandmark = true;
+    if (/<nav\b/i.test(content) || /role\s*=\s*["']navigation["']/i.test(content)) hasNavLandmark = true;
+
+    // A4.4: Lists
+    const repeatedClassPattern = /className\s*=\s*(?:"([^"]+)"|'([^']+)'|{`([^`]+)`})/g;
+    const classCounts = new Map<string, number>();
+    let classMatch;
+    while ((classMatch = repeatedClassPattern.exec(content)) !== null) {
+      const cls = classMatch[1] || classMatch[2] || classMatch[3] || '';
+      if (cls.length > 10 && cls.length < 200) {
+        classCounts.set(cls, (classCounts.get(cls) || 0) + 1);
+      }
+    }
+    for (const [cls, count] of classCounts) {
+      if (count >= 3) {
+        const hasSemanticList = /<(?:ul|ol)\b/i.test(content) || /role\s*=\s*["']list["']/i.test(content);
+        if (!hasSemanticList) {
+          const listDedupeKey = `A4.4|${filePath}|${cls.substring(0, 30)}`;
+          if (!seenKeys.has(listDedupeKey)) {
+            seenKeys.add(listDedupeKey);
+            listIssues.push({
+              elementLabel: `Repeated items (${count}x)`, elementType: 'div', sourceLabel: `Repeated pattern in ${componentName || filePath}`,
+              filePath, componentName,
+              subCheck: 'A4.4', subCheckLabel: 'Lists',
+              classification: 'potential',
+              detection: `${count} sibling elements with identical className, no <ul>/<ol> wrapper`,
+              evidence: `Repeated class in ${filePath}: "${cls.substring(0, 60)}..."`,
+              explanation: `${count} elements with the same class pattern but no semantic list (<ul>/<ol>) structure. Screen readers cannot convey the list relationship.`,
+              confidence: 0.72,
+              deduplicationKey: listDedupeKey,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // A4.1: Post-scan heading analysis
+  if (!hasH1 && headingLevelsUsed.size > 0) {
+    headingIssues.push({
+      elementLabel: 'Missing <h1>', elementType: 'h1', sourceLabel: 'Page heading',
+      filePath: 'global', componentName: undefined,
+      subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+      classification: 'confirmed',
+      detection: 'No <h1> found in any source file',
+      evidence: `Heading levels used: ${Array.from(headingLevelsUsed).sort().map(l => `h${l}`).join(', ')} — no h1`,
+      explanation: 'No <h1> heading found. Every page should have exactly one <h1> representing the page title for screen reader navigation.',
+      confidence: 0.90,
+      correctivePrompt: 'Add exactly one <h1> element for the page title.',
+      deduplicationKey: 'A4.1|no-h1',
+    });
+  }
+
+  const sortedLevels = Array.from(headingLevelsUsed).sort();
+  for (let i = 1; i < sortedLevels.length; i++) {
+    if (sortedLevels[i] - sortedLevels[i - 1] > 1) {
+      headingIssues.push({
+        elementLabel: `Heading level skip (h${sortedLevels[i - 1]} → h${sortedLevels[i]})`,
+        elementType: `h${sortedLevels[i]}`, sourceLabel: 'Heading hierarchy',
+        filePath: 'global', componentName: undefined,
+        subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+        classification: 'potential',
+        detection: `Heading level skips from h${sortedLevels[i - 1]} to h${sortedLevels[i]}`,
+        evidence: `Heading levels used: ${sortedLevels.map(l => `h${l}`).join(', ')}`,
+        explanation: `Heading level skips from h${sortedLevels[i - 1]} to h${sortedLevels[i]}. This breaks the logical document outline for screen readers.`,
+        confidence: 0.78,
+        deduplicationKey: `A4.1|skip-h${sortedLevels[i - 1]}-h${sortedLevels[i]}`,
+      });
+      break;
+    }
+  }
+
+  let h1Count = 0;
+  for (const [, content] of allFiles) {
+    const matches = content.match(/<h1\b/gi);
+    if (matches) h1Count += matches.length;
+  }
+  if (h1Count > 1) {
+    headingIssues.push({
+      elementLabel: `Multiple <h1> elements (${h1Count})`, elementType: 'h1', sourceLabel: 'Page heading',
+      filePath: 'global', componentName: undefined,
+      subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+      classification: 'potential',
+      detection: `${h1Count} <h1> elements found across source files`,
+      evidence: `${h1Count} <h1> tags detected`,
+      explanation: `Multiple <h1> elements detected. Pages should generally have exactly one <h1> for the page title.`,
+      confidence: 0.72,
+      deduplicationKey: 'A4.1|multiple-h1',
+    });
+  }
+
+  // A4.3: Missing landmarks
+  if (!hasMainLandmark) {
+    landmarkIssues.push({
+      elementLabel: 'Missing <main> landmark', elementType: 'main', sourceLabel: 'Page landmark',
+      filePath: 'global', componentName: undefined,
+      subCheck: 'A4.3', subCheckLabel: 'Landmark regions',
+      classification: 'potential',
+      detection: 'No <main> or role="main" found',
+      evidence: 'No main landmark detected in source files',
+      explanation: 'No <main> landmark found. Screen readers use landmarks to navigate page regions efficiently.',
+      confidence: 0.75,
+      deduplicationKey: 'A4.3|no-main',
+    });
+  }
+
+  findings.push(...headingIssues, ...clickableNonSemantics, ...landmarkIssues, ...listIssues);
+  return findings;
+}
+
 function detectStack(files: Map<string, string>): string {
   const fileNames = Array.from(files.keys());
   

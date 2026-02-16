@@ -4199,12 +4199,32 @@ serve(async (req) => {
       };
     }
     
+    // ========== A4 Screenshot Mode (NOT EVALUATED) ==========
+    let aggregatedA4UI: any = null;
+    if (selectedRulesSet.has('A4')) {
+      aggregatedA4UI = {
+        ruleId: 'A4',
+        ruleName: 'Missing semantic structure',
+        category: 'accessibility',
+        status: 'informational',
+        blocksConvergence: false,
+        inputType: 'screenshots',
+        isA4Aggregated: false,
+        diagnosis: 'Semantic structure requires DOM/HTML analysis; screenshot-only input cannot be evaluated reliably.',
+        contextualHint: 'Upload source code (ZIP file or GitHub repository) to enable semantic structure evaluation (headings, landmarks, lists, interactive roles).',
+        correctivePrompt: '',
+        confidence: 0,
+        evidence: 'Input type: Screenshot',
+      };
+    }
+    
     // Combine all violations - A1 uses aggregated cards (max 2), A2 uses aggregated card
     const enhancedViolations = [
       ...filteredOtherViolations,
       ...aggregatedA1Violations,
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
       ...(aggregatedA3UI ? [aggregatedA3UI] : []),
+      ...(aggregatedA4UI ? [aggregatedA4UI] : []),
     ];
 
     console.log(`Analysis complete: ${enhancedViolations.length} violations found`);
