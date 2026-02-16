@@ -60,7 +60,9 @@ function GenericViolationCard({ violation, isConfirmed, compact = false }: {
 }
 
 function isAggregated(v: Violation): boolean {
-  return !!(v.ruleId === 'A1' && v.isA1Aggregated) || !!(v.ruleId === 'A2' && v.isA2Aggregated) || !!(v.ruleId === 'A3' && v.isA3Aggregated);
+  // A3 is ALWAYS routed to the aggregated card — no fallback to GenericViolationCard
+  if (v.ruleId === 'A3') return true;
+  return !!(v.ruleId === 'A1' && v.isA1Aggregated) || !!(v.ruleId === 'A2' && v.isA2Aggregated);
 }
 
 function AggregatedCard({ violation, compact }: { violation: Violation; compact?: boolean }) {
@@ -70,7 +72,7 @@ function AggregatedCard({ violation, compact }: { violation: Violation; compact?
   if (violation.ruleId === 'A2' && violation.isA2Aggregated) {
     return <A2AggregatedCard violation={violation} compact={compact} />;
   }
-  if (violation.ruleId === 'A3' && violation.isA3Aggregated) {
+  if (violation.ruleId === 'A3') {
     return <A3AggregatedCard violation={violation} compact={compact} />;
   }
   return null;
