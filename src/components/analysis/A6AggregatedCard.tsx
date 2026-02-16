@@ -109,7 +109,7 @@ function A6ElementItem({ element, compact = false, cardDiagnosis }: {
 }
 
 export function A6AggregatedCard({ violation, compact = false }: A6AggregatedCardProps) {
-  const elements: A6ElementSubItem[] = (violation.isA6Aggregated && violation.a6Elements)
+  const rawElements: A6ElementSubItem[] = (violation.isA6Aggregated && violation.a6Elements)
     ? violation.a6Elements
     : [{
         elementLabel: violation.evidence || violation.diagnosis?.split('.')[0] || 'Interactive element',
@@ -125,6 +125,16 @@ export function A6AggregatedCard({ violation, compact = false }: A6AggregatedCar
         correctivePrompt: violation.correctivePrompt,
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
+
+  // Suppress A6.1 for elements that also have A6.2 (A6.2 takes precedence)
+  const a62Keys = new Set(
+    rawElements.filter(el => el.subCheck === 'A6.2').map(el => el.deduplicationKey?.replace('-A6.2', '') ?? el.elementLabel)
+  );
+  const elements = rawElements.filter(el => {
+    if (el.subCheck !== 'A6.1') return true;
+    const baseKey = el.deduplicationKey?.replace('-A6.1', '') ?? el.elementLabel;
+    return !a62Keys.has(baseKey);
+  });
 
   return (
     <Card className="border border-destructive/30">
