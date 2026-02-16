@@ -12,50 +12,36 @@ interface A3AggregatedCardProps {
   compact?: boolean;
 }
 
-/** Parse missing requirements from evidence/explanation */
-function parseMissing(evidence?: string, explanation?: string): string[] {
-  const missing: string[] = [];
-  const src = evidence || explanation || '';
-  if (/missing\s+role/i.test(src) || /lacks?\s+role/i.test(src)) missing.push('role (e.g., role="button")');
-  if (/missing.*tabIndex/i.test(src) || /lacks?.*tabIndex/i.test(src) || /no\s+tabIndex/i.test(src) || /not\s+focusable/i.test(src)) missing.push('Not focusable (no tabIndex)');
-  if (/missing.*keyboard/i.test(src) || /lacks?.*keyboard/i.test(src) || /no\s+onKeyDown/i.test(src) || /missing.*key\s*handler/i.test(src)) missing.push('No keyboard activation handler (onKeyDown / onKeyPress)');
-  if (/non.?semantic/i.test(src) || /div.*instead/i.test(src) || /clickable\s+<?(div|span|li)/i.test(src)) missing.push('Non-semantic interactive element (<div> used instead of <button>)');
-  if (/tabIndex.*-1/i.test(src)) missing.push('tabIndex removed from tab order (tabIndex={-1})');
-  if (/no\s+valid\s+href/i.test(src) || /no\s+href/i.test(src)) missing.push('Valid href attribute or role="button"');
-  if (missing.length === 0) missing.push('Keyboard accessibility support');
-  return missing;
+/** Derive missing-requirement chips from evidence/explanation */
+function getMissingChips(evidence?: string, explanation?: string): string[] {
+  const chips: string[] = [];
+  const src = (evidence || '') + ' ' + (explanation || '');
+  if (/missing\s+role|lacks?\s+role/i.test(src)) chips.push('missing role');
+  if (/missing.*tabIndex|lacks?.*tabIndex|no\s+tabIndex|not\s+focusable/i.test(src)) chips.push('missing tabIndex');
+  if (/missing.*onKeyDown|no\s+onKeyDown|missing.*key\s*handler/i.test(src)) chips.push('missing onKeyDown');
+  if (/missing.*onKeyPress|onKeyPress/i.test(src)) chips.push('missing onKeyPress');
+  if (/missing.*onKeyUp|onKeyUp/i.test(src)) chips.push('missing onKeyUp');
+  if (/non.?semantic|div.*instead|clickable\s+<?(div|span|li)/i.test(src)) chips.push('non-semantic element');
+  if (/tabIndex.*-1/i.test(src)) chips.push('tabIndex={-1}');
+  if (/no\s+valid\s+href|no\s+href/i.test(src)) chips.push('missing href');
+  if (chips.length === 0) chips.push('missing keyboard support');
+  return chips;
 }
 
-/** Extract issue reason from explanation */
-function getIssueReason(element: A3ElementSubItem): string {
+/** Extract a short detection reason */
+function getDetection(element: A3ElementSubItem): string {
+  if (element.detection) return element.detection;
+  const tag = element.elementType || 'element';
+  return `Clickable non-semantic <${tag}> without keyboard support`;
+}
+
+/** Extract a short 1–2 sentence explanation */
+function getShortExplanation(element: A3ElementSubItem): string {
   if (element.explanation.includes('Issue reason:')) {
     const match = element.explanation.match(/Issue reason:\s*(.+?)(?:\n|$)/);
     if (match) return match[1].trim();
   }
-  return element.explanation;
-}
-
-/** Extract recommended fix from explanation, or generate one */
-function getRecommendedFix(element: A3ElementSubItem): string {
-  if (element.explanation.includes('Recommended fix:')) {
-    const match = element.explanation.match(/Recommended fix:\s*(.+?)$/s);
-    if (match) return match[1].trim();
-  }
-  const tag = element.elementType || 'element';
-  if (tag === 'a') {
-    return 'Replace the <a> with a semantic <button>, or add a valid href for navigation.';
-  }
-  if (/tabIndex.*-1/i.test(element.evidence || '')) {
-    return `Remove tabIndex={-1} from the <${tag}> or provide an alternative keyboard-accessible path.`;
-  }
-  return `Replace the clickable <${tag}> with a semantic <button> or <a> element, OR add role="button", tabIndex={0}, and an onKeyDown handler that activates on Enter and Space.`;
-}
-
-/** Get detection summary */
-function getDetectionSummary(element: A3ElementSubItem): string {
-  if (element.detection) return element.detection;
-  const tag = element.elementType || 'element';
-  return `Clickable non-semantic <${tag}> without keyboard support`;
+  return 'Element is mouse-operable but cannot be reached or activated via Tab, Enter, or Space.';
 }
 
 function A3ElementItem({ element, isConfirmed, compact = false }: {
@@ -66,10 +52,10 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
   const [isOpen, setIsOpen] = useState(false);
 
   const displayLabel = element.sourceLabel || element.elementLabel;
-  const missingItems = parseMissing(element.evidence, element.explanation);
-  const issueReason = getIssueReason(element);
-  const recommendedFix = getRecommendedFix(element);
-  const detectionSummary = getDetectionSummary(element);
+  const missingChips = getMissingChips(element.evidence, element.explanation);
+  const detection = getDetection(element);
+  const shortExplanation = getShortExplanation(element);
+  const needsNameRole = missingChips.some(c => c === 'missing role');
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -80,7 +66,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
-        {/* Header row — identical to A1/A2 */}
+        {/* Header row — matches A2 */}
         <CollapsibleTrigger className="w-full">
           <div className="flex items-start justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
@@ -119,35 +105,31 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
 
-        {/* Location (always visible) — identical to A1/A2 */}
+        {/* Location (always visible) — matches A2 */}
         <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
           <span className="font-medium">📍 </span>
           {element.location}
         </div>
 
-        {/* Expandable details — field order matches user spec */}
+        {/* Expandable details — matches A2 field style */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Trigger */}
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Trigger:</span>
-              <span className="font-mono">{element.evidence || 'onClick handler'}</span>
-            </div>
-
-            {/* Missing */}
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Missing:</span>
-              <ul className="list-disc list-inside space-y-0.5">
-                {missingItems.map((item, i) => (
-                  <li key={i} className="text-foreground">{item}</li>
-                ))}
-              </ul>
-            </div>
-
             {/* Detection */}
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground font-medium w-20">Detection:</span>
+              <span className="font-mono">{detection}</span>
+            </div>
+
+            {/* Evidence — chips */}
             <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Detection:</span>
-              <span className="text-foreground">{detectionSummary}</span>
+              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Evidence:</span>
+              <div className="flex flex-wrap gap-1">
+                {missingChips.map((chip, i) => (
+                  <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+                    {chip}
+                  </span>
+                ))}
+              </div>
             </div>
 
             {/* Confidence */}
@@ -158,26 +140,22 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
                 isConfirmed ? 'text-destructive' : 'text-warning'
               )}>
                 {Math.round(element.confidence * 100)}%
-                {isConfirmed && ' — deterministic'}
+                {isConfirmed ? ' — deterministic' : ' — heuristic'}
               </span>
             </div>
 
             {/* Requirement */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-20">Requirement:</span>
-              <span>WCAG 2.1.1 Keyboard</span>
+              <span>
+                WCAG 2.1.1 Keyboard
+                {needsNameRole && ', WCAG 4.1.2 Name, Role, Value'}
+              </span>
             </div>
 
-            {/* Impact */}
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Impact:</span>
-              <span className="text-foreground leading-relaxed">{issueReason}</span>
-            </div>
-
-            {/* Recommended fix */}
-            <div className="flex items-start gap-2 pt-1">
-              <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Fix:</span>
-              <span className="text-foreground leading-relaxed">{recommendedFix}</span>
+            {/* Short explanation */}
+            <div className="pt-1">
+              <p className="text-foreground leading-relaxed">{shortExplanation}</p>
             </div>
           </div>
         </CollapsibleContent>
@@ -231,7 +209,6 @@ export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCar
           />
         ))}
 
-        {/* Advisory guidance for potential findings — matches A1/A2 */}
         {!isConfirmed && (
           <SubtypeAdvisoryGuidance
             ruleId="A3"
