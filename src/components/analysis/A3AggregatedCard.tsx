@@ -44,6 +44,9 @@ function getShortExplanation(element: A3ElementSubItem): string {
   return 'Element is mouse-operable but cannot be reached or activated via Tab, Enter, or Space.';
 }
 
+/**
+ * Per-element expandable card — identical layout to A2ElementItem.
+ */
 function A3ElementItem({ element, isConfirmed, compact = false }: {
   element: A3ElementSubItem;
   isConfirmed: boolean;
@@ -111,7 +114,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
           {element.location}
         </div>
 
-        {/* Expandable details — matches A2 field style */}
+        {/* Expandable details — matches A2 row style with w-20 labels */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
             {/* Detection */}
@@ -120,7 +123,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               <span className="font-mono">{detection}</span>
             </div>
 
-            {/* Evidence — chips */}
+            {/* Evidence — chips (like A2 Classes row) */}
             <div className="flex items-start gap-2">
               <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Evidence:</span>
               <div className="flex flex-wrap gap-1">
@@ -196,7 +199,7 @@ export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCar
           </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {elements.length} interactive element{elements.length !== 1 ? 's' : ''} with {isConfirmed ? 'confirmed' : 'potential'} keyboard operability issue{elements.length !== 1 ? 's' : ''} detected.
+          {violation.diagnosis}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
