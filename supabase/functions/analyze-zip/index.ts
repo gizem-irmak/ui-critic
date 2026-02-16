@@ -1784,7 +1784,18 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     }
   }
 
-  return findings;
+  // Post-process: suppress A5.1 for controls in the same file where an A5.3 orphan label exists
+  // The orphan label is the root cause — reporting both is redundant.
+  const a53Files = new Set(findings.filter(f => f.subCheck === 'A5.3').map(f => f.filePath));
+  const deduped = findings.filter(f => {
+    if (f.subCheck === 'A5.1' && a53Files.has(f.filePath)) {
+      // Suppress A5.1 for controls that have an id but no matching label — the A5.3 covers it
+      return false;
+    }
+    return true;
+  });
+
+  return deduped;
 }
 
 serve(async (req) => {

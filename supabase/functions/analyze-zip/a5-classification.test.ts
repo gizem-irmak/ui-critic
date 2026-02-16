@@ -190,7 +190,15 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       }
     }
   }
-  return findings;
+
+  // Post-process: suppress A5.1 for controls in the same file where an A5.3 orphan label exists
+  const a53Files = new Set(findings.filter(f => f.subCheck === 'A5.3').map(f => f.filePath));
+  const deduped = findings.filter(f => {
+    if (f.subCheck === 'A5.1' && a53Files.has(f.filePath)) return false;
+    return true;
+  });
+
+  return deduped;
 }
 
 // ===== TESTS =====
@@ -215,19 +223,17 @@ Deno.test("A5.2: input with placeholder only triggers placeholder-as-label", () 
   assert(results[0].confidence >= 0.95);
 });
 
-Deno.test("A5.3: label for mismatch triggers broken association", () => {
-  // label for references an id that doesn't exist on any control
+Deno.test("A5.3: label for mismatch triggers broken association, suppresses A5.1", () => {
   const files = new Map([["src/Form.tsx", `
     <label for="nonexistent">Email</label>
     <input type="text" id="email-field" />
   `]]);
   const results = detectA5FormLabels(files);
-  // The input has a label via id="email-field" but label for="nonexistent" is orphaned
-  // We should see at least one A5.1 (input without matching label) or A5.3
-  assert(results.length >= 1);
-  // The input itself has no label pointing to it (label points to "nonexistent")
+  // The orphan label triggers A5.3, and the input's A5.1 is suppressed by dedup
+  const a53 = results.find(r => r.subCheck === 'A5.3');
+  assert(a53 !== undefined, "Should find A5.3 for orphan label");
   const a51 = results.find(r => r.subCheck === 'A5.1');
-  assert(a51 !== undefined, "Should find A5.1 for input without matching label");
+  assertEquals(a51, undefined, "A5.1 should be suppressed when A5.3 exists in same file");
 });
 
 Deno.test("No findings for correctly labeled input (label+id)", () => {
@@ -307,17 +313,16 @@ Deno.test("Plain HTML fixture: unlabeled password triggers A5.1", () => {
   assert(a51 !== undefined, "Should find A5.1 for unlabeled password");
 });
 
-Deno.test("Plain HTML fixture: label for mismatch triggers A5.3", () => {
+Deno.test("Plain HTML fixture: label for mismatch triggers A5.3, suppresses A5.1", () => {
   const files = new Map([["index.html", `
     <label for="country">Country</label>
     <select id="countrySelect"><option>US</option></select>
   `]]);
   const results = detectA5FormLabels(files);
-  // label for="country" is orphaned (no id="country"), select has no label pointing to it
   const a53 = results.find(r => r.subCheck === 'A5.3');
   assert(a53 !== undefined, "Should find A5.3 for label/id mismatch");
   const a51 = results.find(r => r.subCheck === 'A5.1');
-  assert(a51 !== undefined, "Should find A5.1 for select without matching label");
+  assertEquals(a51, undefined, "A5.1 should be suppressed when A5.3 exists in same file");
 });
 
 Deno.test("Contenteditable without label triggers A5.1", () => {
@@ -333,7 +338,7 @@ Deno.test("Contenteditable with aria-label is valid", () => {
   assertEquals(results.length, 0);
 });
 
-Deno.test("Multi-control HTML fixture triggers multiple findings", () => {
+Deno.test("Multi-control HTML fixture triggers findings with A5.1 suppressed by A5.3", () => {
   const files = new Map([["form.html", `
     <form>
       <input type="email" placeholder="Enter email" />
@@ -344,9 +349,9 @@ Deno.test("Multi-control HTML fixture triggers multiple findings", () => {
     </form>
   `]]);
   const results = detectA5FormLabels(files);
-  // Expect: A5.2 (email placeholder), A5.1 (password), A5.3 (orphan label), A5.1 (select), A5.1 (contenteditable)
-  assert(results.length >= 4, `Expected at least 4 findings, got ${results.length}`);
+  // A5.3 orphan label suppresses all A5.1 in same file
+  // Expect: A5.2 (email placeholder) + A5.3 (orphan label) = 2 findings
   assert(results.some(r => r.subCheck === 'A5.2'), "Should have A5.2");
-  assert(results.some(r => r.subCheck === 'A5.1'), "Should have A5.1");
   assert(results.some(r => r.subCheck === 'A5.3'), "Should have A5.3");
+  assertEquals(results.filter(r => r.subCheck === 'A5.1').length, 0, "A5.1 should be suppressed by A5.3 dedup");
 });
