@@ -957,6 +957,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
 
   const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
   const CLICK_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
+  const HTML_CLICK_HANDLER_RE = /\b(onclick|onmousedown|onmouseup|onkeydown)\s*=/i;
   const INTERACTIVE_ROLES = /\brole\s*=\s*["'](button|link|menuitem|tab|option|checkbox|radio|switch|combobox|listbox|slider|treeitem|gridcell)["']/i;
 
   for (const [filePathRaw, content] of allFiles) {
@@ -985,14 +986,14 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     while ((match = tagRegex.exec(content)) !== null) {
       const tag = match[1];
       const attrs = match[2];
-      if (!CLICK_HANDLER_RE.test(attrs)) continue;
+      if (!CLICK_HANDLER_RE.test(attrs) && !HTML_CLICK_HANDLER_RE.test(attrs)) continue;
       if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
       if (INTERACTIVE_ROLES.test(attrs)) continue;
       if (/tabIndex\s*=\s*\{?\s*0\s*\}?/i.test(attrs) && INTERACTIVE_ROLES.test(attrs)) continue;
 
       const linesBefore = content.slice(0, match.index).split('\n');
       const lineNumber = linesBefore.length;
-      const handlerMatch = attrs.match(/\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/);
+      const handlerMatch = attrs.match(/\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/) || attrs.match(/\b(onclick|onmousedown|onmouseup|onkeydown)\s*=/i);
       const triggerHandler = handlerMatch?.[1] || 'onClick';
 
       const afterTag = content.slice(match.index + match[0].length, Math.min(content.length, match.index + match[0].length + 300));
@@ -1007,7 +1008,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
 
       clickableNonSemantics.push({
         elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
-        subCheck: 'A4.2', subCheckLabel: 'Interactive elements',
+        subCheck: 'A4.2', subCheckLabel: 'Interactive semantics',
         classification: 'confirmed',
         detection: `${triggerHandler} on non-semantic <${tag}> without ARIA role`,
         evidence: `<${tag} ${triggerHandler}=...> at ${filePath}:${lineNumber}`,
@@ -1042,12 +1043,12 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
             listIssues.push({
               elementLabel: `Repeated items (${count}x)`, elementType: 'div', sourceLabel: `Repeated pattern in ${componentName || filePath}`,
               filePath, componentName,
-              subCheck: 'A4.4', subCheckLabel: 'Lists',
+              subCheck: 'A4.4', subCheckLabel: 'List semantics',
               classification: 'potential',
               detection: `${count} sibling elements with identical className, no <ul>/<ol> wrapper`,
               evidence: `Repeated class in ${filePath}: "${cls.substring(0, 60)}..."`,
               explanation: `${count} elements with the same class pattern but no semantic list (<ul>/<ol>) structure. Screen readers cannot convey the list relationship.`,
-              confidence: 0.72,
+              confidence: 0.88,
               deduplicationKey: listDedupeKey,
             });
           }

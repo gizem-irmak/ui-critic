@@ -14,9 +14,9 @@ interface A4AggregatedCardProps {
 
 const SUB_CHECK_LABELS: Record<string, string> = {
   'A4.1': 'Heading semantics',
-  'A4.2': 'Interactive elements',
+  'A4.2': 'Interactive semantics',
   'A4.3': 'Landmark regions',
-  'A4.4': 'Lists',
+  'A4.4': 'List semantics',
 };
 
 function A4ElementItem({ element, isConfirmed, compact = false }: {
