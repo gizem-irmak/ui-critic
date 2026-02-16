@@ -2199,7 +2199,7 @@ serve(async (req) => {
     
     // ========== A2 Focus Visibility — Aggregate from AI findings ==========
     const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2' || v.ruleId === 'A5');
-    const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4' && v.ruleId !== 'A5');
+    const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4' && v.ruleId !== 'A5' && v.ruleId !== 'A6');
     
     let aggregatedA2GitHub: any = null;
     if (a2AiViolations.length > 0) {
@@ -2411,6 +2411,39 @@ serve(async (req) => {
       }
     }
 
+    // A6 - Accessible names
+    let aggregatedA6GitHub: any = null;
+    if (selectedRulesSet.has('A6')) {
+      const a6Findings = detectA6AccessibleNames(allFiles);
+      if (a6Findings.length > 0) {
+        const overallConfidence = Math.max(...a6Findings.map(f => f.confidence));
+        const a6Elements = a6Findings.map(f => ({
+          elementLabel: f.sourceLabel, elementType: f.elementType, role: f.role, sourceLabel: f.sourceLabel,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
+          classification: f.classification,
+          explanation: f.explanation, confidence: f.confidence,
+          correctivePrompt: f.correctivePrompt,
+          deduplicationKey: f.deduplicationKey,
+        }));
+        const a61Count = a6Findings.filter(f => f.subCheck === 'A6.1').length;
+        const a62Count = a6Findings.filter(f => f.subCheck === 'A6.2').length;
+        const breakdown = [
+          a61Count > 0 ? `${a61Count} missing names` : '',
+          a62Count > 0 ? `${a62Count} broken references` : '',
+        ].filter(Boolean).join(', ');
+        aggregatedA6GitHub = {
+          ruleId: 'A6', ruleName: 'Missing accessible names (Name, Role, Value)', category: 'accessibility',
+          status: 'confirmed', blocksConvergence: true, inputType: 'github', isA6Aggregated: true, a6Elements,
+          diagnosis: `Accessible name issues detected: ${a6Findings.length} confirmed (${breakdown}). WCAG 4.1.2 requires interactive elements to have programmatic accessible names.`,
+          contextualHint: 'Add visible text, aria-label, or aria-labelledby to interactive elements.',
+          correctivePrompt: 'Add visible text content, aria-label, or aria-labelledby to interactive elements. For icon-only buttons/links, add an aria-label.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        };
+        console.log(`A6 aggregated (GitHub): ${a6Findings.length} findings (${a61Count} missing names, ${a62Count} broken refs)`);
+      }
+    }
+
     // Combine all violations
     const allViolations = [
       ...aggregatedA1Violations,
@@ -2419,6 +2452,7 @@ serve(async (req) => {
       ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
       ...(aggregatedA4GitHub ? [aggregatedA4GitHub] : []),
       ...(aggregatedA5GitHub ? [aggregatedA5GitHub] : []),
+      ...(aggregatedA6GitHub ? [aggregatedA6GitHub] : []),
     ];
     
     // Deduplicate by ruleId

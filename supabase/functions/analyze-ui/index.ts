@@ -4237,6 +4237,25 @@ serve(async (req) => {
       };
     }
     
+    // ========== A6 Screenshot Mode (NOT EVALUATED) ==========
+    let aggregatedA6UI: any = null;
+    if (selectedRulesSet.has('A6')) {
+      aggregatedA6UI = {
+        ruleId: 'A6',
+        ruleName: 'Missing accessible names (Name, Role, Value)',
+        category: 'accessibility',
+        status: 'informational',
+        blocksConvergence: false,
+        inputType: 'screenshots',
+        isA6Aggregated: false,
+        diagnosis: 'Accessible names require DOM/HTML analysis; screenshot-only input cannot be evaluated reliably.',
+        contextualHint: 'Upload source code (ZIP file or GitHub repository) to enable accessible name evaluation.',
+        correctivePrompt: '',
+        confidence: 0,
+        evidence: 'Input type: Screenshot',
+      };
+    }
+    
     // Combine all violations - A1 uses aggregated cards (max 2), A2 uses aggregated card
     const enhancedViolations = [
       ...filteredOtherViolations,
@@ -4245,6 +4264,7 @@ serve(async (req) => {
       ...(aggregatedA3UI ? [aggregatedA3UI] : []),
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),
       ...(aggregatedA5UI ? [aggregatedA5UI] : []),
+      ...(aggregatedA6UI ? [aggregatedA6UI] : []),
     ];
 
     console.log(`Analysis complete: ${enhancedViolations.length} violations found`);
