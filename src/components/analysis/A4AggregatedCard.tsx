@@ -19,6 +19,17 @@ const SUB_CHECK_LABELS: Record<string, string> = {
   'A4.4': 'List semantics',
 };
 
+/**
+ * Infer sub-check from violation text when a4Elements is missing (fallback).
+ */
+function inferA4SubCheck(violation: Violation): 'A4.1' | 'A4.2' | 'A4.3' | 'A4.4' {
+  const text = `${violation.diagnosis || ''} ${violation.evidence || ''} ${violation.correctivePrompt || ''}`.toLowerCase();
+  if (/interactive|onclick|click handler|role="button"|tabindex|keyboard/.test(text)) return 'A4.2';
+  if (/landmark|<main>|role="main"|<nav>/.test(text)) return 'A4.3';
+  if (/list|<ul>|<ol>|repeated|sibling/.test(text)) return 'A4.4';
+  return 'A4.1'; // Default to heading semantics
+}
+
 function A4ElementItem({ element, isConfirmed, compact = false }: {
   element: A4ElementSubItem;
   isConfirmed: boolean;
@@ -144,8 +155,8 @@ export function A4AggregatedCard({ violation, compact = false }: A4AggregatedCar
         location: violation.evidence || '',
         detection: undefined,
         evidence: violation.evidence,
-        subCheck: 'A4.1' as const,
-        subCheckLabel: 'Heading semantics',
+        subCheck: inferA4SubCheck(violation),
+        subCheckLabel: SUB_CHECK_LABELS[inferA4SubCheck(violation)] || 'Heading semantics',
         classification: isConfirmed ? 'confirmed' : 'potential',
         explanation: violation.diagnosis || '',
         confidence: violation.confidence,
