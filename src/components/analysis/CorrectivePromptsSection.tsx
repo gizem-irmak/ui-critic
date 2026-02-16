@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { Violation } from '@/types/project';
+import type { Violation, A3ElementSubItem } from '@/types/project';
+import { CorrectivePromptItem } from './CorrectivePromptItem';
 
 const categoryColors: Record<string, string> = {
   accessibility: 'category-accessibility',
@@ -17,6 +18,26 @@ const categoryLabels: Record<string, string> = {
   usability: 'Usability',
   ethics: 'Ethics',
 };
+
+function buildA3PromptBody(el: A3ElementSubItem): { issueReason: string; recommendedFix: string } {
+  const tag = el.elementType || 'div';
+  const missing: string[] = [];
+
+  const evidenceLower = (el.evidence || '').toLowerCase();
+  const explanationLower = (el.explanation || '').toLowerCase();
+  const combined = evidenceLower + ' ' + explanationLower;
+
+  if (combined.includes('tabindex') || combined.includes('not focusable')) missing.push('tabIndex');
+  if (combined.includes('role')) missing.push('semantic role');
+  if (combined.includes('onkeydown') || combined.includes('onkeyup') || combined.includes('onkeypress') || combined.includes('enter') || combined.includes('space')) missing.push('onKeyDown (Enter/Space)');
+  if (missing.length === 0) missing.push('tabIndex', 'semantic role', 'onKeyDown (Enter/Space)');
+
+  const handler = el.detection?.match(/on\w+/)?.[0] || 'onClick';
+  const issueReason = `This ${tag} uses ${handler} but is not keyboard operable because it lacks ${missing.join(', ')}.`;
+  const recommendedFix = `Replace the clickable <${tag}> with a native <button type="button"> (or <a href> if navigation). If you must keep a ${tag}, add role="button", tabIndex={0}, and an onKeyDown handler for Enter/Space, and ensure :focus-visible styling.`;
+
+  return { issueReason, recommendedFix };
+}
 
 interface CorrectivePromptsSectionProps {
   violations: Violation[];
@@ -38,6 +59,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
         prompt: string;
         elementRef?: string;
       }>;
+      a3Items?: A3ElementSubItem[];
     }>();
 
     for (const v of confirmedViolations) {
@@ -94,16 +116,13 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             ruleName: v.ruleName,
             category: v.category,
             prompts: [],
+            a3Items: [],
           });
         }
         const group = ruleGroups.get('A3')!;
         for (const el of v.a3Elements) {
-          if (el.correctivePrompt) {
-            // A3 correctivePrompt already contains the full formatted block
-            // (header line, issue reason, recommended fix) — no separate elementRef needed
-            group.prompts.push({
-              prompt: el.correctivePrompt,
-            });
+          if (el.classification === 'confirmed') {
+            group.a3Items!.push(el);
           }
         }
       } else if (v.correctivePrompt) {
@@ -127,7 +146,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       }
     }
 
-    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0);
+    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a3Items && g.a3Items.length > 0));
   })();
 
   const copyPrompt = async () => {
@@ -147,11 +166,16 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       text += `\n${categoryLabels[cat]}:\n`;
       for (const ruleGroup of grouped[cat]) {
         text += `\n[${ruleGroup.ruleId}] ${ruleGroup.ruleName}:\n`;
-        for (const item of ruleGroup.prompts) {
-          if (ruleGroup.ruleId === 'A3' && !item.elementRef) {
-            // A3 prompts are self-contained blocks — render directly
-            text += `\n${item.prompt}\n`;
-          } else {
+        if (ruleGroup.ruleId === 'A3' && ruleGroup.a3Items?.length) {
+          for (const el of ruleGroup.a3Items) {
+            const label = el.accessibleName || el.elementLabel || el.sourceLabel || el.textSnippet || 'Interactive element';
+            const tag = el.elementType || el.role || 'div';
+            const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+            const { issueReason, recommendedFix } = buildA3PromptBody(el);
+            text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+          }
+        } else {
+          for (const item of ruleGroup.prompts) {
             if (item.elementRef) {
               text += `  • ${item.elementRef}\n`;
             }
@@ -216,18 +240,38 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
 
             {/* Individual prompts with element references */}
             <div className="space-y-3">
-              {group.prompts.map((item, pIdx) => (
-                <div key={pIdx} className="space-y-1">
-                  {item.elementRef && (
-                    <p className="text-xs text-muted-foreground font-medium pl-1">
-                      📍 {item.elementRef}
-                    </p>
-                  )}
-                  <div className="text-sm bg-primary/5 p-3 rounded border-l-2 border-primary whitespace-pre-line">
-                    {item.prompt}
+              {group.ruleId === 'A3' && group.a3Items ? (
+                // A3: use CorrectivePromptItem per element — single source of truth
+                group.a3Items.map((el, pIdx) => {
+                  const label = el.accessibleName || el.elementLabel || el.sourceLabel || el.textSnippet || 'Interactive element';
+                  const tag = el.elementType || el.role || 'div';
+                  const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+                  const { issueReason, recommendedFix } = buildA3PromptBody(el);
+                  return (
+                    <CorrectivePromptItem
+                      key={pIdx}
+                      elementLabel={label}
+                      roleOrTag={tag}
+                      fileName={fileName}
+                      issueReason={issueReason}
+                      recommendedFix={recommendedFix}
+                    />
+                  );
+                })
+              ) : (
+                group.prompts.map((item, pIdx) => (
+                  <div key={pIdx} className="space-y-1">
+                    {item.elementRef && (
+                      <p className="text-xs text-muted-foreground font-medium pl-1">
+                        📍 {item.elementRef}
+                      </p>
+                    )}
+                    <div className="text-sm bg-primary/5 p-3 rounded border-l-2 border-primary whitespace-pre-line">
+                      {item.prompt}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         ))}
