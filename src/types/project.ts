@@ -322,7 +322,7 @@ export interface A5ElementSubItem {
   
   detection?: string;
   evidence?: string;
-  subCheck: 'A5.1' | 'A5.2' | 'A5.3';
+  subCheck: 'A5.1' | 'A5.2' | 'A5.3' | 'A5.4' | 'A5.5' | 'A5.6';
   subCheckLabel: string;
   
   classification: 'confirmed' | 'potential';

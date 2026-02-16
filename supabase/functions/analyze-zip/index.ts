@@ -1511,7 +1511,7 @@ interface A5Finding {
   sourceLabel: string;
   filePath: string;
   componentName?: string;
-  subCheck: 'A5.1' | 'A5.2' | 'A5.3' | 'A5.P1' | 'A5.P2' | 'A5.P3' | 'A5.P4';
+  subCheck: 'A5.1' | 'A5.2' | 'A5.3' | 'A5.4' | 'A5.5' | 'A5.6';
   subCheckLabel: string;
   classification: 'confirmed' | 'potential';
   detection: string;
@@ -1653,10 +1653,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       if (hasValidLabel) continue; // Properly labeled — skip
 
-      // Check for title attribute — if present, skip confirmed (A5.P3 handles it in potential checks)
-      const titleCheckMatch = attrs.match(/title\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const hasTitleAttr = !!(titleCheckMatch?.[1] || titleCheckMatch?.[2])?.trim();
-      if (hasTitleAttr && !hasPlaceholder) continue;
+      // title is NOT a valid label source — title-only inputs remain A5.1 Confirmed
 
       // A5.2: Placeholder-only labeling
       if (hasPlaceholder && !hasValidLabel) {
@@ -1897,26 +1894,6 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const fileName = filePath.split('/').pop() || filePath;
 
-      // A5.P3: Title-only labeling (no label/aria-label/aria-labelledby, but title exists)
-      if (!hasValidLabel && hasTitle) {
-        const dedupeKey = `A5.P3|${filePath}|${tag}|${titleVal}|${lineNumber}`;
-        if (!seenKeys.has(dedupeKey)) {
-          seenKeys.add(dedupeKey);
-          potentialFindings.push({
-            elementLabel: titleVal, elementType: tag, sourceLabel: titleVal, filePath, componentName,
-            subCheck: 'A5.P3', subCheckLabel: 'Title-only labeling',
-            classification: 'potential', potentialSubtype: 'borderline',
-            detection: `<${tag}> relies on title="${titleVal}" as only accessible name`,
-            evidence: `<${tag} title="${titleVal}"> at ${filePath}:${lineNumber}`,
-            explanation: `The title attribute provides a weak accessible name that is not visible and may not be announced by all screen readers.`,
-            confidence: 0.85,
-            advisoryGuidance: 'Add a visible <label> or aria-label instead of relying on the title attribute.',
-            deduplicationKey: dedupeKey,
-          });
-        }
-        continue; // title-only = no valid label, skip other potential checks
-      }
-
       if (!hasValidLabel) continue; // No label at all — already handled by confirmed checks
 
       // Resolve accessible name text for quality checks
@@ -1946,14 +1923,14 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         fileLabels.get(normalizedName)!.push({ tag, label: accessibleName, line: lineNumber, filePath, componentName });
       }
 
-      // A5.P1: Generic label text
+      // A5.4: Generic label text
       if (accessibleName && GENERIC_LABELS.has(accessibleName.trim().toLowerCase())) {
-        const dedupeKey = `A5.P1|${filePath}|${tag}|${accessibleName}|${lineNumber}`;
+        const dedupeKey = `A5.4|${filePath}|${tag}|${accessibleName}|${lineNumber}`;
         if (!seenKeys.has(dedupeKey)) {
           seenKeys.add(dedupeKey);
           potentialFindings.push({
             elementLabel: accessibleName, elementType: tag, sourceLabel: accessibleName, filePath, componentName,
-            subCheck: 'A5.P1', subCheckLabel: 'Generic label text',
+            subCheck: 'A5.4', subCheckLabel: 'Generic label text',
             classification: 'potential', potentialSubtype: 'borderline',
             detection: `<${tag}> label "${accessibleName}" is generic`,
             evidence: `label text "${accessibleName}" at ${filePath}:${lineNumber}`,
@@ -1965,16 +1942,16 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         }
       }
 
-      // A5.P4: Noisy aria-labelledby
+      // A5.6: Noisy aria-labelledby
       if (hasAriaLabelledBy && accessibleName) {
-        const NOISY_TOKENS = /\b(optional|required|hint|note|help|info)\b/i;
+        const NOISY_TOKENS = /\b(optional|required|hint|note|help|info|used for)\b/i;
         if (accessibleName.length > 60 || NOISY_TOKENS.test(accessibleName)) {
-          const dedupeKey = `A5.P4|${filePath}|${tag}|${lineNumber}`;
+          const dedupeKey = `A5.6|${filePath}|${tag}|${lineNumber}`;
           if (!seenKeys.has(dedupeKey)) {
             seenKeys.add(dedupeKey);
             potentialFindings.push({
               elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
-              subCheck: 'A5.P4', subCheckLabel: 'Noisy aria-labelledby',
+              subCheck: 'A5.6', subCheckLabel: 'Noisy aria-labelledby',
               classification: 'potential', potentialSubtype: 'borderline',
               detection: `<${tag}> aria-labelledby resolves to noisy/long text`,
               evidence: `Resolved text: "${accessibleName.slice(0, 80)}${accessibleName.length > 80 ? '…' : ''}" at ${filePath}:${lineNumber}`,
@@ -1989,18 +1966,18 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     }
   }
 
-  // A5.P2: Duplicate label text (per file)
+  // A5.5: Duplicate label text (per file)
   for (const [, fileLabels] of labelsByFile) {
     for (const [normalizedName, controls] of fileLabels) {
       if (controls.length < 2) continue;
-      const dedupeKey = `A5.P2|${controls[0].filePath}|${normalizedName}`;
+      const dedupeKey = `A5.5|${controls[0].filePath}|${normalizedName}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
       const controlList = controls.map(c => `<${c.tag}> at line ${c.line}`).join(', ');
       potentialFindings.push({
         elementLabel: controls[0].label, elementType: controls[0].tag, sourceLabel: controls[0].label,
         filePath: controls[0].filePath, componentName: controls[0].componentName,
-        subCheck: 'A5.P2', subCheckLabel: 'Duplicate label text',
+        subCheck: 'A5.5', subCheckLabel: 'Duplicate label text',
         classification: 'potential', potentialSubtype: 'borderline',
         detection: `${controls.length} controls share label "${controls[0].label}"`,
         evidence: `Duplicate label "${controls[0].label}": ${controlList}`,
