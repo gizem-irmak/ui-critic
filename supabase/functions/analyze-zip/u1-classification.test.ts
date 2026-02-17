@@ -355,7 +355,7 @@ Deno.test("U1.3: Single CTA 'Continue' (generic) → Potential", () => {
   const files = new Map<string, string>();
   files.set("src/components/NextStep.tsx", `
 export default function NextStep() {
-  return <button onClick={() => {}}>Continue</button>;
+  return <button onClick={handleClick}>Continue</button>;
 }
 `);
   const results = detectU1PrimaryAction(files);
