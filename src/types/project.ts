@@ -171,6 +171,12 @@ export interface Violation {
   // ============================================================
   isA6Aggregated?: boolean;
   a6Elements?: A6ElementSubItem[];
+  
+  // ============================================================
+  // U1 AGGREGATED ELEMENT REPORTING (Primary Action)
+  // ============================================================
+  isU1Aggregated?: boolean;
+  u1Elements?: U1ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -363,6 +369,22 @@ export interface A6ElementSubItem {
   confidence: number;
   
   correctivePrompt?: string;
+  deduplicationKey: string;
+}
+
+// U1 Element sub-item for aggregated primary action reporting
+export interface U1ElementSubItem {
+  elementLabel: string;
+  elementType?: string; // form, button, button group, etc.
+  location: string;
+  detection?: string;
+  evidence?: string;
+  subCheck: 'U1.1' | 'U1.2' | 'U1.3' | 'U1.S1';
+  subCheckLabel: string;
+  classification: 'confirmed' | 'potential';
+  explanation: string;
+  confidence: number;
+  advisoryGuidance?: string;
   deduplicationKey: string;
 }
 
