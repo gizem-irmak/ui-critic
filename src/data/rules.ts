@@ -55,121 +55,72 @@ export const rules: Rule[] = [
     id: 'U1',
     category: 'usability',
     name: 'Unclear primary action',
-    diagnosis: 'Users may struggle to identify the main action.',
-    correctivePrompt: 'Establish a clear visual hierarchy by emphasizing one primary action and de-emphasizing secondary actions.'
+    diagnosis: 'Users may struggle to identify the main action due to competing visual emphasis or missing affordances.',
+    correctivePrompt: 'Establish a clear visual hierarchy by emphasizing one primary action and de-emphasizing secondary actions using variant demotion (outline, ghost, link).'
   },
   {
     id: 'U2',
     category: 'usability',
-    name: 'Multiple competing CTAs',
-    diagnosis: 'Competing CTAs increase cognitive load and confusion.',
-    correctivePrompt: 'Reduce emphasis on secondary actions to ensure a single, clear primary CTA.'
+    name: 'Incomplete / Unclear navigation',
+    diagnosis: 'Navigation paths are missing, ambiguous, or prevent users from understanding their current location and how to move forward or backward.',
+    correctivePrompt: 'Ensure clear navigation paths including back, forward, breadcrumb, and cancel options. Provide visible indicators of current location within the navigation hierarchy.'
   },
   {
     id: 'U3',
     category: 'usability',
-    name: 'Inconsistent typography',
-    diagnosis: 'Typography inconsistency reduces visual coherence.',
-    correctivePrompt: 'Use a consistent typography system with limited font families and standardized heading and body styles.'
+    name: 'Truncated or inaccessible content',
+    diagnosis: 'Important content is truncated, clipped, or hidden in ways that prevent users from accessing full information without extra interaction.',
+    correctivePrompt: 'Ensure all meaningful text is fully visible. Adjust layout, wrapping, or container sizes. If truncation is intentional, provide a clear affordance to reveal full content.'
   },
   {
     id: 'U4',
     category: 'usability',
-    name: 'Excessive color usage',
-    diagnosis: 'Excessive color usage can reduce clarity and visual balance.',
-    correctivePrompt: 'Limit the color palette and use color consistently to support visual hierarchy.'
+    name: 'Recognition-to-recall regression',
+    diagnosis: 'The interface requires users to recall information from memory instead of recognizing it from visible options, increasing cognitive load.',
+    correctivePrompt: 'Make options, commands, and actions visible or easily retrievable. Reduce reliance on user memory by providing contextual cues, labels, and previews.'
   },
   {
     id: 'U5',
     category: 'usability',
-    name: 'Weak grouping or alignment',
-    diagnosis: 'Poor grouping can reduce scannability and comprehension.',
-    correctivePrompt: 'Improve alignment and grouping to visually associate related elements.'
+    name: 'Insufficient interaction feedback',
+    diagnosis: 'Users receive inadequate or no visible feedback about the result of their actions, leaving them uncertain whether the action was registered.',
+    correctivePrompt: 'Add visible feedback after user actions: loading indicators, success/error confirmations, or state change animations. Ensure feedback is immediate and unambiguous.'
   },
   {
     id: 'U6',
     category: 'usability',
-    name: 'Unclear or insufficient error feedback',
-    diagnosis: 'Insufficient error feedback may prevent users from correcting mistakes.',
-    correctivePrompt: 'Provide clear, descriptive error messages near relevant fields using text, not color alone.'
+    name: 'Weak grouping / layout coherence',
+    diagnosis: 'Related elements lack visual grouping or alignment, reducing scannability and comprehension of content relationships.',
+    correctivePrompt: 'Improve alignment and grouping to visually associate related elements. Use consistent spacing, borders, or background differentiation to establish content regions.'
   },
-  {
-    id: 'U7',
-    category: 'usability',
-    name: 'Insufficient visible interaction feedback',
-    diagnosis: 'Users may be uncertain whether actions were registered.',
-    correctivePrompt: 'Add visible feedback after user actions (loading indicators, confirmations, or state changes).'
-  },
-  {
-    id: 'U8',
-    category: 'usability',
-    name: 'Incomplete or unclear navigation',
-    diagnosis: 'Users may not understand how to move between screens or recover.',
-    correctivePrompt: 'Ensure clear navigation paths including back, forward, and cancel options.'
-  },
-  {
-    id: 'U9',
-    category: 'usability',
-    name: 'Lack of cross-page visual coherence',
-    diagnosis: 'Inconsistency reduces learnability and confidence.',
-    correctivePrompt: 'Ensure consistent layout, navigation placement, typography, and color usage across screens.'
-  },
-  {
-    id: 'U10',
-    category: 'usability',
-    name: 'Truncated or clipped text',
-    diagnosis: 'Truncated text may obscure meaning.',
-    correctivePrompt: 'Ensure all text is fully visible; adjust layout, wrapping, or container sizes.'
-  },
-  {
-    id: 'U11',
-    category: 'usability',
-    name: 'Inappropriate control type',
-    diagnosis: 'Inappropriate controls increase cognitive effort.',
-    correctivePrompt: 'Replace chip-based controls with clearer text-based options where meaning must be explicit.'
-  },
-  {
-    id: 'U12',
-    category: 'usability',
-    name: 'Missing confirmation for high-impact actions',
-    diagnosis: 'Users may trigger irreversible actions accidentally.',
-    correctivePrompt: 'Add confirmation or warning steps for irreversible or high-impact actions.'
-  },
-  // Ethics / Dark Patterns
+  // Ethics
   {
     id: 'E1',
     category: 'ethics',
-    name: 'Monetized option visually dominant',
-    diagnosis: 'Visual dominance may nudge unintended choices.',
-    correctivePrompt: 'Reduce emphasis on monetized actions and ensure alternatives are equally visible.'
+    name: 'Insufficient transparency in high-impact actions',
+    diagnosis: 'High-impact actions (delete, purchase, subscribe, share data) lack adequate disclosure, confirmation, or consequence explanation.',
+    correctivePrompt: 'Add confirmation steps with clear consequence disclosure for irreversible or high-impact actions. Ensure users understand what will happen before committing.'
   },
   {
     id: 'E2',
     category: 'ethics',
-    name: 'Hidden or de-emphasized opt-out',
-    diagnosis: 'Hidden opt-outs undermine user autonomy.',
-    correctivePrompt: 'Make opt-out options clearly visible with equal hierarchy and contrast.'
+    name: 'Imbalanced or manipulative choice architecture',
+    diagnosis: 'Choice presentation uses visual weight, ordering, pre-selection, or defaults to nudge users toward a specific option that may not serve their interest.',
+    correctivePrompt: 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.'
   },
   {
     id: 'E3',
     category: 'ethics',
-    name: 'Misleading visual hierarchy',
-    diagnosis: 'Hierarchy may falsely suggest mandatory actions.',
-    correctivePrompt: 'Adjust hierarchy to accurately reflect optional vs mandatory actions.'
-  },
-  {
-    id: 'E4',
-    category: 'ethics',
-    name: 'Overuse of urgency cues',
-    diagnosis: 'Excessive urgency pressures users unfairly.',
-    correctivePrompt: 'Reduce urgency cues and present choices neutrally.'
+    name: 'Obscured or restricted user control',
+    diagnosis: 'User control options (opt-out, cancel, dismiss, unsubscribe) are visually suppressed, harder to access, or require more effort than their counterparts.',
+    correctivePrompt: 'Make opt-out, cancel, and control options clearly visible with equal visual hierarchy and accessibility. Do not require extra steps to exercise user autonomy.'
   }
 ];
 
 export const ruleCategories = [
   { id: 'accessibility', name: 'Accessibility', description: 'WCAG AA compliance checks' },
   { id: 'usability', name: 'Usability', description: 'HCI best practices' },
-  { id: 'ethics', name: 'Ethics', description: 'Dark pattern detection' }
+  { id: 'ethics', name: 'Ethics', description: 'Transparency, choice architecture & user control' }
 ] as const;
 
 export const getRulesByCategory = (category: string) => 
