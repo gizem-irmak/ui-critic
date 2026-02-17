@@ -379,15 +379,71 @@ function extractActionGroups(content: string, buttonLocalNames: Set<string>): Ac
   return groups;
 }
 
-function detectU1CompetingPrimaryActions(allFiles: Map<string, string>): {
-  violation: any | null;
-} {
+// =====================
+// U1 Primary Action Detection (sub-checks U1.1, U1.2, U1.3)
+// =====================
+
+interface U1Finding {
+  subCheck: 'U1.1' | 'U1.2' | 'U1.3';
+  subCheckLabel: string;
+  classification: 'confirmed' | 'potential';
+  elementLabel: string;
+  elementType: string;
+  filePath: string;
+  detection: string;
+  evidence: string;
+  explanation: string;
+  confidence: number;
+  advisoryGuidance?: string;
+  deduplicationKey: string;
+}
+
+function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
+  const findings: U1Finding[] = [];
+  const formFilesWithU1_1 = new Set<string>();
+
+  // === U1.1: Form without submit mechanism ===
+  for (const [filePathRaw, content] of allFiles.entries()) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx|html|htm)$/i.test(filePath)) continue;
+    if (filePath.includes('components/ui/')) continue;
+    if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+
+    const formRegex = /<form\b([^>]*)>([\s\S]*?)<\/form>/gi;
+    let formMatch;
+    while ((formMatch = formRegex.exec(content)) !== null) {
+      const formAttrs = formMatch[1] || '';
+      const formContent = formMatch[2] || '';
+
+      const hasOnSubmit = /onSubmit\s*=/i.test(formAttrs);
+      const hasSubmitButton = /<(?:button|Button)\b(?![^>]*type\s*=\s*["'](?:button|reset)["'])[^>]*>/i.test(formContent);
+      const hasSubmitInput = /<input\b[^>]*type\s*=\s*["']submit["'][^>]*>/i.test(formContent);
+
+      if (!hasSubmitButton && !hasSubmitInput && !hasOnSubmit) {
+        findings.push({
+          subCheck: 'U1.1',
+          subCheckLabel: 'No submit primary action',
+          classification: 'confirmed',
+          elementLabel: 'Form element',
+          elementType: 'form',
+          filePath,
+          detection: 'Form without submit control',
+          evidence: `<form> in ${filePath} — no submit button, input[type="submit"], or onSubmit handler`,
+          explanation: 'A <form> exists but has no submit mechanism. Users cannot complete the form action.',
+          confidence: 0.95,
+          advisoryGuidance: 'Add a clear submit action (e.g., "Save", "Submit") tied to the form.',
+          deduplicationKey: `U1.1|${filePath}`,
+        });
+        formFilesWithU1_1.add(filePath);
+      }
+    }
+  }
+
+  // === U1.2 & U1.3: Competing CTAs and generic labels ===
   const resolveKnownButtonImpl = (): { filePath: string; config: CvaVariantConfig } | null => {
     const candidates = [
-      'src/components/ui/button.tsx',
-      'src/components/ui/button.ts',
-      'components/ui/button.tsx',
-      'components/ui/button.ts',
+      'src/components/ui/button.tsx', 'src/components/ui/button.ts',
+      'components/ui/button.tsx', 'components/ui/button.ts',
     ];
     for (const p of candidates) {
       const content = allFiles.get(p);
@@ -399,127 +455,105 @@ function detectU1CompetingPrimaryActions(allFiles: Map<string, string>): {
   };
 
   const buttonImpl = resolveKnownButtonImpl();
-
-  if (!buttonImpl) return { violation: null };
-
-  const findings: Array<{
-    filePath: string;
-    componentName: string;
-    groupType: string;
-    labels: string[];
-    resolvedVariant: string;
-  }> = [];
+  const seenU12Groups = new Set<string>();
+  const GENERIC_LABELS = new Set(['continue', 'next', 'submit', 'save', 'confirm', 'ok']);
 
   for (const [filePathRaw, content] of allFiles.entries()) {
     const filePath = normalizePath(filePathRaw);
     if (!/\.(tsx|jsx)$/.test(filePath)) continue;
     if (filePath.includes('components/ui/button')) continue;
+    if (filePath.includes('components/ui/')) continue;
+    if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+    if (formFilesWithU1_1.has(filePath)) continue;
 
     const buttonLocalNames = new Set<string>();
     const importRegex = /import\s*\{([^}]+)\}\s*from\s*["']([^"']*components\/ui\/button[^"']*)["']/g;
     let importMatch;
     while ((importMatch = importRegex.exec(content)) !== null) {
-      const imports = importMatch[1];
-      if (/\bButton\b/.test(imports)) {
-        const aliasMatch = imports.match(/Button\s+as\s+(\w+)/);
-        if (aliasMatch) {
-          buttonLocalNames.add(aliasMatch[1]);
-        } else {
-          buttonLocalNames.add('Button');
-        }
+      if (/\bButton\b/.test(importMatch[1])) {
+        const aliasMatch = importMatch[1].match(/Button\s+as\s+(\w+)/);
+        buttonLocalNames.add(aliasMatch ? aliasMatch[1] : 'Button');
       }
     }
-
     buttonLocalNames.add('button');
 
-    if (buttonLocalNames.size === 0) continue;
-
-    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || 'UnknownComponent';
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || 'Component';
     const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
     const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
-    const actionGroups = extractActionGroups(content, buttonLocalNames);
-
-    for (const group of actionGroups) {
-      const ctas: Array<{ label: string; emphasis: Emphasis; styleKey: string | null; resolvedVariant: string | null }> = [];
-
-      for (const btn of group.buttons) {
-        const resolvedVariant = btn.variant || buttonImpl.config.defaultVariant || 'default';
-        
-        const classified = classifyButtonEmphasis({
-          resolvedVariant,
-          variantConfig: buttonImpl.config,
-          instanceClassName: btn.className,
-        });
-
-        ctas.push({
-          label: btn.label,
-          emphasis: classified.emphasis,
-          styleKey: classified.styleKey,
-          resolvedVariant,
-        });
-      }
-
-      if (ctas.some((c) => c.emphasis === 'unknown' || !c.styleKey)) {
-        continue;
-      }
-
-      const highs = ctas.filter((c) => c.emphasis === 'high');
-      if (highs.length >= 2) {
-        const highStyleKeys = new Set(highs.map((h) => h.styleKey));
-        if (highStyleKeys.size === 1) {
-          const labels = ctas.map((c) => c.label);
-          const resolvedVariant = highs[0].resolvedVariant || buttonImpl.config.defaultVariant || 'default';
-          findings.push({
-            filePath,
-            componentName,
-            groupType: group.containerType,
-            labels,
+    // U1.2: Check action groups for competing primaries
+    if (buttonImpl) {
+      const actionGroups = extractActionGroups(content, buttonLocalNames);
+      for (const group of actionGroups) {
+        const ctas: Array<{ label: string; emphasis: Emphasis; styleKey: string | null }> = [];
+        for (const btn of group.buttons) {
+          const resolvedVariant = btn.variant || buttonImpl.config.defaultVariant || 'default';
+          const classified = classifyButtonEmphasis({
             resolvedVariant,
+            variantConfig: buttonImpl.config,
+            instanceClassName: btn.className,
           });
+          ctas.push({ label: btn.label, emphasis: classified.emphasis, styleKey: classified.styleKey });
         }
+        if (ctas.some(c => c.emphasis === 'unknown' || !c.styleKey)) continue;
+
+        const highs = ctas.filter(c => c.emphasis === 'high');
+        if (highs.length >= 2) {
+          const highStyleKeys = new Set(highs.map(h => h.styleKey));
+          if (highStyleKeys.size === 1) {
+            const groupKey = `${filePath}|${group.containerType}`;
+            if (seenU12Groups.has(groupKey)) continue;
+            seenU12Groups.add(groupKey);
+
+            const labels = ctas.map(c => c.label);
+            const sharedToken = highs[0].styleKey || 'default';
+            findings.push({
+              subCheck: 'U1.2',
+              subCheckLabel: 'Multiple equivalent CTAs',
+              classification: 'potential',
+              elementLabel: `${componentName} — ${group.containerType}`,
+              elementType: 'button group',
+              filePath,
+              detection: `${highs.length} CTAs share variant="${sharedToken}"`,
+              evidence: `${labels.join(', ')} — all use same high-emphasis styling (${sharedToken})`,
+              explanation: `${highs.length} sibling CTA buttons share identical high-emphasis styling (variant="${sharedToken}"), making the primary action unclear.`,
+              confidence: 0.78,
+              advisoryGuidance: 'Visually distinguish the primary action and demote secondary actions to outline/ghost/link variants.',
+              deduplicationKey: `U1.2|${filePath}|${group.containerType}`,
+            });
+          }
+        }
+      }
+    }
+
+    // U1.3: Generic CTA labels
+    const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
+    for (const btn of allButtons) {
+      const labelLower = btn.label.trim().toLowerCase();
+      if (GENERIC_LABELS.has(labelLower)) {
+        const dedupeKey = `U1.3|${filePath}|${labelLower}`;
+        if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
+        findings.push({
+          subCheck: 'U1.3',
+          subCheckLabel: 'Ambiguous CTA label',
+          classification: 'potential',
+          elementLabel: `"${btn.label}" button`,
+          elementType: 'button',
+          filePath,
+          detection: `Generic label: "${btn.label}"`,
+          evidence: `CTA labeled "${btn.label}" in ${componentName} — generic label without context`,
+          explanation: `The CTA label "${btn.label}" is generic and does not communicate the specific action.`,
+          confidence: 0.65,
+          advisoryGuidance: 'Use specific, action-oriented labels (e.g., "Save changes" instead of "Save", "Create account" instead of "Submit").',
+          deduplicationKey: dedupeKey,
+        });
       }
     }
   }
 
-  if (findings.length === 0) return { violation: null };
-
-  const displayLimit = 3;
-  const displayedFindings = findings.slice(0, displayLimit);
-  const moreCount = findings.length - displayLimit;
-  
-  const evidenceLines = displayedFindings.map(f => 
-    `${f.componentName} (${f.groupType}): ${f.labels.slice(0, 3).join(', ')}${f.labels.length > 3 ? '...' : ''} all use variant="${f.resolvedVariant}"`
-  );
-  
-  if (moreCount > 0) {
-    evidenceLines.push(`...and ${moreCount} more similar issues`);
-  }
-
-  const u1Rule = rules.usability.find(r => r.id === 'U1');
-  
-  return {
-    violation: {
-      ruleId: 'U1',
-      ruleName: u1Rule?.name || 'Unclear primary action',
-      category: 'usability',
-      typeBadge: 'Confirmed (static)',
-      diagnosis: `Case B detected: Multiple buttons share the same high-emphasis styling within ${findings.length} action group(s), creating competing primary actions.`,
-      evidence: evidenceLines.join('\n'),
-      contextualHint: 'Demote secondary actions to outline/ghost/link variants; keep exactly one primary action per group.',
-      correctivePrompt: u1Rule?.correctivePrompt || 'Ensure exactly one primary action per action group.',
-      confidence: 0.85,
-      affected_items: findings.map(f => ({
-        component_name: f.componentName,
-        file_path: f.filePath,
-        group_type: f.groupType,
-        labels: f.labels,
-        resolved_variant: f.resolvedVariant,
-      })),
-    },
-  };
+  return findings;
 }
 
 // Contrast analysis (simplified for GitHub - static only)
@@ -1961,12 +1995,34 @@ serve(async (req) => {
     const contrastViolations = selectedRulesSet.has('A1') ? analyzeContrastInCode(allFiles) : [];
     console.log(`A1 contrast analysis: ${contrastViolations.length} violations`);
     
-    // U1 - Competing primary actions
-    let u1Violation = null;
+    // U1 - Primary action sub-checks
+    let aggregatedU1GitHub: any = null;
     if (selectedRulesSet.has('U1')) {
-      const u1Result = detectU1CompetingPrimaryActions(allFiles);
-      u1Violation = u1Result.violation;
-      console.log(`U1 analysis: ${u1Violation ? '1 violation' : 'no violations'}`);
+      const u1Findings = detectU1PrimaryAction(allFiles);
+      if (u1Findings.length > 0) {
+        const confirmedCount = u1Findings.filter((f: any) => f.classification === 'confirmed').length;
+        const potentialCount = u1Findings.filter((f: any) => f.classification === 'potential').length;
+        const hasConfirmed = confirmedCount > 0;
+        const overallConfidence = Math.max(...u1Findings.map((f: any) => f.confidence));
+        const u1Elements = u1Findings.map((f: any) => ({
+          elementLabel: f.elementLabel, elementType: f.elementType,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
+          classification: f.classification,
+          explanation: f.explanation, confidence: f.confidence,
+          advisoryGuidance: f.advisoryGuidance, deduplicationKey: f.deduplicationKey,
+        }));
+        aggregatedU1GitHub = {
+          ruleId: 'U1', ruleName: 'Unclear primary action', category: 'usability',
+          status: hasConfirmed ? 'confirmed' : 'potential',
+          blocksConvergence: false, inputType: 'github', isU1Aggregated: true, u1Elements,
+          diagnosis: `Primary action clarity issues: ${confirmedCount} confirmed, ${potentialCount} potential.`,
+          contextualHint: 'Establish a clear visual hierarchy with one primary action per group.',
+          advisoryGuidance: 'Visually distinguish the primary action (stronger color/weight/placement) and use specific labels.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        };
+        console.log(`U1 aggregated (GitHub): ${u1Findings.length} findings`);
+      }
     }
     
     // A3 - Keyboard operability
@@ -2014,7 +2070,7 @@ serve(async (req) => {
       // Return deterministic results only
       const allViolations = [
         ...contrastViolations,
-        ...(u1Violation ? [u1Violation] : []),
+        ...(aggregatedU1GitHub ? [aggregatedU1GitHub] : []),
       ];
       
       return new Response(
@@ -2061,7 +2117,7 @@ serve(async (req) => {
       // Return deterministic results
       const allViolations = [
         ...contrastViolations,
-        ...(u1Violation ? [u1Violation] : []),
+        ...(aggregatedU1GitHub ? [aggregatedU1GitHub] : []),
       ];
       
       return new Response(
@@ -2199,7 +2255,7 @@ serve(async (req) => {
     
     // ========== A2 Focus Visibility — Aggregate from AI findings ==========
     const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2' || v.ruleId === 'A5');
-    const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4' && v.ruleId !== 'A5' && v.ruleId !== 'A6');
+    const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4' && v.ruleId !== 'A5' && v.ruleId !== 'A6' && v.ruleId !== 'U1');
     
     let aggregatedA2GitHub: any = null;
     if (a2AiViolations.length > 0) {
@@ -2448,6 +2504,7 @@ serve(async (req) => {
     const allViolations = [
       ...aggregatedA1Violations,
       ...nonA2AiViolations,
+      ...(aggregatedU1GitHub ? [aggregatedU1GitHub] : []),
       ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
       ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
       ...(aggregatedA4GitHub ? [aggregatedA4GitHub] : []),
