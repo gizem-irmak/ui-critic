@@ -3535,10 +3535,11 @@ serve(async (req) => {
     const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
-        
+        // Tag with evaluationMethod — all screenshot LLM violations are llm_assisted
         return {
           ...v,
           correctivePrompt: rule?.correctivePrompt || v.correctivePrompt || '',
+          evaluationMethod: 'llm_assisted',
         };
       });
 
@@ -4021,6 +4022,7 @@ serve(async (req) => {
         inputType: 'screenshots',
         isA2Aggregated: true,
         a2Elements,
+        evaluationMethod: 'llm_assisted',
         diagnosis: `${a2Elements.length} interactive element${a2Elements.length !== 1 ? 's' : ''} with potential focus visibility issues detected. Screenshot analysis cannot confirm actual focus behavior.`,
         contextualHint: 'Add visible focus-visible indicators for keyboard accessibility.',
         correctivePrompt: '',
@@ -4130,6 +4132,7 @@ serve(async (req) => {
         blocksConvergence: true,
         inputType: 'screenshots',
         samplingMethod: 'pixel',
+        evaluationMethod: 'deterministic',
       });
       
       console.log(`A1 aggregated: ${confirmedA1Elements.length} confirmed elements → 1 Confirmed card (${elements.length} unique)`);
@@ -4167,6 +4170,7 @@ serve(async (req) => {
         blocksConvergence: false,
         inputType: 'screenshots',
         samplingMethod: 'pixel',
+        evaluationMethod: 'deterministic',
       });
       
       console.log(`A1 aggregated: ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);

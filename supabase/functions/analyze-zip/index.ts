@@ -915,20 +915,42 @@ function detectStack(files: Map<string, string>): string {
   return 'Unknown';
 }
 
+// ============================================================
+// TWO-LAYER HYBRID ARCHITECTURE — Rule Routing
+// ============================================================
+// Rules are classified by evaluation method:
+//   DETERMINISTIC: A1, A3, A4, A5, A6 — regex/static analysis only, never sent to LLM
+//   LLM_ASSISTED:  A2 (code), U4, U6, E2 — always sent to LLM
+//   HYBRID:        U1, U2, U3, U5, E1, E3 — deterministic signals first, LLM fallback
+//
+// For ZIP/GitHub code analysis:
+//   - DETERMINISTIC rules are handled by dedicated regex detectors (never in LLM prompt)
+//   - LLM_ASSISTED rules are always included in LLM prompt
+//   - HYBRID rules: deterministic signals run separately; LLM prompt includes them
+//     for fallback analysis, but deterministic results take precedence
+// ============================================================
+
+const DETERMINISTIC_CODE_RULES = new Set(['A1', 'A3', 'A4', 'A5', 'A6']);
+const LLM_ONLY_RULES = new Set(['U4', 'U6', 'E2']);
+const HYBRID_RULES_SET = new Set(['U1', 'U2', 'U3', 'U5', 'E1', 'E3']);
+// A2 is LLM_ASSISTED for code analysis (Gemini detects focus patterns, post-processed deterministically)
+
 function buildCodeAnalysisPrompt(selectedRules: string[]) {
   const selectedRulesSet = new Set(selectedRules);
-  // Filter out A1 since we handle it separately with computed contrast
-  const accessibilityRulesWithoutA1 = rules.accessibility.filter(r => r.id !== 'A1' && selectedRulesSet.has(r.id));
+  // DETERMINISTIC rules (A1, A3-A6) are NEVER sent to LLM — handled by regex detectors
+  // Only send A2 (LLM-assisted) + rules that need LLM interpretation
+  const accessibilityRulesForLLM = rules.accessibility.filter(r => 
+    !DETERMINISTIC_CODE_RULES.has(r.id) && selectedRulesSet.has(r.id)
+  );
   
-  return `You are an expert UI/UX code auditor performing a comprehensive 3-pass static analysis of source code. Analyze the provided code files following this structured methodology:
+  return `You are an expert UI/UX code auditor performing a comprehensive 3-pass static analysis of source code.
+This analysis uses a Two-Layer Hybrid Architecture:
+- Accessibility rules A1, A3, A4, A5, A6 are evaluated by the DETERMINISTIC engine (regex/static analysis). Do NOT report findings for these rules.
+- A2 (focus visibility) is evaluated by YOU (LLM-assisted) with deterministic post-processing.
+- Usability and Ethics rules are evaluated by YOU, with some rules having deterministic signals that take precedence.
 
-## PASS 1 — Accessibility (WCAG AA) - Static Code Analysis
-NOTE: A1 (text contrast) is analyzed separately with computed ratios. Do NOT report A1 violations.
-
-Examine the code for other accessibility issues:
-- Focus styles (:focus, :focus-visible, outline declarations)
-- ARIA attributes and semantic HTML usage
-- Alt text for images
+## PASS 1 — Accessibility (WCAG AA) - LLM-Assisted Rules Only
+NOTE: A1 (contrast), A3 (keyboard), A4 (semantics), A5 (form labels), A6 (accessible names) are handled by the deterministic engine. Do NOT report these rules.
 
 ### A2 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
@@ -1057,8 +1079,8 @@ Each A2 finding MUST include rich element identity fields so users can locate th
 - NEVER speculate about "might be subtle" or "could be overridden" — analyze actual code only
 - Report ONLY actual accessibility risks with code evidence
 
-Accessibility rules to check:
-${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name}`).join('\n')}
+Accessibility rules to check (LLM-assisted only — A1, A3-A6 are handled by deterministic engine):
+${accessibilityRulesForLLM.map(r => `- ${r.id}: ${r.name}`).join('\n')}
 
 ## PASS 2 — Usability (HCI) - Code Pattern Analysis
 Analyze code structure for usability patterns:
@@ -2768,13 +2790,17 @@ ${codeContent}`,
       console.log(`U1: No valid violations found (${u1Violations.length} filtered out as speculative or lacking evidence)`);
     }
     
-    // Process non-A2/U1 violations
+    // Process non-A2/U1 violations — tag with evaluationMethod
     const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRules.find(r => r.id === v.ruleId);
+        // Determine evaluationMethod based on rule classification
+        const isHybridRule = HYBRID_RULES_SET.has(v.ruleId);
+        const evaluationMethod = isHybridRule ? 'hybrid_llm_fallback' : 'llm_assisted';
         return {
           ...v,
           correctivePrompt: rule?.correctivePrompt || v.correctivePrompt || '',
+          evaluationMethod,
         };
       });
 
@@ -3138,7 +3164,10 @@ ${codeContent}`,
       console.log(`A2: No valid violations found (${a2Violations.length} filtered out as PASS or NOT APPLICABLE)`);
     }
     
-    // Combine all violations
+    // Tag A2 with evaluationMethod (LLM-assisted with deterministic post-processing)
+    if (aggregatedA2) {
+      aggregatedA2.evaluationMethod = 'llm_assisted';
+    }
     let aiViolations = [
       ...filteredOtherViolations,
       ...(aggregatedA2 ? [aggregatedA2] : []),
@@ -3166,7 +3195,7 @@ ${codeContent}`,
           ruleId: 'U1', ruleName: 'Unclear primary action', category: 'usability',
           status: hasConfirmed ? 'confirmed' : 'potential',
           blocksConvergence: false,
-          inputType: 'zip', isU1Aggregated: true, u1Elements,
+          inputType: 'zip', isU1Aggregated: true, u1Elements, evaluationMethod: 'hybrid_deterministic',
           diagnosis: `Primary action clarity issues: ${confirmedCount} confirmed, ${potentialCount} potential.`,
           contextualHint: 'Establish a clear visual hierarchy with one primary action per group.',
           advisoryGuidance: 'Visually distinguish the primary action (stronger color/weight/placement) and use specific labels.',
@@ -3214,10 +3243,11 @@ ${codeContent}`,
           category: 'accessibility',
           status: hasConfirmed ? 'confirmed' : 'potential',
           potentialSubtype: hasConfirmed ? undefined : 'borderline',
-          blocksConvergence: hasConfirmed,
-          inputType: 'zip',
-          isA3Aggregated: true,
-          a3Elements,
+           blocksConvergence: hasConfirmed,
+           inputType: 'zip',
+           isA3Aggregated: true,
+           a3Elements,
+           evaluationMethod: 'deterministic',
           diagnosis: `Keyboard operability issues detected: ${typeBreakdown}. Interactive elements that lack proper keyboard semantics prevent keyboard-only users from accessing functionality.`,
           contextualHint: 'Ensure all interactive elements are keyboard accessible using native elements or ARIA + key handlers.',
           correctivePrompt: 'Ensure all interactive elements are keyboard accessible: use native <button>/<a href> elements, or add role, tabIndex=0, and Enter/Space key handlers.',
@@ -3262,7 +3292,7 @@ ${codeContent}`,
           ruleId: 'A4', ruleName: 'Missing semantic structure', category: 'accessibility',
           status: hasConfirmed ? 'confirmed' : 'potential',
           potentialSubtype: hasConfirmed ? undefined : 'borderline',
-          blocksConvergence: hasConfirmed, inputType: 'zip', isA4Aggregated: true, a4Elements,
+          blocksConvergence: hasConfirmed, inputType: 'zip', isA4Aggregated: true, a4Elements, evaluationMethod: 'deterministic',
           diagnosis: `Semantic structure issues detected: ${typeBreakdown}. WCAG 1.3.1 requires meaningful structure via headings, landmarks, lists, and semantic interactive elements.`,
           contextualHint: 'Use semantic HTML elements to represent page hierarchy and structure.',
           correctivePrompt: 'Use semantic HTML elements (<h1>–<h6>, <main>, <nav>, <button>, <ul>/<ol>) to represent page structure.',
@@ -3308,7 +3338,7 @@ ${codeContent}`,
         aggregatedA5 = {
           ruleId: 'A5', ruleName: 'Missing form labels (Input clarity)', category: 'accessibility',
           status: hasConfirmed ? 'confirmed' : 'potential',
-          blocksConvergence: hasConfirmed, inputType: 'zip', isA5Aggregated: true, a5Elements,
+          blocksConvergence: hasConfirmed, inputType: 'zip', isA5Aggregated: true, a5Elements, evaluationMethod: 'deterministic',
           diagnosis: `Form label issues detected: ${confirmedFindings.length} confirmed, ${potentialFindings.length} potential (${subCheckBreakdown}). WCAG 1.3.1 and 3.3.2 require form controls to have programmatic labels.`,
           contextualHint: 'Add visible <label> elements or aria-label/aria-labelledby for all form controls.',
           correctivePrompt: hasConfirmed ? 'Add visible <label> elements associated with form controls using for/id, or provide accessible names via aria-label/aria-labelledby. Do not rely on placeholder text as the sole label.' : undefined,
@@ -3344,7 +3374,7 @@ ${codeContent}`,
         ].filter(Boolean).join(', ');
         aggregatedA6 = {
           ruleId: 'A6', ruleName: 'Missing accessible names (Name, Role, Value)', category: 'accessibility',
-          status: 'confirmed', blocksConvergence: true, inputType: 'zip', isA6Aggregated: true, a6Elements,
+          status: 'confirmed', blocksConvergence: true, inputType: 'zip', isA6Aggregated: true, a6Elements, evaluationMethod: 'deterministic',
           diagnosis: `Accessible name issues detected: ${a6Findings.length} confirmed (${breakdown}). WCAG 4.1.2 requires interactive elements to have programmatic accessible names.`,
           contextualHint: 'Add visible text, aria-label, or aria-labelledby to interactive elements.',
           correctivePrompt: 'Add visible text content, aria-label, or aria-labelledby to interactive elements. For icon-only buttons/links, add an aria-label.',
@@ -3389,6 +3419,7 @@ ${codeContent}`,
         blocksConvergence: false,
         inputType: 'zip',
         samplingMethod: 'inferred',
+        evaluationMethod: 'deterministic',
       });
       console.log(`A1 aggregated (ZIP): ${contrastViolations.length} potential elements → 1 Potential card`);
     }
