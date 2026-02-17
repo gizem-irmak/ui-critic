@@ -1752,11 +1752,23 @@ function detectStack(files: Map<string, string>): string {
   return 'Unknown';
 }
 
+// ============================================================
+// TWO-LAYER HYBRID ARCHITECTURE — Rule Routing (GitHub)
+// ============================================================
+const DETERMINISTIC_CODE_RULES = new Set(['A1', 'A3', 'A4', 'A5', 'A6']);
+
 function buildCodeAnalysisPrompt(selectedRules: string[]) {
   const selectedRulesSet = new Set(selectedRules);
-  const accessibilityRulesWithoutA1 = rules.accessibility.filter(r => r.id !== 'A1' && selectedRulesSet.has(r.id));
+  // DETERMINISTIC rules (A1, A3-A6) are NEVER sent to LLM
+  const accessibilityRulesForLLM = rules.accessibility.filter(r => 
+    !DETERMINISTIC_CODE_RULES.has(r.id) && selectedRulesSet.has(r.id)
+  );
   
   return `You are an expert UI/UX code auditor performing static analysis of source code from a GitHub repository.
+This analysis uses a Two-Layer Hybrid Architecture:
+- Accessibility rules A1, A3, A4, A5, A6 are evaluated by the DETERMINISTIC engine (regex/static analysis). Do NOT report findings for these rules.
+- A2 (focus visibility) is evaluated by YOU (LLM-assisted) with deterministic post-processing.
+- Usability and Ethics rules are evaluated by YOU.
 
 ## IMPORTANT: STATIC ANALYSIS CONTEXT
 This code is being analyzed from a GitHub repository. You do NOT have access to:
@@ -1769,11 +1781,11 @@ All findings must be classified as:
 - "Confirmed (static)" - When the issue is clearly evident from code patterns
 - "Heuristic (requires runtime verification)" - When the issue might exist but needs runtime confirmation
 
-## PASS 1 — Accessibility (WCAG AA) - Static Code Analysis
-NOTE: A1 (text contrast) is analyzed separately. Do NOT report A1 violations.
+## PASS 1 — Accessibility (WCAG AA) - LLM-Assisted Rules Only
+NOTE: A1 (contrast), A3 (keyboard), A4 (semantics), A5 (form labels), A6 (accessible names) are handled by the deterministic engine. Do NOT report these rules.
 
-Accessibility rules to check:
-${accessibilityRulesWithoutA1.map(r => `- ${r.id}: ${r.name} - ${r.diagnosis}`).join('\n')}
+Accessibility rules to check (LLM-assisted only):
+${accessibilityRulesForLLM.map(r => `- ${r.id}: ${r.name} - ${r.diagnosis}`).join('\n')}
 
 ### A2 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
 
@@ -2008,7 +2020,7 @@ serve(async (req) => {
         aggregatedU1GitHub = {
           ruleId: 'U1', ruleName: 'Unclear primary action', category: 'usability',
           status: hasConfirmed ? 'confirmed' : 'potential',
-          blocksConvergence: false, inputType: 'github', isU1Aggregated: true, u1Elements,
+          blocksConvergence: false, inputType: 'github', isU1Aggregated: true, u1Elements, evaluationMethod: 'hybrid_deterministic',
           diagnosis: `Primary action clarity issues: ${confirmedCount} confirmed, ${potentialCount} potential.`,
           contextualHint: 'Establish a clear visual hierarchy with one primary action per group.',
           advisoryGuidance: 'Visually distinguish the primary action (stronger color/weight/placement) and use specific labels.',
@@ -2039,7 +2051,7 @@ serve(async (req) => {
           ruleId: 'A3', ruleName: 'Incomplete keyboard operability', category: 'accessibility',
           status: hasConfirmed ? 'confirmed' : 'potential',
           potentialSubtype: hasConfirmed ? undefined : 'borderline',
-          blocksConvergence: hasConfirmed, inputType: 'github', isA3Aggregated: true, a3Elements,
+          blocksConvergence: hasConfirmed, inputType: 'github', isA3Aggregated: true, a3Elements, evaluationMethod: 'deterministic',
           diagnosis: `Keyboard operability issues: ${confirmedCount} confirmed, ${potentialCount} potential.`,
           contextualHint: 'Ensure all interactive elements are keyboard accessible.',
           correctivePrompt: 'Use native <button>/<a href> or add role, tabIndex=0, and Enter/Space key handlers.',
@@ -2151,15 +2163,21 @@ serve(async (req) => {
     );
     
     // Add typeBadge to AI violations if not present
-    const taggedAiViolations = aiViolations.map((v: any) => ({
-      ...v,
-      typeBadge: v.typeBadge || "Heuristic (requires runtime verification)",
-      correctivePrompt: v.correctivePrompt || 
-        rules.accessibility.find(r => r.id === v.ruleId)?.correctivePrompt ||
-        rules.usability.find(r => r.id === v.ruleId)?.correctivePrompt ||
-        rules.ethics.find(r => r.id === v.ruleId)?.correctivePrompt ||
-        "Review and address this issue.",
-    }));
+    const taggedAiViolations = aiViolations.map((v: any) => {
+      // Determine evaluationMethod based on rule classification
+      const isHybridRule = ['U1', 'U2', 'U3', 'U5', 'E1', 'E3'].includes(v.ruleId);
+      const evaluationMethod = isHybridRule ? 'hybrid_llm_fallback' : 'llm_assisted';
+      return {
+        ...v,
+        typeBadge: v.typeBadge || "Heuristic (requires runtime verification)",
+        evaluationMethod,
+        correctivePrompt: v.correctivePrompt || 
+          rules.accessibility.find(r => r.id === v.ruleId)?.correctivePrompt ||
+          rules.usability.find(r => r.id === v.ruleId)?.correctivePrompt ||
+          rules.ethics.find(r => r.id === v.ruleId)?.correctivePrompt ||
+          "Review and address this issue.",
+      };
+    });
     
     // ========== A1 AGGREGATION LOGIC (v22) ==========
     // Aggregate per-element A1 contrast findings into at most 1 Potential card
@@ -2240,6 +2258,7 @@ serve(async (req) => {
         blocksConvergence: false,
         inputType: 'github',
         samplingMethod: 'inferred',
+        evaluationMethod: 'deterministic',
         typeBadge: 'Heuristic (requires runtime verification)',
       });
       
@@ -2376,9 +2395,10 @@ serve(async (req) => {
           status: a2Status,
           potentialSubtype: a2Status === 'potential' ? 'borderline' : undefined,
           blocksConvergence: a2Status === 'confirmed',
-          inputType: 'github',
-          isA2Aggregated: true,
-          a2Elements,
+           inputType: 'github',
+           isA2Aggregated: true,
+           a2Elements,
+           evaluationMethod: 'llm_assisted',
           diagnosis: `${a2Elements.length} interactive element${a2Elements.length !== 1 ? 's' : ''} with focus visibility issues detected.`,
           contextualHint: 'Add visible focus-visible indicators for keyboard accessibility.',
           correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline.',
@@ -2414,7 +2434,7 @@ serve(async (req) => {
           ruleId: 'A4', ruleName: 'Missing semantic structure', category: 'accessibility',
           status: hasConfirmed ? 'confirmed' : 'potential',
           potentialSubtype: hasConfirmed ? undefined : 'borderline',
-          blocksConvergence: hasConfirmed, inputType: 'github', isA4Aggregated: true, a4Elements,
+          blocksConvergence: hasConfirmed, inputType: 'github', isA4Aggregated: true, a4Elements, evaluationMethod: 'deterministic',
           diagnosis: `Semantic structure issues: ${confirmedCount} confirmed, ${potentialCount} potential.`,
           contextualHint: 'Use semantic HTML elements to represent page hierarchy and structure.',
           correctivePrompt: 'Use semantic HTML (<h1>–<h6>, <main>, <nav>, <button>, <ul>/<ol>) for structure.',
@@ -2449,7 +2469,7 @@ serve(async (req) => {
         aggregatedA5GitHub = {
           ruleId: 'A5', ruleName: 'Missing form labels (Input clarity)', category: 'accessibility',
           status: hasConfirmed ? 'confirmed' : 'potential',
-          blocksConvergence: hasConfirmed, inputType: 'github', isA5Aggregated: true, a5Elements,
+          blocksConvergence: hasConfirmed, inputType: 'github', isA5Aggregated: true, a5Elements, evaluationMethod: 'deterministic',
           diagnosis: `Form label issues: ${confirmedFindings.length} confirmed, ${potentialFindings.length} potential. WCAG 1.3.1/3.3.2 require programmatic labels.`,
           contextualHint: 'Add <label> or aria-label/aria-labelledby for form controls.',
           correctivePrompt: hasConfirmed ? 'Add visible <label> elements or aria-label/aria-labelledby for all form controls.' : undefined,
@@ -2483,7 +2503,7 @@ serve(async (req) => {
         ].filter(Boolean).join(', ');
         aggregatedA6GitHub = {
           ruleId: 'A6', ruleName: 'Missing accessible names (Name, Role, Value)', category: 'accessibility',
-          status: 'confirmed', blocksConvergence: true, inputType: 'github', isA6Aggregated: true, a6Elements,
+          status: 'confirmed', blocksConvergence: true, inputType: 'github', isA6Aggregated: true, a6Elements, evaluationMethod: 'deterministic',
           diagnosis: `Accessible name issues detected: ${a6Findings.length} confirmed (${breakdown}). WCAG 4.1.2 requires interactive elements to have programmatic accessible names.`,
           contextualHint: 'Add visible text, aria-label, or aria-labelledby to interactive elements.',
           correctivePrompt: 'Add visible text content, aria-label, or aria-labelledby to interactive elements. For icon-only buttons/links, add an aria-label.',
