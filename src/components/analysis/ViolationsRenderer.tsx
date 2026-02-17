@@ -26,6 +26,23 @@ interface ViolationsRendererProps {
 /**
  * Renders a single non-aggregated violation card (for rules that don't have aggregated rendering).
  */
+function EvaluationMethodBadge({ method }: { method?: Violation['evaluationMethod'] }) {
+  if (!method) return null;
+  const labels: Record<string, { text: string; className: string }> = {
+    deterministic: { text: 'Deterministic (static analysis)', className: 'bg-blue-500/10 text-blue-600 border-blue-500/20' },
+    llm_assisted: { text: 'AI-assisted (vision/LLM)', className: 'bg-violet-500/10 text-violet-600 border-violet-500/20' },
+    hybrid_deterministic: { text: 'Hybrid — deterministic signal', className: 'bg-blue-500/10 text-blue-600 border-blue-500/20' },
+    hybrid_llm_fallback: { text: 'Hybrid — AI fallback', className: 'bg-violet-500/10 text-violet-600 border-violet-500/20' },
+  };
+  const config = labels[method];
+  if (!config) return null;
+  return (
+    <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-medium', config.className)}>
+      {config.text}
+    </span>
+  );
+}
+
 function GenericViolationCard({ violation, isConfirmed, compact = false }: {
   violation: Violation;
   isConfirmed: boolean;
@@ -47,6 +64,7 @@ function GenericViolationCard({ violation, isConfirmed, compact = false }: {
             {violation.ruleId}
           </span>
           <span className="font-bold text-base">{violation.ruleName}</span>
+          <EvaluationMethodBadge method={violation.evaluationMethod} />
         </div>
         <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
           {Math.round(violation.confidence * 100)}%
