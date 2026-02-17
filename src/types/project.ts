@@ -128,6 +128,16 @@ export interface Violation {
   blocksConvergence?: boolean;
   
   // ============================================================
+  // EVALUATION METHOD (Two-Layer Hybrid Architecture)
+  // ============================================================
+  // Indicates which engine produced this finding:
+  //   - 'deterministic' → regex/AST static analysis (high reproducibility)
+  //   - 'llm_assisted' → AI vision or LLM code analysis (perceptual/contextual)
+  //   - 'hybrid_deterministic' → HYBRID rule, finding came from deterministic signals
+  //   - 'hybrid_llm_fallback' → HYBRID rule, finding came from LLM fallback
+  evaluationMethod?: 'deterministic' | 'llm_assisted' | 'hybrid_deterministic' | 'hybrid_llm_fallback';
+  
+  // ============================================================
   // A1 AGGREGATED ELEMENT REPORTING (v22)
   // ============================================================
   // When isA1Aggregated = true, this violation represents an aggregated
