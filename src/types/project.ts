@@ -125,6 +125,14 @@ export interface Violation {
   blocksConvergence?: boolean;
   
   // ============================================================
+  // A1 EPISTEMIC SOURCE TRACKING (Tailwind-Token Contrast)
+  // ============================================================
+  fgSource?: 'tailwind_token';
+  bgSource?: 'tailwind_token' | 'assumed_default' | 'unresolved';
+  evidenceLevel?: 'structural_deterministic' | 'structural_estimated';
+  sizeStatus?: 'normal' | 'large' | 'unknown';
+  
+  // ============================================================
   // PERCEPTUAL CONTRAST ASSESSMENT (Screenshot LLM-Assisted A1)
   // ============================================================
   // Used when inputType = 'screenshots' for A1. No numeric ratio.
@@ -415,9 +423,18 @@ export type A1ReasonCode =
   | 'BG_IMAGE'           // Image or textured background
   | 'BG_OVERLAY'         // Transparency or overlay suspected
   | 'BG_TOO_SMALL_REGION'// Insufficient background pixels around text
+  | 'BG_ASSUMED_DEFAULT' // No bg-* token found; assumed #FFFFFF
+  | 'BG_UNRESOLVED'      // Background could not be resolved at all
+  | 'SIZE_UNKNOWN'       // Text size could not be determined; using 4.5:1
   | 'FG_ANTIALIASING'    // Glyph sampling unstable due to anti-aliasing
   | 'FG_IMPLAUSIBLE'     // Foreground sampling inconsistent with visual prominence (v25.2)
   | 'FG_SAMPLING_UNRELIABLE' // Foreground color sampling unreliable after re-sampling (v25.3)
   | 'FG_BG_AMBIGUITY'    // Foreground/background roles ambiguous in enclosed component (badge/pill/chip)
   | 'LOW_CONFIDENCE'     // Combined confidence below threshold
   | 'STATIC_ANALYSIS';   // Colors inferred from code, not rendered pixels
+
+// A1 epistemic source tracking for Tailwind-token contrast computation
+export type A1FgSource = 'tailwind_token';
+export type A1BgSource = 'tailwind_token' | 'assumed_default' | 'unresolved';
+export type A1EvidenceLevel = 'structural_deterministic' | 'structural_estimated';
+export type A1SizeStatus = 'normal' | 'large' | 'unknown';

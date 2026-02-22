@@ -18,6 +18,9 @@ const reasonCodeLabels: Record<A1ReasonCode, string> = {
   BG_IMAGE: 'Image/textured background',
   BG_OVERLAY: 'Transparency/overlay',
   BG_TOO_SMALL_REGION: 'Insufficient background pixels',
+  BG_ASSUMED_DEFAULT: 'Background assumed (#FFFFFF)',
+  BG_UNRESOLVED: 'Background unresolved',
+  SIZE_UNKNOWN: 'Text size unknown (using 4.5:1)',
   FG_ANTIALIASING: 'Glyph sampling unstable',
   FG_IMPLAUSIBLE: 'Foreground sampling inconsistent',
   FG_SAMPLING_UNRELIABLE: 'Foreground sampling unreliable',
@@ -283,12 +286,24 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
               LLM-Assisted (Perceptual – Screenshot Modality)
             </span>
           ) : (
-            <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-blue-500/10 text-blue-600 border-blue-500/20">
-              Deterministic (Structural Evidence)
-            </span>
+            <>
+              <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-blue-500/10 text-blue-600 border-blue-500/20">
+                Deterministic (Structural Evidence)
+              </span>
+              {violation.evidenceLevel && (
+                <span className={cn(
+                  "text-[10px] px-1.5 py-0.5 rounded border font-medium",
+                  violation.evidenceLevel === 'structural_deterministic'
+                    ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+                    : "bg-amber-500/10 text-amber-600 border-amber-500/20"
+                )}>
+                  {violation.evidenceLevel === 'structural_deterministic' ? 'Token-Resolved BG' : 'Estimated BG'}
+                </span>
+              )}
+            </>
           )}
         </CardTitle>
-        <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
+          <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
           {violation.diagnosis}
         </p>
       </CardHeader>
