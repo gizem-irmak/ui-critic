@@ -156,8 +156,8 @@ export function PotentialRiskItem({ violation, compact = false }: PotentialRiskI
         </p>
       )}
 
-      {/* A1 Contrast details (always show colors; ratio only when reliable/computed) */}
-      {violation.ruleId === 'A1' && (violation.foregroundHex || violation.backgroundHex || violation.contrastRatio !== undefined || violation.contrastRange) && (
+      {/* A1 Contrast details — structural mode only (hide for perceptual/screenshot) */}
+      {violation.ruleId === 'A1' && !violation.perceivedContrast && (violation.foregroundHex || violation.backgroundHex || violation.contrastRatio !== undefined || violation.contrastRange) && (
         <div className={cn('space-y-1', compact ? 'text-xs' : 'text-sm')}>
           {(violation.foregroundHex || violation.backgroundHex) && (
             <div className="text-muted-foreground">
@@ -180,7 +180,6 @@ export function PotentialRiskItem({ violation, compact = false }: PotentialRiskI
               <span>ratio not computed (unreliable sampling)</span>
             )}
           </div>
-          {/* Show fallback method when used */}
           {violation.samplingFallback && (
             <div className="text-muted-foreground">
               <span className="font-medium">Method: </span>
@@ -188,6 +187,33 @@ export function PotentialRiskItem({ violation, compact = false }: PotentialRiskI
               {violation.samplingFallback.rangeSpansThreshold && (
                 <span className="text-warning ml-1">(spans threshold)</span>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* A1 Perceptual assessment (screenshot LLM-assisted mode) */}
+      {violation.ruleId === 'A1' && violation.perceivedContrast && (
+        <div className={cn('space-y-1', compact ? 'text-xs' : 'text-sm')}>
+          <div className="text-muted-foreground">
+            <span className="font-medium">Perceived Contrast: </span>
+            <span className={cn(
+              'font-medium',
+              violation.perceivedContrast === 'low' ? 'text-warning' : 'text-foreground'
+            )}>
+              {violation.perceivedContrast === 'low' ? 'Low (perceptual)' : violation.perceivedContrast}
+            </span>
+          </div>
+          {violation.perceptualRationale && (
+            <div className="text-muted-foreground">
+              <span className="font-medium">Rationale: </span>
+              <span className="text-foreground">{violation.perceptualRationale}</span>
+            </div>
+          )}
+          {violation.suggestedFix && (
+            <div className="text-muted-foreground">
+              <span className="font-medium">Suggestion: </span>
+              <span className="text-foreground">{violation.suggestedFix}</span>
             </div>
           )}
         </div>
