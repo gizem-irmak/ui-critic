@@ -3778,11 +3778,14 @@ serve(async (req) => {
     const buildA1SubItem = (v: any): any => {
       const dedupeKey = buildDedupeKey(v);
       
+      // Check if this is a perceptual (LLM-assisted screenshot) finding
+      const isPerceptual = !!v.perceivedContrast;
+      
       // Determine if near-threshold (within small margin, NOT for values far below)
-      // Near threshold: ratio between (threshold - 0.3) and threshold
+      // Only relevant for structural (non-perceptual) findings
       const ratio = v.contrastRatio || v.contrastRange?.min;
       const threshold = v.thresholdUsed || 4.5;
-      const isNearThreshold = ratio !== undefined && ratio >= (threshold - 0.3) && ratio < threshold;
+      const isNearThreshold = !isPerceptual && ratio !== undefined && ratio >= (threshold - 0.3) && ratio < threshold;
       
       // Extract uiRole from elementRole
       const uiRole = v.elementRole || 'text element';
@@ -3790,29 +3793,40 @@ serve(async (req) => {
       // Extract patternGroup from location or context
       const patternGroup = v.location || 'UI section';
       
-      return {
+      const subItem: any = {
         elementLabel: v.elementDescription || v.elementRole || 'Text element',
         textSnippet: v.textSnippet,
         location: v.evidence || v.elementIdentifier || 'Unknown location',
-        uiRole, // Semantic UI role
-        patternGroup, // UI pattern group
+        uiRole,
+        patternGroup,
         screenshotIndex: parseInt(v.evidence?.match(/Screenshot #(\d+)/)?.[1] || '1'),
-        foregroundHex: v.foregroundHex,
-        foregroundConfidence: v.foregroundConfidence,
-        backgroundStatus: v.backgroundStatus || 'uncertain',
-        backgroundHex: v.backgroundHex,
-        backgroundCandidates: v.backgroundCandidates,
-        contrastRatio: v.contrastRatio,
-        contrastRange: v.contrastRange,
-        contrastNotMeasurable: v.backgroundStatus === 'unmeasurable',
+        backgroundStatus: isPerceptual ? 'unmeasurable' : (v.backgroundStatus || 'uncertain'),
         thresholdUsed: v.thresholdUsed || 4.5,
         explanation: v.diagnosis,
-        reasonCodes: v.reasonCodes,
         nearThreshold: isNearThreshold,
         deduplicationKey: dedupeKey,
-        // Element-specific corrective prompt (from per-element violation)
         correctivePrompt: v.correctivePrompt,
       };
+      
+      if (isPerceptual) {
+        // Perceptual mode: carry through LLM assessment fields, NO hex/ratio
+        subItem.perceivedContrast = v.perceivedContrast;
+        subItem.perceptualRationale = v.perceptualRationale || v.diagnosis || '';
+        subItem.suggestedFix = v.suggestedFix || v.contextualHint || '';
+        subItem.contrastNotMeasurable = true;
+      } else {
+        // Structural mode: carry through deterministic color/ratio fields
+        subItem.foregroundHex = v.foregroundHex;
+        subItem.foregroundConfidence = v.foregroundConfidence;
+        subItem.backgroundHex = v.backgroundHex;
+        subItem.backgroundCandidates = v.backgroundCandidates;
+        subItem.contrastRatio = v.contrastRatio;
+        subItem.contrastRange = v.contrastRange;
+        subItem.contrastNotMeasurable = v.backgroundStatus === 'unmeasurable';
+        subItem.reasonCodes = v.reasonCodes;
+      }
+      
+      return subItem;
     };
     
     // Deduplicate elements by key
@@ -3865,12 +3879,17 @@ serve(async (req) => {
       const elements = deduplicateElements(potentialA1Elements.map(buildA1SubItem));
       const avgConfidence = potentialA1Elements.reduce((sum: number, v: any) => sum + (v.confidence || 0.55), 0) / potentialA1Elements.length;
       
-      // Collect all unique reason codes across elements
+      // Check if these are perceptual (screenshot LLM-assisted) findings
+      const isPerceptual = potentialA1Elements.some((v: any) => !!v.perceivedContrast);
+      
+      // Collect all unique reason codes across elements (structural only)
       const allReasonCodes = new Set<string>();
-      for (const el of elements) {
-        if (el.reasonCodes) {
-          for (const code of el.reasonCodes) {
-            allReasonCodes.add(code);
+      if (!isPerceptual) {
+        for (const el of elements) {
+          if (el.reasonCodes) {
+            for (const code of el.reasonCodes) {
+              allReasonCodes.add(code);
+            }
           }
         }
       }
@@ -3882,20 +3901,26 @@ serve(async (req) => {
         status: 'potential',
         isA1Aggregated: true,
         a1Elements: elements,
-        diagnosis: `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast issues detected. These require manual verification due to measurement uncertainty.`,
+        diagnosis: isPerceptual
+          ? `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast concerns detected via perceptual assessment. Manual verification with developer tools required.`
+          : `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast issues detected. These require manual verification due to measurement uncertainty.`,
         correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools or accessibility testing tools.',
         contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools.',
         confidence: Math.round(avgConfidence * 100) / 100,
-        reasonCodes: Array.from(allReasonCodes),
-        potentialRiskReason: Array.from(allReasonCodes).join(', '),
-        advisoryGuidance: 'Upload screenshots at 100% zoom or verify with DevTools/axe for accurate measurement.',
+        reasonCodes: allReasonCodes.size > 0 ? Array.from(allReasonCodes) : undefined,
+        potentialRiskReason: allReasonCodes.size > 0 ? Array.from(allReasonCodes).join(', ') : undefined,
+        advisoryGuidance: isPerceptual
+          ? 'Screenshot-based contrast assessment is perceptual. Verify with browser DevTools or accessibility testing tools for WCAG compliance.'
+          : 'Upload screenshots at 100% zoom or verify with DevTools/axe for accurate measurement.',
         blocksConvergence: false,
         inputType: 'screenshots',
-        samplingMethod: 'pixel',
-        evaluationMethod: 'deterministic',
+        samplingMethod: isPerceptual ? 'inferred' : 'pixel',
+        evaluationMethod: isPerceptual ? 'llm_assisted' : 'deterministic',
+        // Carry perceptual fields to top-level for UI rendering
+        ...(isPerceptual ? { perceivedContrast: 'low' } : {}),
       });
       
-      console.log(`A1 aggregated: ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
+      console.log(`A1 aggregated: ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique, ${isPerceptual ? 'perceptual' : 'structural'})`);
     }
     
     // ========== A3 Screenshot Mode (advisory only) ==========
