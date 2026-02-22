@@ -122,10 +122,15 @@ export interface Violation {
     reason?: string;
   };
   // Convergence constraint: Whether this finding blocks project convergence
-  // Per authoritative A1 rule:
-  //   - Confirmed violations: block convergence (true)
-  //   - Heuristic/potential findings: never block convergence (false)
   blocksConvergence?: boolean;
+  
+  // ============================================================
+  // PERCEPTUAL CONTRAST ASSESSMENT (Screenshot LLM-Assisted A1)
+  // ============================================================
+  // Used when inputType = 'screenshots' for A1. No numeric ratio.
+  perceivedContrast?: 'low' | 'adequate' | 'high';
+  perceptualRationale?: string; // 1-2 sentence explanation
+  suggestedFix?: string; // 1 sentence corrective guidance
   
   // ============================================================
   // EVALUATION METHOD (Two-Layer Hybrid Architecture)
@@ -221,7 +226,12 @@ export interface A1ElementSubItem {
   
   // Classification explanation
   explanation: string; // Why this element is confirmed or potential
-  reasonCodes?: A1ReasonCode[]; // Mandatory for potential
+  reasonCodes?: A1ReasonCode[]; // Mandatory for potential (structural)
+  
+  // Perceptual contrast assessment (screenshot LLM-assisted A1 only)
+  perceivedContrast?: 'low' | 'adequate' | 'high';
+  perceptualRationale?: string;
+  suggestedFix?: string;
   
   // Element-specific corrective prompt (ONLY for confirmed violations)
   // Must be pattern-oriented: mentions text content, UI role, location, and suggests group-wide fix

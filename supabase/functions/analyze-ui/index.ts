@@ -2203,312 +2203,83 @@ An element is ONLY considered focusable if:
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
-### SPECIAL HANDLING FOR A1 (Text Contrast) — COMPREHENSIVE MANDATORY COVERAGE
+### SPECIAL HANDLING FOR A1 (Text Contrast) — LLM-ASSISTED PERCEPTUAL ASSESSMENT (Screenshot Modality)
 
-**DESIGN PRINCIPLE: Screenshots are the source of truth for visual properties.**
+**MODALITY: Screenshot — Perceptual Contrast Only**
 Input constraint: Only screenshots are available (no DOM, no CSS tokens, no source code).
-Use interior-stroke sampling to measure what a user color-picker would measure on text.
+Screenshot-based contrast analysis uses perceptual assessment, NOT numeric WCAG ratio calculation.
 
-**CRITICAL: Only reliable measurements block convergence. Unreliable A1 findings MUST be classified as Potential Risk (non-blocking).**
+**CRITICAL RULES:**
+- Do NOT generate numeric contrast ratios
+- Do NOT claim WCAG compliance or non-compliance
+- Do NOT output foreground/background hex color values
+- All screenshot A1 findings MUST have status: "potential"
+- Never mark screenshot A1 as "confirmed"
+- Set blocksConvergence: false for ALL screenshot A1 findings
 
----
+## DETECTION SCOPE — COMPREHENSIVE (NO EXCLUSIONS)
 
-## 0️⃣ MANDATORY DETECTION SCOPE — NO EXCLUSIONS (v24)
+You MUST identify ALL visible text elements that appear to have low contrast. NO EXCLUSIONS.
 
-**CRITICAL: You MUST identify ALL visible text elements for A1 evaluation. NO EXCLUSIONS.**
-
-Do NOT skip text based on:
-- Visual prominence (secondary, muted, faded, subtle)
-- Semantic role (metadata, captions, badges, labels, tags)
-- Stylistic intent (intentionally low-contrast for aesthetic)
-- Text color (gray, yellow, blue, colored text)
-- Text size or weight (small text must still be evaluated)
-- Perceived importance or emphasis
-
-**MUST INCLUDE (comprehensive list — not exhaustive):**
-- Secondary or muted text (even if intentionally styled that way)
-- Descriptions and summaries
-- Author names, usernames, handles
-- Timestamps, dates, metadata
-- Tags, labels, badges, chips, pills
-- Colored text (yellow prices, blue links, gray hints)
-- Placeholder text in inputs
-- Helper text, hint text, caption text
-- Price labels, discount percentages
+MUST INCLUDE:
+- Secondary or muted text (even if intentionally styled)
+- Descriptions, summaries, captions
+- Author names, timestamps, metadata
+- Tags, labels, badges, chips
+- Colored text (yellow, blue, gray, etc.)
+- Placeholder text, helper text
+- Price labels, discount text
 - Footer text, copyright notices
-- Breadcrumb text, navigation labels
-- Status indicators, state labels
-- Counter text, quantity labels
-- Any other readable text visible to users
+- Small text, light-weight text
+- Navigation text, button labels
 
-**RULE: If a user can read the text, it MUST be in a1TextElements for evaluation.**
+## PERCEPTUAL ASSESSMENT METHOD
 
----
+For each text element that appears to have potentially low contrast:
 
-## 1️⃣ INTERIOR-STROKE SAMPLING METHODOLOGY (MANDATORY FOR SCREENSHOTS)
+1. **Observe** the text against its immediate visual background
+2. **Assess** whether readability appears reduced due to insufficient contrast
+3. **Classify** the perceived contrast level:
+   - "low" — Text is noticeably hard to read against its background
+   - "adequate" — Text is readable but could be improved
+   - "high" — Text is clearly readable (DO NOT report as violation)
 
-For each detected text element, estimate colors as follows:
+4. **Report** only elements with perceivedContrast = "low"
 
-**STEP 1 — Detect text region:**
-- Identify text region visually or via OCR
-- Define a bounding box around the text element
-- INCLUDE ALL VISIBLE TEXT — do not skip based on prominence
+## OUTPUT FORMAT FOR A1 PERCEPTUAL FINDINGS
 
-**STEP 2 — Sample foreground (text) color using INTERIOR GLYPH STROKES:**
-- Sample many pixels from the text region (e.g., 50-200 pixels)
-- Convert all sampled pixels to luminance
-- **Select the DARKEST 30–40% of pixels** by luminance (these are the core glyph stroke interiors)
-- This excludes anti-aliased edges and halos which have intermediate luminance values
-- Compute the **median RGB** of this darkest subset as the foreground color
-- Report the RAW sampled hex — do NOT map to Tailwind tokens or nearest palette color
-
-**STEP 3 — Estimate background color using LOCAL-PRIORITY RING SAMPLING (v24):**
-- Sample a LOCAL margin (6-10px) around the text bounding box
-- Weight pixels by proximity — nearer pixels get higher weight
-- If local region is uniform (single dominant color) → use that as background
-- This correctly handles badges, pills, chips with colored backgrounds
-- Only expand to wider regions if local sampling is insufficient
-- Use the **median RGB** of remaining pixels as the background color
-- Report the RAW sampled hex — do NOT snap to palette tokens
-
-**STEP 3.5 — BADGE/PILL/CHIP ENCLOSED COMPONENT HANDLING (v25.5):**
-- When text is inside a visually bounded container (badge, pill, chip, label with rounded background):
-  * The container fill IS the background — do NOT sample outside the badge boundary
-  * The foreground is the text glyph color, NOT the container color
-  * Measure contrast between text color and container fill color
-- If foreground and background roles cannot be determined with high confidence:
-  * Set \`status: "potential"\`
-  * Add reason: "Foreground/background ambiguity in enclosed component"
-  * Do NOT report as confirmed
-- Only report A1 — Confirmed for badges/pills when:
-  * Text color and container background are confidently identified
-  * Contrast is measured between text and its immediate container
-- This prevents false positives where light badge fills are mistaken for foreground text
-
-**STEP 4 — Compute contrast ratio:**
-- Use WCAG 2.1 relative luminance formula on the sampled median foreground/background RGB
-- Convert to hex for reporting (hex values are estimated from pixels, not verified tokens)
-- Threshold: 4.5:1 for normal text (< ~18px), 3.0:1 for large text (≥ 18px or ≥ 14px bold)
-
----
-
-## 2️⃣ RELIABILITY CHECKS (ALL must pass for Confirmed status)
-
-**CHECK 1 — Hex-to-Ratio Verification (MANDATORY):**
-After sampling, recompute contrast from the reported estimated hex values.
-The recomputed ratio MUST match the measured contrast within ±0.2.
-If not, mark as UNRELIABLE with reason: "Hex-to-ratio verification failed: measured X.X vs recomputed Y.Y"
-
-**CHECK 2 — Sufficient Pixel Support:**
-Require enough "text pixels" in the darkest subset (at least 15-20 pixels).
-If insufficient, mark as UNRELIABLE with reason: "Insufficient foreground pixels for reliable sampling"
-
-**CHECK 3 — Color Distance Check:**
-If foreground and background colors are too similar (very small color distance, e.g., < 20 luminance units apart), mark as UNRELIABLE with reason: "Foreground and background too similar for reliable measurement"
-
-**CHECK 4 — Foreground Variance:**
-If stddev(luminance) of foreground pixels > 15, mark as UNRELIABLE with reason: "Foreground variance too high — text rendering unstable"
-
-**CHECK 5 — Background Variance:**
-If stddev(luminance) of background pixels > 20, mark as UNRELIABLE with reason: "Background variance too high — non-uniform background (possible gradient/image)"
-
-**CHECK 6 — Multi-Sample Consistency:**
-Repeat sampling with small offsets (~2-5px) 3 times total.
-Compute contrast ratio for each sample.
-If the 3 ratios differ by more than ±0.2, mark as UNRELIABLE with reason: "Multi-sample consistency failed: ratios varied by X.X across positions"
-
----
-
-## 3️⃣ TRI-STATE CLASSIFICATION
-
-**CONFIRMED FAIL (Reliable, Blocking):**
-- ALL reliability checks PASS
-- Interior-stroke contrast is clearly below WCAG AA (< 4.0:1 for normal text to allow margin)
-- Set \`status: "confirmed"\`, \`samplingMethod: "pixel"\`
-- Report \`contrastRatio\`, \`foregroundHex\`, \`backgroundHex\` (RAW sampled values)
-- Confidence: **85–95%**
-- **Blocks convergence**
-
-**BORDERLINE / NEEDS REVIEW (Non-blocking):**
-- Contrast is near threshold (≈ 4.0–4.5:1)
-- OR sampling is unreliable (any reliability check failed)
-- OR element is labeled "secondary" / "muted" / "caption"
-- Set \`status: "borderline"\` or \`status: "potential"\`, \`samplingMethod: "inferred"\`
-- Set \`potentialRiskReason\`: Specific reason (e.g., "Near-threshold contrast (4.2:1) — manual verification recommended")
-- Report estimated hex values but include uncertainty note
-- Confidence: **50–75%**
-- **Does NOT block convergence**
-
-**PASS / RESOLVED:**
-- ALL reliability checks PASS
-- Contrast ≥ 4.5:1 (or ≥ 3.0:1 for large text)
-- DO NOT include in violations array
-- No output for passing elements
-
----
-
-## 4️⃣ CONVERGENCE BEHAVIOR
-
-**CRITICAL: Only \`status: "confirmed"\` violations count toward threshold and block convergence.**
-**\`status: "potential"\` and \`status: "borderline"\` findings are advisory and NEVER block convergence.**
-
-This prevents infinite iterations where A1 repeats despite UI updates due to sampling variability.
-
----
-
-## 5️⃣ FORBIDDEN BEHAVIORS
-
-**DO NOT:**
-- Snap sampled colors to Tailwind tokens or "nearest palette color" (e.g., don't replace sampled #8A8A8F with "#6B7280 (gray-500)")
-- Report palette-mapped hex values — only RAW sampled hex from pixels
-- Say "Exact color values cannot be determined from a screenshot"
-- Output Confirmed status when ANY reliability check fails
-- Assign high confidence (>75%) to findings that fail reliability checks
-- Mark borderline ratios (4.0–4.5:1) as Confirmed — use "borderline" status instead
-- Group multiple unrelated elements under one finding — each element is separate
-
----
-
-## 6️⃣ OUTPUT FORMAT FOR CONFIRMED FAIL (Reliable Interior-Stroke Sampling)
-
-\`\`\`json
-{
-  "ruleId": "A1",
-  "ruleName": "Insufficient text contrast",
-  "category": "accessibility",
-  "status": "confirmed",
-  "samplingMethod": "pixel",
-  "inputType": "screenshots",
-  "elementRole": "badge",
-  "evidence": "CourseCard → Credits badge",
-  "elementDescription": "Credits badge label text",
-  "foregroundRgb": "rgb(138, 138, 143)",
-  "foregroundHex": "#8A8A8F",
-  "backgroundRgb": "rgb(255, 255, 255)",
-  "backgroundHex": "#FFFFFF",
-  "contrastRatio": 2.91,
-  "thresholdUsed": 4.5,
-  "samplingReliability": {
-    "foregroundVariance": "low (stddev 8)",
-    "backgroundVariance": "low (stddev 5)",
-    "hexVerification": "passed (measured 2.91, recomputed 2.89)",
-    "pixelSupport": "adequate (32 fg pixels)",
-    "colorDistance": "adequate (117 luminance units)"
-  },
-  "colorApproximate": true,
-  "diagnosis": "Credits badge text has 2.91:1 contrast (interior-stroke sampled), failing WCAG AA 4.5:1 threshold.",
-  "contextualHint": "Increase badge text contrast to at least 4.5:1 by using darker text or lighter background.",
-  "confidence": 0.90
-}
-\`\`\`
-
----
-
-## 7️⃣ OUTPUT FORMAT FOR BORDERLINE / NEEDS REVIEW (Near-threshold or Unreliable)
-
-\`\`\`json
-{
-  "ruleId": "A1",
-  "ruleName": "Insufficient text contrast",
-  "category": "accessibility",
-  "status": "borderline",
-  "samplingMethod": "inferred",
-  "inputType": "screenshots",
-  "elementRole": "caption",
-  "evidence": "ArticleCard → Published date caption",
-  "elementDescription": "Caption text appears low contrast",
-  "foregroundHex": "#9CA3AF",
-  "backgroundHex": "#F9FAFB",
-  "contrastRatio": 4.21,
-  "thresholdUsed": 4.5,
-  "potentialRiskReason": "Near-threshold contrast (4.21:1) — manual verification recommended",
-  "colorApproximate": true,
-  "diagnosis": "Caption text has near-threshold contrast (4.21:1). Borderline — verify with color picker or DevTools.",
-  "advisoryGuidance": "Upload a PNG at 100% zoom or verify with DevTools/axe for accurate measurement.",
-  "confidence": 0.68
-}
-\`\`\`
-
----
-
-## 8️⃣ OUTPUT FORMAT FOR POTENTIAL RISK (Sampling Unreliable)
-
+For each low-contrast text element, include in the violations array:
 \`\`\`json
 {
   "ruleId": "A1",
   "ruleName": "Insufficient text contrast",
   "category": "accessibility",
   "status": "potential",
-  "samplingMethod": "inferred",
   "inputType": "screenshots",
-  "elementRole": "label",
-  "evidence": "FormField → Helper text",
-  "elementDescription": "Helper text appears low contrast",
-  "potentialRiskReason": "Multi-sample consistency failed: ratios varied by 0.4 across positions",
-  "colorApproximate": true,
-  "diagnosis": "Helper text may have insufficient contrast. Ratio not computed (unreliable sampling).",
-  "advisoryGuidance": "Upload a PNG at 100% zoom or verify with DevTools/axe for accurate measurement.",
-  "confidence": 0.55
+  "perceivedContrast": "low",
+  "perceptualRationale": "1-2 sentence explanation of why contrast appears insufficient",
+  "suggestedFix": "1 sentence corrective guidance",
+  "evidence": "Location/description of the text element",
+  "elementRole": "metadata|caption|badge|label|body text|heading|muted|colored|navigation",
+  "elementDescription": "Short description of the text element",
+  "diagnosis": "Descriptive diagnosis of the perceived contrast issue",
+  "contextualHint": "Short guidance on what to improve",
+  "confidence": 0.5-0.8,
+  "blocksConvergence": false
 }
 \`\`\`
 
-**POTENTIAL RISK REASONS (use specific failure reason):**
-- "Hex-to-ratio verification failed: measured X.X vs recomputed Y.Y"
-- "Insufficient foreground pixels for reliable sampling"
-- "Foreground and background too similar for reliable measurement"
-- "Foreground variance too high (stddev > 15) — text rendering unstable"
-- "Background variance too high (stddev > 20) — non-uniform background"
-- "Multi-sample consistency failed: ratios varied by X.X across positions"
-
----
-
-## 9️⃣ PER-ELEMENT ANALYSIS WORKFLOW (Report each element separately)
-
-For EACH visible text element:
-1. **Identify location** — Component and element role (badge, caption, label, heading, etc.)
-2. **Sample text region pixels** — Collect 50-200 pixels from text bounding box
-3. **Extract foreground** — Select darkest 30-40% by luminance (interior strokes)
-4. **Extract background** — Sample ring around text, exclude dark pixels
-5. **Compute median RGB** — For both foreground and background
-6. **Run reliability checks:**
-   - Hex-to-ratio verification (±0.2)
-   - Pixel support (≥15 fg pixels)
-   - Color distance (≥20 luminance units)
-   - Foreground variance (stddev ≤15)
-   - Background variance (stddev ≤20)
-   - Multi-sample consistency (3 samples, ±0.2)
-7. **Classify:**
-   - All checks pass + ratio < 4.0 → **Confirmed Fail** (blocking)
-   - All checks pass + ratio 4.0-4.5 → **Borderline** (non-blocking)
-   - Any check fails → **Potential Risk** (non-blocking)
-   - All checks pass + ratio ≥ 4.5 → **Pass** (no output)
-8. **Report RAW sampled hex** — Never snap to Tailwind/palette tokens
-
----
-
-## 🔟 MANDATORY FIELDS FOR ALL A1 FINDINGS
-
-- \`samplingMethod\`: "pixel" (reliable) or "inferred" (unreliable/borderline)
-- \`inputType\`: "screenshots"
-- \`colorApproximate: true\` (always for screenshots)
-- \`status\`: "confirmed", "borderline", or "potential"
-
-**CONFIRMED requires:**
-- \`contrastRatio\`, \`foregroundHex\`, \`backgroundHex\` (RAW sampled)
-- \`samplingReliability\` object with all check results
-- Confidence 85-95%
-
-**BORDERLINE/POTENTIAL requires:**
-- \`potentialRiskReason\` with specific failure reason
-- \`advisoryGuidance\`
-- Confidence 50-75%
+**CONFIDENCE GUIDELINES:**
+- 0.7-0.8: Text is clearly low contrast (e.g., light gray on white)
+- 0.5-0.65: Text appears borderline, may need manual verification
 
 **DO NOT:**
-- Include PASS results in violations array
-- Snap colors to Tailwind tokens — report RAW sampled hex only
-- Include "heuristic" or "non-blocking" labels in diagnosis text
-- Mark as Confirmed if ANY reliability check fails
-- Mark borderline (4.0-4.5:1) as Confirmed
+- Report elements with "high" or "adequate" perceived contrast
+- Generate numeric contrast ratios
+- Claim WCAG compliance or non-compliance
+- Output foreground/background hex color values
+- Mark any screenshot A1 finding as "confirmed"
+- Group multiple unrelated elements into one finding — each element is separate
 ` : ''}
 
 Report violations ONLY if there is strong visual evidence.
@@ -2737,13 +2508,13 @@ ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.
 - Absence of evidence does NOT imply absence of usability or ethical issues
 - For each category, output triggered rules OR explicitly state "No violations detected after reasoning"
 - Be thorough but avoid false positives - only report violations with clear evidence
-${includesA1 ? '- For A1 (contrast): Use "confirmed" status when pixel sampling succeeds (solid backgrounds, uniform text regions). Use "potential" ONLY when sampling truly fails (gradients, images, overlays).' : ''}
+${includesA1 ? '- For A1 (contrast): All screenshot findings are status "potential" with perceptual assessment. No numeric ratios. No confirmed status.' : ''}
 
 ## OUTPUT FORMAT (JSON)
 For EACH violation, you MUST provide:
 1. **diagnosis**: Detailed, evidence-based explanation of WHY the rule is violated. Reference UI elements conceptually (e.g., "success message", "filter chips", "primary button").
 2. **contextualHint**: A short (1 sentence) high-level hint summarizing WHERE the issue appears and WHAT kind of adjustment is needed. Keep it descriptive, not implementation-level.
-${includesA1 ? `3. For A1 only: Include "status": "confirmed" (pixel-sampled, solid backgrounds) or "potential" (complex backgrounds only), plus "evidence" describing what you observed.` : ''}
+${includesA1 ? `3. For A1 only: Include "status": "potential", "perceivedContrast": "low", "perceptualRationale", and "suggestedFix" fields. No numeric ratios.` : ''}
 
 IMPORTANT CONSTRAINTS:
 - Do NOT include file paths, class names, or code snippets in diagnosis or contextualHint
@@ -2821,65 +2592,8 @@ Do NOT apply this exception if:
 - When uncertain about size, default to "normal" (conservative approach)
 - When uncertain about navigation, check visual context (header position, menu styling)
 
-## FOREGROUND SAMPLING VALIDATION (MANDATORY - v25.3)
-
-Before computing any contrast ratio, the backend will validate that the sampled
-foreground color truly represents the rendered text glyphs. The AI MUST NOT
-guess or estimate contrast ratios — only identify candidate text regions.
-
-**Foreground Sampling Rules (enforced by backend):**
-1. Sample foreground colors ONLY from pixels strictly inside detected text glyph shapes.
-   Do NOT sample from:
-   - Container backgrounds
-   - Padding areas
-   - Borders
-   - Shadows
-   - Anti-aliased outer edges
-
-2. If sampled foreground is visually similar to surrounding background
-   (luminance difference < 10%), foreground sampling is treated as incorrect.
-
-3. In such cases, the backend will re-sample using:
-   - The lightest 20% of glyph pixels AND
-   - The darkest 20% of glyph pixels
-   The variant producing higher contrast ratio is selected.
-
-4. If re-sampling yields a foreground color visually inconsistent with
-   rendered text appearance (e.g., dark text reported where text appears light),
-   the measurement is discarded.
-
-**Classification Rules (backend enforcement):**
-- CONFIRMED: Foreground AND background both confidently identified,
-  contrast < threshold, sampled colors match visible appearance.
-- POTENTIAL with FG_SAMPLING_UNRELIABLE: Foreground extraction fails after re-sampling.
-- Never report confirmed violation for text that is visually high-contrast
-  (e.g., light text on dark background appears correctly visible).
-
-"a1TextElements": [
-  {
-    "screenshotIndex": 1,
-    "bbox": { "x": 0.12, "y": 0.42, "w": 0.25, "h": 0.04 },
-    "location": "Secondary label in a card header",
-    "elementRole": "metadata" | "caption" | "badge" | "label" | "body text" | "heading" | "muted" | "colored",
-    "elementDescription": "Short description text",
-    "isSecondary": true,
-    "textSize": "normal" | "large"
-  }
-]
-
-**MANDATORY COVERAGE EXAMPLES (must include elements like these):**
-- Gray/muted secondary text: Include with elementRole "muted" or "secondary"
-- Colored price labels: Include with elementRole "colored" or "label"
-- Badge/chip text: Include with elementRole "badge"
-- Timestamp/metadata: Include with elementRole "metadata"
-- Description paragraphs: Include with elementRole "body text" or "caption"
-- Author names: Include with elementRole "metadata"
-
-IMPORTANT:
-- For A1, DO NOT guess colors or contrast ratios in the AI output. ONLY identify candidate text regions (bounding boxes) and context.
-- Bounding box coordinates MUST be normalized fractions (0..1) relative to the screenshot size.
-- The backend will compute contrast ratios from screenshot pixels using interior-stroke sampling.
-- Include EVERY readable text element — the backend will determine pass/fail.
+## NOTE ON A1 PERCEPTUAL MODE
+A1 findings for screenshots use perceptual assessment only. The AI outputs perceivedContrast, perceptualRationale, and suggestedFix fields directly in the violations array. No a1TextElements array is needed.
 
 Respond with a JSON object in this exact structure:
 {
@@ -3186,7 +2900,8 @@ serve(async (req) => {
     
     // CRITICAL: Filter violations to ONLY include selected rules
     // This ensures unselected rules are never reported, even if AI returns them
-    const shouldComputeA1FromPixels = inputType === 'screenshots' && selectedRulesSet.has('A1');
+    // Screenshot A1 now uses LLM perceptual assessment — no pixel sampling
+    const shouldComputeA1FromPixels = false;
 
     // Compute screenshot-only A1 via pixel sampling (anti-alias resistant)
     let computedA1Violations: any[] = [];
@@ -3222,8 +2937,6 @@ serve(async (req) => {
       if (!isSelected) {
         console.log(`Filtering out violation for unselected rule: ${v.ruleId}`);
       }
-      // For screenshot-based A1, we ignore any AI-provided A1 and use pixel sampling instead.
-      if (shouldComputeA1FromPixels && v.ruleId === 'A1') return false;
       return isSelected;
     });
     
@@ -3234,8 +2947,18 @@ serve(async (req) => {
     const a2Violations: any[] = []; // A2 = Poor focus visibility (accepts both old A5 and new A2 IDs)
     const otherViolations: any[] = [];
     
+    // For screenshot A1, force all findings to perceptual/potential
     filteredBySelection.forEach((v: any) => {
       if (v.ruleId === 'A1') {
+        // Force perceptual assessment fields for screenshot A1
+        v.status = 'potential';
+        v.evaluationMethod = 'llm_assisted';
+        v.blocksConvergence = false;
+        v.inputType = 'screenshots';
+        v.samplingMethod = 'inferred';
+        v.perceivedContrast = v.perceivedContrast || 'low';
+        v.perceptualRationale = v.perceptualRationale || v.diagnosis || '';
+        v.suggestedFix = v.suggestedFix || v.contextualHint || '';
         a1Violations.push(v);
       } else if (v.ruleId === 'A2' || v.ruleId === 'A5') {
         v.ruleId = 'A2'; // Normalize to A2
@@ -3245,10 +2968,9 @@ serve(async (req) => {
       }
     });
 
-    if (shouldComputeA1FromPixels) {
-      a1Violations.push(...computedA1Violations);
-    }
-    
+    // Screenshot A1 now uses LLM perceptual assessment — no pixel sampling needed
+    console.log(`A1 perceptual: ${a1Violations.length} findings from LLM (all potential)`);
+
     // ========== U1 EVIDENCE GATING (Cases A, B, C, D) ==========
     // Filter out speculative U1 violations that lack proper evidence
     // Supports 4 cases: A (equal emphasis), B (competing primaries), C (hidden affordance), D (de-emphasized primary)
