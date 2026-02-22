@@ -32,6 +32,7 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const isPerceptual = !!element.perceivedContrast;
   
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -57,7 +58,12 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                   "{element.textSnippet}"
                 </span>
               )}
-              {element.nearThreshold && (
+              {isPerceptual && (
+                <Badge variant="outline" className="text-xs border-violet-500/50 text-violet-600">
+                  Perceptual Estimate
+                </Badge>
+              )}
+              {!isPerceptual && element.nearThreshold && (
                 <Badge variant="outline" className="text-xs border-warning/50 text-warning">
                   near-threshold
                 </Badge>
@@ -82,109 +88,142 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Foreground */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Foreground:</span>
-              {element.foregroundHex ? (
-                <span className="flex items-center gap-1">
-                  <span className="font-mono">{element.foregroundHex}</span>
-                  <span 
-                    className="w-3 h-3 rounded border border-border" 
-                    style={{ backgroundColor: element.foregroundHex }} 
-                  />
-                  {element.foregroundConfidence !== undefined && (
-                    <span className="text-muted-foreground">
-                      ({Math.round(element.foregroundConfidence * 100)}% conf)
-                    </span>
-                  )}
-                </span>
-              ) : (
-                <span className="text-muted-foreground italic">not measured</span>
-              )}
-            </div>
             
-            {/* Background */}
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20">Background:</span>
-              <div>
-                {element.backgroundStatus === 'certain' && element.backgroundHex ? (
-                  <span className="flex items-center gap-1">
-                    <span className="font-mono">{element.backgroundHex}</span>
-                    <span 
-                      className="w-3 h-3 rounded border border-border" 
-                      style={{ backgroundColor: element.backgroundHex }} 
-                    />
-                    <span className="text-muted-foreground">(certain)</span>
-                  </span>
-                ) : element.backgroundStatus === 'uncertain' && element.backgroundCandidates?.length ? (
-                  <div className="space-y-1">
-                    <span className="text-warning">(uncertain — multiple candidates)</span>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {element.backgroundCandidates.map((c, i) => (
-                        <span key={i} className="flex items-center gap-1">
-                          <span className="font-mono text-xs">{c.hex}</span>
-                          <span 
-                            className="w-3 h-3 rounded border border-border" 
-                            style={{ backgroundColor: c.hex }} 
-                          />
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : element.backgroundHex ? (
-                  <span className="flex items-center gap-1">
-                    <span className="font-mono">{element.backgroundHex}</span>
-                    <span 
-                      className="w-3 h-3 rounded border border-border" 
-                      style={{ backgroundColor: element.backgroundHex }} 
-                    />
-                    <span className="text-warning">({element.backgroundStatus})</span>
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground italic">unmeasurable</span>
-                )}
-              </div>
-            </div>
-            
-            {/* Contrast */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Contrast:</span>
-              {element.contrastNotMeasurable ? (
-                <span className="text-muted-foreground italic">not measurable</span>
-              ) : element.contrastRange ? (
-                <span>
-                  <span className={cn(
-                    'font-mono font-medium',
-                    isConfirmed ? 'text-destructive' : 'text-warning'
+            {/* PERCEPTUAL MODE: Show perceptual assessment instead of colors/ratio */}
+            {isPerceptual ? (
+              <>
+                {/* Perceived Contrast */}
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground font-medium w-20">Contrast:</span>
+                  <Badge variant="outline" className={cn('text-xs',
+                    element.perceivedContrast === 'low' ? 'border-warning/50 text-warning' : 'border-muted-foreground/50'
                   )}>
-                    {element.contrastRange.min.toFixed(1)}:1 – {element.contrastRange.max.toFixed(1)}:1
+                    {element.perceivedContrast === 'low' ? 'Low (perceptual)' : element.perceivedContrast}
+                  </Badge>
+                </div>
+                
+                {/* Rationale */}
+                {element.perceptualRationale && (
+                  <div className="pt-1">
+                    <span className="text-muted-foreground font-medium">Rationale: </span>
+                    <span className="text-foreground">{element.perceptualRationale}</span>
+                  </div>
+                )}
+                
+                {/* Suggested Fix */}
+                {element.suggestedFix && (
+                  <div className="pt-1">
+                    <span className="text-muted-foreground font-medium">Suggestion: </span>
+                    <span className="text-foreground">{element.suggestedFix}</span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {/* STRUCTURAL MODE: Show foreground/background/ratio */}
+                {/* Foreground */}
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground font-medium w-20">Foreground:</span>
+                  {element.foregroundHex ? (
+                    <span className="flex items-center gap-1">
+                      <span className="font-mono">{element.foregroundHex}</span>
+                      <span 
+                        className="w-3 h-3 rounded border border-border" 
+                        style={{ backgroundColor: element.foregroundHex }} 
+                      />
+                      {element.foregroundConfidence !== undefined && (
+                        <span className="text-muted-foreground">
+                          ({Math.round(element.foregroundConfidence * 100)}% conf)
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground italic">not measured</span>
+                  )}
+                </div>
+                
+                {/* Background */}
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground font-medium w-20">Background:</span>
+                  <div>
+                    {element.backgroundStatus === 'certain' && element.backgroundHex ? (
+                      <span className="flex items-center gap-1">
+                        <span className="font-mono">{element.backgroundHex}</span>
+                        <span 
+                          className="w-3 h-3 rounded border border-border" 
+                          style={{ backgroundColor: element.backgroundHex }} 
+                        />
+                        <span className="text-muted-foreground">(certain)</span>
+                      </span>
+                    ) : element.backgroundStatus === 'uncertain' && element.backgroundCandidates?.length ? (
+                      <div className="space-y-1">
+                        <span className="text-warning">(uncertain — multiple candidates)</span>
+                        <div className="flex flex-wrap gap-2 mt-1">
+                          {element.backgroundCandidates.map((c, i) => (
+                            <span key={i} className="flex items-center gap-1">
+                              <span className="font-mono text-xs">{c.hex}</span>
+                              <span 
+                                className="w-3 h-3 rounded border border-border" 
+                                style={{ backgroundColor: c.hex }} 
+                              />
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : element.backgroundHex ? (
+                      <span className="flex items-center gap-1">
+                        <span className="font-mono">{element.backgroundHex}</span>
+                        <span 
+                          className="w-3 h-3 rounded border border-border" 
+                          style={{ backgroundColor: element.backgroundHex }} 
+                        />
+                        <span className="text-warning">({element.backgroundStatus})</span>
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground italic">unmeasurable</span>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Contrast */}
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground font-medium w-20">Contrast:</span>
+                  {element.contrastNotMeasurable ? (
+                    <span className="text-muted-foreground italic">not measurable</span>
+                  ) : element.contrastRange ? (
+                    <span>
+                      <span className={cn(
+                        'font-mono font-medium',
+                        isConfirmed ? 'text-destructive' : 'text-warning'
+                      )}>
+                        {element.contrastRange.min.toFixed(1)}:1 – {element.contrastRange.max.toFixed(1)}:1
+                      </span>
+                      <span className="text-muted-foreground ml-1">(range)</span>
+                    </span>
+                  ) : element.contrastRatio !== undefined ? (
+                    <span className={cn(
+                      'font-mono font-medium',
+                      isConfirmed ? 'text-destructive' : 'text-warning'
+                    )}>
+                      {element.contrastRatio.toFixed(1)}:1
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground italic">not computed</span>
+                  )}
+                  <span className="text-muted-foreground">
+                    vs {element.thresholdUsed}:1 threshold
                   </span>
-                  <span className="text-muted-foreground ml-1">(range)</span>
-                </span>
-              ) : element.contrastRatio !== undefined ? (
-                <span className={cn(
-                  'font-mono font-medium',
-                  isConfirmed ? 'text-destructive' : 'text-warning'
-                )}>
-                  {element.contrastRatio.toFixed(1)}:1
-                </span>
-              ) : (
-                <span className="text-muted-foreground italic">not computed</span>
-              )}
-              <span className="text-muted-foreground">
-                vs {element.thresholdUsed}:1 threshold
-              </span>
-            </div>
+                </div>
+              </>
+            )}
             
             {/* Explanation */}
             <div className="pt-1">
               <p className="text-foreground leading-relaxed">{element.explanation}</p>
             </div>
             
-            {/* Corrective prompts are rendered in the dedicated "Corrective Prompts" section, not here */}
-            
-            {/* Reason codes (for potential findings only — no corrective prompts) */}
-            {!isConfirmed && element.reasonCodes && element.reasonCodes.length > 0 && (
+            {/* Reason codes (for structural potential findings only) */}
+            {!isConfirmed && !isPerceptual && element.reasonCodes && element.reasonCodes.length > 0 && (
               <div className="flex items-start gap-2 pt-1">
                 <Info className="h-3 w-3 text-warning mt-0.5 flex-shrink-0" />
                 <div className="flex flex-wrap gap-1">
@@ -214,6 +253,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
   
   const isConfirmed = violation.status === 'confirmed';
   const elements = violation.a1Elements;
+  const isPerceptual = violation.evaluationMethod === 'llm_assisted' || violation.inputType === 'screenshots';
   
   return (
     <Card className={cn(
@@ -237,6 +277,16 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           )}>
             {elements.length} element{elements.length !== 1 ? 's' : ''}
           </Badge>
+          {/* Modality label */}
+          {isPerceptual ? (
+            <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-violet-500/10 text-violet-600 border-violet-500/20">
+              LLM-Assisted (Perceptual – Screenshot Modality)
+            </span>
+          ) : (
+            <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-blue-500/10 text-blue-600 border-blue-500/20">
+              Deterministic (Structural Evidence)
+            </span>
+          )}
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
           {violation.diagnosis}
@@ -252,8 +302,20 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           />
         ))}
         
+        {/* Perceptual disclaimer for screenshot mode */}
+        {isPerceptual && (
+          <div className={cn(
+            'rounded-lg bg-violet-500/5 border border-violet-500/20 mt-3',
+            compact ? 'p-2' : 'p-3'
+          )}>
+            <p className={cn('text-violet-600 italic', compact ? 'text-xs' : 'text-sm')}>
+              ⚠️ Screenshot-based contrast assessment is perceptual and requires manual verification using developer tools for WCAG compliance.
+            </p>
+          </div>
+        )}
+        
         {/* Advisory guidance for potential findings */}
-        {!isConfirmed && violation.advisoryGuidance && (
+        {!isConfirmed && !isPerceptual && violation.advisoryGuidance && (
           <div className={cn(
             'rounded-lg bg-muted/30 border border-border mt-3',
             compact ? 'p-2' : 'p-3'
