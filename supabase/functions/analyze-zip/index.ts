@@ -413,22 +413,98 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
   return findings;
 }
 
-// Tailwind color mappings to approximate hex values
+// Tailwind color mappings — full default palette
 const TAILWIND_COLORS: Record<string, string> = {
-  // Grays
+  // White/Black
+  'white': '#ffffff', 'black': '#000000',
+  // Gray
   'gray-50': '#f9fafb', 'gray-100': '#f3f4f6', 'gray-200': '#e5e7eb',
   'gray-300': '#d1d5db', 'gray-400': '#9ca3af', 'gray-500': '#6b7280',
-  'gray-600': '#4b5563', 'gray-700': '#374151', 'gray-800': '#1f2937', 'gray-900': '#111827',
+  'gray-600': '#4b5563', 'gray-700': '#374151', 'gray-800': '#1f2937', 'gray-900': '#111827', 'gray-950': '#030712',
   // Slate
   'slate-50': '#f8fafc', 'slate-100': '#f1f5f9', 'slate-200': '#e2e8f0',
   'slate-300': '#cbd5e1', 'slate-400': '#94a3b8', 'slate-500': '#64748b',
-  'slate-600': '#475569', 'slate-700': '#334155', 'slate-800': '#1e293b', 'slate-900': '#0f172a',
+  'slate-600': '#475569', 'slate-700': '#334155', 'slate-800': '#1e293b', 'slate-900': '#0f172a', 'slate-950': '#020617',
   // Zinc
   'zinc-50': '#fafafa', 'zinc-100': '#f4f4f5', 'zinc-200': '#e4e4e7',
   'zinc-300': '#d4d4d8', 'zinc-400': '#a1a1aa', 'zinc-500': '#71717a',
-  'zinc-600': '#52525b', 'zinc-700': '#3f3f46', 'zinc-800': '#27272a', 'zinc-900': '#18181b',
-  // White/Black
-  'white': '#ffffff', 'black': '#000000',
+  'zinc-600': '#52525b', 'zinc-700': '#3f3f46', 'zinc-800': '#27272a', 'zinc-900': '#18181b', 'zinc-950': '#09090b',
+  // Neutral
+  'neutral-50': '#fafafa', 'neutral-100': '#f5f5f5', 'neutral-200': '#e5e5e5',
+  'neutral-300': '#d4d4d4', 'neutral-400': '#a3a3a3', 'neutral-500': '#737373',
+  'neutral-600': '#525252', 'neutral-700': '#404040', 'neutral-800': '#262626', 'neutral-900': '#171717', 'neutral-950': '#0a0a0a',
+  // Stone
+  'stone-50': '#fafaf9', 'stone-100': '#f5f5f4', 'stone-200': '#e7e5e4',
+  'stone-300': '#d6d3d1', 'stone-400': '#a8a29e', 'stone-500': '#78716c',
+  'stone-600': '#57534e', 'stone-700': '#44403c', 'stone-800': '#292524', 'stone-900': '#1c1917', 'stone-950': '#0c0a09',
+  // Red
+  'red-50': '#fef2f2', 'red-100': '#fee2e2', 'red-200': '#fecaca',
+  'red-300': '#fca5a5', 'red-400': '#f87171', 'red-500': '#ef4444',
+  'red-600': '#dc2626', 'red-700': '#b91c1c', 'red-800': '#991b1b', 'red-900': '#7f1d1d', 'red-950': '#450a0a',
+  // Orange
+  'orange-50': '#fff7ed', 'orange-100': '#ffedd5', 'orange-200': '#fed7aa',
+  'orange-300': '#fdba74', 'orange-400': '#fb923c', 'orange-500': '#f97316',
+  'orange-600': '#ea580c', 'orange-700': '#c2410c', 'orange-800': '#9a3412', 'orange-900': '#7c2d12', 'orange-950': '#431407',
+  // Amber
+  'amber-50': '#fffbeb', 'amber-100': '#fef3c7', 'amber-200': '#fde68a',
+  'amber-300': '#fcd34d', 'amber-400': '#fbbf24', 'amber-500': '#f59e0b',
+  'amber-600': '#d97706', 'amber-700': '#b45309', 'amber-800': '#92400e', 'amber-900': '#78350f', 'amber-950': '#451a03',
+  // Yellow
+  'yellow-50': '#fefce8', 'yellow-100': '#fef9c3', 'yellow-200': '#fef08a',
+  'yellow-300': '#fde047', 'yellow-400': '#facc15', 'yellow-500': '#eab308',
+  'yellow-600': '#ca8a04', 'yellow-700': '#a16207', 'yellow-800': '#854d0e', 'yellow-900': '#713f12', 'yellow-950': '#422006',
+  // Lime
+  'lime-50': '#f7fee7', 'lime-100': '#ecfccb', 'lime-200': '#d9f99d',
+  'lime-300': '#bef264', 'lime-400': '#a3e635', 'lime-500': '#84cc16',
+  'lime-600': '#65a30d', 'lime-700': '#4d7c0f', 'lime-800': '#3f6212', 'lime-900': '#365314', 'lime-950': '#1a2e05',
+  // Green
+  'green-50': '#f0fdf4', 'green-100': '#dcfce7', 'green-200': '#bbf7d0',
+  'green-300': '#86efac', 'green-400': '#4ade80', 'green-500': '#22c55e',
+  'green-600': '#16a34a', 'green-700': '#15803d', 'green-800': '#166534', 'green-900': '#14532d', 'green-950': '#052e16',
+  // Emerald
+  'emerald-50': '#ecfdf5', 'emerald-100': '#d1fae5', 'emerald-200': '#a7f3d0',
+  'emerald-300': '#6ee7b7', 'emerald-400': '#34d399', 'emerald-500': '#10b981',
+  'emerald-600': '#059669', 'emerald-700': '#047857', 'emerald-800': '#065f46', 'emerald-900': '#064e3b', 'emerald-950': '#022c22',
+  // Teal
+  'teal-50': '#f0fdfa', 'teal-100': '#ccfbf1', 'teal-200': '#99f6e4',
+  'teal-300': '#5eead4', 'teal-400': '#2dd4bf', 'teal-500': '#14b8a6',
+  'teal-600': '#0d9488', 'teal-700': '#0f766e', 'teal-800': '#115e59', 'teal-900': '#134e4a', 'teal-950': '#042f2e',
+  // Cyan
+  'cyan-50': '#ecfeff', 'cyan-100': '#cffafe', 'cyan-200': '#a5f3fc',
+  'cyan-300': '#67e8f9', 'cyan-400': '#22d3ee', 'cyan-500': '#06b6d4',
+  'cyan-600': '#0891b2', 'cyan-700': '#0e7490', 'cyan-800': '#155e75', 'cyan-900': '#164e63', 'cyan-950': '#083344',
+  // Sky
+  'sky-50': '#f0f9ff', 'sky-100': '#e0f2fe', 'sky-200': '#bae6fd',
+  'sky-300': '#7dd3fc', 'sky-400': '#38bdf8', 'sky-500': '#0ea5e9',
+  'sky-600': '#0284c7', 'sky-700': '#0369a1', 'sky-800': '#075985', 'sky-900': '#0c4a6e', 'sky-950': '#082f49',
+  // Blue
+  'blue-50': '#eff6ff', 'blue-100': '#dbeafe', 'blue-200': '#bfdbfe',
+  'blue-300': '#93c5fd', 'blue-400': '#60a5fa', 'blue-500': '#3b82f6',
+  'blue-600': '#2563eb', 'blue-700': '#1d4ed8', 'blue-800': '#1e40af', 'blue-900': '#1e3a8a', 'blue-950': '#172554',
+  // Indigo
+  'indigo-50': '#eef2ff', 'indigo-100': '#e0e7ff', 'indigo-200': '#c7d2fe',
+  'indigo-300': '#a5b4fc', 'indigo-400': '#818cf8', 'indigo-500': '#6366f1',
+  'indigo-600': '#4f46e5', 'indigo-700': '#4338ca', 'indigo-800': '#3730a3', 'indigo-900': '#312e81', 'indigo-950': '#1e1b4b',
+  // Violet
+  'violet-50': '#f5f3ff', 'violet-100': '#ede9fe', 'violet-200': '#ddd6fe',
+  'violet-300': '#c4b5fd', 'violet-400': '#a78bfa', 'violet-500': '#8b5cf6',
+  'violet-600': '#7c3aed', 'violet-700': '#6d28d9', 'violet-800': '#5b21b6', 'violet-900': '#4c1d95', 'violet-950': '#2e1065',
+  // Purple
+  'purple-50': '#faf5ff', 'purple-100': '#f3e8ff', 'purple-200': '#e9d5ff',
+  'purple-300': '#d8b4fe', 'purple-400': '#c084fc', 'purple-500': '#a855f7',
+  'purple-600': '#9333ea', 'purple-700': '#7e22ce', 'purple-800': '#6b21a8', 'purple-900': '#581c87', 'purple-950': '#3b0764',
+  // Fuchsia
+  'fuchsia-50': '#fdf4ff', 'fuchsia-100': '#fae8ff', 'fuchsia-200': '#f5d0fe',
+  'fuchsia-300': '#f0abfc', 'fuchsia-400': '#e879f9', 'fuchsia-500': '#d946ef',
+  'fuchsia-600': '#c026d3', 'fuchsia-700': '#a21caf', 'fuchsia-800': '#86198f', 'fuchsia-900': '#701a75', 'fuchsia-950': '#4a044e',
+  // Pink
+  'pink-50': '#fdf2f8', 'pink-100': '#fce7f3', 'pink-200': '#fbcfe8',
+  'pink-300': '#f9a8d4', 'pink-400': '#f472b6', 'pink-500': '#ec4899',
+  'pink-600': '#db2777', 'pink-700': '#be185d', 'pink-800': '#9d174d', 'pink-900': '#831843', 'pink-950': '#500724',
+  // Rose
+  'rose-50': '#fff1f2', 'rose-100': '#ffe4e6', 'rose-200': '#fecdd3',
+  'rose-300': '#fda4af', 'rose-400': '#fb7185', 'rose-500': '#f43f5e',
+  'rose-600': '#e11d48', 'rose-700': '#be123c', 'rose-800': '#9f1239', 'rose-900': '#881337', 'rose-950': '#4c0519',
 };
 
 // Parse hex color to RGB
@@ -465,30 +541,101 @@ function getContrastRatio(hex1: string, hex2: string): number | null {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-// Extract text color classes from code
-function extractTextColors(code: string): Array<{ colorClass: string; context: string }> {
-  const results: Array<{ colorClass: string; context: string }> = [];
-  
-  // Match Tailwind text color classes
-  const textColorRegex = /text-(gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|white|black)-?(\d{2,3})?/g;
+// ========== A1 TAILWIND-TOKEN CONTRAST COMPUTATION ==========
+// Extracts text-* and bg-* Tailwind tokens, traverses parent elements for
+// background resolution, computes actual WCAG contrast ratio when both fg
+// and bg are resolvable. Epistemic flags track source reliability.
+
+type A1FgSource = 'tailwind_token';
+type A1BgSource = 'tailwind_token' | 'assumed_default' | 'unresolved';
+type A1EvidenceLevel = 'structural_deterministic' | 'structural_estimated';
+type A1SizeStatus = 'normal' | 'large' | 'unknown';
+
+interface A1TokenFinding {
+  fgHex: string;
+  fgClass: string;
+  fgSource: A1FgSource;
+  bgHex: string;
+  bgClass: string | null;
+  bgSource: A1BgSource;
+  ratio: number | null;
+  threshold: 4.5 | 3.0;
+  sizeStatus: A1SizeStatus;
+  evidenceLevel: A1EvidenceLevel;
+  filePath: string;
+  componentName?: string;
+  elementContext?: string;
+  context: string;
+  occurrence_count: number;
+}
+
+const TW_COLOR_FAMILIES = 'gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|white|black';
+
+function extractTextColorTokens(code: string): Array<{ colorClass: string; colorName: string; context: string; matchIndex: number }> {
+  const results: Array<{ colorClass: string; colorName: string; context: string; matchIndex: number }> = [];
+  const textColorRegex = new RegExp(`text-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?`, 'g');
   
   let match;
   while ((match = textColorRegex.exec(code)) !== null) {
     const colorClass = match[0];
-    const start = Math.max(0, match.index - 50);
-    const end = Math.min(code.length, match.index + colorClass.length + 50);
+    const colorName = match[1] + (match[2] ? `-${match[2]}` : '');
+    const start = Math.max(0, match.index - 100);
+    const end = Math.min(code.length, match.index + colorClass.length + 100);
     const context = code.slice(start, end).replace(/\n/g, ' ').trim();
-    results.push({ colorClass, context });
+    results.push({ colorClass, colorName, context, matchIndex: match.index });
   }
-  
   return results;
 }
 
-// Analyze contrast issues in code - HEURISTIC ONLY (no computed DOM styles)
-// Per requirements: Only mark as "confirmed" if using axe-core with element reference 
-// OR actual computed DOM styles. Static Tailwind class mapping is NOT sufficient.
-// ZIP INPUT = HEURISTIC: Cannot confirm contrast without runtime rendering
-// Per authoritative A1 rule: ZIP analysis = ALWAYS "Heuristic Potential Risk"
+// Extract bg-* class from the same className attribute or nearby JSX context
+function extractBgFromContext(code: string, textMatchIndex: number): { bgClass: string; bgName: string } | null {
+  const searchStart = Math.max(0, textMatchIndex - 300);
+  const searchEnd = Math.min(code.length, textMatchIndex + 300);
+  const region = code.slice(searchStart, searchEnd);
+  
+  const bgRegex = new RegExp(`bg-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?`, 'g');
+  let bgMatch;
+  while ((bgMatch = bgRegex.exec(region)) !== null) {
+    const bgClass = bgMatch[0];
+    const bgName = bgMatch[1] + (bgMatch[2] ? `-${bgMatch[2]}` : '');
+    return { bgClass, bgName };
+  }
+  return null;
+}
+
+// Traverse backwards from the text-* match to find the nearest parent bg-* class
+function findParentBg(code: string, textMatchIndex: number): { bgClass: string; bgName: string } | null {
+  const scanRadii = [500, 1000, 2000];
+  const bgRegex = new RegExp(`bg-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?`, 'g');
+  
+  for (const radius of scanRadii) {
+    const start = Math.max(0, textMatchIndex - radius);
+    const region = code.slice(start, textMatchIndex);
+    
+    let lastBg: { bgClass: string; bgName: string } | null = null;
+    let m;
+    while ((m = bgRegex.exec(region)) !== null) {
+      const bgClass = m[0];
+      const bgName = m[1] + (m[2] ? `-${m[2]}` : '');
+      lastBg = { bgClass, bgName };
+    }
+    bgRegex.lastIndex = 0;
+    if (lastBg) return lastBg;
+  }
+  return null;
+}
+
+// Best-effort text size inference from surrounding code context
+function inferTextSize(context: string): A1SizeStatus {
+  const lower = context.toLowerCase();
+  if (/text-(3xl|4xl|5xl|6xl|7xl|8xl|9xl)\b/.test(context)) return 'large';
+  if (/text-2xl\b/.test(context) && /font-(bold|extrabold|black|semibold)\b/.test(context)) return 'large';
+  if (/<h[12]\b/.test(lower)) return 'large';
+  if (/text-(xs|sm)\b/.test(context)) return 'normal';
+  if (/<(p|span|label|td|li)\b/.test(lower)) return 'normal';
+  return 'unknown';
+}
+
 interface ContrastViolation {
   ruleId: string;
   ruleName: string;
@@ -514,6 +661,11 @@ interface ContrastViolation {
   reasonCodes?: string[];
   backgroundStatus?: 'certain' | 'uncertain' | 'unmeasurable';
   blocksConvergence?: boolean;
+  // Epistemic fields for Tailwind-token contrast computation
+  fgSource?: A1FgSource;
+  bgSource?: A1BgSource;
+  evidenceLevel?: A1EvidenceLevel;
+  sizeStatus?: A1SizeStatus;
   affectedComponents?: Array<{
     colorClass: string;
     hexColor?: string;
@@ -525,170 +677,190 @@ interface ContrastViolation {
   }>;
 }
 
-// A1 Color risk tiers for Tailwind gray scale classes
-// Higher risk = lighter colors that are more likely to fail on light backgrounds
-const A1_COLOR_RISK_TIERS: Record<string, { riskLevel: 'high' | 'medium' | 'low'; baseConfidence: number }> = {
-  // High risk: very light grays - almost certainly fail on white/light backgrounds
-  'gray-200': { riskLevel: 'high', baseConfidence: 0.70 },
-  'gray-300': { riskLevel: 'high', baseConfidence: 0.70 },
-  'slate-200': { riskLevel: 'high', baseConfidence: 0.70 },
-  'slate-300': { riskLevel: 'high', baseConfidence: 0.70 },
-  'zinc-200': { riskLevel: 'high', baseConfidence: 0.70 },
-  'zinc-300': { riskLevel: 'high', baseConfidence: 0.70 },
-  // Medium risk: mid-light grays - likely to fail on white, borderline on light grays
-  'gray-400': { riskLevel: 'medium', baseConfidence: 0.60 },
-  'slate-400': { riskLevel: 'medium', baseConfidence: 0.60 },
-  'zinc-400': { riskLevel: 'medium', baseConfidence: 0.60 },
-  // Low risk: darker grays - may fail depending on background and font size
-  'gray-500': { riskLevel: 'low', baseConfidence: 0.45 },
-  'slate-500': { riskLevel: 'low', baseConfidence: 0.45 },
-  'zinc-500': { riskLevel: 'low', baseConfidence: 0.45 },
-};
-
 function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] {
-  // Collect all potential A1 findings first for aggregation
-  const a1Findings: Array<{
-    colorClass: string;
-    colorName: string;
-    hexColor?: string;
-    filePath: string;
-    componentName?: string;
-    elementContext?: string;
-    riskLevel: 'high' | 'medium' | 'low';
-    confidence: number;
-  }> = [];
+  const a1Findings: A1TokenFinding[] = [];
   
   for (const [filepath, content] of files) {
-    const textColors = extractTextColors(content);
-    
-    // Try to extract component name from file
     let componentName = filepath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js)$/i, '') || '';
     const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
     const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
     
-    for (const { colorClass, context } of textColors) {
-      const colorMatch = colorClass.match(/text-(\w+-?\d*)/);
-      if (!colorMatch) continue;
+    const textTokens = extractTextColorTokens(content);
+    
+    for (const { colorClass, colorName, context, matchIndex } of textTokens) {
+      const fgHex = TAILWIND_COLORS[colorName];
+      if (!fgHex) continue; // Unknown token — skip
       
-      const colorName = colorMatch[1];
-      const riskTier = A1_COLOR_RISK_TIERS[colorName];
+      // --- Background resolution ---
+      let bgHex: string;
+      let bgClass: string | null = null;
+      let bgSource: A1BgSource;
       
-      if (!riskTier) continue; // Not a tracked low-contrast color
+      // 1) Same-element bg-*
+      const sameBg = extractBgFromContext(content, matchIndex);
+      if (sameBg && TAILWIND_COLORS[sameBg.bgName]) {
+        bgHex = TAILWIND_COLORS[sameBg.bgName];
+        bgClass = sameBg.bgClass;
+        bgSource = 'tailwind_token';
+      } else {
+        // 2) Parent traversal
+        const parentBg = findParentBg(content, matchIndex);
+        if (parentBg && TAILWIND_COLORS[parentBg.bgName]) {
+          bgHex = TAILWIND_COLORS[parentBg.bgName];
+          bgClass = parentBg.bgClass;
+          bgSource = 'tailwind_token';
+        } else {
+          // 3) Assume white default
+          bgHex = '#ffffff';
+          bgSource = 'assumed_default';
+        }
+      }
       
-      const hexColor = TAILWIND_COLORS[colorName];
+      // --- Contrast computation ---
+      const ratio = getContrastRatio(fgHex, bgHex);
+      
+      // --- Size inference ---
+      const sizeStatus = inferTextSize(context);
+      const threshold: 4.5 | 3.0 = sizeStatus === 'large' ? 3.0 : 4.5;
+      
+      const evidenceLevel: A1EvidenceLevel = bgSource === 'tailwind_token'
+        ? 'structural_deterministic'
+        : 'structural_estimated';
+      
       const elementContext = inferElementContext(context);
       
+      // Only report if ratio fails threshold
+      if (ratio !== null && ratio >= threshold) continue; // PASS
+      
       a1Findings.push({
-        colorClass,
-        colorName,
-        hexColor,
+        fgHex,
+        fgClass: colorClass,
+        fgSource: 'tailwind_token',
+        bgHex,
+        bgClass,
+        bgSource,
+        ratio,
+        threshold,
+        sizeStatus,
+        evidenceLevel,
         filePath: filepath,
         componentName: componentName || undefined,
         elementContext: elementContext || undefined,
-        riskLevel: riskTier.riskLevel,
-        confidence: riskTier.baseConfidence,
+        context,
+        occurrence_count: 1,
       });
     }
   }
   
-  if (a1Findings.length === 0) {
-    return [];
-  }
+  if (a1Findings.length === 0) return [];
   
-  // ========== A1 ELEMENT-LEVEL REPORTING (NO AGGREGATION) ==========
-  // Per authoritative A1 rule: NEVER aggregate A1 findings into a single message.
-  // For ZIP input, ALL findings are Heuristic Potential Risk with STATIC_ANALYSIS reason code.
-  
-  // Deduplicate by color class + file (but still report per unique occurrence)
-  const dedupeMap = new Map<string, {
-    colorClass: string;
-    colorName: string;
-    hexColor?: string;
-    filePath: string;
-    componentName?: string;
-    elementContext?: string;
-    riskLevel: 'high' | 'medium' | 'low';
-    confidence: number;
-    occurrence_count: number;
-  }>();
-  
+  // Deduplicate by fg+bg+file
+  const dedupeMap = new Map<string, A1TokenFinding>();
   for (const finding of a1Findings) {
-    const key = `${finding.colorName}:${finding.filePath}`;
+    const key = `${finding.fgClass}:${finding.bgSource}:${finding.bgHex}:${finding.filePath}`;
     if (dedupeMap.has(key)) {
-      const existing = dedupeMap.get(key)!;
-      existing.occurrence_count += 1;
+      dedupeMap.get(key)!.occurrence_count += 1;
     } else {
-      dedupeMap.set(key, { ...finding, occurrence_count: 1 });
+      dedupeMap.set(key, { ...finding });
     }
   }
   
-  const affectedComponents = Array.from(dedupeMap.values());
+  const results: ContrastViolation[] = [];
   
-  // Return PER-ELEMENT A1 findings (no aggregation)
-  const perElementResults: ContrastViolation[] = [];
-  
-  for (const component of affectedComponents) {
-    const fileName = component.filePath.split('/').pop() || component.filePath;
-    const elementIdentifier = component.componentName 
-      ? `${component.componentName} (${fileName})`
+  for (const finding of dedupeMap.values()) {
+    const fileName = finding.filePath.split('/').pop() || finding.filePath;
+    const elementIdentifier = finding.componentName
+      ? `${finding.componentName} (${fileName})`
       : fileName;
     
-    // Reason codes for ZIP input - ALWAYS include STATIC_ANALYSIS
-    const reasonCodes = ['STATIC_ANALYSIS'];
+    // Classification: Confirmed only when both fg AND bg are from Tailwind tokens
+    const isConfirmed = finding.bgSource === 'tailwind_token' && finding.ratio !== null && finding.ratio < finding.threshold;
+    const status: 'confirmed' | 'potential' = isConfirmed ? 'confirmed' : 'potential';
     
-    // Build per-element diagnosis
-    const diagnosis = `Text color ${component.colorClass} (${component.hexColor || 'unknown hex'}) detected in ${elementIdentifier}. ` +
-      `Background color cannot be determined from static code analysis; contrast ratio cannot be computed.`;
+    // Reason codes
+    const reasonCodes: string[] = ['STATIC_ANALYSIS'];
+    if (finding.bgSource === 'assumed_default') reasonCodes.push('BG_ASSUMED_DEFAULT');
+    if (finding.bgSource === 'unresolved') reasonCodes.push('BG_UNRESOLVED');
+    if (finding.sizeStatus === 'unknown') reasonCodes.push('SIZE_UNKNOWN');
     
-    // Actionable guidance
-    const actionableGuidance = 'Verify contrast with browser DevTools after rendering. ' +
-      `If ratio < 4.5:1 on your background, replace ${component.colorClass} with a higher-contrast token.`;
+    // Risk level from ratio
+    let riskLevel: 'high' | 'medium' | 'low' = 'medium';
+    if (finding.ratio !== null) {
+      if (finding.ratio < 2.5) riskLevel = 'high';
+      else if (finding.ratio < 3.5) riskLevel = 'medium';
+      else riskLevel = 'low';
+    }
     
-    perElementResults.push({
+    const ratioStr = finding.ratio !== null ? `${finding.ratio.toFixed(2)}:1` : 'not computable';
+    const bgNote = finding.bgSource === 'assumed_default'
+      ? ' (background assumed #FFFFFF — no bg-* token found)'
+      : finding.bgSource === 'unresolved'
+        ? ' (background unresolved)'
+        : ` (background from ${finding.bgClass})`;
+    
+    const diagnosis = `Text ${finding.fgClass} (${finding.fgHex}) on ${finding.bgHex}${bgNote} — ` +
+      `contrast ratio ${ratioStr} vs ${finding.threshold}:1 required (${finding.sizeStatus === 'large' ? 'large' : 'normal'} text).`;
+    
+    let correctivePrompt = '';
+    if (isConfirmed) {
+      correctivePrompt = `• ${finding.elementContext || 'Text element'} "${finding.fgClass}" in ${elementIdentifier}\n` +
+        `  Issue: ${ratioStr} vs ${finding.threshold}:1 required\n` +
+        `  Fix: Replace ${finding.fgClass} with a darker token (e.g., ${finding.fgClass.replace(/\d+$/, '700')}) ` +
+        `or lighten background from ${finding.bgClass || finding.bgHex} to ensure ≥ ${finding.threshold}:1.`;
+    }
+    
+    const advisoryGuidance = isConfirmed ? undefined :
+      `Verify contrast in browser DevTools. Computed ratio: ${ratioStr}. ` +
+      `If background differs from ${finding.bgHex}, re-check.`;
+    
+    results.push({
       ruleId: 'A1',
       ruleName: 'Insufficient text contrast',
       category: 'accessibility',
-      status: 'potential', // ALWAYS potential for ZIP (per authoritative rule)
+      status,
       samplingMethod: 'inferred',
       inputType: 'zip',
-      // Element identification
+      contrastRatio: finding.ratio ?? undefined,
+      thresholdUsed: finding.threshold,
+      foregroundHex: finding.fgHex,
+      backgroundHex: finding.bgHex,
       elementIdentifier,
-      elementDescription: component.elementContext,
-      evidence: `${component.colorClass} in ${component.filePath}`,
+      elementDescription: finding.elementContext,
+      evidence: `${finding.fgClass}${finding.bgClass ? ` on ${finding.bgClass}` : ''} in ${finding.filePath}`,
       diagnosis,
-      contextualHint: `Light text color (${component.colorClass}) may be insufficient on light backgrounds.`,
-      correctivePrompt: '', // No mandatory corrective prompt for heuristic findings
-      confidence: Math.round(component.confidence * 0.9 * 100) / 100, // Reduce 10% for static analysis
-      riskLevel: component.riskLevel,
-      // Reason codes (MANDATORY for potential findings)
-      reasonCodes,
-      potentialRiskReason: 'Static code analysis cannot access rendered pixels; colors inferred from Tailwind classes.',
-      // Background status
-      backgroundStatus: 'unmeasurable',
-      foregroundHex: component.hexColor,
-      // Input limitation
-      inputLimitation: 'Static code analysis cannot determine rendered background colors.',
-      advisoryGuidance: actionableGuidance,
-      // Per authoritative A1 rule: Heuristic findings NEVER block convergence
-      blocksConvergence: false,
-      // Legacy affected_items for backwards compatibility
+      contextualHint: `Contrast ${ratioStr} — ${finding.evidenceLevel.replace(/_/g, ' ')}.`,
+      correctivePrompt,
+      confidence: isConfirmed ? 0.90 : (finding.bgSource === 'assumed_default' ? 0.55 : 0.40),
+      riskLevel,
+      reasonCodes: isConfirmed ? undefined : reasonCodes,
+      potentialRiskReason: isConfirmed ? undefined : `Background source: ${finding.bgSource.replace(/_/g, ' ')}.`,
+      backgroundStatus: finding.bgSource === 'tailwind_token' ? 'certain' : 'uncertain',
+      blocksConvergence: isConfirmed,
+      inputLimitation: finding.bgSource !== 'tailwind_token' ? `Background inferred (${finding.bgSource.replace(/_/g, ' ')}); verify at runtime.` : undefined,
+      advisoryGuidance,
+      fgSource: finding.fgSource,
+      bgSource: finding.bgSource,
+      evidenceLevel: finding.evidenceLevel,
+      sizeStatus: finding.sizeStatus,
       affectedComponents: [{
-        colorClass: component.colorClass,
-        hexColor: component.hexColor,
-        filePath: component.filePath,
-        componentName: component.componentName,
-        elementContext: component.elementContext,
-        riskLevel: component.riskLevel,
-        occurrence_count: component.occurrence_count,
+        colorClass: finding.fgClass,
+        hexColor: finding.fgHex,
+        filePath: finding.filePath,
+        componentName: finding.componentName,
+        elementContext: finding.elementContext,
+        riskLevel,
+        occurrence_count: finding.occurrence_count,
       }],
     });
   }
   
-  console.log(`A1 per-element (ZIP): ${perElementResults.length} individual findings (all potential/heuristic)`);
+  const confirmed = results.filter(r => r.status === 'confirmed').length;
+  const potential = results.filter(r => r.status === 'potential').length;
+  console.log(`A1 token-contrast (ZIP): ${results.length} findings (${confirmed} confirmed, ${potential} potential)`);
   
-  return perElementResults;
+  return results;
 }
 
 // Try to infer what kind of UI element the text is in based on context
