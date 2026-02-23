@@ -795,21 +795,6 @@ interface A3Finding {
   deduplicationKey: string;
 }
 
-// Helper: check if element at matchIndex is nested inside an open interactive ancestor
-function isNestedInInteractiveAncestor(content: string, matchIndex: number): boolean {
-  const before = content.slice(Math.max(0, matchIndex - 800), matchIndex);
-  for (const tag of ['button', 'a', 'select', 'textarea']) {
-    const openRe = new RegExp(`<${tag}\\b`, 'gi');
-    const closeRe = new RegExp(`</${tag}>`, 'gi');
-    let opens = 0, closes = 0;
-    let m;
-    while ((m = openRe.exec(before)) !== null) opens++;
-    while ((m = closeRe.exec(before)) !== null) closes++;
-    if (opens > closes) return true;
-  }
-  return false;
-}
-
 function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[] {
   const findings: A3Finding[] = [];
   const seenKeys = new Set<string>();
@@ -831,7 +816,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
-    // A3-C1: Non-focusable custom interactive (refined — reduced false positives)
+    // A3-C1: Non-focusable custom interactive
     const tagRegex = new RegExp(`<(${NON_INTERACTIVE_TAGS})\\b([^>]*)>`, 'gi');
     let match;
     while ((match = tagRegex.exec(content)) !== null) {
@@ -839,23 +824,10 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
       const attrs = match[2];
       if (!CLICK_HANDLER_RE.test(attrs)) continue;
       if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
-
-      // Exemption: nested inside a native interactive ancestor
-      if (isNestedInInteractiveAncestor(content, match.index)) continue;
-
-      // Check individual accessibility properties
-      const hasRole = INTERACTIVE_ROLES.test(attrs);
-      const hasTabIndexGe0 = /tabIndex\s*=\s*\{?\s*(\d+)\s*\}?/i.test(attrs) || /tabindex\s*=\s*["'](\d+)["']/i.test(attrs);
-      const hasNegTabIndex = /tabIndex\s*=\s*\{?\s*-1\s*\}?/i.test(attrs) || /tabindex\s*=\s*["']-1["']/i.test(attrs);
-      const hasKeyHandler = /\b(onKeyDown|onKeyUp|onKeyPress)\s*=/.test(attrs);
-
-      // Full exemption: role + tabIndex>=0 + keyHandler ALL present → no finding
-      if (hasRole && hasTabIndexGe0 && !hasNegTabIndex && hasKeyHandler) continue;
-
-      const missingRole = !hasRole;
-      const missingTabIndex = !hasTabIndexGe0 || hasNegTabIndex;
-      const missingKeyHandler = !hasKeyHandler;
-      if (!missingRole && !missingTabIndex && !missingKeyHandler) continue;
+      if (INTERACTIVE_ROLES.test(attrs)) continue;
+      if (/tabIndex\s*=\s*\{?\s*(\d+)\s*\}?/i.test(attrs) || /tabindex\s*=\s*["'](\d+)["']/i.test(attrs)) continue;
+      if (/\b(onKeyDown|onKeyUp|onKeyPress)\s*=/.test(attrs)) continue;
+      if (/tabIndex\s*=\s*\{?\s*-1\s*\}?/i.test(attrs) || /tabindex\s*=\s*["']-1["']/i.test(attrs)) continue;
 
       const testIdMatch = attrs.match(/data-testid\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
       const ariaLabelMatch = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
@@ -879,31 +851,24 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
-      const missing: string[] = [];
-      if (missingRole) missing.push('role');
-      if (missingTabIndex) missing.push('tabIndex');
-      if (missingKeyHandler) missing.push('keyboard handler');
-
       findings.push({
         elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
         classificationCode: 'A3-C1', classification: 'confirmed',
         detection: `${triggerHandler} on non-semantic <${tag}> element`,
-        evidence: `<${tag} ${triggerHandler}=...> at ${filePath}:${lineNumber} — missing ${missing.join(', ')}`,
-        explanation: `This <${tag}> has ${triggerHandler} but is missing ${missing.join(', ')}. Keyboard users cannot reach or activate it.`,
+        evidence: `<${tag} ${triggerHandler}=...> at ${filePath}:${lineNumber} — missing role, tabIndex, keyboard handlers`,
+        explanation: `This <${tag}> has ${triggerHandler} but lacks role, tabIndex, and keyboard event handlers. Keyboard users cannot reach or activate it.`,
         confidence: 0.92,
-        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <${tag}> (no interactive role)\n\n  Issue reason: Clickable <${tag}> with ${triggerHandler} is missing ${missing.join(', ')}.\n\n  Recommended fix: Replace the clickable <${tag}> with a semantic <button> or <a> element, OR add role="button", tabIndex={0}, and an onKeyDown handler that activates on Enter and Space.`,
+        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <${tag}> (no interactive role)\n\n  Issue reason: Clickable <${tag}> with ${triggerHandler} is not focusable (no tabIndex) and has no keyboard activation handlers for Enter/Space.\n\n  Recommended fix: Replace the clickable <${tag}> with a semantic <button> or <a> element, OR add role="button", tabIndex={0}, and an onKeyDown handler that activates on Enter and Space.`,
         deduplicationKey: dedupeKey,
       });
     }
 
-    // A3-C2: tabindex="-1" on primary interactive (refined — exempt disabled elements)
+    // A3-C2: tabindex="-1" on primary interactive
     const negTabIndexRegex = /<(button|a|input|select|textarea)\b([^>]*tabIndex\s*=\s*\{?\s*-1[^>]*)>/gi;
     while ((match = negTabIndexRegex.exec(content)) !== null) {
       const tag = match[1];
       const attrs = match[2];
       if (/aria-hidden\s*=\s*["']?true/i.test(attrs) || /hidden\b/.test(attrs) || /sr-only|visually-hidden|clip-path/i.test(attrs)) continue;
-      // Exemption: disabled or aria-disabled elements are intentionally non-focusable
-      if (/\bdisabled\b/i.test(attrs) || /aria-disabled\s*=\s*["']true["']/i.test(attrs)) continue;
 
       const ariaLabel = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const label = ariaLabel?.[1] || ariaLabel?.[2] || `<${tag}> element`;
@@ -954,7 +919,7 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
       });
     }
 
-    // A3-P1/C1: <a> without href used as button (refined — upgrade to Confirmed if missing role/tabIndex/keyHandler)
+    // A3-P1: <a> without href used as button
     const anchorNoHrefRegex = /<a\b([^>]*(?:onClick|onMouseDown|onPointerDown)[^>]*)>/gi;
     while ((match = anchorNoHrefRegex.exec(content)) !== null) {
       const attrs = match[1];
@@ -971,27 +936,14 @@ function detectA3KeyboardOperability(allFiles: Map<string, string>): A3Finding[]
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
-      const hasRole = /\brole\s*=\s*["'](button|link|menuitem)["']/i.test(attrs);
-      const hasTabIndex = /tabIndex\s*=\s*\{?\s*(\d+)/i.test(attrs) || /tabindex\s*=\s*["'](\d+)/i.test(attrs);
-      const hasKeyHandler = /\b(onKeyDown|onKeyUp|onKeyPress)\s*=/.test(attrs);
-      const isConfirmed = !hasRole || !hasTabIndex || !hasKeyHandler;
-
-      const missing: string[] = [];
-      if (!hasRole) missing.push('role');
-      if (!hasTabIndex) missing.push('tabIndex');
-      if (!hasKeyHandler) missing.push('keyboard handler');
-
       findings.push({
         elementLabel: label, elementType: 'a', role: 'link', sourceLabel: label, filePath, componentName,
-        classificationCode: isConfirmed ? 'A3-C1' : 'A3-P1',
-        classification: isConfirmed ? 'confirmed' : 'potential',
+        classificationCode: 'A3-P1', classification: 'potential',
         detection: `<a> with onClick but no valid href`,
-        evidence: `<a onClick=...${hasHref ? ' href="#"' : ''}> at ${filePath}:${lineNumber}${missing.length ? ' — missing ' + missing.join(', ') : ''}`,
-        explanation: isConfirmed
-          ? `<a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}, missing ${missing.join(', ')}. Keyboard users cannot properly interact with it.`
-          : `<a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. Has role/tabIndex/keyHandler but use <button> for semantic correctness.`,
-        confidence: isConfirmed ? 0.90 : 0.68,
-        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <a> (role="link")\n\n  Issue reason: <a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. ${isConfirmed ? `Missing ${missing.join(', ')}.` : 'Not semantically correct.'}\n\n  Recommended fix: Replace the <a> with a semantic <button>, or add a valid href for navigation and role="button" with key handlers.`,
+        evidence: `<a onClick=...${hasHref ? ' href="#"' : ''}> at ${filePath}:${lineNumber}`,
+        explanation: `<a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. Use <button> or add role="button".`,
+        confidence: 0.68,
+        correctivePrompt: `• ${label} — ${filePath}:${lineNumber}\n  element: <a> (role="link")\n\n  Issue reason: <a> used as button with onClick${hasHref ? ' and href="#"' : ' but no href'}. Not a valid navigation link.\n\n  Recommended fix: Replace the <a> with a semantic <button>, or add a valid href for navigation and role="button" with key handlers.`,
         deduplicationKey: dedupeKey,
       });
     }
