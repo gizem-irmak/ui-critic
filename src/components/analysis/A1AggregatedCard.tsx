@@ -35,7 +35,9 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const isPerceptual = !!element.perceivedContrast;
+  const isPerceptual = !!element.perceivedContrast && element.a1Method !== 'LLM→Pixel';
+  const isHybridPixel = element.a1Method === 'LLM→Pixel';
+  const isLLMOnly = element.a1Method === 'LLM-only (measurement failed)';
   
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -61,12 +63,23 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                   "{element.textSnippet}"
                 </span>
               )}
-              {isPerceptual && (
+              {/* Method badge */}
+              {isHybridPixel && (
+                <Badge variant="outline" className="text-xs border-emerald-500/50 text-emerald-600">
+                  LLM→Pixel
+                </Badge>
+              )}
+              {isLLMOnly && (
+                <Badge variant="outline" className="text-xs border-amber-500/50 text-amber-600">
+                  LLM-only (measurement failed)
+                </Badge>
+              )}
+              {isPerceptual && !isLLMOnly && (
                 <Badge variant="outline" className="text-xs border-violet-500/50 text-violet-600">
                   Perceptual Estimate
                 </Badge>
               )}
-              {!isPerceptual && element.nearThreshold && (
+              {!isPerceptual && !isHybridPixel && !isLLMOnly && element.nearThreshold && (
                 <Badge variant="outline" className="text-xs border-warning/50 text-warning">
                   near-threshold
                 </Badge>
@@ -112,10 +125,9 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
             
-            {/* PERCEPTUAL MODE: Show perceptual assessment instead of colors/ratio */}
-            {isPerceptual ? (
+            {/* PERCEPTUAL MODE (LLM-only, no pixel data): Show perceptual assessment */}
+            {(isPerceptual || isLLMOnly) && !isHybridPixel ? (
               <>
-                {/* Text size + threshold for perceptual findings */}
                 {element.screenshotTextSize && (
                   <div className="flex items-center gap-2">
                     <span className="text-muted-foreground font-medium w-20">Text size:</span>
@@ -125,11 +137,6 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                     {element.appliedThreshold && (
                       <span className="text-muted-foreground text-xs">
                         Threshold: {element.appliedThreshold}:1
-                      </span>
-                    )}
-                    {element.wcagCriterion && (
-                      <span className="text-muted-foreground text-xs">
-                        WCAG {element.wcagCriterion}
                       </span>
                     )}
                   </div>
@@ -145,7 +152,6 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                   </Badge>
                 </div>
                 
-                {/* Rationale */}
                 {element.perceptualRationale && (
                   <div className="pt-1">
                     <span className="text-muted-foreground font-medium">Rationale: </span>
@@ -153,7 +159,6 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                   </div>
                 )}
                 
-                {/* Suggested Fix */}
                 {element.suggestedFix && (
                   <div className="pt-1">
                     <span className="text-muted-foreground font-medium">Suggestion: </span>
@@ -297,6 +302,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
   const isConfirmed = violation.status === 'confirmed';
   const elements = violation.a1Elements;
   const isPerceptual = violation.evaluationMethod === 'llm_assisted' || violation.inputType === 'screenshots';
+  const isHybrid = violation.evaluationMethod === 'hybrid_deterministic';
   
   return (
     <Card className={cn(
@@ -321,7 +327,11 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
             {elements.length} element{elements.length !== 1 ? 's' : ''}
           </Badge>
           {/* Modality label */}
-          {isPerceptual ? (
+          {isHybrid ? (
+            <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
+              LLM→Pixel Hybrid (Screenshot)
+            </span>
+          ) : isPerceptual ? (
             <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-violet-500/10 text-violet-600 border-violet-500/20">
               LLM-Assisted (Perceptual – Screenshot Modality)
             </span>
@@ -357,8 +367,18 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           />
         ))}
         
-        {/* Perceptual disclaimer for screenshot mode */}
-        {isPerceptual && (
+        {/* Hybrid/Perceptual disclaimer for screenshot mode */}
+        {isHybrid && (
+          <div className={cn(
+            'rounded-lg bg-emerald-500/5 border border-emerald-500/20 mt-3',
+            compact ? 'p-2' : 'p-3'
+          )}>
+            <p className={cn('text-emerald-600 italic', compact ? 'text-xs' : 'text-sm')}>
+              🔬 Two-stage hybrid: LLM identified candidate regions → pixel engine measured contrast ratios. Ratios are screenshot estimates — verify with browser DevTools for WCAG compliance.
+            </p>
+          </div>
+        )}
+        {isPerceptual && !isHybrid && (
           <div className={cn(
             'rounded-lg bg-violet-500/5 border border-violet-500/20 mt-3',
             compact ? 'p-2' : 'p-3'

@@ -2197,132 +2197,107 @@ An element is ONLY considered focusable if:
 - Report ONLY actual accessibility risks observed in the screenshot
 
 ${includesA1 ? `
-### SPECIAL HANDLING FOR A1 (Text Contrast) — LLM-ASSISTED PERCEPTUAL ASSESSMENT (Screenshot Modality)
+### SPECIAL HANDLING FOR A1 (Text Contrast) — TWO-STAGE HYBRID (Screenshot Modality)
 
-**MODALITY: Screenshot — Perceptual Contrast Only (WCAG 1.4.3)**
+**MODALITY: Screenshot — LLM Candidate Detection → Pixel Measurement (WCAG 1.4.3)**
 Input constraint: Only screenshots are available (no DOM, no CSS tokens, no source code).
-Screenshot-based contrast analysis uses perceptual assessment, NOT numeric WCAG ratio calculation.
 A1 applies ONLY to WCAG 1.4.3 Text Contrast — readable text content only.
 
+**YOUR ROLE (Stage 1 — Candidate Detection):**
+You identify text regions that VISUALLY APPEAR to have low contrast.
+A separate pixel measurement engine (Stage 2) will compute the actual WCAG ratio.
+
 **CRITICAL RULES:**
-- Do NOT generate numeric contrast ratios
+- Do NOT generate numeric contrast ratios — the pixel engine computes those
 - Do NOT claim WCAG compliance or non-compliance
 - Do NOT output foreground/background hex color values
-- All screenshot A1 findings MUST have status: "potential"
-- Never mark screenshot A1 as "confirmed"
-- Set blocksConvergence: false for ALL screenshot A1 findings
+- Provide bounding box coordinates for each candidate region
 
 ## STEP 1 — CONTENT TYPE CLASSIFICATION (MANDATORY)
 
-Before assessing contrast, you MUST classify each candidate region:
+Before proposing candidates, you MUST classify each region:
 
 **contentType: "text"** — Readable text content. Includes:
-- Paragraphs, headings, labels, descriptions
-- Button text, link text, badge text
-- Metadata text, timestamps, captions
-- Navigation text, footer text
+- Paragraphs, headings, labels, descriptions, button text, link text, badge text
+- Metadata text, timestamps, captions, navigation text, footer text
 - Any element containing readable characters
 
 **contentType: "icon"** — Non-text visual elements. Includes:
-- SVG icons (e.g., lucide-react icons: User, BookOpen, Search, ChevronDown, Heart, Star, etc.)
-- Icon-only graphics without accompanying text
-- Decorative symbols, logos without text
-- Any visual element that is NOT readable text
+- SVG icons (lucide-react icons: User, BookOpen, Search, ChevronDown, Heart, Star, etc.)
+- Icon-only graphics without text, decorative symbols, logos without text
 
-**RULE: If contentType = "icon", do NOT create an A1 finding. Skip entirely.**
-A1 is strictly for text contrast (WCAG 1.4.3). Icons are not text.
+**RULE: If contentType = "icon", do NOT include it. Skip entirely.**
 
-## STEP 2 — TEXT SIZE CLASSIFICATION (for text regions only)
+## STEP 2 — TEXT SIZE CLASSIFICATION
 
-For each text region classified as contentType: "text", estimate the text size:
+For text regions, estimate text size:
+- **"large"**: ≥ 24px normal weight OR ≥ 18.66px bold. Examples: headings, hero text, large titles
+- **"normal"**: Smaller than large thresholds. Examples: body text, labels, metadata, badges
+- **"unknown"**: Cannot reliably estimate
 
-**textSize: "large"** — Apply when:
-- Text appears to be ≥ 24px (≥18pt) at normal weight, OR
-- Text appears to be ≥ 18.66px (≥14pt) AND bold/heavy weight
-- Typical examples: page headings, section titles, hero text, large card titles
+## STEP 3 — CANDIDATE REGION DETECTION
 
-**textSize: "normal"** — Apply when:
-- Text appears smaller than the large text thresholds above
-- Typical examples: body text, labels, metadata, descriptions, badges, small headings
-
-**textSize: "unknown"** — Apply when:
-- Cannot reliably estimate the text size from the screenshot
-
-**Threshold mapping:**
-- textSize "normal" or "unknown" → appliedThreshold: 4.5
-- textSize "large" → appliedThreshold: 3.0
-
-## STEP 3 — PERCEPTUAL CONTRAST ASSESSMENT
-
-For each TEXT element (contentType: "text") that appears to have potentially low contrast:
+For each TEXT element that VISUALLY APPEARS to have potentially low contrast:
 
 1. **Observe** the text against its immediate visual background
-2. **Consider the threshold**: large text needs only 3:1, normal text needs 4.5:1
-3. **Assess** whether readability appears reduced given the applicable threshold
-4. **Classify** the perceived contrast level:
-   - "low" — Text appears to have insufficient contrast for its size category
-   - "adequate" — Text meets or exceeds the threshold for its size category
-5. **Report** only elements with perceivedContrast = "low"
+2. **Estimate a tight bounding box** around the text region
+3. **Provide bbox as normalized coordinates** (0.0 to 1.0 relative to screenshot dimensions)
+   - x: left edge / screenshot width
+   - y: top edge / screenshot height  
+   - w: region width / screenshot width
+   - h: region height / screenshot height
 
-## DETECTION SCOPE — TEXT ONLY (NO ICONS)
+**BBOX GUIDELINES:**
+- The bbox should tightly enclose the text with ~5-10px margin
+- For multi-line text, include all lines in one bbox
+- Each separate text element gets its own bbox
+- Bbox coordinates must be between 0.0 and 1.0
 
-You MUST identify ALL visible TEXT elements that appear to have low contrast.
+## OUTPUT FORMAT — A1 CANDIDATES (in a1Candidates array, NOT in violations)
 
-MUST INCLUDE:
-- Secondary or muted text (even if intentionally styled)
-- Descriptions, summaries, captions
-- Author names, timestamps, metadata
-- Tags, labels, badges, chips (text within them)
-- Colored text (yellow, blue, gray, etc.)
-- Placeholder text, helper text
-- Price labels, discount text
-- Footer text, copyright notices
-- Small text, light-weight text
-- Navigation text, button labels
+Output A1 candidates in a SEPARATE top-level array called "a1Candidates":
 
-MUST EXCLUDE (contentType = "icon"):
-- SVG icons and icon components (lucide-react, heroicons, etc.)
-- Icon-only elements without readable text
-- Decorative graphics and symbols
-
-## OUTPUT FORMAT FOR A1 PERCEPTUAL FINDINGS
-
-For each low-contrast TEXT element, include in the violations array:
 \`\`\`json
 {
-  "ruleId": "A1",
-  "ruleName": "Insufficient text contrast",
-  "category": "accessibility",
-  "status": "potential",
-  "inputType": "screenshots",
-  "contentType": "text",
-  "textSize": "normal" | "large" | "unknown",
-  "appliedThreshold": 4.5 | 3.0,
-  "perceivedContrast": "low",
-  "perceptualRationale": "1-2 sentence explanation of why contrast appears insufficient for its size category",
-  "suggestedFix": "1 sentence corrective guidance",
-  "evidence": "Location/description of the text element",
-  "elementRole": "metadata|caption|badge|label|body text|heading|muted|colored|navigation",
-  "elementDescription": "Short description of the text element",
-  "diagnosis": "Descriptive diagnosis of the perceived contrast issue",
-  "contextualHint": "Short guidance on what to improve",
-  "confidence": 0.5-0.8,
-  "blocksConvergence": false
+  "violations": [ ... other rule violations ... ],
+  "a1Candidates": [
+    {
+      "contentType": "text",
+      "screenshotIndex": 1,
+      "bbox": { "x": 0.05, "y": 0.30, "w": 0.25, "h": 0.04 },
+      "textSize": "normal",
+      "elementRole": "metadata",
+      "elementDescription": "Course credits text",
+      "textSnippet": "3 Credits",
+      "rationale": "Light gray text on white background appears to have low contrast"
+    }
+  ],
+  "passNotes": { ... }
 }
 \`\`\`
 
-**CONFIDENCE GUIDELINES:**
-- 0.7-0.8: Text is clearly low contrast (e.g., light gray on white)
-- 0.5-0.65: Text appears borderline, may need manual verification
+**FIELD DESCRIPTIONS:**
+- contentType: Always "text" (icons are excluded)
+- screenshotIndex: 1-based index of which screenshot this region is in
+- bbox: Normalized bounding box {x, y, w, h} with values 0.0–1.0
+- textSize: "normal" | "large" | "unknown"
+- elementRole: "metadata|caption|badge|label|body text|heading|muted|colored|navigation"
+- elementDescription: Short human-readable description
+- textSnippet: The actual text if readable (optional)
+- rationale: 1 short sentence explaining why contrast appears low
+
+**DETECTION SCOPE — COMPREHENSIVE:**
+MUST INCLUDE: Secondary/muted text, descriptions, captions, author names, timestamps,
+metadata, badges, colored text, placeholder text, price labels, footer text, small text.
+
+MUST EXCLUDE: SVG icons, icon components, decorative graphics.
 
 **DO NOT:**
-- Report elements with contentType "icon" — skip them entirely
-- Report elements with "adequate" perceived contrast
+- Put A1 findings in the violations array — use a1Candidates instead
 - Generate numeric contrast ratios
-- Claim WCAG compliance or non-compliance
-- Output foreground/background hex color values
-- Mark any screenshot A1 finding as "confirmed"
-- Group multiple unrelated elements into one finding — each element is separate
+- Output hex color values
+- Include regions where contrast appears clearly adequate
+- Include icon/non-text regions
 ` : ''}
 
 Report violations ONLY if there is strong visual evidence.
@@ -2943,35 +2918,133 @@ serve(async (req) => {
     
     // CRITICAL: Filter violations to ONLY include selected rules
     // This ensures unselected rules are never reported, even if AI returns them
-    // Screenshot A1 now uses LLM perceptual assessment — no pixel sampling
-    const shouldComputeA1FromPixels = false;
+    // TWO-STAGE HYBRID A1: LLM proposes candidate regions → Pixel engine measures contrast
+    const shouldComputeA1FromPixels = includesA1;
 
-    // Compute screenshot-only A1 via pixel sampling (anti-alias resistant)
+    // Extract a1Candidates from LLM response (Stage 1 output)
+    const a1CandidatesRaw = Array.isArray((analysisResult as any).a1Candidates)
+      ? ((analysisResult as any).a1Candidates as any[])
+      : [];
+    
+    // Filter out icons and convert to A1TextElement format for pixel engine
+    const a1TextElements: A1TextElement[] = a1CandidatesRaw
+      .filter((c: any) => c.contentType === 'text')
+      .map((c: any) => ({
+        screenshotIndex: c.screenshotIndex || 1,
+        bbox: c.bbox as A1BBoxNorm,
+        location: c.elementDescription || c.textSnippet || 'Text region',
+        elementRole: c.elementRole,
+        elementDescription: c.elementDescription,
+        textSize: c.textSize === 'large' ? 'large' as const : 'normal' as const,
+        // Carry through LLM rationale for fallback
+        _llmRationale: c.rationale,
+        _llmTextSnippet: c.textSnippet,
+        _llmSuggestedFix: c.suggestedFix,
+      } as A1TextElement & { _llmRationale?: string; _llmTextSnippet?: string; _llmSuggestedFix?: string }));
+    
+    console.log(`A1 Stage 1 (LLM): ${a1CandidatesRaw.length} candidates proposed, ${a1TextElements.length} text regions after icon filtering`);
+
+    // Compute screenshot A1 via pixel sampling (Stage 2)
     let computedA1Violations: any[] = [];
-    if (shouldComputeA1FromPixels) {
-      const candidates = Array.isArray((analysisResult as any).a1TextElements)
-        ? ((analysisResult as any).a1TextElements as A1TextElement[])
-        : [];
+    if (shouldComputeA1FromPixels && a1TextElements.length > 0) {
       try {
-        computedA1Violations = await computeA1ViolationsFromScreenshots(images, candidates, toolUsed);
+        computedA1Violations = await computeA1ViolationsFromScreenshots(images, a1TextElements, toolUsed);
+        
+        // Tag all computed violations with a1Method = 'LLM→Pixel'
+        for (const v of computedA1Violations) {
+          v.a1Method = 'LLM→Pixel';
+          v.status = 'potential'; // Screenshot A1 always potential
+          v.blocksConvergence = false;
+          v.evaluationMethod = 'hybrid_deterministic'; // LLM detected, pixel measured
+          // Carry through LLM rationale
+          const srcCandidate = a1TextElements.find((el: any) => 
+            el.screenshotIndex === ((v.evidence?.match(/Screenshot #(\d+)/)?.[1] || '1') | 0) + 1
+          );
+        }
+        
+        // For candidates where pixel measurement failed, create LLM-only fallback findings
+        // Check which candidates got a result vs which were filtered out
+        const measuredCandidateKeys = new Set(computedA1Violations.map((v: any) => v.elementIdentifier));
+        
+        for (const candidate of a1TextElements) {
+          const expectedKey = `Screenshot #${candidate.screenshotIndex}${candidate.location ? ` — ${candidate.location}` : ''}${candidate.elementDescription ? ` (${candidate.elementDescription})` : ''}`;
+          
+          // Check if this candidate produced a finding (either violation or pass)
+          // If not in results AND we know it didn't pass, create LLM-only fallback
+          const hasResult = computedA1Violations.some((v: any) => 
+            v.evidence?.includes(`Screenshot #${candidate.screenshotIndex}`) &&
+            (v.elementDescription === candidate.elementDescription || v.evidence?.includes(candidate.location || ''))
+          );
+          
+          if (!hasResult) {
+            const extCandidate = candidate as any;
+            const thresholdUsed = candidate.textSize === 'large' ? 3.0 : 4.5;
+            computedA1Violations.push({
+              ruleId: 'A1',
+              ruleName: 'Insufficient text contrast',
+              category: 'accessibility',
+              status: 'potential',
+              a1Method: 'LLM-only (measurement failed)',
+              samplingMethod: 'inferred',
+              inputType: 'screenshots',
+              elementIdentifier: expectedKey,
+              elementRole: candidate.elementRole,
+              elementDescription: candidate.elementDescription,
+              evidence: `Screenshot #${candidate.screenshotIndex}${candidate.location ? ` — ${candidate.location}` : ''}`,
+              diagnosis: extCandidate._llmRationale || 'Text region flagged by visual assessment but pixel measurement could not determine contrast ratio.',
+              perceivedContrast: 'low',
+              perceptualRationale: extCandidate._llmRationale || 'Perceptual assessment detected low contrast.',
+              suggestedFix: extCandidate._llmSuggestedFix || `Verify contrast meets ${thresholdUsed}:1 with browser DevTools.`,
+              textSnippet: extCandidate._llmTextSnippet,
+              textSize: candidate.textSize || 'normal',
+              appliedThreshold: thresholdUsed,
+              thresholdUsed,
+              contentType: 'text',
+              screenshotTextSize: candidate.textSize || 'unknown',
+              contextualHint: 'Pixel measurement failed for this region. Verify contrast with browser DevTools.',
+              confidence: 0.50,
+              blocksConvergence: false,
+              evaluationMethod: 'llm_assisted',
+              bbox: candidate.bbox,
+            });
+          }
+        }
+        
+        console.log(`A1 Stage 2 (Pixel): ${computedA1Violations.filter((v: any) => v.a1Method === 'LLM→Pixel').length} pixel-measured, ${computedA1Violations.filter((v: any) => v.a1Method === 'LLM-only (measurement failed)').length} LLM-only fallbacks`);
       } catch (e) {
         console.error('A1 pixel sampling failed:', e);
-        computedA1Violations = [
-          {
+        // All candidates become LLM-only fallbacks
+        computedA1Violations = a1TextElements.map((candidate: any) => {
+          const thresholdUsed = candidate.textSize === 'large' ? 3.0 : 4.5;
+          return {
             ruleId: 'A1',
             ruleName: 'Insufficient text contrast',
             category: 'accessibility',
             status: 'potential',
+            a1Method: 'LLM-only (measurement failed)',
             samplingMethod: 'inferred',
             inputType: 'screenshots',
-            evidence: 'A1 pixel sampling failed to run for the provided screenshot(s).',
-            diagnosis: 'Contrast could not be computed due to a runtime error in pixel sampling.',
-            contextualHint: 'Retry with PNG screenshots at 100% zoom, or verify with DevTools/axe.',
-            confidence: 0.55,
-            potentialRiskReason: 'Pixel sampling runtime error',
-            advisoryGuidance: 'Upload a PNG at 100% zoom or verify with DevTools/axe for accurate measurement.',
-          },
-        ];
+            elementIdentifier: `Screenshot #${candidate.screenshotIndex} — ${candidate.location || candidate.elementDescription || 'Text region'}`,
+            elementRole: candidate.elementRole,
+            elementDescription: candidate.elementDescription,
+            evidence: `Screenshot #${candidate.screenshotIndex}${candidate.location ? ` — ${candidate.location}` : ''}`,
+            diagnosis: candidate._llmRationale || 'Pixel measurement engine failed. Perceptual assessment detected low contrast.',
+            perceivedContrast: 'low',
+            perceptualRationale: candidate._llmRationale || 'Perceptual assessment detected low contrast.',
+            suggestedFix: candidate._llmSuggestedFix || `Verify contrast meets ${thresholdUsed}:1 with browser DevTools.`,
+            textSnippet: candidate._llmTextSnippet,
+            textSize: candidate.textSize || 'normal',
+            appliedThreshold: thresholdUsed,
+            thresholdUsed,
+            contentType: 'text',
+            screenshotTextSize: candidate.textSize || 'unknown',
+            contextualHint: 'Pixel sampling runtime error — verify with DevTools.',
+            confidence: 0.50,
+            blocksConvergence: false,
+            evaluationMethod: 'llm_assisted',
+            bbox: candidate.bbox,
+          };
+        });
       }
     }
 
@@ -2986,33 +3059,17 @@ serve(async (req) => {
     console.log(`Filtered ${(analysisResult.violations || []).length - filteredBySelection.length} violations from unselected rules`);
     
     // Separate A1 and A2 (focus visibility, formerly A5) violations for aggregation
-    const a1Violations: any[] = [];
+    // A1 now comes from computedA1Violations (two-stage hybrid), NOT from LLM violations
+    const a1Violations: any[] = [...computedA1Violations]; // From Stage 2 pixel engine + LLM fallbacks
     const a2Violations: any[] = []; // A2 = Poor focus visibility (accepts both old A5 and new A2 IDs)
     const otherViolations: any[] = [];
     
-    // For screenshot A1, force all findings to perceptual/potential and filter icons
+    // Filter LLM violations — skip any A1 (handled by two-stage pipeline above)
     filteredBySelection.forEach((v: any) => {
       if (v.ruleId === 'A1') {
-        // Filter out icon/non-text findings — A1 is for text contrast only (WCAG 1.4.3)
-        if (v.contentType === 'icon') {
-          console.log(`A1: Filtering out icon/non-text finding: ${v.evidence || v.elementDescription || 'unknown'}`);
-          return; // Skip — do not add to a1Violations
-        }
-        // Force perceptual assessment fields for screenshot A1
-        v.status = 'potential';
-        v.evaluationMethod = 'llm_assisted';
-        v.blocksConvergence = false;
-        v.inputType = 'screenshots';
-        v.samplingMethod = 'inferred';
-        v.contentType = v.contentType || 'text';
-        v.perceivedContrast = v.perceivedContrast || 'low';
-        v.perceptualRationale = v.perceptualRationale || v.diagnosis || '';
-        v.suggestedFix = v.suggestedFix || v.contextualHint || '';
-        // Carry through text size classification
-        v.textSize = v.textSize || 'unknown';
-        v.appliedThreshold = v.appliedThreshold || (v.textSize === 'large' ? 3.0 : 4.5);
-        v.thresholdUsed = v.appliedThreshold;
-        a1Violations.push(v);
+        // A1 is handled by the two-stage hybrid pipeline — skip LLM A1 violations
+        console.log(`A1: Skipping LLM violation (handled by two-stage hybrid): ${v.evidence || v.elementDescription || 'unknown'}`);
+        return;
       } else if (v.ruleId === 'A2' || v.ruleId === 'A5') {
         v.ruleId = 'A2'; // Normalize to A2
         a2Violations.push(v);
@@ -3021,8 +3078,8 @@ serve(async (req) => {
       }
     });
 
-    // Screenshot A1 now uses LLM perceptual assessment — no pixel sampling needed
-    console.log(`A1 perceptual: ${a1Violations.length} findings from LLM (all potential)`);
+    // Two-stage hybrid A1 summary
+    console.log(`A1 two-stage hybrid: ${a1Violations.length} findings (${a1Violations.filter((v: any) => v.a1Method === 'LLM→Pixel').length} pixel-measured, ${a1Violations.filter((v: any) => v.a1Method === 'LLM-only (measurement failed)').length} LLM-only)`);
 
     // ========== U1 EVIDENCE GATING (Cases A, B, C, D) ==========
     // Filter out speculative U1 violations that lack proper evidence
@@ -3813,7 +3870,10 @@ serve(async (req) => {
       const dedupeKey = buildDedupeKey(v);
       
       // Check if this is a perceptual (LLM-assisted screenshot) finding
-      const isPerceptual = !!v.perceivedContrast;
+      // Check if this is a two-stage hybrid finding
+      const isHybridPixel = v.a1Method === 'LLM→Pixel';
+      const isHybridLLMOnly = v.a1Method === 'LLM-only (measurement failed)';
+      const isPerceptual = isHybridLLMOnly || (!!v.perceivedContrast && !isHybridPixel);
       
       // Determine if near-threshold (within small margin, NOT for values far below)
       // Only relevant for structural (non-perceptual) findings
@@ -3840,10 +3900,28 @@ serve(async (req) => {
         nearThreshold: isNearThreshold,
         deduplicationKey: dedupeKey,
         correctivePrompt: v.correctivePrompt,
+        // Two-stage hybrid fields
+        a1Method: v.a1Method,
+        bbox: v.bbox,
       };
       
-      if (isPerceptual) {
-        // Perceptual mode: carry through LLM assessment fields, NO hex/ratio
+      if (isHybridPixel) {
+        // LLM→Pixel mode: carry through pixel-measured color/ratio fields
+        subItem.foregroundHex = v.foregroundHex;
+        subItem.foregroundConfidence = v.foregroundConfidence;
+        subItem.backgroundHex = v.backgroundHex;
+        subItem.backgroundCandidates = v.backgroundCandidates;
+        subItem.contrastRatio = v.contrastRatio;
+        subItem.contrastRange = v.contrastRange;
+        subItem.contrastNotMeasurable = v.backgroundStatus === 'unmeasurable';
+        subItem.reasonCodes = v.reasonCodes;
+        // Text size from LLM
+        subItem.screenshotTextSize = v.textSize || 'unknown';
+        subItem.textType = v.textSize === 'large' ? 'large' : 'normal';
+        subItem.appliedThreshold = v.thresholdUsed || 4.5;
+        subItem.wcagCriterion = '1.4.3';
+      } else if (isPerceptual) {
+        // LLM-only (measurement failed) mode: carry through LLM assessment fields, NO hex/ratio
         subItem.perceivedContrast = v.perceivedContrast;
         subItem.perceptualRationale = v.perceptualRationale || v.diagnosis || '';
         subItem.suggestedFix = v.suggestedFix || v.contextualHint || '';
@@ -3919,20 +3997,24 @@ serve(async (req) => {
       const elements = deduplicateElements(potentialA1Elements.map(buildA1SubItem));
       const avgConfidence = potentialA1Elements.reduce((sum: number, v: any) => sum + (v.confidence || 0.55), 0) / potentialA1Elements.length;
       
-      // Check if these are perceptual (screenshot LLM-assisted) findings
-      const isPerceptual = potentialA1Elements.some((v: any) => !!v.perceivedContrast);
+      // Check if these include two-stage hybrid findings
+      const hasHybridPixel = potentialA1Elements.some((v: any) => v.a1Method === 'LLM→Pixel');
+      const hasLLMOnly = potentialA1Elements.some((v: any) => v.a1Method === 'LLM-only (measurement failed)');
+      const isPerceptual = !hasHybridPixel && potentialA1Elements.some((v: any) => !!v.perceivedContrast);
       
-      // Collect all unique reason codes across elements (structural only)
+      // Collect all unique reason codes across elements
       const allReasonCodes = new Set<string>();
-      if (!isPerceptual) {
-        for (const el of elements) {
-          if (el.reasonCodes) {
-            for (const code of el.reasonCodes) {
-              allReasonCodes.add(code);
-            }
+      for (const el of elements) {
+        if (el.reasonCodes) {
+          for (const code of el.reasonCodes) {
+            allReasonCodes.add(code);
           }
         }
       }
+      
+      // Determine evaluation method based on two-stage hybrid
+      const evalMethod = hasHybridPixel ? 'hybrid_deterministic' : (isPerceptual || hasLLMOnly) ? 'llm_assisted' : 'deterministic';
+      const sampMethod = hasHybridPixel ? 'pixel' : (isPerceptual || hasLLMOnly) ? 'inferred' : 'pixel';
       
       aggregatedA1Violations.push({
         ruleId: 'A1',
@@ -3941,26 +4023,32 @@ serve(async (req) => {
         status: 'potential',
         isA1Aggregated: true,
         a1Elements: elements,
-        diagnosis: isPerceptual
-          ? `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast concerns detected via perceptual assessment. Manual verification with developer tools required.`
-          : `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast issues detected. These require manual verification due to measurement uncertainty.`,
+        diagnosis: hasHybridPixel
+          ? `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast issues detected via LLM→Pixel hybrid analysis. Screenshot-based measurements require manual verification.`
+          : hasLLMOnly
+            ? `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast concerns. Pixel measurement failed — using perceptual assessment only.`
+            : isPerceptual
+              ? `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast concerns detected via perceptual assessment. Manual verification with developer tools required.`
+              : `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast issues detected. These require manual verification due to measurement uncertainty.`,
         correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools or accessibility testing tools.',
         contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools.',
         confidence: Math.round(avgConfidence * 100) / 100,
         reasonCodes: allReasonCodes.size > 0 ? Array.from(allReasonCodes) : undefined,
         potentialRiskReason: allReasonCodes.size > 0 ? Array.from(allReasonCodes).join(', ') : undefined,
-        advisoryGuidance: isPerceptual
-          ? 'Screenshot-based contrast assessment is perceptual. Verify with browser DevTools or accessibility testing tools for WCAG compliance.'
-          : 'Upload screenshots at 100% zoom or verify with DevTools/axe for accurate measurement.',
+        advisoryGuidance: hasHybridPixel
+          ? 'Two-stage hybrid analysis: LLM identified candidate regions, pixel engine measured contrast. Ratios are screenshot estimates — verify with browser DevTools.'
+          : isPerceptual || hasLLMOnly
+            ? 'Screenshot-based contrast assessment is perceptual. Verify with browser DevTools or accessibility testing tools for WCAG compliance.'
+            : 'Upload screenshots at 100% zoom or verify with DevTools/axe for accurate measurement.',
         blocksConvergence: false,
         inputType: 'screenshots',
-        samplingMethod: isPerceptual ? 'inferred' : 'pixel',
-        evaluationMethod: isPerceptual ? 'llm_assisted' : 'deterministic',
-        // Carry perceptual fields to top-level for UI rendering
-        ...(isPerceptual ? { perceivedContrast: 'low' } : {}),
+        samplingMethod: sampMethod,
+        evaluationMethod: evalMethod,
+        // Carry perceptual fields to top-level for UI rendering (LLM-only mode)
+        ...(hasLLMOnly && !hasHybridPixel ? { perceivedContrast: 'low' } : {}),
       });
       
-      console.log(`A1 aggregated: ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique, ${isPerceptual ? 'perceptual' : 'structural'})`);
+      console.log(`A1 aggregated: ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique, ${hasHybridPixel ? 'hybrid-pixel' : hasLLMOnly ? 'LLM-only' : isPerceptual ? 'perceptual' : 'structural'})`);
     }
     
     // ========== A3 Screenshot Mode (advisory only) ==========
