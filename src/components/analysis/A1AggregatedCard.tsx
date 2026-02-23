@@ -82,6 +82,14 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
         
+        {/* JSX tag (structural mode only) */}
+        {element.jsxTag && (
+          <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
+            <span className="font-medium">Element: </span>
+            <code className="text-foreground font-mono">&lt;{element.jsxTag}&gt;</code>
+          </div>
+        )}
+        
         {/* Location (always visible) */}
         <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
           <span className="font-medium">📍 </span>

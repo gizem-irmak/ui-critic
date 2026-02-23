@@ -565,14 +565,28 @@ interface A1TokenFinding {
   filePath: string;
   componentName?: string;
   elementContext?: string;
+  jsxTag?: string;
   context: string;
   occurrence_count: number;
 }
 
 const TW_COLOR_FAMILIES = 'gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|white|black';
 
-function extractTextColorTokens(code: string): Array<{ colorClass: string; colorName: string; context: string; matchIndex: number }> {
-  const results: Array<{ colorClass: string; colorName: string; context: string; matchIndex: number }> = [];
+function extractJsxTag(code: string, matchIndex: number): string | undefined {
+  // Scan backwards from the match to find the nearest JSX opening tag: <tagName ...>
+  const scanStart = Math.max(0, matchIndex - 500);
+  const before = code.slice(scanStart, matchIndex);
+  // Match the last opening tag before the match position (not self-closing end or closing tag)
+  const tagMatches = [...before.matchAll(/<([a-zA-Z][a-zA-Z0-9.]*)\s/g)];
+  if (tagMatches.length > 0) {
+    const lastTag = tagMatches[tagMatches.length - 1];
+    return lastTag[1]; // e.g. "p", "span", "div", "Card.Title"
+  }
+  return undefined;
+}
+
+function extractTextColorTokens(code: string): Array<{ colorClass: string; colorName: string; context: string; matchIndex: number; jsxTag?: string }> {
+  const results: Array<{ colorClass: string; colorName: string; context: string; matchIndex: number; jsxTag?: string }> = [];
   const textColorRegex = new RegExp(`text-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?`, 'g');
   
   let match;
@@ -582,7 +596,8 @@ function extractTextColorTokens(code: string): Array<{ colorClass: string; color
     const start = Math.max(0, match.index - 100);
     const end = Math.min(code.length, match.index + colorClass.length + 100);
     const context = code.slice(start, end).replace(/\n/g, ' ').trim();
-    results.push({ colorClass, colorName, context, matchIndex: match.index });
+    const jsxTag = extractJsxTag(code, match.index);
+    results.push({ colorClass, colorName, context, matchIndex: match.index, jsxTag });
   }
   return results;
 }
@@ -689,7 +704,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     
     const textTokens = extractTextColorTokens(content);
     
-    for (const { colorClass, colorName, context, matchIndex } of textTokens) {
+    for (const { colorClass, colorName, context, matchIndex, jsxTag } of textTokens) {
       const fgHex = TAILWIND_COLORS[colorName];
       if (!fgHex) continue; // Unknown token — skip
       
@@ -748,6 +763,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         filePath: filepath,
         componentName: componentName || undefined,
         elementContext: elementContext || undefined,
+        jsxTag,
         context,
         occurrence_count: 1,
       });
@@ -850,6 +866,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         filePath: finding.filePath,
         componentName: finding.componentName,
         elementContext: finding.elementContext,
+        jsxTag: finding.jsxTag,
         riskLevel,
         occurrence_count: finding.occurrence_count,
       }],
@@ -3566,11 +3583,14 @@ ${codeContent}`,
         textSnippet: v.evidence,
         location: v.evidence || '',
         foregroundHex: v.foregroundHex,
-        backgroundStatus: v.backgroundStatus || 'unmeasurable',
-        contrastNotMeasurable: true,
-        thresholdUsed: 4.5 as const,
+        backgroundHex: v.backgroundHex,
+        backgroundStatus: (v.backgroundStatus || 'unmeasurable') as 'certain' | 'uncertain' | 'unmeasurable',
+        contrastRatio: v.contrastRatio,
+        contrastNotMeasurable: v.contrastRatio === undefined,
+        thresholdUsed: (v.thresholdUsed || 4.5) as 4.5 | 3.0,
         explanation: v.diagnosis,
         reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
+        jsxTag: v.affectedComponents?.[0]?.jsxTag,
         deduplicationKey: `a1|${v.elementIdentifier}|${v.foregroundHex}`,
       }));
       const avgConfidence = contrastViolations.reduce((sum, v) => sum + v.confidence, 0) / contrastViolations.length;

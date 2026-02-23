@@ -248,6 +248,9 @@ export interface A1ElementSubItem {
   // Optional "near-threshold" tag (within small margin of threshold, NOT for far-below values)
   nearThreshold?: boolean;
   
+  // JSX tag name for structural findings (e.g., "p", "span", "div")
+  jsxTag?: string;
+  
   // Deduplication key
   deduplicationKey: string; // screenId + bbox + textSnippet
 }
