@@ -2199,9 +2199,10 @@ An element is ONLY considered focusable if:
 ${includesA1 ? `
 ### SPECIAL HANDLING FOR A1 (Text Contrast) — LLM-ASSISTED PERCEPTUAL ASSESSMENT (Screenshot Modality)
 
-**MODALITY: Screenshot — Perceptual Contrast Only**
+**MODALITY: Screenshot — Perceptual Contrast Only (WCAG 1.4.3)**
 Input constraint: Only screenshots are available (no DOM, no CSS tokens, no source code).
 Screenshot-based contrast analysis uses perceptual assessment, NOT numeric WCAG ratio calculation.
+A1 applies ONLY to WCAG 1.4.3 Text Contrast — readable text content only.
 
 **CRITICAL RULES:**
 - Do NOT generate numeric contrast ratios
@@ -2211,15 +2212,67 @@ Screenshot-based contrast analysis uses perceptual assessment, NOT numeric WCAG 
 - Never mark screenshot A1 as "confirmed"
 - Set blocksConvergence: false for ALL screenshot A1 findings
 
-## DETECTION SCOPE — COMPREHENSIVE (NO EXCLUSIONS)
+## STEP 1 — CONTENT TYPE CLASSIFICATION (MANDATORY)
 
-You MUST identify ALL visible text elements that appear to have low contrast. NO EXCLUSIONS.
+Before assessing contrast, you MUST classify each candidate region:
+
+**contentType: "text"** — Readable text content. Includes:
+- Paragraphs, headings, labels, descriptions
+- Button text, link text, badge text
+- Metadata text, timestamps, captions
+- Navigation text, footer text
+- Any element containing readable characters
+
+**contentType: "icon"** — Non-text visual elements. Includes:
+- SVG icons (e.g., lucide-react icons: User, BookOpen, Search, ChevronDown, Heart, Star, etc.)
+- Icon-only graphics without accompanying text
+- Decorative symbols, logos without text
+- Any visual element that is NOT readable text
+
+**RULE: If contentType = "icon", do NOT create an A1 finding. Skip entirely.**
+A1 is strictly for text contrast (WCAG 1.4.3). Icons are not text.
+
+## STEP 2 — TEXT SIZE CLASSIFICATION (for text regions only)
+
+For each text region classified as contentType: "text", estimate the text size:
+
+**textSize: "large"** — Apply when:
+- Text appears to be ≥ 24px (≥18pt) at normal weight, OR
+- Text appears to be ≥ 18.66px (≥14pt) AND bold/heavy weight
+- Typical examples: page headings, section titles, hero text, large card titles
+
+**textSize: "normal"** — Apply when:
+- Text appears smaller than the large text thresholds above
+- Typical examples: body text, labels, metadata, descriptions, badges, small headings
+
+**textSize: "unknown"** — Apply when:
+- Cannot reliably estimate the text size from the screenshot
+
+**Threshold mapping:**
+- textSize "normal" or "unknown" → appliedThreshold: 4.5
+- textSize "large" → appliedThreshold: 3.0
+
+## STEP 3 — PERCEPTUAL CONTRAST ASSESSMENT
+
+For each TEXT element (contentType: "text") that appears to have potentially low contrast:
+
+1. **Observe** the text against its immediate visual background
+2. **Consider the threshold**: large text needs only 3:1, normal text needs 4.5:1
+3. **Assess** whether readability appears reduced given the applicable threshold
+4. **Classify** the perceived contrast level:
+   - "low" — Text appears to have insufficient contrast for its size category
+   - "adequate" — Text meets or exceeds the threshold for its size category
+5. **Report** only elements with perceivedContrast = "low"
+
+## DETECTION SCOPE — TEXT ONLY (NO ICONS)
+
+You MUST identify ALL visible TEXT elements that appear to have low contrast.
 
 MUST INCLUDE:
 - Secondary or muted text (even if intentionally styled)
 - Descriptions, summaries, captions
 - Author names, timestamps, metadata
-- Tags, labels, badges, chips
+- Tags, labels, badges, chips (text within them)
 - Colored text (yellow, blue, gray, etc.)
 - Placeholder text, helper text
 - Price labels, discount text
@@ -2227,22 +2280,14 @@ MUST INCLUDE:
 - Small text, light-weight text
 - Navigation text, button labels
 
-## PERCEPTUAL ASSESSMENT METHOD
-
-For each text element that appears to have potentially low contrast:
-
-1. **Observe** the text against its immediate visual background
-2. **Assess** whether readability appears reduced due to insufficient contrast
-3. **Classify** the perceived contrast level:
-   - "low" — Text is noticeably hard to read against its background
-   - "adequate" — Text is readable but could be improved
-   - "high" — Text is clearly readable (DO NOT report as violation)
-
-4. **Report** only elements with perceivedContrast = "low"
+MUST EXCLUDE (contentType = "icon"):
+- SVG icons and icon components (lucide-react, heroicons, etc.)
+- Icon-only elements without readable text
+- Decorative graphics and symbols
 
 ## OUTPUT FORMAT FOR A1 PERCEPTUAL FINDINGS
 
-For each low-contrast text element, include in the violations array:
+For each low-contrast TEXT element, include in the violations array:
 \`\`\`json
 {
   "ruleId": "A1",
@@ -2250,8 +2295,11 @@ For each low-contrast text element, include in the violations array:
   "category": "accessibility",
   "status": "potential",
   "inputType": "screenshots",
+  "contentType": "text",
+  "textSize": "normal" | "large" | "unknown",
+  "appliedThreshold": 4.5 | 3.0,
   "perceivedContrast": "low",
-  "perceptualRationale": "1-2 sentence explanation of why contrast appears insufficient",
+  "perceptualRationale": "1-2 sentence explanation of why contrast appears insufficient for its size category",
   "suggestedFix": "1 sentence corrective guidance",
   "evidence": "Location/description of the text element",
   "elementRole": "metadata|caption|badge|label|body text|heading|muted|colored|navigation",
@@ -2268,7 +2316,8 @@ For each low-contrast text element, include in the violations array:
 - 0.5-0.65: Text appears borderline, may need manual verification
 
 **DO NOT:**
-- Report elements with "high" or "adequate" perceived contrast
+- Report elements with contentType "icon" — skip them entirely
+- Report elements with "adequate" perceived contrast
 - Generate numeric contrast ratios
 - Claim WCAG compliance or non-compliance
 - Output foreground/background hex color values
@@ -2941,18 +2990,28 @@ serve(async (req) => {
     const a2Violations: any[] = []; // A2 = Poor focus visibility (accepts both old A5 and new A2 IDs)
     const otherViolations: any[] = [];
     
-    // For screenshot A1, force all findings to perceptual/potential
+    // For screenshot A1, force all findings to perceptual/potential and filter icons
     filteredBySelection.forEach((v: any) => {
       if (v.ruleId === 'A1') {
+        // Filter out icon/non-text findings — A1 is for text contrast only (WCAG 1.4.3)
+        if (v.contentType === 'icon') {
+          console.log(`A1: Filtering out icon/non-text finding: ${v.evidence || v.elementDescription || 'unknown'}`);
+          return; // Skip — do not add to a1Violations
+        }
         // Force perceptual assessment fields for screenshot A1
         v.status = 'potential';
         v.evaluationMethod = 'llm_assisted';
         v.blocksConvergence = false;
         v.inputType = 'screenshots';
         v.samplingMethod = 'inferred';
+        v.contentType = v.contentType || 'text';
         v.perceivedContrast = v.perceivedContrast || 'low';
         v.perceptualRationale = v.perceptualRationale || v.diagnosis || '';
         v.suggestedFix = v.suggestedFix || v.contextualHint || '';
+        // Carry through text size classification
+        v.textSize = v.textSize || 'unknown';
+        v.appliedThreshold = v.appliedThreshold || (v.textSize === 'large' ? 3.0 : 4.5);
+        v.thresholdUsed = v.appliedThreshold;
         a1Violations.push(v);
       } else if (v.ruleId === 'A2' || v.ruleId === 'A5') {
         v.ruleId = 'A2'; // Normalize to A2
@@ -3789,6 +3848,12 @@ serve(async (req) => {
         subItem.perceptualRationale = v.perceptualRationale || v.diagnosis || '';
         subItem.suggestedFix = v.suggestedFix || v.contextualHint || '';
         subItem.contrastNotMeasurable = true;
+        // Carry through text size classification for screenshot A1
+        subItem.contentType = v.contentType || 'text';
+        subItem.screenshotTextSize = v.textSize || 'unknown';
+        subItem.textType = v.textSize === 'large' ? 'large' : 'normal';
+        subItem.appliedThreshold = v.appliedThreshold || 4.5;
+        subItem.wcagCriterion = '1.4.3';
       } else {
         // Structural mode: carry through deterministic color/ratio fields
         subItem.foregroundHex = v.foregroundHex;
