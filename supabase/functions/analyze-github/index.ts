@@ -1116,11 +1116,17 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   const headingIssues: A4Finding[] = [];
   const landmarkIssues: A4Finding[] = [];
   const listIssues: A4Finding[] = [];
+  const visualHeadingIssues: A4Finding[] = [];
 
   const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
-  const CLICK_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
+  const POINTER_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
   const HTML_CLICK_HANDLER_RE = /\b(onclick|onmousedown|onmouseup|onkeydown)\s*=/i;
   const INTERACTIVE_ROLES = /\brole\s*=\s*["'](button|link|menuitem|tab|option|checkbox|radio|switch|combobox|listbox|slider|treeitem|gridcell)["']/i;
+  const KEY_HANDLER_RE = /\b(onKeyDown|onKeyUp|onKeyPress)\s*=/;
+  const TABINDEX_GTE0_RE = /tabIndex\s*=\s*\{?\s*(?:0|[1-9])\s*\}?/i;
+  const LARGE_FONT_RE = /\b(?:text-(?:xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)|text-lg)\b/;
+  const BOLD_RE = /\b(?:font-bold|font-semibold|font-extrabold|font-black)\b/;
+  const LIST_INTENT_RE = /^(?:\s*[•\-\*\d]+[\.\)]\s|\s*(?:item|card|entry|row|record)\b)/i;
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
@@ -1135,30 +1141,63 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
-    // A4.1: Heading semantics
-    const h1Match = content.match(/<h1\b/gi);
-    if (h1Match) hasH1 = true;
+    // A4.1: Heading semantics — scan for h1–h6
+    if (/<h1\b/gi.test(content)) hasH1 = true;
     for (let i = 1; i <= 6; i++) {
       if (new RegExp(`<h${i}\\b`, 'i').test(content)) headingLevelsUsed.add(i);
     }
 
-    // A4.2: Interactive elements are semantic
-    const tagRegex = new RegExp(`<(${NON_INTERACTIVE_TAGS})\\b([^>]*)>`, 'gi');
-    let match;
-    while ((match = tagRegex.exec(content)) !== null) {
-      const tag = match[1];
-      const attrs = match[2];
-      if (!CLICK_HANDLER_RE.test(attrs) && !HTML_CLICK_HANDLER_RE.test(attrs)) continue;
-      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
-      if (INTERACTIVE_ROLES.test(attrs)) continue;
-      if (/tabIndex\s*=\s*\{?\s*0\s*\}?/i.test(attrs) && INTERACTIVE_ROLES.test(attrs)) continue;
+    // A4.1: Visual heading heuristic
+    const visualHeadingTags = extractJsxOpeningTags(content, 'div|span|p');
+    for (const { tag, attrs, index } of visualHeadingTags) {
+      const classMatch = attrs.match(/className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[`"']([^`"']+)[`"']\})/);
+      const cls = classMatch?.[1] || classMatch?.[2] || classMatch?.[3] || '';
+      if (!LARGE_FONT_RE.test(cls) || !BOLD_RE.test(cls)) continue;
+      if (/role\s*=\s*["']heading["']/i.test(attrs)) continue;
+      const afterTag = content.slice(index + attrs.length + tag.length + 2, Math.min(content.length, index + attrs.length + tag.length + 200));
+      const textMatch = afterTag.match(/^([^<]{3,80})/);
+      if (!textMatch) continue;
+      const text = textMatch[1].trim();
+      if (text.length < 3 || text.length > 80) continue;
 
-      const linesBefore = content.slice(0, match.index).split('\n');
-      const lineNumber = linesBefore.length;
+      const lineNumber = content.slice(0, index).split('\n').length;
+      const dedupeKey = `A4.1|visual-heading|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      visualHeadingIssues.push({
+        elementLabel: `Visual heading: "${text.substring(0, 40)}"`, elementType: tag, sourceLabel: text.substring(0, 40),
+        filePath, componentName,
+        subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+        classification: 'confirmed',
+        detection: `visual_heading_missing_semantics: <${tag}> with ${cls.substring(0, 40)} but no <h1–h6> or role="heading"`,
+        evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
+        explanation: `<${tag}> element looks like a heading (large font + bold: "${text.substring(0, 40)}") but lacks semantic heading markup. Screen readers cannot identify this as a heading.`,
+        confidence: 0.92,
+        correctivePrompt: `Replace <${tag}> with an appropriate heading level (<h2>, <h3>, etc.) or add role="heading" aria-level="N".`,
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // A4.2: Interactive semantics — multiline JSX, suppresses if keyboard support missing (→ A3-C1)
+    const a4NonInteractiveTags = extractJsxOpeningTags(content, NON_INTERACTIVE_TAGS);
+    for (const { tag, attrs, index } of a4NonInteractiveTags) {
+      if (!POINTER_HANDLER_RE.test(attrs) && !HTML_CLICK_HANDLER_RE.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
+      if (/aria-hidden\s*=\s*\{\s*true\s*\}/i.test(attrs)) continue;
+      if (INTERACTIVE_ROLES.test(attrs)) continue;
+      if (isInsideInteractiveAncestor(content, index)) continue;
+      if (isSummaryInDetails(content, index, tag)) continue;
+
+      const hasKeyHandler = KEY_HANDLER_RE.test(attrs);
+      const hasTabIndex = TABINDEX_GTE0_RE.test(attrs);
+      // Suppress if keyboard support missing → A3-C1 territory
+      if (!hasKeyHandler || !hasTabIndex) continue;
+
+      const lineNumber = content.slice(0, index).split('\n').length;
       const handlerMatch = attrs.match(/\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/) || attrs.match(/\b(onclick|onmousedown|onmouseup|onkeydown)\s*=/i);
       const triggerHandler = handlerMatch?.[1] || 'onClick';
-
-      const afterTag = content.slice(match.index + match[0].length, Math.min(content.length, match.index + match[0].length + 300));
+      const afterTag = content.slice(index + attrs.length + tag.length + 2, Math.min(content.length, index + attrs.length + tag.length + 300));
       const childTextMatch = afterTag.match(/^([^<]{1,80})/);
       const innerText = childTextMatch?.[1]?.trim();
       const ariaLabelMatch = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
@@ -1172,11 +1211,11 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
         elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
         subCheck: 'A4.2', subCheckLabel: 'Interactive semantics',
         classification: 'confirmed',
-        detection: `${triggerHandler} on non-semantic <${tag}> without ARIA role`,
-        evidence: `<${tag} ${triggerHandler}=...> at ${filePath}:${lineNumber}`,
-        explanation: `Clickable <${tag}> with ${triggerHandler} but no semantic role (button/link). Screen readers cannot identify this as interactive.`,
-        confidence: 0.95,
-        correctivePrompt: `Replace clickable <${tag}> with <button> or <a>. If non-button must be used, add role="button", tabIndex="0", and Enter/Space handlers.`,
+        detection: `${triggerHandler} on <${tag}> with keyboard support (tabIndex+keyHandler) but missing semantic role`,
+        evidence: `<${tag} ${triggerHandler}=... tabIndex onKeyDown=...> at ${filePath}:${lineNumber} — no role="button"/"link"`,
+        explanation: `Clickable <${tag}> has keyboard support but no semantic role (button/link). Screen readers cannot identify this as interactive.`,
+        confidence: 0.93,
+        correctivePrompt: `Add role="button" or role="link" to <${tag}>, or replace with a native <button>/<a> element.`,
         deduplicationKey: dedupeKey,
       });
     }
@@ -1185,51 +1224,59 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     if (/<main\b/i.test(content) || /role\s*=\s*["']main["']/i.test(content)) hasMainLandmark = true;
     if (/<nav\b/i.test(content) || /role\s*=\s*["']navigation["']/i.test(content)) hasNavLandmark = true;
 
-    // A4.4: Lists
+    // A4.4: Lists — tightened heuristic (Potential only)
     const repeatedClassPattern = /className\s*=\s*(?:"([^"]+)"|'([^']+)'|{`([^`]+)`})/g;
-    const classCounts = new Map<string, number>();
-    let classMatch;
-    while ((classMatch = repeatedClassPattern.exec(content)) !== null) {
-      const cls = classMatch[1] || classMatch[2] || classMatch[3] || '';
+    const classCounts = new Map<string, { count: number; samples: string[] }>();
+    let classMatch2;
+    while ((classMatch2 = repeatedClassPattern.exec(content)) !== null) {
+      const cls = classMatch2[1] || classMatch2[2] || classMatch2[3] || '';
       if (cls.length > 10 && cls.length < 200) {
-        classCounts.set(cls, (classCounts.get(cls) || 0) + 1);
+        const entry = classCounts.get(cls) || { count: 0, samples: [] };
+        entry.count++;
+        const afterPos = classMatch2.index + classMatch2[0].length;
+        const snippet = content.slice(afterPos, Math.min(content.length, afterPos + 200));
+        const closingTag = snippet.match(/>\s*([^<]{0,80})/);
+        if (closingTag?.[1]) entry.samples.push(closingTag[1].trim());
+        classCounts.set(cls, entry);
       }
     }
-    for (const [cls, count] of classCounts) {
-      if (count >= 3) {
-        const hasSemanticList = /<(?:ul|ol)\b/i.test(content) || /role\s*=\s*["']list["']/i.test(content);
-        if (!hasSemanticList) {
-          const listDedupeKey = `A4.4|${filePath}|${cls.substring(0, 30)}`;
-          if (!seenKeys.has(listDedupeKey)) {
-            seenKeys.add(listDedupeKey);
-            listIssues.push({
-              elementLabel: `Repeated items (${count}x)`, elementType: 'div', sourceLabel: `Repeated pattern in ${componentName || filePath}`,
-              filePath, componentName,
-              subCheck: 'A4.4', subCheckLabel: 'List semantics',
-              classification: 'potential',
-              detection: `${count} sibling elements with identical className, no <ul>/<ol> wrapper`,
-              evidence: `Repeated class in ${filePath}: "${cls.substring(0, 60)}..."`,
-              explanation: `${count} elements with the same class pattern but no semantic list (<ul>/<ol>) structure. Screen readers cannot convey the list relationship.`,
-              confidence: 0.88,
-              deduplicationKey: listDedupeKey,
-            });
-          }
-        }
-      }
+    for (const [cls, { count, samples }] of classCounts) {
+      if (count < 3) continue;
+      const hasSemanticList = /<(?:ul|ol)\b/i.test(content) || /role\s*=\s*["']list["']/i.test(content);
+      if (hasSemanticList) continue;
+      const isTailwindOnlyClass = /^[\s\w\-\/\[\]:]+$/.test(cls) && !/\b(?:item|card|entry|row|record|list)\b/i.test(cls);
+      const hasListIntent = samples.some(s => LIST_INTENT_RE.test(s)) || /\b(?:item|card|entry|row|record|list)\b/i.test(cls);
+      if (isTailwindOnlyClass && !hasListIntent) continue;
+
+      const listDedupeKey = `A4.4|${filePath}|${cls.substring(0, 30)}`;
+      if (seenKeys.has(listDedupeKey)) continue;
+      seenKeys.add(listDedupeKey);
+
+      listIssues.push({
+        elementLabel: `Repeated items (${count}x)`, elementType: 'div', sourceLabel: `Repeated pattern in ${componentName || filePath}`,
+        filePath, componentName,
+        subCheck: 'A4.4', subCheckLabel: 'List semantics',
+        classification: 'potential',
+        detection: `${count} sibling elements with identical className and list-like intent, no <ul>/<ol> wrapper`,
+        evidence: `Repeated class in ${filePath}: "${cls.substring(0, 60)}..."`,
+        explanation: `${count} elements with the same class pattern and list-like content but no semantic list (<ul>/<ol>) structure.`,
+        confidence: 0.82,
+        deduplicationKey: listDedupeKey,
+      });
     }
   }
 
-  // A4.1: Post-scan heading analysis
+  // A4.1: Post-scan — missing h1 is Potential
   if (!hasH1 && headingLevelsUsed.size > 0) {
     headingIssues.push({
       elementLabel: 'Missing <h1>', elementType: 'h1', sourceLabel: 'Page heading',
       filePath: 'global', componentName: undefined,
       subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
-      classification: 'confirmed',
-      detection: 'No <h1> found in any source file',
+      classification: 'potential',
+      detection: 'missing_h1: No <h1> found in any source file',
       evidence: `Heading levels used: ${Array.from(headingLevelsUsed).sort().map(l => `h${l}`).join(', ')} — no h1`,
-      explanation: 'No <h1> heading found. Every page should have exactly one <h1> representing the page title for screen reader navigation.',
-      confidence: 0.90,
+      explanation: 'No <h1> heading found. Pages should generally have one <h1> for the page title, though it may be rendered dynamically.',
+      confidence: 0.72,
       correctivePrompt: 'Add exactly one <h1> element for the page title.',
       deduplicationKey: 'A4.1|no-h1',
     });
@@ -1244,7 +1291,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
         filePath: 'global', componentName: undefined,
         subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
         classification: 'potential',
-        detection: `Heading level skips from h${sortedLevels[i - 1]} to h${sortedLevels[i]}`,
+        detection: `skipped_levels: Heading level skips from h${sortedLevels[i - 1]} to h${sortedLevels[i]}`,
         evidence: `Heading levels used: ${sortedLevels.map(l => `h${l}`).join(', ')}`,
         explanation: `Heading level skips from h${sortedLevels[i - 1]} to h${sortedLevels[i]}. This breaks the logical document outline for screen readers.`,
         confidence: 0.78,
@@ -1265,7 +1312,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       filePath: 'global', componentName: undefined,
       subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
       classification: 'potential',
-      detection: `${h1Count} <h1> elements found across source files`,
+      detection: `multiple_h1: ${h1Count} <h1> elements found across source files`,
       evidence: `${h1Count} <h1> tags detected`,
       explanation: `Multiple <h1> elements detected. Pages should generally have exactly one <h1> for the page title.`,
       confidence: 0.72,
@@ -1273,7 +1320,6 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     });
   }
 
-  // A4.3: Missing landmarks
   if (!hasMainLandmark) {
     landmarkIssues.push({
       elementLabel: 'Missing <main> landmark', elementType: 'main', sourceLabel: 'Page landmark',
@@ -1288,7 +1334,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     });
   }
 
-  findings.push(...headingIssues, ...clickableNonSemantics, ...landmarkIssues, ...listIssues);
+  findings.push(...headingIssues, ...visualHeadingIssues, ...clickableNonSemantics, ...landmarkIssues, ...listIssues);
   return findings;
 }
 
