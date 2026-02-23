@@ -1208,107 +1208,60 @@ This analysis uses a Two-Layer Hybrid Architecture:
 ## PASS 1 — Accessibility (WCAG AA) - LLM-Assisted Rules Only
 NOTE: A1 (contrast), A3 (keyboard), A4 (semantics), A5 (form labels), A6 (accessible names) are handled by the deterministic engine. Do NOT report these rules.
 
-### A2 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
+### A2 (Poor focus visibility) — CLASSIFICATION RULES:
 
-**ABSOLUTE RULE:**
-If an element does NOT remove the default browser focus outline, it MUST NOT be reported under A2.
-Lack of a custom focus-visible style alone is NOT an accessibility issue — browser defaults are acceptable.
+**PREREQUISITE — FOCUS SUPPRESSION CHECK:**
+ONLY evaluate an element for A2 if it explicitly suppresses the default focus indicator:
+- \`outline: none\`, \`outline-none\`, \`focus:outline-none\`, \`focus-visible:outline-none\`
+- OR \`ring-0\`, \`focus:ring-0\`, \`focus-visible:ring-0\`
+- OR \`:focus { outline: none }\`
+If no suppression is detected → SKIP (do not report).
 
-**PREREQUISITE — OUTLINE REMOVAL CHECK:**
-ONLY evaluate an element for A2 if it explicitly removes the default focus outline or zeroes the ring:
-- \`outline-none\`, \`focus:outline-none\`, or \`focus-visible:outline-none\` is present in the class list
-- OR \`ring-0\`, \`focus:ring-0\`, or \`focus-visible:ring-0\` is present
-- OR \`focus:border-0\`, \`focus-visible:border-0\` is present
-If the element does NOT remove the outline AND does not zero the ring/border → SKIP (do not report)
+**FOCUSABILITY — STRICT CRITERIA:**
+Only evaluate elements that are focusable:
+1. Native: \`<button>\`, \`<a href="...">\`, \`<input>\`, \`<select>\`, \`<textarea>\`
+2. Explicit tabIndex: \`tabIndex={0}\` or positive
+3. Interactive ARIA role with tabIndex: \`role="button"\`, \`role="link"\`, \`role="menuitem"\` + \`tabIndex >= 0\`
+Do NOT classify \`<div>\`/\`<span>\` without tabIndex or keyboard handlers as focusable.
 
-**FOCUSABILITY DETERMINATION — STRICT CRITERIA:**
-An element is ONLY considered focusable if it matches ONE of these criteria:
-1. Native focusable elements: \`<button>\`, \`<a href="...">\`, \`<input>\`, \`<select>\`, \`<textarea>\`
-2. Explicit tabIndex: has \`tabIndex={0}\`, \`tabIndex="0"\`, \`tabindex="0"\`, or positive tabIndex
-3. Interactive ARIA role WITH tabIndex: \`role="button"\`, \`role="link"\`, \`role="menuitem"\` with \`tabIndex >= 0\`
-4. onClick handler WITH keyboard support: element has both \`onClick\` AND \`onKeyDown\`/\`onKeyPress\` handlers
+**IGNORE:** All hover styles — hover is NOT focus.
 
-**DO NOT CLASSIFY AS FOCUSABLE:**
-- Plain \`<div>\`, \`<span>\`, \`<p>\` without tabIndex or keyboard handlers
-- Elements with ONLY \`onClick\` (no keyboard handler) — this is a different a11y issue
-- Speculative cases like "if used as clickable" — analyze the ACTUAL code
+**CLASSIFICATION:**
 
-**IGNORE COMPLETELY:**
-- All hover styles (\`hover:bg-*\`, \`hover:text-*\`, etc.) — hover is NOT focus
-- Hover feedback must NEVER be used as evidence for or against focus visibility
+1. **CONFIRMED (Blocking):**
+   - Explicit focus suppression detected (outline-none, ring-0, :focus{outline:none})
+   - AND **no** valid replacement focus style is present
+   - Valid replacements: \`focus:ring-*\`, \`focus-visible:ring-*\`, \`focus:border-*\`, \`focus-visible:border-*\`, \`focus:shadow-*\`, \`focus-visible:shadow-*\`, \`focus:bg-*\`, \`focus-visible:bg-*\`
+   - If ANY valid replacement exists → DO NOT mark confirmed
+   - Set \`typeBadge: "CONFIRMED"\`, confidence 90-95%
 
-**CLASSIFICATION CATEGORIES:**
+2. **POTENTIAL (Non-blocking):**
+   - Focus suppression detected AND a replacement exists but perceptibility cannot be statically verified
+   - Examples: ring-1 with muted color, bg-only change, shadow-sm only
+   - OR: Interactive elements exist but no explicit focus styles are detected
+   - Do NOT assume subtle styling equals invisible — static analysis cannot evaluate visual contrast of focus rings
+   - Set \`typeBadge: "POTENTIAL"\`, confidence 60-75%
 
-1. **NOT APPLICABLE — SKIP ENTIRELY:**
-   - Element does NOT remove the default outline (no \`outline-none\`, \`focus:outline-none\`, \`focus-visible:outline-none\`)
-   - AND does NOT zero the ring (\`ring-0\`, \`focus:ring-0\`, \`focus-visible:ring-0\`)
-   - OR element does NOT meet focusability criteria above
-   - DO NOT REPORT — do not include in violations array
+3. **PASS — SKIP ENTIRELY:**
+   - No focus suppression detected (browser defaults preserved)
+   - OR strong visible replacement present (\`focus:ring-2\`+, \`focus:border-*\` with distinct color, \`focus:outline-*\` not outline-none, \`focus:shadow-md\`+)
+   - Do NOT include in violations array
 
-2. **PASS — SKIP ENTIRELY:**
-   - Element IS focusable AND removes outline BUT has a STRONG visible replacement:
-   - Valid PASS replacements (clear focus indicator):
-     * \`focus:ring-2\` or higher, \`focus-visible:ring-2\` or higher → PASS
-     * \`ring-offset-2\` or higher → PASS
-     * \`focus:border-*\` or \`focus-visible:border-*\` with strong color token (not gray-100/200) → PASS
-     * \`focus-visible:outline-*\` (not \`outline-none\`) → PASS
-     * Outline explicitly retained (no outline-none) → PASS
-   - DO NOT REPORT — do not include in violations array
+**ELEMENT IDENTITY (MANDATORY for every A2 finding):**
+- "role": HTML tag name or ARIA role
+- "accessibleName": Computed accessible name (aria-label, visible text). "" if none.
+- "sourceLabel": Human-readable label describing the element
+- "selectorHint": data-testid, id, class fragment, or component JSX snippet
+- "filePath": Full file path
+- "componentName": PascalCase component name
 
-3. **HEURISTIC RISK (Borderline) — REPORT:**
-   - Element IS focusable AND outline is removed AND replacement exists but is LIKELY TOO SUBTLE:
-   - Specific borderline patterns (ANY of these → HEURISTIC):
-     a) \`ring-1\` or \`focus:ring-1\` or \`focus-visible:ring-1\` (ring thickness < 2px)
-     b) Muted ring color: \`ring-gray-100\`, \`ring-gray-200\`, \`ring-slate-100\`, \`ring-slate-200\`, \`ring-zinc-200\` (low-contrast ring)
-     c) No ring offset: missing any \`ring-offset-*\` OR explicitly \`ring-offset-0\` (ring merges with element border)
-     d) \`ring-1\` + muted color + no offset combination (very subtle)
-     e) Focus indicator is ONLY a background/text color change (\`focus:bg-*\`, \`focus:text-*\`, \`focus-visible:bg-*\`) without ring/outline/border/shadow
-     f) "Shadow only" focus: \`focus:shadow-sm\` or \`focus-visible:shadow-sm\` without ring/outline/border
-     g) Styles exist only on \`:focus\` without \`:focus-visible\` (keyboard perception risk)
-   - Set \`typeBadge: "HEURISTIC"\`
-   - Set confidence to 60-75% (deterministic but subtle)
-   - Evidence: list the exact subtle focus classes found. Use detection text like:
-     "Subtle focus ring (ring-1 gray-200) without offset after outline removal — may be hard to perceive"
-
-4. **CONFIRMED VIOLATION — REPORT:**
-   - Element IS focusable AND outline is removed AND replacement is NONE OR ZERO:
-   - Confirmed patterns:
-     * \`outline-none\` + \`ring-0\` or no ring/border/shadow/bg/text at all
-     * \`focus:outline-none\` + no replacement classes whatsoever
-     * \`focus-visible:outline-none\` + only \`ring-0\` or \`focus:ring-0\`
-   - IMPORTANT: If focus is removed AND no replacement → ALWAYS Confirmed, NEVER Borderline/Heuristic
-   - Set \`typeBadge: "CONFIRMED"\`
-   - Set confidence to 90-95% (deterministic)
-   - Evidence: list the outline-removal class and note complete absence of replacement
-
-**VARIANT HANDLING — IMPORTANT:**
-- Treat \`focus:*\` and \`focus-visible:*\` equally as valid focus styling signals
-- Do NOT require \`focus-visible:\` exclusively — \`focus:\` variants are valid indicators
-- A \`focus:ring-2\` is equally valid as \`focus-visible:ring-2\` for PASS classification
-
-**FOCUS STYLE CHECK — PRIORITY ORDER:**
-When \`focus:outline-none\` or \`outline-none\` or \`ring-0\` is present, check for VISIBLE REPLACEMENTS:
-1. Strong ring: \`focus:ring-2\` or higher, \`focus-visible:ring-2\` or higher → PASS
-2. Border change: \`focus:border-*\`, \`focus-visible:border-*\` with distinct color → PASS
-3. Outline replacement: \`focus-visible:outline-*\` (not \`outline-none\`) → PASS
-4. Strong shadow: \`focus:shadow-md\` or larger → PASS
-5. Subtle ring: \`ring-1\` / \`focus:ring-1\` with muted color (gray-100/200) and no offset → HEURISTIC RISK
-6. Shadow-sm only: \`focus:shadow-sm\` without ring/outline/border → HEURISTIC RISK
-7. Background/text ONLY: \`focus:bg-*\`, \`focus-visible:bg-*\`, \`focus:text-*\` with no other → HEURISTIC RISK
-8. NONE of the above → CONFIRMED VIOLATION
-
-**GROUPING RULE:**
-Group identical background-only focus patterns into a SINGLE A2 finding with multiple occurrences listed.
-Example: If 5 buttons all use \`focus:bg-primary\` without ring/border, report ONE violation listing all 5 locations.
-
-**OUTPUT FORMAT FOR A2 VIOLATIONS ONLY:**
-Each A2 finding MUST include rich element identity fields so users can locate the exact element:
+**OUTPUT FORMAT:**
 \`\`\`json
 {
   "ruleId": "A2",
   "ruleName": "Poor focus visibility",
   "category": "accessibility",
-  "typeBadge": "CONFIRMED" or "HEURISTIC",
+  "typeBadge": "CONFIRMED" or "POTENTIAL",
   "evidence": "focus:outline-none with only focus:bg-accent in Button.tsx",
   "diagnosis": "Button removes focus outline without visible replacement.",
   "contextualHint": "Add visible focus ring or border for keyboard accessibility.",
@@ -1316,24 +1269,17 @@ Each A2 finding MUST include rich element identity fields so users can locate th
   "role": "button",
   "accessibleName": "More options",
   "sourceLabel": "More options (kebab menu)",
-  "selectorHint": "<Button aria-label=\"More options\" className=\"...outline-none\">",
+  "selectorHint": "<Button aria-label=\\"More options\\" className=\\"...outline-none\\">",
   "filePath": "src/components/Header.tsx",
   "componentName": "Header"
 }
 \`\`\`
-**Element identity fields (MANDATORY for every A2 finding):**
-- "role": The HTML tag name or ARIA role (e.g., "button", "link", "input", "menuitem", "tab")
-- "accessibleName": Computed accessible name from aria-label, aria-labelledby, or visible text content. Use "" (empty string) if none found.
-- "sourceLabel": Best human-readable label describing the element (e.g., "3-dot menu", "Submit", "Close dialog"). Use visible text, aria-label, or contextual description.
-- "selectorHint": The most useful selector to find the element — prefer data-testid if present, then id, then a class fragment, then component path with nearest JSX snippet (e.g., \`<Button aria-label="More options">\`)
-- "filePath": Full file path where the element is defined
-- "componentName": PascalCase component name if identifiable
 
-**OUTPUT CONSTRAINT — MANDATORY:**
-- The "violations" array must contain ONLY categories 3 and 4 (HEURISTIC RISK and CONFIRMED)
-- NEVER include PASS or NOT APPLICABLE cases in violations
-- NEVER speculate about "might be subtle" or "could be overridden" — analyze actual code only
-- Report ONLY actual accessibility risks with code evidence
+**OUTPUT CONSTRAINT:**
+- Only report CONFIRMED and POTENTIAL findings
+- NEVER include PASS or NOT APPLICABLE in violations
+- NEVER speculate — analyze actual code only
+- Report only actual accessibility risks with code evidence
 
 Accessibility rules to check (LLM-assisted only — A1, A3-A6 are handled by deterministic engine):
 ${accessibilityRulesForLLM.map(r => `- ${r.id}: ${r.name}`).join('\n')}
@@ -3375,9 +3321,11 @@ ${codeContent}`,
           textSnippet: undefined,
           location: item.file_path || 'Unknown file',
           detection: item.detection,
+          detectionMethod: 'deterministic' as const,
           focusClasses: item.focus_classes,
           classification: isConfirmed ? 'confirmed' as const : 'potential' as const,
           potentialSubtype: elSubtype,
+          potentialReason: isConfirmed ? undefined : 'Custom focus styles exist but perceptibility cannot be statically verified.',
           explanation: item.rationale,
           confidence: item.confidence,
           correctivePrompt: isConfirmed
