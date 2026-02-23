@@ -251,6 +251,11 @@ export interface A1ElementSubItem {
   // JSX tag name for structural findings (e.g., "p", "span", "div")
   jsxTag?: string;
   
+  // WCAG 1.4.3 text classification
+  textType?: 'normal' | 'large'; // Normal (4.5:1) or large text (3:1)
+  appliedThreshold?: 4.5 | 3.0; // Threshold used for this element
+  wcagCriterion?: '1.4.3'; // Always 1.4.3 for A1
+  
   // Deduplication key
   deduplicationKey: string; // screenId + bbox + textSnippet
 }
