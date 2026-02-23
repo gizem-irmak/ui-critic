@@ -1748,12 +1748,9 @@ async function computeA1ViolationsFromScreenshots(
     const implausibilityPenalty = classification.isForegroundImplausible ? 0.2 : 0;
     const confidence = Math.max(0.45, baseConfidence - reliability.confidencePenalty - implausibilityPenalty);
     
-    // Final status comes directly from the classification function
-    // v23: Classification is based on background certainty, not confidence
-    // v25.2: Also considers foreground plausibility
-    const finalStatus: 'confirmed' | 'potential' = classification.classification === 'confirmed' 
-      ? 'confirmed' 
-      : 'potential';
+    // SCREENSHOT A1: ALWAYS potential, never confirmed.
+    // Pixel sampling from screenshots lacks DOM context for WCAG-grade confirmation.
+    const finalStatus: 'confirmed' | 'potential' = 'potential';
 
     // ====================================================================
     // BUILD REASON CODES FOR POTENTIAL FINDINGS (Mandatory per A1 rule)
@@ -1805,10 +1802,7 @@ async function computeA1ViolationsFromScreenshots(
     // elementIdentifier already defined earlier in loop
     
     const diagnosis = (() => {
-      if (finalStatus === 'confirmed') {
-        return `Text contrast ${ratio.toFixed(1)}:1 is below WCAG AA minimum ${thresholdUsed}:1. ` +
-               `Foreground ${sample.fgHex} on background ${sample.bgHex}${confidence < 0.75 ? ' (sampling confidence reduced)' : ' measured reliably'}.`;
-      }
+      // Screenshot A1 is always potential — no confirmed branch
       // potential — explain background uncertainty
       const reasons = reasonCodes.map(code => {
         switch (code) {
@@ -1893,8 +1887,8 @@ async function computeA1ViolationsFromScreenshots(
         clusterCount: sample.clusterCount,
         rangeSpansThreshold: sample.contrastRange ? (sample.contrastRange.min < 4.5 && sample.contrastRange.max >= 4.5) : false,
       } : undefined,
-      // Convergence: Confirmed blocks, potential/borderline does not
-      blocksConvergence: finalStatus === 'confirmed',
+      // Screenshot A1: never blocks convergence
+      blocksConvergence: false,
     });
   }
 
@@ -3336,7 +3330,9 @@ serve(async (req) => {
       // 2. If ratio between borderlineThreshold and threshold → BORDERLINE (near-threshold, reduced confidence)
       // 3. If ratio < borderlineThreshold → CONFIRMED VIOLATION
       // 4. If measurement impossible → POTENTIAL
-      let status: 'confirmed' | 'borderline' | 'potential' = 'confirmed';
+      // SCREENSHOT A1: ALWAYS potential, never confirmed.
+      // Screenshots use perceptual/pixel sampling — insufficient for WCAG-grade confirmation.
+      let status: 'confirmed' | 'borderline' | 'potential' = 'potential';
       let potentialRiskReason: string | undefined = undefined;
       
       // First check if element PASSES (meets threshold) - EXCLUDE from violations
@@ -3345,25 +3341,17 @@ serve(async (req) => {
         continue; // Skip this element - it passes WCAG AA
       }
       
-      // Check for borderline vs confirmed violation
+      // Classify sub-status for reporting (but never 'confirmed')
       if (v.status === 'potential' && v.potentialRiskReason) {
-        // Legitimate potential risk - measurement genuinely impossible
-        status = 'potential';
         potentialRiskReason = v.potentialRiskReason;
       } else if (v.status === 'borderline' || 
                  (contrastRatio !== undefined && contrastRatio >= borderlineThreshold && contrastRatio < threshold)) {
-        // Borderline contrast - near threshold (4.3-4.5:1 zone for normal text)
         status = 'borderline';
-      } else if (contrastRatio !== undefined && v.foregroundHex && v.backgroundHex) {
-        // Clear violation with computed data
-        status = 'confirmed';
       } else if (/gradient|image|overlay|transparent|non-uniform|cannot sample|cannot compute/.test(combined)) {
-        // LLM indicated measurement is impossible
-        status = 'potential';
         potentialRiskReason = 'Background complexity prevents stable contrast measurement';
       } else {
-        // Default to confirmed for screenshot input
-        status = 'confirmed';
+        // Default reason for screenshot findings
+        potentialRiskReason = 'Screenshot-based assessment requires manual verification';
       }
       
       // Determine risk level based on contrast ratio or description
@@ -3389,19 +3377,13 @@ serve(async (req) => {
       // - Borderline (ratio 4.3-4.5:1): 0.65-0.75 (reduced due to threshold proximity)
       // - Potential (measurement impossible): 0.50-0.70
       let confidence = v.confidence || 0.55;
-      if (status === 'confirmed') {
-        if (contrastRatio !== undefined && v.foregroundHex && v.backgroundHex) {
-          // Full data available → high confidence
-          confidence = Math.min(Math.max(confidence, 0.88), 0.95);
-        } else {
-          // Confirmed but missing some data
-          confidence = Math.min(Math.max(confidence, 0.80), 0.88);
-        }
-      } else if (status === 'borderline') {
-        // Borderline contrast - reduced confidence due to threshold proximity
+      // Screenshot A1: confidence is capped — never reaches confirmed-grade levels
+      if (status === 'borderline') {
         confidence = Math.min(Math.max(confidence, 0.65), 0.75);
+      } else if (contrastRatio !== undefined && v.foregroundHex && v.backgroundHex) {
+        // Has pixel data but still potential
+        confidence = Math.min(Math.max(confidence, 0.60), 0.78);
       } else {
-        // Potential risk - measurement was impossible
         confidence = Math.min(Math.max(confidence, 0.50), 0.70);
       }
       
@@ -3413,13 +3395,10 @@ serve(async (req) => {
           ? ` (${v.foregroundHex} on ${v.backgroundHex})`
           : '';
         
-        if (status === 'confirmed') {
-          const ratioInfo = contrastRatio !== undefined
-            ? ` has ${contrastRatio}:1 contrast, failing WCAG AA minimum of ${thresholdVal}:1.`
-            : ' fails to meet WCAG AA contrast requirements.';
-          rationale = `${v.elementDescription || elementRole || `Text in ${location}`}${colorInfo}${ratioInfo}`;
-        } else if (status === 'borderline') {
-          rationale = `${v.elementDescription || elementRole || `Text in ${location}`}${colorInfo} has ${contrastRatio}:1 contrast—borderline near WCAG AA ${thresholdVal}:1 threshold.`;
+        if (status === 'borderline') {
+          rationale = `${v.elementDescription || elementRole || `Text in ${location}`}${colorInfo} has ${contrastRatio}:1 contrast—borderline near WCAG AA ${thresholdVal}:1 threshold. Manual verification required.`;
+        } else if (contrastRatio !== undefined) {
+          rationale = `${v.elementDescription || elementRole || `Text in ${location}`}${colorInfo} has estimated ${contrastRatio}:1 contrast vs ${thresholdVal}:1 threshold. Screenshot-based—verify with DevTools.`;
         } else {
           rationale = `Text in ${location} cannot be measured for contrast due to ${potentialRiskReason || 'background complexity'}. Manual verification recommended.`;
         }
@@ -3434,10 +3413,7 @@ serve(async (req) => {
         if (confidence > existing.confidence) {
           existing.confidence = confidence;
         }
-        // Upgrade to confirmed if any finding in same location is confirmed
-        if (status === 'confirmed') {
-          existing.status = 'confirmed';
-        }
+        // Screenshot A1: never upgrade to confirmed
       } else {
         const item: A1AffectedItemUI = {
           screenshotIndex,
@@ -3491,16 +3467,15 @@ serve(async (req) => {
         if (reasonCodes.length === 0) reasonCodes.push('LOW_CONFIDENCE');
       }
       
-      // Determine background status
+      // Screenshot: never 'certain' — at best 'uncertain'
       const backgroundStatus: 'certain' | 'uncertain' | 'unmeasurable' = 
-        item.status === 'confirmed' ? 'certain' :
         item.contrastRatio !== undefined ? 'uncertain' : 'unmeasurable';
       
       // Build diagnosis per element
       const diagnosis = (() => {
-        if (item.status === 'confirmed') {
-          return `Text contrast ${item.contrastRatio}:1 is below WCAG AA minimum ${item.thresholdUsed || 4.5}:1. ` +
-                 `Foreground ${item.foregroundHex || 'unknown'} on background ${item.backgroundHex || 'unknown'}.`;
+        if (item.contrastRatio !== undefined) {
+          return `Estimated contrast ${item.contrastRatio}:1 vs WCAG AA ${item.thresholdUsed || 4.5}:1. ` +
+                 `Foreground ${item.foregroundHex || 'unknown'} on background ${item.backgroundHex || 'unknown'}. Screenshot-based—verify with DevTools.`;
         }
         if (item.status === 'potential') {
           const reasons = reasonCodes.map(code => {
