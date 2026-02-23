@@ -2919,6 +2919,7 @@ serve(async (req) => {
     // CRITICAL: Filter violations to ONLY include selected rules
     // This ensures unselected rules are never reported, even if AI returns them
     // TWO-STAGE HYBRID A1: LLM proposes candidate regions → Pixel engine measures contrast
+    const includesA1 = selectedRulesSet.has('A1');
     const shouldComputeA1FromPixels = includesA1;
 
     // Extract a1Candidates from LLM response (Stage 1 output)
