@@ -263,6 +263,9 @@ export interface A1ElementSubItem {
   appliedThreshold?: 4.5 | 3.0; // Threshold used for this element
   wcagCriterion?: '1.4.3'; // Always 1.4.3 for A1
   
+  // Two-stage hybrid method label (screenshot A1)
+  a1Method?: 'LLM→Pixel' | 'LLM-only (measurement failed)';
+  
   // Deduplication key
   deduplicationKey: string; // screenId + bbox + textSnippet
 }
