@@ -241,6 +241,13 @@ export interface A1ElementSubItem {
   perceptualRationale?: string;
   suggestedFix?: string;
   
+  // Content type classification (screenshot A1)
+  contentType?: 'text' | 'icon'; // "icon" findings are filtered out
+  
+  // Text size classification (screenshot A1 perceptual)
+  // Also used by structural mode (textType/appliedThreshold/wcagCriterion above)
+  screenshotTextSize?: 'normal' | 'large' | 'unknown';
+  
   // Element-specific corrective prompt (ONLY for confirmed violations)
   // Must be pattern-oriented: mentions text content, UI role, location, and suggests group-wide fix
   correctivePrompt?: string;

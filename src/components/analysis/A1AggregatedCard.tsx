@@ -115,6 +115,26 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
             {/* PERCEPTUAL MODE: Show perceptual assessment instead of colors/ratio */}
             {isPerceptual ? (
               <>
+                {/* Text size + threshold for perceptual findings */}
+                {element.screenshotTextSize && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground font-medium w-20">Text size:</span>
+                    <Badge variant="outline" className="text-xs">
+                      {element.screenshotTextSize === 'large' ? 'Large text' : element.screenshotTextSize === 'unknown' ? 'Unknown (assumed normal)' : 'Normal text'}
+                    </Badge>
+                    {element.appliedThreshold && (
+                      <span className="text-muted-foreground text-xs">
+                        Threshold: {element.appliedThreshold}:1
+                      </span>
+                    )}
+                    {element.wcagCriterion && (
+                      <span className="text-muted-foreground text-xs">
+                        WCAG {element.wcagCriterion}
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {/* Perceived Contrast */}
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground font-medium w-20">Contrast:</span>
