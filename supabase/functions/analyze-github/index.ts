@@ -1787,55 +1787,23 @@ NOTE: A1 (contrast), A3 (keyboard), A4 (semantics), A5 (form labels), A6 (access
 Accessibility rules to check (LLM-assisted only):
 ${accessibilityRulesForLLM.map(r => `- ${r.id}: ${r.name} - ${r.diagnosis}`).join('\n')}
 
-### A2 (Poor focus visibility) — STRICT CLASSIFICATION & DETECTION RULES:
+### A2 (Poor focus visibility) — CLASSIFICATION RULES:
 
-**ABSOLUTE RULE:**
-If an element does NOT remove the default browser focus outline, it MUST NOT be reported under A2.
-Lack of a custom focus-visible style alone is NOT an accessibility issue — browser defaults are acceptable.
+**PREREQUISITE — FOCUS SUPPRESSION CHECK:**
+ONLY evaluate an element for A2 if it explicitly suppresses the default focus indicator:
+- \`outline-none\`, \`focus:outline-none\`, \`focus-visible:outline-none\`
+- OR \`ring-0\`, \`focus:ring-0\`, \`focus-visible:ring-0\`
+- OR \`:focus { outline: none }\`
+If no suppression → SKIP.
 
-**PREREQUISITE — OUTLINE REMOVAL CHECK:**
-ONLY evaluate an element for A2 if it explicitly removes the default focus outline or zeroes the ring:
-- \`outline-none\`, \`focus:outline-none\`, or \`focus-visible:outline-none\` is present in the class list
-- OR \`ring-0\`, \`focus:ring-0\`, or \`focus-visible:ring-0\` is present
-- OR \`focus:border-0\`, \`focus-visible:border-0\` is present
-If the element does NOT remove the outline AND does not zero the ring/border → SKIP (do not report)
+**FOCUSABILITY:** Only native focusable elements (\`<button>\`, \`<a href>\`, \`<input>\`, \`<select>\`, \`<textarea>\`) or elements with explicit tabIndex/ARIA role.
 
-**FOCUSABILITY DETERMINATION:**
-An element is ONLY considered focusable if it matches ONE of:
-1. Native focusable: \`<button>\`, \`<a href="...">\`, \`<input>\`, \`<select>\`, \`<textarea>\`
-2. Explicit tabIndex >= 0
-3. Interactive ARIA role WITH tabIndex: \`role="button"\`, \`role="link"\`, etc.
-4. onClick handler WITH keyboard handler
+**IGNORE:** All hover styles — hover is NOT focus.
 
 **CLASSIFICATION:**
-- **PASS (SKIP)**: outline removed BUT has a STRONG visible replacement:
-  * \`focus:ring-2\` or higher, \`focus-visible:ring-2\` or higher → PASS
-  * \`ring-offset-2\` or higher → PASS
-  * Border change with distinct color → PASS
-  * Outline replacement (not outline-none) → PASS
-- **HEURISTIC RISK (Borderline)**: outline removed AND replacement exists but is LIKELY TOO SUBTLE:
-  * \`ring-1\` / \`focus:ring-1\` / \`focus-visible:ring-1\` (< 2px) → HEURISTIC
-  * Muted ring color: \`ring-gray-100/200\`, \`ring-slate-100/200\`, \`ring-zinc-200\` → HEURISTIC
-  * No ring offset (missing \`ring-offset-*\` or \`ring-offset-0\`) → HEURISTIC
-  * \`ring-1\` + muted color + no offset → HEURISTIC
-  * Background/text ONLY (\`focus:bg-*\`, \`focus:text-*\`) without ring/outline/border → HEURISTIC
-  * Shadow-sm only: \`focus:shadow-sm\` without ring/outline/border → HEURISTIC
-  * \`:focus\` without \`:focus-visible\` (keyboard perception risk) → HEURISTIC
-  * Detection text example: "Subtle focus ring (ring-1 gray-200) without offset after outline removal — may be hard to perceive"
-- **CONFIRMED**: outline removed AND NO visible replacement at all (or only ring-0/border-0). IMPORTANT: If focus is removed AND no replacement exists → ALWAYS Confirmed, NEVER Heuristic/Borderline.
-
-**VARIANT HANDLING:**
-Treat \`focus:*\` and \`focus-visible:*\` equally as valid focus styling signals. Do NOT require \`focus-visible:\` exclusively.
-
-**FOCUS REPLACEMENT PRIORITY:**
-1. Strong ring: \`focus:ring-2\` or higher, \`focus-visible:ring-2\` or higher → PASS
-2. Border: \`focus:border-*\`, \`focus-visible:border-*\` with distinct color → PASS
-3. Outline: \`focus-visible:outline-*\` (not outline-none) → PASS
-4. Strong shadow: \`focus:shadow-md\` or larger → PASS
-5. Subtle ring: \`ring-1\` with muted color and no offset → HEURISTIC RISK
-6. Shadow-sm only without ring/outline/border → HEURISTIC RISK
-7. Background/text ONLY → HEURISTIC RISK
-8. NONE of the above → CONFIRMED (blocking)
+1. **CONFIRMED:** Focus suppression detected AND NO valid replacement. Valid replacements: \`focus:ring-*\`, \`focus-visible:ring-*\`, \`focus:border-*\`, \`focus-visible:border-*\`, \`focus:shadow-*\`, \`focus-visible:shadow-*\`, \`focus:bg-*\`, \`focus-visible:bg-*\`. If ANY exists → NOT confirmed. Confidence: 90-95%.
+2. **POTENTIAL:** Suppression + replacement exists but perceptibility cannot be statically verified (ring-1 muted, bg-only, shadow-sm). Or interactive elements with no explicit focus styles. Do NOT assume subtle styling equals invisible. Confidence: 60-75%.
+3. **PASS (SKIP):** No suppression, or strong replacement (ring-2+, border, outline, shadow-md+).
 
 **ELEMENT IDENTITY (MANDATORY for every A2 finding):**
 Each finding MUST include:
@@ -2357,6 +2325,7 @@ serve(async (req) => {
             selectorHint,
             location,
             detection,
+            detectionMethod: 'deterministic' as const,
             focusClasses: [...new Set(focusClasses)].filter((cls, _i, arr) => {
               if (cls === 'outline-none' && arr.includes('focus:outline-none')) return false;
               if (cls === 'outline-none' && arr.includes('focus-visible:outline-none')) return false;
@@ -2366,6 +2335,7 @@ serve(async (req) => {
             }),
             classification: isConfirmed ? 'confirmed' as const : 'potential' as const,
             potentialSubtype: isConfirmed ? undefined : 'borderline' as const,
+            potentialReason: isConfirmed ? undefined : 'Custom focus styles exist but perceptibility cannot be statically verified.',
             explanation: (() => {
               if (isConfirmed) return v.diagnosis || 'Element removes the default browser outline without providing a visible focus replacement.';
               const classStr = focusClasses.join(' ');

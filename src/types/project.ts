@@ -284,11 +284,13 @@ export interface A2ElementSubItem {
   
   // Detection data
   detection?: string; // e.g., "Tailwind/CSS: focus:outline-none without replacement"
+  detectionMethod?: 'deterministic' | 'llm_assisted'; // How the finding was detected
   focusClasses?: string[]; // Focus-related classes found
   
   // Classification
   classification: 'confirmed' | 'potential';
   potentialSubtype?: 'accuracy' | 'borderline'; // Only when classification='potential'
+  potentialReason?: string; // Why this is potential (e.g., "Focus visibility cannot be verified from static screenshot")
   
   // Explanation
   explanation: string; // Why this element is flagged

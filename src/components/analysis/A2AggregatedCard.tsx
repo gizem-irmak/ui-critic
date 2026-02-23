@@ -132,11 +132,32 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               </span>
             </div>
 
+            {/* Detection method */}
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground font-medium w-20">Method:</span>
+              <Badge variant="outline" className={cn(
+                'text-xs',
+                element.detectionMethod === 'deterministic'
+                  ? 'border-blue-500/50 text-blue-600'
+                  : 'border-amber-500/50 text-amber-600'
+              )}>
+                {element.detectionMethod === 'deterministic' ? 'Deterministic' : 'LLM-Assisted'}
+              </Badge>
+            </div>
+
             {/* Requirement */}
             <div className="flex items-center gap-2">
               <span className="text-muted-foreground font-medium w-20">Requirement:</span>
               <span>WCAG 2.4.7 Focus Visible</span>
             </div>
+
+            {/* Potential reason */}
+            {!isConfirmed && element.potentialReason && (
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-20">Reason:</span>
+                <span className="text-warning italic">{element.potentialReason}</span>
+              </div>
+            )}
 
             {/* Explanation — render structured if it contains Issue reason / Recommended fix */}
             <div className="pt-1">

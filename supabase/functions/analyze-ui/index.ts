@@ -1933,87 +1933,44 @@ Run visual inspection for accessibility issues:
 - Line spacing and readability
 - Focus indicator visibility
 
-### A2 (Small body font size) — VISUAL DETECTION RULES:
+### A2 (Poor focus visibility) — SCREENSHOT DETECTION RULES:
 
-**SCOPE:** Body-level text only: paragraphs, descriptions, article content, main text areas,
-dialog descriptions, alert bodies, form descriptions, card descriptions.
-
-**DO NOT APPLY to:** Badges, metadata, timestamps, intentional microcopy, labels, tags,
-chips, status indicators, keyboard shortcuts, breadcrumbs, navigation items, button labels.
+**SCOPE:** Interactive elements only: buttons, links, inputs, selects, textareas, tabs, menu items.
 
 **CLASSIFICATION:**
-All screenshot-based A2 findings are **POTENTIAL RISK** (status: "potential", blocksConvergence: false)
-because visual estimation cannot deterministically resolve exact pixel sizes.
+All screenshot-based A2 findings are **POTENTIAL RISK** (status: "potential", blocksConvergence: false).
+Screenshot analysis cannot confirm actual focus behavior — only observe visible states.
 
-**VISUAL SIZE THRESHOLDS (approximate visual assessment):**
-1. **POTENTIAL RISK** (typeBadge: "POTENTIAL"): Body text appears noticeably smaller than 16px
-   - Only for PRIMARY BODY TEXT content (descriptions, paragraphs, content blocks)
-   - Confidence: 45-60% (visual estimation has inherent uncertainty)
+**DETECTION APPROACH:**
+1. Identify interactive elements in the screenshot.
+2. Check whether any element appears to be in a focused state (visible focus ring, outline, border change).
+3. If no focused state is shown in the screenshot: report as potential with reason "Focus visibility cannot be verified from static screenshot."
+4. If a focused element is shown but no visible focus indicator exists: report as potential with reason "No visible focus indicator observed on focused element."
 
-2. **NO ACTION**: Text appears ≥16px or is not body text
-   - Do NOT include in violations array
-   - Skip entirely
-
-**SEMANTIC ROLE VISUAL CLASSIFICATION:**
-**PRIMARY BODY TEXT (A2 targets — must use ≥16px):**
-- Dialog/modal description text
-- Form field description/helper text
-- Card descriptions and content blocks
-- Alert/notification body text
-- Article/paragraph content
-- Main readable content areas
-
-**EXCLUDED ELEMENTS (DO NOT EVALUATE for A2):**
-- Badges, tags, status indicators, chips
-- Metadata displays (dates, counts, status text)
-- Timestamps, "time ago" displays
-- Keyboard shortcut hints
-- Tooltip content, breadcrumbs
-- Icon-only elements, action buttons
-- Navigation menu items
-- Button labels, interactive elements
-- Code blocks, monospace text
-- Captions under images/figures
-
-**CONFIDENCE ADJUSTMENT FACTORS:**
-1. **Visual certainty** (±15%):
-   - Text clearly small compared to standard body text → +10%
-   - Text size ambiguous or borderline → -10%
-
-2. **Context clarity** (±10%):
-   - Standalone body text paragraph → +5%
-   - Part of complex UI pattern → -5%
+**NEVER mark screenshot A2 as "confirmed" — focus visibility requires runtime keyboard testing.**
 
 **OUTPUT FORMAT FOR A2 FINDINGS:**
 \`\`\`json
 {
   "ruleId": "A2",
-  "ruleName": "Small body font size",
+  "ruleName": "Poor focus visibility",
   "category": "accessibility",
   "status": "potential",
   "typeBadge": "POTENTIAL",
-  "evidence": "Body text in dialog description appears smaller than 16px",
-  "diagnosis": "Body text in [location] appears to use a font size below the recommended 16px minimum for primary readable content.",
-  "contextualHint": "Increase body text to at least 16px (text-base) for primary content areas.",
-  "confidence": 0.50,
-  "semanticRole": "body-text"
+  "evidence": "Interactive elements detected but focus state cannot be verified from static screenshot",
+  "diagnosis": "Focus visibility cannot be fully assessed from a static screenshot. Interactive elements may lack visible focus indicators for keyboard users.",
+  "contextualHint": "Verify focus visibility by tabbing through interactive elements with a keyboard.",
+  "confidence": 0.45,
+  "potentialReason": "Focus visibility cannot be verified from static screenshot."
 }
 \`\`\`
 
 **STRICT RULES:**
-- Only report text that serves as PRIMARY BODY TEXT (not badges, metadata, timestamps, microcopy)
-- Text appearing ≥16px → DO NOT report
-- All screenshot findings are status: "potential" (visual estimation)
-- Frame as best-practice concern, never WCAG violation
-- Lower confidence than code analysis (visual estimation)
-
-**DO NOT:**
-- Flag badges, metadata, timestamps, or microcopy
-- Flag normal-sized body text as violations
-- Use "fails", "violates WCAG", or compliance language
-- Assume text size without clear visual evidence
-- Flag interactive elements (buttons, links)
-- Over-report borderline cases
+- ALL screenshot A2 findings MUST be status: "potential"
+- NEVER mark screenshot A2 as "confirmed"
+- Focus visibility requires runtime keyboard testing — screenshots show only one state
+- Do NOT report non-interactive elements (headings, paragraphs, images)
+- Do NOT flag elements that appear to have visible focus indicators
 ### A3 (Insufficient line spacing) — PARAGRAPH BLOCK DETECTION FOR SCREENSHOTS:
 
 **SCOPE:** Primary body text only: paragraphs, descriptions, article content, main text areas,
@@ -3815,10 +3772,12 @@ serve(async (req) => {
           elementType,
           textSnippet: undefined,
           location: formattedLocation,
-          detection: 'Visual heuristic: no visible focus indicator detected in screenshot',
+          detection: 'Visual heuristic: focus visibility cannot be verified from static screenshot',
+          detectionMethod: 'llm_assisted' as const,
           focusClasses: [],
           classification: 'potential' as const,
           potentialSubtype: 'accuracy' as const,
+          potentialReason: v.potentialReason || 'Focus visibility cannot be verified from static screenshot.',
           explanation: item.rationale,
           confidence: item.confidence,
           correctivePrompt: undefined, // Screenshot findings never get corrective prompts
