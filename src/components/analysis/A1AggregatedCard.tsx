@@ -82,11 +82,23 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
         
-        {/* JSX tag (structural mode only) */}
+        {/* JSX tag + WCAG info (structural mode only) */}
         {element.jsxTag && (
-          <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-            <span className="font-medium">Element: </span>
-            <code className="text-foreground font-mono">&lt;{element.jsxTag}&gt;</code>
+          <div className={cn('text-muted-foreground flex items-center gap-2 flex-wrap', compact ? 'text-xs' : 'text-sm')}>
+            <span>
+              <span className="font-medium">Element: </span>
+              <code className="text-foreground font-mono">&lt;{element.jsxTag}&gt;</code>
+            </span>
+            {element.textType && (
+              <Badge variant="outline" className="text-xs">
+                {element.textType === 'large' ? 'Large text' : 'Normal text'}
+              </Badge>
+            )}
+            {element.wcagCriterion && (
+              <span className="text-muted-foreground text-xs">
+                WCAG {element.wcagCriterion} — {element.appliedThreshold}:1
+              </span>
+            )}
           </div>
         )}
         

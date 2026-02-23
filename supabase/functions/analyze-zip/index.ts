@@ -568,6 +568,62 @@ interface A1TokenFinding {
   jsxTag?: string;
   context: string;
   occurrence_count: number;
+  textType: 'normal' | 'large';
+  appliedThreshold: 4.5 | 3.0;
+  wcagCriterion: '1.4.3';
+}
+
+// ===== A1 TEXT ELEMENT SCOPE =====
+// Only these JSX/HTML tags contain readable text subject to WCAG 1.4.3.
+const A1_TEXT_TAGS = new Set([
+  'p', 'span', 'a', 'label', 'li', 'td', 'th',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'button', 'input', 'textarea',
+  'strong', 'em', 'b', 'i', 'small', 'sub', 'sup',
+  'blockquote', 'q', 'cite', 'abbr', 'code', 'pre',
+  'dt', 'dd', 'figcaption', 'legend', 'caption',
+  'summary', 'mark', 'time', 'address',
+]);
+
+// Tags that are never text content (always excluded)
+const A1_EXCLUDED_TAGS = new Set(['svg', 'path', 'circle', 'rect', 'line', 'polygon', 'polyline', 'ellipse', 'g', 'use', 'defs', 'clipPath', 'mask', 'image']);
+
+// Extract lucide-react icon imports to exclude them from A1 evaluation
+function extractLucideImports(code: string): Set<string> {
+  const icons = new Set<string>();
+  const importRegex = /import\s*\{([^}]+)\}\s*from\s*["']lucide-react["']/g;
+  let m;
+  while ((m = importRegex.exec(code)) !== null) {
+    const names = m[1].split(',').map(n => n.trim().split(/\s+as\s+/).pop()!.trim()).filter(Boolean);
+    for (const name of names) icons.add(name);
+  }
+  return icons;
+}
+
+// Check if a JSX tag represents a text-bearing element eligible for A1
+function isTextElement(jsxTag: string | undefined, lucideIcons: Set<string>): boolean {
+  if (!jsxTag) return true; // If tag unknown, be conservative and include
+  
+  const tagLower = jsxTag.toLowerCase();
+  
+  // Exclude SVG elements
+  if (A1_EXCLUDED_TAGS.has(tagLower)) return false;
+  
+  // Exclude lucide-react icon components (PascalCase imports)
+  if (lucideIcons.has(jsxTag)) return false;
+  
+  // For simple tags, check allowlist
+  if (/^[a-z]/.test(jsxTag)) {
+    return A1_TEXT_TAGS.has(tagLower);
+  }
+  
+  // For compound tags (e.g., Card.Title), check if the last segment suggests text
+  const lastSegment = jsxTag.split('.').pop()!;
+  const textSegments = /^(Title|Description|Header|Label|Text|Caption|Name|Heading|Content|Footer|Subtitle)$/i;
+  if (textSegments.test(lastSegment)) return true;
+  
+  // PascalCase components: include by default (could contain text), unless known icon
+  return true;
 }
 
 const TW_COLOR_FAMILIES = 'gray|slate|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|white|black';
@@ -702,11 +758,18 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
     
+    // Build set of lucide-react icon imports for this file
+    const lucideIcons = extractLucideImports(content);
+    
     const textTokens = extractTextColorTokens(content);
     
     for (const { colorClass, colorName, context, matchIndex, jsxTag } of textTokens) {
       const fgHex = TAILWIND_COLORS[colorName];
       if (!fgHex) continue; // Unknown token — skip
+      
+      // --- WCAG 1.4.3 SCOPE FILTER ---
+      // Only evaluate text-bearing elements; exclude SVGs, icons, non-text tags
+      if (!isTextElement(jsxTag, lucideIcons)) continue;
       
       // --- Background resolution ---
       let bgHex: string;
@@ -736,9 +799,10 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       // --- Contrast computation ---
       const ratio = getContrastRatio(fgHex, bgHex);
       
-      // --- Size inference ---
+      // --- Size inference & WCAG 1.4.3 threshold ---
       const sizeStatus = inferTextSize(context);
-      const threshold: 4.5 | 3.0 = sizeStatus === 'large' ? 3.0 : 4.5;
+      const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
+      const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
       
       const evidenceLevel: A1EvidenceLevel = bgSource === 'tailwind_token'
         ? 'structural_deterministic'
@@ -766,6 +830,9 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         jsxTag,
         context,
         occurrence_count: 1,
+        textType,
+        appliedThreshold: threshold,
+        wcagCriterion: '1.4.3',
       });
     }
   }
@@ -3575,10 +3642,13 @@ ${codeContent}`,
       }
     }
 
-    // Aggregate per-element A1 findings into at most 1 potential card
+    // Aggregate per-element A1 findings into confirmed + potential cards
     const aggregatedA1Violations: any[] = [];
     if (contrastViolations.length > 0) {
-      const a1Elements = contrastViolations.map(v => ({
+      const confirmedFindings = contrastViolations.filter(v => v.status === 'confirmed');
+      const potentialFindings = contrastViolations.filter(v => v.status !== 'confirmed');
+      
+      const mapToElement = (v: any) => ({
         elementLabel: v.elementIdentifier || v.elementDescription || 'Unknown element',
         textSnippet: v.evidence,
         location: v.evidence || '',
@@ -3591,29 +3661,62 @@ ${codeContent}`,
         explanation: v.diagnosis,
         reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
         jsxTag: v.affectedComponents?.[0]?.jsxTag,
+        textType: v.sizeStatus === 'large' ? 'large' : 'normal',
+        appliedThreshold: v.thresholdUsed || 4.5,
+        wcagCriterion: '1.4.3' as const,
         deduplicationKey: `a1|${v.elementIdentifier}|${v.foregroundHex}`,
-      }));
-      const avgConfidence = contrastViolations.reduce((sum, v) => sum + v.confidence, 0) / contrastViolations.length;
-      aggregatedA1Violations.push({
-        ruleId: 'A1',
-        ruleName: 'Insufficient text contrast',
-        category: 'accessibility',
-        status: 'potential',
-        isA1Aggregated: true,
-        a1Elements,
-        diagnosis: `${a1Elements.length} text element${a1Elements.length !== 1 ? 's' : ''} with potential contrast issues detected via static code analysis.`,
-        correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools after rendering.',
-        contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools after rendering.',
-        confidence: Math.round(avgConfidence * 100) / 100,
-        reasonCodes: ['STATIC_ANALYSIS'],
-        potentialRiskReason: 'STATIC_ANALYSIS',
-        advisoryGuidance: 'Upload screenshots of the rendered UI for higher-confidence verification.',
-        blocksConvergence: false,
-        inputType: 'zip',
-        samplingMethod: 'inferred',
-        evaluationMethod: 'deterministic',
       });
-      console.log(`A1 aggregated (ZIP): ${contrastViolations.length} potential elements → 1 Potential card`);
+      
+      if (confirmedFindings.length > 0) {
+        const a1Elements = confirmedFindings.map(mapToElement);
+        const avgConf = confirmedFindings.reduce((s, v) => s + v.confidence, 0) / confirmedFindings.length;
+        aggregatedA1Violations.push({
+          ruleId: 'A1',
+          ruleName: 'Insufficient text contrast',
+          category: 'accessibility',
+          status: 'confirmed',
+          isA1Aggregated: true,
+          a1Elements,
+          diagnosis: `${a1Elements.length} text element${a1Elements.length !== 1 ? 's' : ''} with confirmed contrast violations (WCAG 1.4.3).`,
+          correctivePrompt: a1Elements.map(e => e.explanation).join('\n'),
+          contextualHint: 'Both foreground and background resolved from Tailwind tokens.',
+          confidence: Math.round(avgConf * 100) / 100,
+          blocksConvergence: true,
+          inputType: 'zip',
+          samplingMethod: 'inferred',
+          evaluationMethod: 'deterministic',
+          evidenceLevel: 'structural_deterministic',
+        });
+      }
+      
+      if (potentialFindings.length > 0) {
+        const a1Elements = potentialFindings.map(mapToElement);
+        const avgConf = potentialFindings.reduce((s, v) => s + v.confidence, 0) / potentialFindings.length;
+        aggregatedA1Violations.push({
+          ruleId: 'A1',
+          ruleName: 'Insufficient text contrast',
+          category: 'accessibility',
+          status: 'potential',
+          isA1Aggregated: true,
+          a1Elements,
+          diagnosis: `${a1Elements.length} text element${a1Elements.length !== 1 ? 's' : ''} with potential contrast issues (WCAG 1.4.3) — verify at runtime.`,
+          correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools after rendering.',
+          contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools after rendering.',
+          confidence: Math.round(avgConf * 100) / 100,
+          reasonCodes: ['STATIC_ANALYSIS'],
+          potentialRiskReason: 'STATIC_ANALYSIS',
+          advisoryGuidance: 'Upload screenshots of the rendered UI for higher-confidence verification.',
+          blocksConvergence: false,
+          inputType: 'zip',
+          samplingMethod: 'inferred',
+          evaluationMethod: 'deterministic',
+          evidenceLevel: 'structural_estimated',
+        });
+      }
+      
+      const confirmed = confirmedFindings.length;
+      const potential = potentialFindings.length;
+      console.log(`A1 aggregated (ZIP): ${confirmed} confirmed, ${potential} potential → ${aggregatedA1Violations.length} card(s)`);
     }
 
     // Merge aggregated A1 with AI violations (no raw contrast violations)
