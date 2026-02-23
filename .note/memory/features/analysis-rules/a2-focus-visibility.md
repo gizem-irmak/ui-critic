@@ -22,12 +22,23 @@ Rule A2 (Poor Focus Visibility) uses refined classification logic with epistemic
 **Pass (Skip):**
 - No suppression, or strong replacement (ring-2+, border, outline, shadow-md+)
 
-## Screenshot (LLM-Assisted Mode)
+## Screenshot (LLM-Assisted Mode) — Three-Tier Classification
 
-- ALWAYS status="potential", NEVER confirmed
-- LLM detects interactive elements and checks for visible focus indicators
-- If no focused state shown: reason="Focus visibility cannot be verified from static screenshot."
-- If focused element shown but no indicator: reason="No visible focus indicator observed."
+1. **Not Evaluated (status: "informational"):**
+   - Screenshot does NOT display any element in a focused state
+   - reason: "Focus state not observable in provided screenshot."
+   - confidence: 0
+   - Renders in "Rules Not Evaluated" section
+
+2. **Potential (status: "potential"):**
+   - Screenshot DOES show a focused element but that element lacks a visible indicator
+   - reason: "No visible focus indicator observed."
+   - confidence: 0.55-0.75
+
+3. **No Finding:**
+   - Screenshot shows visible focus indicators on focused elements → PASS
+
+- NEVER mark screenshot A2 as confirmed.
 - detectionMethod: 'llm_assisted'
 
 ## Policy
@@ -36,7 +47,3 @@ Rule A2 (Poor Focus Visibility) uses refined classification logic with epistemic
 - Screenshot findings cannot override deterministic Confirmed findings
 - UI shows detection method (Deterministic / LLM-Assisted) and WCAG 2.4.7 reference
 - Each element includes `detectionMethod` and `potentialReason` fields
-
-## Critical Bug Fixed
-
-The screenshot A2 prompt was previously mislabeled as "Small body font size" instead of "Poor focus visibility" — now corrected to properly detect focus visibility issues in screenshots.

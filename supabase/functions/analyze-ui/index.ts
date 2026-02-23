@@ -1937,19 +1937,41 @@ Run visual inspection for accessibility issues:
 
 **SCOPE:** Interactive elements only: buttons, links, inputs, selects, textareas, tabs, menu items.
 
-**CLASSIFICATION:**
-All screenshot-based A2 findings are **POTENTIAL RISK** (status: "potential", blocksConvergence: false).
-Screenshot analysis cannot confirm actual focus behavior — only observe visible states.
+**THREE-TIER CLASSIFICATION:**
 
-**DETECTION APPROACH:**
-1. Identify interactive elements in the screenshot.
-2. Check whether any element appears to be in a focused state (visible focus ring, outline, border change).
-3. If no focused state is shown in the screenshot: report as potential with reason "Focus visibility cannot be verified from static screenshot."
-4. If a focused element is shown but no visible focus indicator exists: report as potential with reason "No visible focus indicator observed on focused element."
+1. **NOT EVALUATED (status: "not_evaluated"):** If the screenshot does NOT display any element in a focused state (no visible focus ring, outline, or border change on any element), report:
+   - status: "not_evaluated"
+   - potentialReason: "Focus state not observable in provided screenshot."
+   - confidence: 0.0
+   - This means focus visibility CANNOT be assessed from this screenshot.
+
+2. **POTENTIAL (status: "potential"):** If the screenshot DOES show a focused element (e.g., an element with a visible focus ring or outline) but another interactive element lacks a visible focus indicator, report:
+   - status: "potential"
+   - potentialReason: "No visible focus indicator observed."
+   - confidence: 0.55-0.75
+
+3. **NO FINDING:** If the screenshot shows visible focus indicators on focused elements, do NOT report any A2 finding.
 
 **NEVER mark screenshot A2 as "confirmed" — focus visibility requires runtime keyboard testing.**
 
 **OUTPUT FORMAT FOR A2 FINDINGS:**
+When focus state is NOT observable (most common case):
+\`\`\`json
+{
+  "ruleId": "A2",
+  "ruleName": "Poor focus visibility",
+  "category": "accessibility",
+  "status": "not_evaluated",
+  "typeBadge": "NOT_EVALUATED",
+  "evidence": "No focused state observable in screenshot",
+  "diagnosis": "Focus visibility cannot be assessed — no element appears in a focused state in the provided screenshot.",
+  "contextualHint": "Upload source code for deterministic focus visibility analysis, or provide a screenshot showing a focused element.",
+  "confidence": 0.0,
+  "potentialReason": "Focus state not observable in provided screenshot."
+}
+\`\`\`
+
+When a focused element is shown but lacks indicator:
 \`\`\`json
 {
   "ruleId": "A2",
@@ -1957,16 +1979,18 @@ Screenshot analysis cannot confirm actual focus behavior — only observe visibl
   "category": "accessibility",
   "status": "potential",
   "typeBadge": "POTENTIAL",
-  "evidence": "Interactive elements detected but focus state cannot be verified from static screenshot",
-  "diagnosis": "Focus visibility cannot be fully assessed from a static screenshot. Interactive elements may lack visible focus indicators for keyboard users.",
-  "contextualHint": "Verify focus visibility by tabbing through interactive elements with a keyboard.",
-  "confidence": 0.45,
-  "potentialReason": "Focus visibility cannot be verified from static screenshot."
+  "evidence": "Focused element visible but no focus indicator detected",
+  "diagnosis": "A focused interactive element appears to lack a visible focus indicator for keyboard users.",
+  "contextualHint": "Add visible focus-visible indicators (ring, outline, border) for keyboard accessibility.",
+  "confidence": 0.6,
+  "potentialReason": "No visible focus indicator observed."
 }
 \`\`\`
 
 **STRICT RULES:**
-- ALL screenshot A2 findings MUST be status: "potential"
+- If no focused state is shown → status: "not_evaluated" (NOT "potential")
+- If focused element shown but no indicator → status: "potential"
+- If visible focus indicator shown → NO finding
 - NEVER mark screenshot A2 as "confirmed"
 - Focus visibility requires runtime keyboard testing — screenshots show only one state
 - Do NOT report non-interactive elements (headings, paragraphs, images)
@@ -2877,6 +2901,7 @@ serve(async (req) => {
     // This ensures unselected rules are never reported, even if AI returns them
     // TWO-STAGE HYBRID A1: LLM proposes candidate regions → Pixel engine measures contrast
     const includesA1 = selectedRulesSet.has('A1');
+    const includesA2 = selectedRulesSet.has('A2');
     const shouldComputeA1FromPixels = includesA1;
 
     // Extract a1Candidates from LLM response (Stage 1 output)
@@ -3662,9 +3687,12 @@ serve(async (req) => {
     }
     
     console.log(`A1 per-element: ${perElementA1Violations.length} individual violations (${perElementA1Violations.filter(v => v.status === 'confirmed').length} confirmed, ${perElementA1Violations.filter(v => v.status === 'potential').length} potential, ${perElementA1Violations.filter(v => v.status === 'borderline').length} borderline)`);
-    // ========== A2 AGGREGATION LOGIC (Screenshot — Focus Visibility, always Potential) ==========
-    // For screenshot input: A2 is NEVER confirmed (heuristic only).
-    // Only report if screenshot clearly shows a focused state with no visible indicator.
+    // ========== A2 AGGREGATION LOGIC (Screenshot — Focus Visibility, three-tier) ==========
+    // For screenshot input: A2 uses three-tier classification:
+    //   1. not_evaluated (informational) — no focused state observable in screenshot
+    //   2. potential — focused element shown but no visible indicator
+    //   3. no finding — visible focus indicator shown (PASS)
+    // A2 is NEVER confirmed from screenshots.
     interface A2FocusItemUI {
       component_name: string;
       location: string;
@@ -3676,12 +3704,21 @@ serve(async (req) => {
 
     const a2DedupeMapUI = new Map<string, A2FocusItemUI>();
     const a2ValidViolationsUI: any[] = [];
+    let a2HasNotEvaluated = false;
 
     for (const v of a2Violations) {
       const evidence = (v.evidence || '');
       const evidenceLower = evidence.toLowerCase();
       const diagnosis = (v.diagnosis || '').toLowerCase();
       const combined = evidenceLower + ' ' + diagnosis;
+      const status = (v.status || '').toLowerCase();
+
+      // NOT EVALUATED: no focused state observable in screenshot
+      if (status === 'not_evaluated' || /cannot.*assess|not observable|no focused state|no focus state shown|cannot determine|unable to assess|not visible in screenshot/.test(combined)) {
+        console.log(`A2 NOT_EVALUATED (focus state not observable): ${evidence}`);
+        a2HasNotEvaluated = true;
+        continue;
+      }
 
       // PASS: has visible focus ring/border/indicator
       const hasVisibleFocusRing = /has.*ring|visible ring|shows.*ring|focus ring|ring.*focus/i.test(combined);
@@ -3700,18 +3737,11 @@ serve(async (req) => {
         continue;
       }
 
-      // SKIP: cannot determine focus state from screenshot
-      const cannotDetermine = /cannot determine|unable to assess|not visible in screenshot|no focus state shown|no focused state/.test(combined);
-      if (cannotDetermine) {
-        console.log(`A2 SKIP (cannot determine from screenshot): ${evidence}`);
-        continue;
-      }
-
-      console.log(`A2 VIOLATION (screenshot heuristic): ${evidence}`);
+      console.log(`A2 VIOLATION (screenshot heuristic — potential): ${evidence}`);
       a2ValidViolationsUI.push(v);
     }
 
-    // Aggregate valid A2 violations
+    // Aggregate valid A2 violations (potential — focused element with no indicator)
     for (const v of a2ValidViolationsUI) {
       const evidence = (v.evidence || '');
       const combined = (evidence + ' ' + (v.diagnosis || '')).toLowerCase();
@@ -3753,7 +3783,9 @@ serve(async (req) => {
     const a2AffectedItemsUI = Array.from(a2DedupeMapUI.values());
 
     let aggregatedA2UI: any = null;
+
     if (a2AffectedItemsUI.length > 0) {
+      // Tier 2: Potential — focused element shown but no visible indicator
       const overallConfidence = Math.max(...a2AffectedItemsUI.map(i => i.confidence));
 
       const a2Elements = a2AffectedItemsUI.map((item, idx) => {
@@ -3772,15 +3804,15 @@ serve(async (req) => {
           elementType,
           textSnippet: undefined,
           location: formattedLocation,
-          detection: 'Visual heuristic: focus visibility cannot be verified from static screenshot',
+          detection: 'Visual heuristic: focused element lacks visible focus indicator',
           detectionMethod: 'llm_assisted' as const,
           focusClasses: [],
           classification: 'potential' as const,
           potentialSubtype: 'accuracy' as const,
-          potentialReason: v.potentialReason || 'Focus visibility cannot be verified from static screenshot.',
+          potentialReason: 'No visible focus indicator observed.',
           explanation: item.rationale,
           confidence: item.confidence,
-          correctivePrompt: undefined, // Screenshot findings never get corrective prompts
+          correctivePrompt: undefined,
           deduplicationKey: `${item.location}|${item.component_name}`,
         };
       });
@@ -3791,19 +3823,39 @@ serve(async (req) => {
         category: 'accessibility',
         status: 'potential',
         potentialSubtype: 'accuracy',
-        blocksConvergence: false, // Screenshot A2 NEVER blocks convergence
+        blocksConvergence: false,
         inputType: 'screenshots',
         isA2Aggregated: true,
         a2Elements,
         evaluationMethod: 'llm_assisted',
-        diagnosis: `${a2Elements.length} interactive element${a2Elements.length !== 1 ? 's' : ''} with potential focus visibility issues detected. Screenshot analysis cannot confirm actual focus behavior.`,
-        contextualHint: 'Add visible focus-visible indicators for keyboard accessibility.',
+        diagnosis: `${a2Elements.length} interactive element${a2Elements.length !== 1 ? 's' : ''} with missing focus indicators detected in screenshot.`,
+        contextualHint: 'Add visible focus-visible indicators (ring, outline, border) for keyboard accessibility.',
         correctivePrompt: '',
         confidence: Math.round(overallConfidence * 100) / 100,
-        advisoryGuidance: 'Focus visibility cannot be verified reliably without a captured focused state or source styles. For deterministic verification, upload ZIP source code or provide a GitHub repository.',
+        advisoryGuidance: 'Focus indicators were visually absent on focused elements. For deterministic verification, upload ZIP source code or provide a GitHub repository.',
       };
 
-      console.log(`A2 aggregated (screenshot): ${a2Violations.length} findings → ${a2AffectedItemsUI.length} valid → 1 result (all potential/accuracy)`);
+      console.log(`A2 aggregated (screenshot): ${a2Violations.length} findings → ${a2AffectedItemsUI.length} potential → 1 result`);
+    } else if (a2HasNotEvaluated && includesA2) {
+      // Tier 1: Not Evaluated — no focused state observable in screenshot
+      aggregatedA2UI = {
+        ruleId: 'A2',
+        ruleName: 'Poor focus visibility',
+        category: 'accessibility',
+        status: 'informational',
+        blocksConvergence: false,
+        inputType: 'screenshots',
+        isA2Aggregated: false,
+        evaluationMethod: 'llm_assisted',
+        diagnosis: 'Focus state not observable in provided screenshot. Focus visibility cannot be assessed without a captured focused state.',
+        contextualHint: 'Upload source code for deterministic focus visibility analysis, or provide a screenshot showing a focused element.',
+        correctivePrompt: '',
+        confidence: 0,
+        potentialReason: 'Focus state not observable in provided screenshot.',
+        advisoryGuidance: 'Focus visibility requires either source code analysis or a screenshot that captures a focused interactive element. Upload ZIP or GitHub for deterministic evaluation.',
+      };
+
+      console.log(`A2 not_evaluated (screenshot): no focused state observable — emitting informational card`);
     } else {
       console.log(`A2: No valid violations found (${a2Violations.length} filtered out as PASS or NOT APPLICABLE)`);
     }
