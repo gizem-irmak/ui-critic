@@ -658,42 +658,122 @@ function extractTextColorTokens(code: string): Array<{ colorClass: string; color
   return results;
 }
 
-// Extract bg-* class from the same className attribute or nearby JSX context
-function extractBgFromContext(code: string, textMatchIndex: number): { bgClass: string; bgName: string } | null {
-  const searchStart = Math.max(0, textMatchIndex - 300);
-  const searchEnd = Math.min(code.length, textMatchIndex + 300);
-  const region = code.slice(searchStart, searchEnd);
-  
-  const bgRegex = new RegExp(`bg-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?`, 'g');
-  let bgMatch;
-  while ((bgMatch = bgRegex.exec(region)) !== null) {
-    const bgClass = bgMatch[0];
-    const bgName = bgMatch[1] + (bgMatch[2] ? `-${bgMatch[2]}` : '');
-    return { bgClass, bgName };
+// Find the opening tag that contains the text-* class at textMatchIndex
+function findContainingTagClasses(code: string, textMatchIndex: number): { tagStart: number; tagEnd: number; classes: string; tagName: string } | null {
+  let i = textMatchIndex;
+  while (i >= 0 && code[i] !== '<') i--;
+  if (i < 0) return null;
+  const tagStart = i;
+  const tagNameMatch = code.slice(tagStart).match(/^<\s*([A-Za-z][A-Za-z0-9_.]*)/);
+  if (!tagNameMatch) return null;
+  const tagName = tagNameMatch[1];
+  let j = tagStart + 1;
+  let braceDepth = 0;
+  let inString: string | null = null;
+  while (j < code.length) {
+    const ch = code[j];
+    if (inString) {
+      if (ch === inString && code[j - 1] !== '\\') inString = null;
+    } else if (braceDepth > 0) {
+      if (ch === '{') braceDepth++;
+      else if (ch === '}') braceDepth--;
+      else if (ch === '"' || ch === "'" || ch === '`') inString = ch;
+    } else {
+      if (ch === '{') braceDepth++;
+      else if (ch === '>' || (ch === '/' && j + 1 < code.length && code[j + 1] === '>')) {
+        const tagEnd = ch === '/' ? j + 2 : j + 1;
+        const tagContent = code.slice(tagStart, tagEnd);
+        const classMatch = tagContent.match(/className\s*=\s*(?:"([^"]+)"|'([^']+)'|{`([^`]+)`})/);
+        const classes = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
+        return { tagStart, tagEnd, classes, tagName };
+      }
+      else if (ch === '"' || ch === "'" || ch === '`') inString = ch;
+    }
+    j++;
   }
   return null;
 }
 
-// Traverse backwards from the text-* match to find the nearest parent bg-* class
-function findParentBg(code: string, textMatchIndex: number): { bgClass: string; bgName: string } | null {
-  const scanRadii = [500, 1000, 2000];
-  const bgRegex = new RegExp(`bg-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?`, 'g');
+// Extract bg-* from a className string
+function extractBgFromClasses(classes: string): { bgClass: string; bgName: string } | null {
+  const bgRegex = new RegExp(`bg-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?`);
+  const m = classes.match(bgRegex);
+  if (!m) return null;
+  return { bgClass: m[0], bgName: m[1] + (m[2] ? `-${m[2]}` : '') };
+}
+
+// Walk up ancestor JSX elements to find the nearest bg-* class.
+// Only considers actual ancestors (not siblings).
+function findAncestorBg(code: string, tagStart: number): { bgClass: string; bgName: string; bgSourceType: 'ancestor' } | null {
+  let pos = tagStart - 1;
+  let depth = 0;
   
-  for (const radius of scanRadii) {
-    const start = Math.max(0, textMatchIndex - radius);
-    const region = code.slice(start, textMatchIndex);
-    
-    let lastBg: { bgClass: string; bgName: string } | null = null;
-    let m;
-    while ((m = bgRegex.exec(region)) !== null) {
-      const bgClass = m[0];
-      const bgName = m[1] + (m[2] ? `-${m[2]}` : '');
-      lastBg = { bgClass, bgName };
+  while (pos >= 0) {
+    // Check for closing tag end '>'
+    if (code[pos] === '>') {
+      let closeScan = pos - 1;
+      while (closeScan >= 0 && code[closeScan] !== '<') closeScan--;
+      if (closeScan >= 0 && closeScan + 1 < code.length && code[closeScan + 1] === '/') {
+        depth++;
+        pos = closeScan - 1;
+        continue;
+      }
     }
-    bgRegex.lastIndex = 0;
-    if (lastBg) return lastBg;
+    
+    // Check for opening tag start
+    if (code[pos] === '<' && pos + 1 < code.length && code[pos + 1] !== '/' && code[pos + 1] !== '!') {
+      if (depth > 0) {
+        depth--;
+        pos--;
+        continue;
+      }
+      
+      // depth === 0: genuine ancestor
+      const tagNameM = code.slice(pos).match(/^<\s*([A-Za-z][A-Za-z0-9_.]*)/);
+      if (tagNameM) {
+        let end = pos + 1;
+        let bd = 0;
+        let inStr: string | null = null;
+        while (end < code.length) {
+          const ch = code[end];
+          if (inStr) { if (ch === inStr && code[end - 1] !== '\\') inStr = null; }
+          else if (bd > 0) {
+            if (ch === '{') bd++;
+            else if (ch === '}') bd--;
+            else if (ch === '"' || ch === "'" || ch === '`') inStr = ch;
+          } else {
+            if (ch === '{') bd++;
+            else if (ch === '>' || (ch === '/' && end + 1 < code.length && code[end + 1] === '>')) break;
+            else if (ch === '"' || ch === "'" || ch === '`') inStr = ch;
+          }
+          end++;
+        }
+        const tagStr = code.slice(pos, end + 1);
+        const classM = tagStr.match(/className\s*=\s*(?:"([^"]+)"|'([^']+)'|{`([^`]+)`})/);
+        const classes = classM ? (classM[1] || classM[2] || classM[3] || '') : '';
+        const bg = extractBgFromClasses(classes);
+        if (bg) return { ...bg, bgSourceType: 'ancestor' };
+      }
+      pos--;
+      continue;
+    }
+    pos--;
   }
   return null;
+}
+
+// Resolve background for a text element: self → ancestor → assumed default
+function resolveBackground(code: string, textMatchIndex: number): { bgClass: string | null; bgName: string | null; bgSourceType: 'self' | 'ancestor' | 'assumed_default' } {
+  const containingTag = findContainingTagClasses(code, textMatchIndex);
+  if (containingTag) {
+    const selfBg = extractBgFromClasses(containingTag.classes);
+    if (selfBg) return { bgClass: selfBg.bgClass, bgName: selfBg.bgName, bgSourceType: 'self' };
+    
+    const ancestorBg = findAncestorBg(code, containingTag.tagStart);
+    if (ancestorBg) return { bgClass: ancestorBg.bgClass, bgName: ancestorBg.bgName, bgSourceType: ancestorBg.bgSourceType };
+  }
+  
+  return { bgClass: null, bgName: null, bgSourceType: 'assumed_default' };
 }
 
 // Best-effort text size inference from surrounding code context
@@ -771,29 +851,19 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       // Only evaluate text-bearing elements; exclude SVGs, icons, non-text tags
       if (!isTextElement(jsxTag, lucideIcons)) continue;
       
-      // --- Background resolution ---
+      // --- Background resolution (ancestor-only, no sibling leakage) ---
       let bgHex: string;
       let bgClass: string | null = null;
       let bgSource: A1BgSource;
       
-      // 1) Same-element bg-*
-      const sameBg = extractBgFromContext(content, matchIndex);
-      if (sameBg && TAILWIND_COLORS[sameBg.bgName]) {
-        bgHex = TAILWIND_COLORS[sameBg.bgName];
-        bgClass = sameBg.bgClass;
+      const resolved = resolveBackground(content, matchIndex);
+      if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
+        bgHex = TAILWIND_COLORS[resolved.bgName];
+        bgClass = resolved.bgClass;
         bgSource = 'tailwind_token';
       } else {
-        // 2) Parent traversal
-        const parentBg = findParentBg(content, matchIndex);
-        if (parentBg && TAILWIND_COLORS[parentBg.bgName]) {
-          bgHex = TAILWIND_COLORS[parentBg.bgName];
-          bgClass = parentBg.bgClass;
-          bgSource = 'tailwind_token';
-        } else {
-          // 3) Assume white default
-          bgHex = '#ffffff';
-          bgSource = 'assumed_default';
-        }
+        bgHex = '#ffffff';
+        bgSource = 'assumed_default';
       }
       
       // --- Contrast computation ---
