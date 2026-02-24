@@ -3873,24 +3873,35 @@ ${codeContent}`,
       const confirmedFindings = contrastViolations.filter(v => v.status === 'confirmed');
       const potentialFindings = contrastViolations.filter(v => v.status !== 'confirmed');
       
-      const mapToElement = (v: any) => ({
-        elementLabel: v.elementIdentifier || v.elementDescription || 'Unknown element',
-        textSnippet: v.evidence,
-        location: v.evidence || '',
-        foregroundHex: v.foregroundHex,
-        backgroundHex: v.backgroundHex,
-        backgroundStatus: (v.backgroundStatus || 'unmeasurable') as 'certain' | 'uncertain' | 'unmeasurable',
-        contrastRatio: v.contrastRatio,
-        contrastNotMeasurable: v.contrastRatio === undefined,
-        thresholdUsed: (v.thresholdUsed || 4.5) as 4.5 | 3.0,
-        explanation: v.diagnosis,
-        reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
-        jsxTag: v.affectedComponents?.[0]?.jsxTag,
-        textType: v.sizeStatus === 'large' ? 'large' : 'normal',
-        appliedThreshold: v.thresholdUsed || 4.5,
-        wcagCriterion: '1.4.3' as const,
-        deduplicationKey: `a1|${v.elementIdentifier}|${v.foregroundHex}`,
-      });
+      const mapToElement = (v: any) => {
+        const ratioStr = v.contrastRatio != null ? `${v.contrastRatio.toFixed(1)}:1` : 'unknown';
+        const threshStr = `${v.thresholdUsed || 4.5}:1`;
+        const sizeLabel = v.sizeStatus === 'large' ? 'large' : 'normal';
+        const fgHex = v.foregroundHex || '???';
+        const bgHex = v.backgroundHex || '#FFFFFF';
+        const prompt = v.status === 'confirmed'
+          ? `Issue reason: ${ratioStr} measured vs ${threshStr} required (WCAG AA, ${sizeLabel} text).\n\nRecommended fix: Increase text contrast for this element (currently ${fgHex} on ${bgHex}) by darkening the text color or adjusting the background to reach ≥${threshStr}; keep visual style consistent across similar elements.`
+          : undefined;
+        return {
+          elementLabel: v.elementIdentifier || v.elementDescription || 'Unknown element',
+          textSnippet: v.evidence,
+          location: v.evidence || '',
+          foregroundHex: v.foregroundHex,
+          backgroundHex: v.backgroundHex,
+          backgroundStatus: (v.backgroundStatus || 'unmeasurable') as 'certain' | 'uncertain' | 'unmeasurable',
+          contrastRatio: v.contrastRatio,
+          contrastNotMeasurable: v.contrastRatio === undefined,
+          thresholdUsed: (v.thresholdUsed || 4.5) as 4.5 | 3.0,
+          explanation: v.diagnosis,
+          reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
+          jsxTag: v.affectedComponents?.[0]?.jsxTag,
+          textType: v.sizeStatus === 'large' ? 'large' : 'normal',
+          appliedThreshold: v.thresholdUsed || 4.5,
+          wcagCriterion: '1.4.3' as const,
+          deduplicationKey: `a1|${v.elementIdentifier}|${v.foregroundHex}`,
+          correctivePrompt: prompt,
+        };
+      };
       
       if (confirmedFindings.length > 0) {
         const a1Elements = confirmedFindings.map(mapToElement);
