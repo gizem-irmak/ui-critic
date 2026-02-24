@@ -77,22 +77,30 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 )}
               </div>
 
-              {/* Detection — merge evidence tokens (focusClasses) into the sentence */}
+              {/* Detection — chips only (matches A3 style) */}
               <div className="flex items-start gap-2">
                 <span className="text-muted-foreground font-medium w-24">Detection:</span>
-              <span>{(() => {
-                  let base = element.detection || 'Focus indicator removed without visible replacement.';
-                  const evidence = element.focusClasses?.length
-                    ? element.focusClasses.join(', ')
-                    : '';
-                  if (evidence) {
-                    const alreadyPresent = element.focusClasses?.some(cls => base.includes(cls));
-                    if (!alreadyPresent) {
-                      base = base.replace(/\.?\s*$/, '') + ` (${evidence}).`;
+                <div className="flex flex-wrap gap-1">
+                  {(() => {
+                    // Prefer explicit token list from detector
+                    if (element.focusClasses && element.focusClasses.length > 0) {
+                      return element.focusClasses.map((cls, i) => (
+                        <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+                          {cls}
+                        </span>
+                      ));
                     }
-                  }
-                  return base;
-                })()}</span>
+                    // Fallback: extract token from detection string
+                    const det = element.detection || '';
+                    const match = det.match(/\(([^)]+)\)/);
+                    const chip = match ? match[1] : (det || 'outline suppressed');
+                    return (
+                      <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+                        {chip}
+                      </span>
+                    );
+                  })()}
+                </div>
               </div>
 
               {/* Requirement */}
