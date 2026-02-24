@@ -155,7 +155,7 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
               </>
             ) : isConfirmed ? (
               <>
-                {/* CONFIRMED STRUCTURAL MODE — Clean layout: Element → FG → BG → Detection → Requirement → Explanation */}
+                {/* CONFIRMED STRUCTURAL MODE — Element → FG → BG → Detection → Requirement → Confidence */}
                 
                 {/* 1) Element */}
                 {element.jsxTag && (
@@ -229,11 +229,6 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                   <span>
                     WCAG 1.4.3 — {element.textType === 'large' ? 'Large text' : 'Normal text'} — {element.appliedThreshold || element.thresholdUsed}:1
                   </span>
-                </div>
-
-                {/* 6) Explanation */}
-                <div className="pt-1">
-                  <p className="text-foreground leading-relaxed">{element.explanation}</p>
                 </div>
               </>
             ) : (
@@ -431,7 +426,9 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           ) : null}
         </CardTitle>
           <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {violation.diagnosis}
+          {isConfirmed
+            ? 'Text contrast falls below WCAG AA minimum thresholds.'
+            : violation.diagnosis}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
