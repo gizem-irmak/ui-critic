@@ -2063,6 +2063,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
 
 // ========== A5 DETERMINISTIC DETECTION (Missing Form Labels) ==========
 interface A5Finding {
+  elementKey: string; // Stable identity: hash of tag + id + name + type + filePath + lineNumber
   elementLabel: string;
   elementType: string;
   inputSubtype?: string;
@@ -2076,11 +2077,16 @@ interface A5Finding {
   detection: string;
   evidence: string;
   explanation: string;
-  confidence: number;
+  confidence?: number; // Only for potential findings
+  wcagCriteria: string[]; // e.g., ["1.3.1", "3.3.2"]
   correctivePrompt?: string;
   advisoryGuidance?: string;
   deduplicationKey: string;
   potentialSubtype?: 'accuracy' | 'borderline';
+}
+
+function makeA5ElementKey(tag: string, id: string, name: string, type: string, filePath: string, lineNumber: number): string {
+  return `a5:${tag}|${id}|${name}|${type}|${filePath}|${lineNumber}`;
 }
 
 function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
@@ -2131,7 +2137,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
     // Find form controls: <input>, <textarea>, <select>, and ARIA input roles
     const CONTROL_TAGS = 'input|textarea|select';
-    const ARIA_INPUT_ROLES = /\brole\s*=\s*["'](textbox|combobox|searchbox|spinbutton)["']/i;
+    const ARIA_INPUT_ROLES = /\brole\s*=\s*["'](textbox|combobox|searchbox|spinbutton|listbox)["']/i;
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
 
     const controlRegex = new RegExp(`<(${CONTROL_TAGS})\\b([^>]*)(?:>|\\/>)`, 'gi');
@@ -2195,13 +2201,14 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           if (!seenKeys.has(dedupeKey)) {
             seenKeys.add(dedupeKey);
             findings.push({
+              elementKey: makeA5ElementKey(tag, controlId, elementName, inputSubtype || tag, filePath, lineNumber),
               elementLabel: label, elementType: tag, inputSubtype, sourceLabel: label, filePath, componentName,
               subCheck: 'A5.3', subCheckLabel: 'Broken label association',
               classification: 'confirmed',
               detection: `Duplicate id="${controlId}" — ambiguous label association`,
               evidence: `<${tag} id="${controlId}"> at ${filePath}:${lineNumber} — ${idCount} elements share this id`,
               explanation: `Multiple elements share id="${controlId}", creating ambiguous label-control association.`,
-              confidence: 0.92,
+              wcagCriteria: ['1.3.1', '3.3.2'],
               correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nMultiple elements share id="${controlId}". The <label for="${controlId}"> cannot uniquely target the correct control.\n\nRecommended fix:\nAssign unique ids to each form control and update the corresponding <label for> attributes.`,
               deduplicationKey: dedupeKey,
             });
@@ -2220,13 +2227,14 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         if (!seenKeys.has(dedupeKey)) {
           seenKeys.add(dedupeKey);
           findings.push({
+            elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
             elementLabel: label, elementType: tag, inputSubtype, sourceLabel: label, filePath, componentName,
             subCheck: 'A5.2', subCheckLabel: 'Placeholder used as label',
             classification: 'confirmed',
             detection: `<${tag}> has placeholder="${placeholder}" but no label/aria-label/aria-labelledby`,
             evidence: `<${tag} placeholder="${placeholder}"> at ${filePath}:${lineNumber} — missing label association`,
             explanation: `Placeholder text "${placeholder}" is the only label. Placeholders disappear on input and are not reliably announced by all screen readers.`,
-            confidence: 0.95,
+            wcagCriteria: ['1.3.1', '3.3.2'],
             correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nPlaceholder text is the only label for this control. Placeholders are not sufficient labels per WCAG 3.3.2.\n\nRecommended fix:\nAdd a persistent <label> associated with this input using for/id, or provide an accessible name via aria-label or aria-labelledby.`,
             deduplicationKey: dedupeKey,
           });
@@ -2239,13 +2247,14 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       if (!seenKeys.has(dedupeKey)) {
         seenKeys.add(dedupeKey);
         findings.push({
+          elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
           elementLabel: label, elementType: tag, inputSubtype, sourceLabel: label, filePath, componentName,
           subCheck: 'A5.1', subCheckLabel: 'Missing label association',
           classification: 'confirmed',
           detection: `<${tag}> has no label, aria-label, or aria-labelledby`,
           evidence: `<${tag}> at ${filePath}:${lineNumber} — no programmatic label source found`,
           explanation: `Form control <${tag}> has no accessible name. Screen readers cannot identify what this control is for.`,
-          confidence: 0.97,
+          wcagCriteria: ['1.3.1', '3.3.2'],
           correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nThis form control has no programmatic label (no <label>, aria-label, or aria-labelledby).\n\nRecommended fix:\nAdd a visible <label> associated with this input using for + id, or provide an accessible name via aria-label or aria-labelledby.`,
           deduplicationKey: dedupeKey,
         });
@@ -2253,7 +2262,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     }
 
     // Also detect ARIA input roles on non-form elements
-    const ariaInputRegex = new RegExp(`<(div|span|p|section)\\b([^>]*role\\s*=\\s*["'](?:textbox|combobox|searchbox|spinbutton)["'][^>]*)>`, 'gi');
+    const ariaInputRegex = new RegExp(`<(div|span|p|section)\\b([^>]*role\\s*=\\s*["'](?:textbox|combobox|searchbox|spinbutton|listbox)["'][^>]*)>`, 'gi');
     while ((match = ariaInputRegex.exec(content)) !== null) {
       const tag = match[1];
       const attrs = match[2];
@@ -2276,13 +2285,14 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const fileName = filePath.split('/').pop() || filePath;
       findings.push({
+        elementKey: makeA5ElementKey(tag, '', '', role, filePath, lineNumber),
         elementLabel: label, elementType: tag, role, sourceLabel: label, filePath, componentName,
         subCheck: 'A5.1', subCheckLabel: 'Missing label association',
         classification: 'confirmed',
         detection: `<${tag} role="${role}"> has no aria-label or aria-labelledby`,
         evidence: `<${tag} role="${role}"> at ${filePath}:${lineNumber} — no programmatic label`,
         explanation: `Custom input (role="${role}") has no accessible name. Screen readers cannot identify what this control is for.`,
-        confidence: 0.95,
+        wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
         correctivePrompt: `[${label}] — ${fileName}\n\nIssue reason:\nCustom input with role="${role}" has no programmatic label.\n\nRecommended fix:\nAdd aria-label or aria-labelledby to provide an accessible name for this control.`,
         deduplicationKey: dedupeKey,
       });
@@ -2312,13 +2322,14 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const fileName2 = filePath.split('/').pop() || filePath;
       findings.push({
+        elementKey: makeA5ElementKey(tag, '', '', 'contenteditable', filePath, lineNumber2),
         elementLabel: label2, elementType: tag, role, sourceLabel: label2, filePath, componentName,
         subCheck: 'A5.1', subCheckLabel: 'Missing label association',
         classification: 'confirmed',
         detection: `<${tag} contenteditable="true"> has no aria-label or aria-labelledby`,
         evidence: `<${tag} contenteditable="true"> at ${filePath}:${lineNumber2} — no programmatic label`,
         explanation: `Contenteditable element (role="${role}") has no accessible name.`,
-        confidence: 0.95,
+        wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
         correctivePrompt: `[${label2}] — ${fileName2}\n\nIssue reason:\nContenteditable element has no programmatic label.\n\nRecommended fix:\nAdd aria-label or aria-labelledby.`,
         deduplicationKey: dedupeKey,
       });
@@ -2332,13 +2343,14 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           seenKeys.add(dedupeKey);
           const fileName3 = filePath.split('/').pop() || filePath;
           findings.push({
+            elementKey: makeA5ElementKey('label', forTarget, '', 'label', filePath, 0),
             elementLabel: `label[for="${forTarget}"]`, elementType: 'label', sourceLabel: `Orphan label for="${forTarget}"`, filePath, componentName,
             subCheck: 'A5.3', subCheckLabel: 'Broken label association',
             classification: 'confirmed',
             detection: `<label for="${forTarget}"> references non-existent id`,
             evidence: `label for="${forTarget}" in ${filePath} — no element with id="${forTarget}" found`,
             explanation: `A <label for="${forTarget}"> exists but no form control with id="${forTarget}" was found.`,
-            confidence: 0.90,
+            wcagCriteria: ['1.3.1', '3.3.2'],
             correctivePrompt: `[label for="${forTarget}"] — ${fileName3}\n\nIssue reason:\nThe label references id="${forTarget}" but no form control with that id exists.\n\nRecommended fix:\nEnsure the target form control has id="${forTarget}", or update the label's for attribute to match the control's actual id.`,
             deduplicationKey: dedupeKey,
           });
@@ -2488,6 +2500,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         if (!seenKeys.has(dedupeKey)) {
           seenKeys.add(dedupeKey);
           potentialFindings.push({
+            elementKey: makeA5ElementKey(tag, controlId || '', elementName, tag, filePath, lineNumber),
             elementLabel: accessibleName, elementType: tag, sourceLabel: accessibleName, filePath, componentName,
             subCheck: 'A5.4', subCheckLabel: 'Generic label text',
             classification: 'potential', potentialSubtype: 'borderline',
@@ -2495,6 +2508,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
             evidence: `label text "${accessibleName}" at ${filePath}:${lineNumber}`,
             explanation: `The label "${accessibleName}" is too generic to be meaningful. Users relying on screen readers cannot distinguish this control from others.`,
             confidence: 0.88,
+            wcagCriteria: ['1.3.1', '3.3.2'],
             advisoryGuidance: 'Use a descriptive label that explains the purpose of this control (e.g., "Email address" instead of "Input").',
             deduplicationKey: dedupeKey,
           });
@@ -2509,6 +2523,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           if (!seenKeys.has(dedupeKey)) {
             seenKeys.add(dedupeKey);
             potentialFindings.push({
+              elementKey: makeA5ElementKey(tag, controlId || '', elementName, tag, filePath, lineNumber),
               elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
               subCheck: 'A5.6', subCheckLabel: 'Noisy aria-labelledby',
               classification: 'potential', potentialSubtype: 'borderline',
@@ -2516,6 +2531,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
               evidence: `Resolved text: "${accessibleName.slice(0, 80)}${accessibleName.length > 80 ? '…' : ''}" at ${filePath}:${lineNumber}`,
               explanation: `The aria-labelledby resolves to text that is too long (${accessibleName.length} chars) or contains advisory tokens (optional/required/hint). This creates a confusing experience for screen reader users.`,
               confidence: 0.82,
+              wcagCriteria: ['1.3.1', '3.3.2'],
               advisoryGuidance: 'Simplify the referenced label text. Move hints and status indicators to aria-describedby instead of aria-labelledby.',
               deduplicationKey: dedupeKey,
             });
@@ -2534,6 +2550,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       seenKeys.add(dedupeKey);
       const controlList = controls.map(c => `<${c.tag}> at line ${c.line}`).join(', ');
       potentialFindings.push({
+        elementKey: makeA5ElementKey(controls[0].tag, '', '', controls[0].tag, controls[0].filePath, controls[0].line),
         elementLabel: controls[0].label, elementType: controls[0].tag, sourceLabel: controls[0].label,
         filePath: controls[0].filePath, componentName: controls[0].componentName,
         subCheck: 'A5.5', subCheckLabel: 'Duplicate label text',
@@ -2542,6 +2559,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         evidence: `Duplicate label "${controls[0].label}": ${controlList}`,
         explanation: `Multiple controls share the same accessible name "${controls[0].label}". Screen reader users cannot distinguish between them.`,
         confidence: 0.90,
+        wcagCriteria: ['1.3.1', '3.3.2'],
         advisoryGuidance: 'Give each control a unique, descriptive label to differentiate them.',
         deduplicationKey: dedupeKey,
       });
@@ -3828,17 +3846,17 @@ ${codeContent}`,
       if (a5Findings.length > 0) {
         const confirmedFindings = a5Findings.filter(f => f.classification === 'confirmed');
         const potentialFindings = a5Findings.filter(f => f.classification === 'potential');
-        const overallConfidence = Math.max(...a5Findings.map(f => f.confidence));
-
         const a5Elements = a5Findings.map(f => ({
+          elementKey: f.elementKey,
           elementLabel: f.sourceLabel, elementType: f.elementType, inputSubtype: f.inputSubtype,
           role: f.role, sourceLabel: f.sourceLabel,
-          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          location: f.filePath, filePath: f.filePath, detection: f.detection, evidence: f.evidence,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           classification: f.classification,
-          explanation: f.explanation, confidence: f.confidence,
+          explanation: f.explanation,
+          ...(f.classification === 'potential' ? { confidence: f.confidence } : {}),
+          wcagCriteria: f.wcagCriteria,
           correctivePrompt: f.correctivePrompt,
-          advisoryGuidance: f.advisoryGuidance,
           potentialSubtype: f.potentialSubtype,
           deduplicationKey: f.deduplicationKey,
         }));
@@ -3859,7 +3877,7 @@ ${codeContent}`,
           contextualHint: 'Add visible <label> elements or aria-label/aria-labelledby for all form controls.',
           correctivePrompt: hasConfirmed ? 'Add visible <label> elements associated with form controls using for/id, or provide accessible names via aria-label/aria-labelledby. Do not rely on placeholder text as the sole label.' : undefined,
           advisoryGuidance: potentialFindings.length > 0 ? 'Review label quality: avoid generic text, duplicate labels, title-only naming, and noisy aria-labelledby references.' : undefined,
-          confidence: Math.round(overallConfidence * 100) / 100,
+          confidence: hasConfirmed ? 0.97 : 0.88,
         };
         console.log(`A5 aggregated: ${a5Findings.length} findings (${confirmedFindings.length} confirmed, ${potentialFindings.length} potential)`);
       } else {
