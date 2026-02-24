@@ -34,9 +34,11 @@ function U1ElementRow({ element, compact = false }: { element: U1ElementSubItem;
           <Badge variant="outline" className="text-xs ml-auto flex-shrink-0">
             {element.subCheckLabel}
           </Badge>
-          <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded flex-shrink-0">
-            {Math.round(element.confidence * 100)}%
-          </span>
+          {element.classification !== 'confirmed' && (
+            <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded flex-shrink-0">
+              {Math.round(element.confidence * 100)}%
+            </span>
+          )}
         </div>
       </CollapsibleTrigger>
       <CollapsibleContent>

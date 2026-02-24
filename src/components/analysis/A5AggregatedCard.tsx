@@ -93,15 +93,15 @@ function A5ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }:
               </div>
             )}
 
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Confidence:</span>
-              <span className={cn(
-                'font-mono font-medium',
-                isConfirmed ? 'text-destructive' : 'text-warning'
-              )}>
-                {Math.round(element.confidence * 100)}%
-              </span>
-            </div>
+            {/* Confidence — only for potential findings */}
+            {!isConfirmed && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-20">Confidence:</span>
+                <span className="font-mono font-medium text-warning">
+                  {Math.round(element.confidence * 100)}%
+                </span>
+              </div>
+            )}
 
             <div className="flex items-start gap-2">
               <span className="text-muted-foreground font-medium w-20">Requirement:</span>
