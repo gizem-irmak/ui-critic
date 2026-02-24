@@ -73,113 +73,152 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
 
         {/* Expandable details */}
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Detection */}
-            {element.detection && (
+          {isConfirmed ? (
+            /* ── Confirmed layout: Element → Detection → Requirement → Explanation (matches A1) ── */
+            <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+              {/* Element */}
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Detection:</span>
-                <span className="font-mono">{element.detection}</span>
+                <span className="text-muted-foreground font-medium w-24">Element:</span>
+                <span className="font-mono">&lt;{element.elementType || 'element'}&gt;</span>
+                {displayLabel && displayLabel !== element.elementType && (
+                  <span className="text-muted-foreground">— {displayLabel}</span>
+                )}
               </div>
-            )}
 
-            {/* Reason line for borderline findings */}
-            {isBorderline && element.focusClasses && element.focusClasses.length > 0 && (() => {
-              const classes = element.focusClasses.join(' ');
-              const hasOutlineRemoval = /outline-none|ring-0|border-0/.test(classes);
-              const hasRing1 = /ring-1\b/.test(classes);
-              const hasMutedColor = /ring-(?:gray|slate|zinc)-(?:100|200)/.test(classes);
-              const hasNoOffset = !/ring-offset-[1-9]/.test(classes) || /ring-offset-0/.test(classes);
-              
-              if (hasOutlineRemoval && (hasRing1 || hasMutedColor)) {
-                const parts: string[] = [];
-                if (hasOutlineRemoval) parts.push('outline removed');
-                if (hasRing1) parts.push('ring-1');
-                if (hasMutedColor) parts.push('muted color');
-                if (hasNoOffset && (hasRing1 || hasMutedColor)) parts.push('no ring-offset');
-                
-                return (
-                  <div className="flex items-start gap-2">
-                    <span className="text-muted-foreground font-medium w-20">Reason:</span>
-                    <span className="text-warning">{parts.join(' + ')}</span>
-                  </div>
-                );
-              }
-              return null;
-            })()}
-
-            {/* Focus classes found */}
-            {element.focusClasses && element.focusClasses.length > 0 && (
+              {/* Detection — merge evidence tokens (focusClasses) into the sentence */}
               <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Classes:</span>
-                <div className="flex flex-wrap gap-1">
-                  {element.focusClasses.map((cls, i) => (
-                    <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
-                      {cls}
-                    </span>
-                  ))}
+                <span className="text-muted-foreground font-medium w-24">Detection:</span>
+                <span>{(() => {
+                  const base = element.detection || 'Focus indicator removed without visible replacement.';
+                  const evidence = element.focusClasses?.length
+                    ? ` (${element.focusClasses.join(', ')})`
+                    : '';
+                  return base.replace(/\.?\s*$/, '') + evidence + '.';
+                })()}</span>
+              </div>
+
+              {/* Requirement */}
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-24">Requirement:</span>
+                <span>WCAG 2.4.7 Focus Visible</span>
+              </div>
+
+              {/* Explanation (single sentence) */}
+              <div className="pt-1">
+                <p className="text-foreground leading-relaxed">{
+                  element.explanation.includes('Issue reason:')
+                    ? element.explanation.replace(/^.*?Issue reason:\s*/i, '').replace(/\s*Recommended fix:.*$/i, '').trim()
+                    : element.explanation
+                }</p>
+              </div>
+            </div>
+          ) : (
+            /* ── Potential layout: keep full detail for debugging ── */
+            <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+              {/* Detection */}
+              {element.detection && (
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground font-medium w-20">Detection:</span>
+                  <span className="font-mono">{element.detection}</span>
                 </div>
-              </div>
-            )}
-
-            {/* Confidence */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Confidence:</span>
-              <span className={cn(
-                'font-mono font-medium',
-                isConfirmed ? 'text-destructive' : 'text-warning'
-              )}>
-                {Math.round(element.confidence * 100)}%
-              </span>
-            </div>
-
-            {/* Detection method */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Method:</span>
-              <Badge variant="outline" className={cn(
-                'text-xs',
-                element.detectionMethod === 'deterministic'
-                  ? 'border-blue-500/50 text-blue-600'
-                  : 'border-amber-500/50 text-amber-600'
-              )}>
-                {element.detectionMethod === 'deterministic' ? 'Deterministic' : 'LLM-Assisted'}
-              </Badge>
-            </div>
-
-            {/* Requirement */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Requirement:</span>
-              <span>WCAG 2.4.7 Focus Visible</span>
-            </div>
-
-            {/* Potential reason */}
-            {!isConfirmed && element.potentialReason && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Reason:</span>
-                <span className="text-warning italic">{element.potentialReason}</span>
-              </div>
-            )}
-
-            {/* Explanation — render structured if it contains Issue reason / Recommended fix */}
-            <div className="pt-1">
-              {element.explanation.includes('Issue reason:') && element.explanation.includes('Recommended fix:') ? (
-                <>
-                  {element.explanation.split('\n').filter(Boolean).map((line, i) => {
-                    const isLabel = /^(Issue reason|Recommended fix):/.test(line.trim());
-                    return (
-                      <p key={i} className={cn(
-                        'leading-relaxed',
-                        isLabel ? 'font-medium text-foreground' : 'text-foreground'
-                      )}>
-                        {line.trim()}
-                      </p>
-                    );
-                  })}
-                </>
-              ) : (
-                <p className="text-foreground leading-relaxed">{element.explanation}</p>
               )}
+
+              {/* Reason line for borderline findings */}
+              {isBorderline && element.focusClasses && element.focusClasses.length > 0 && (() => {
+                const classes = element.focusClasses.join(' ');
+                const hasOutlineRemoval = /outline-none|ring-0|border-0/.test(classes);
+                const hasRing1 = /ring-1\b/.test(classes);
+                const hasMutedColor = /ring-(?:gray|slate|zinc)-(?:100|200)/.test(classes);
+                const hasNoOffset = !/ring-offset-[1-9]/.test(classes) || /ring-offset-0/.test(classes);
+                
+                if (hasOutlineRemoval && (hasRing1 || hasMutedColor)) {
+                  const parts: string[] = [];
+                  if (hasOutlineRemoval) parts.push('outline removed');
+                  if (hasRing1) parts.push('ring-1');
+                  if (hasMutedColor) parts.push('muted color');
+                  if (hasNoOffset && (hasRing1 || hasMutedColor)) parts.push('no ring-offset');
+                  
+                  return (
+                    <div className="flex items-start gap-2">
+                      <span className="text-muted-foreground font-medium w-20">Reason:</span>
+                      <span className="text-warning">{parts.join(' + ')}</span>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+
+              {/* Focus classes found */}
+              {element.focusClasses && element.focusClasses.length > 0 && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground font-medium w-20">Classes:</span>
+                  <div className="flex flex-wrap gap-1">
+                    {element.focusClasses.map((cls, i) => (
+                      <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
+                        {cls}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Confidence */}
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-20">Confidence:</span>
+                <span className={cn('font-mono font-medium', 'text-warning')}>
+                  {Math.round(element.confidence * 100)}%
+                </span>
+              </div>
+
+              {/* Detection method */}
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-20">Method:</span>
+                <Badge variant="outline" className={cn(
+                  'text-xs',
+                  element.detectionMethod === 'deterministic'
+                    ? 'border-blue-500/50 text-blue-600'
+                    : 'border-amber-500/50 text-amber-600'
+                )}>
+                  {element.detectionMethod === 'deterministic' ? 'Deterministic' : 'LLM-Assisted'}
+                </Badge>
+              </div>
+
+              {/* Requirement */}
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-20">Requirement:</span>
+                <span>WCAG 2.4.7 Focus Visible</span>
+              </div>
+
+              {/* Potential reason */}
+              {element.potentialReason && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground font-medium w-20">Reason:</span>
+                  <span className="text-warning italic">{element.potentialReason}</span>
+                </div>
+              )}
+
+              {/* Explanation */}
+              <div className="pt-1">
+                {element.explanation.includes('Issue reason:') && element.explanation.includes('Recommended fix:') ? (
+                  <>
+                    {element.explanation.split('\n').filter(Boolean).map((line, i) => {
+                      const isLabel = /^(Issue reason|Recommended fix):/.test(line.trim());
+                      return (
+                        <p key={i} className={cn(
+                          'leading-relaxed',
+                          isLabel ? 'font-medium text-foreground' : 'text-foreground'
+                        )}>
+                          {line.trim()}
+                        </p>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <p className="text-foreground leading-relaxed">{element.explanation}</p>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </CollapsibleContent>
       </div>
     </Collapsible>
