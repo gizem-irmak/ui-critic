@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { Violation, A3ElementSubItem, A4ElementSubItem, A5ElementSubItem, A6ElementSubItem } from '@/types/project';
+import type { Violation, A1ElementSubItem, A3ElementSubItem, A4ElementSubItem, A5ElementSubItem, A6ElementSubItem } from '@/types/project';
 import { CorrectivePromptItem } from './CorrectivePromptItem';
 
 const categoryColors: Record<string, string> = {
@@ -18,6 +18,17 @@ const categoryLabels: Record<string, string> = {
   usability: 'Usability',
   ethics: 'Ethics',
 };
+
+function buildA1PromptBody(el: A1ElementSubItem): { issueReason: string; recommendedFix: string } {
+  const ratioStr = el.contrastRatio != null ? `${el.contrastRatio.toFixed(1)}:1` : 'unknown';
+  const threshStr = `${el.thresholdUsed || 4.5}:1`;
+  const sizeLabel = el.textType === 'large' ? 'large' : 'normal';
+  const fgHex = el.foregroundHex || '???';
+  const bgHex = el.backgroundHex || '#FFFFFF';
+  const issueReason = `Contrast ratio ${ratioStr} is below WCAG 1.4.3 threshold of ${threshStr} (${sizeLabel} text).`;
+  const recommendedFix = `Darken the text color (currently ${fgHex} on ${bgHex}) to reach ≥${threshStr}, e.g. use text-gray-700/800 or adjust the background; keep visual style consistent across similar elements.`;
+  return { issueReason, recommendedFix };
+}
 
 function buildA3PromptBody(el: A3ElementSubItem): { issueReason: string; recommendedFix: string } {
   const tag = el.elementType || 'div';
@@ -122,6 +133,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
         prompt: string;
         elementRef?: string;
       }>;
+      a1Items?: A1ElementSubItem[];
       a3Items?: A3ElementSubItem[];
       a4Items?: A4ElementSubItem[];
       a5Items?: A5ElementSubItem[];
@@ -136,20 +148,13 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             ruleName: v.ruleName,
             category: v.category,
             prompts: [],
+            a1Items: [],
           });
         }
         const group = ruleGroups.get('A1')!;
-        for (const el of v.a1Elements) {
-          if (el.correctivePrompt) {
-            const elementRef = [
-              el.uiRole || el.elementLabel,
-              el.textSnippet ? `'${el.textSnippet}'` : null,
-              el.location ? `— ${el.location}` : null,
-            ].filter(Boolean).join(' ');
-            group.prompts.push({
-              prompt: el.correctivePrompt,
-              elementRef: elementRef || el.elementLabel,
-            });
+        if (v.status === 'confirmed') {
+          for (const el of v.a1Elements) {
+            group.a1Items!.push(el);
           }
         }
     } else if (v.ruleId === 'A2' && v.isA2Aggregated && v.a2Elements) {
@@ -327,7 +332,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       }
     }
 
-    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a3Items && g.a3Items.length > 0) || (g.a4Items && g.a4Items.length > 0) || (g.a5Items && g.a5Items.length > 0) || (g.a6Items && g.a6Items.length > 0));
+    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a1Items && g.a1Items.length > 0) || (g.a3Items && g.a3Items.length > 0) || (g.a4Items && g.a4Items.length > 0) || (g.a5Items && g.a5Items.length > 0) || (g.a6Items && g.a6Items.length > 0));
   })();
 
   const copyPrompt = async () => {
@@ -347,7 +352,15 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       text += `\n${categoryLabels[cat]}:\n`;
       for (const ruleGroup of grouped[cat]) {
         text += `\n[${ruleGroup.ruleId}] ${ruleGroup.ruleName}:\n`;
-        if (ruleGroup.ruleId === 'A3' && ruleGroup.a3Items?.length) {
+        if (ruleGroup.ruleId === 'A1' && ruleGroup.a1Items?.length) {
+          for (const el of ruleGroup.a1Items) {
+            const label = el.elementLabel || el.textSnippet || 'Text element';
+            const tag = el.jsxTag || 'text';
+            const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+            const { issueReason, recommendedFix } = buildA1PromptBody(el);
+            text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+          }
+        } else if (ruleGroup.ruleId === 'A3' && ruleGroup.a3Items?.length) {
           for (const el of ruleGroup.a3Items) {
             const label = el.accessibleName || el.elementLabel || el.sourceLabel || el.textSnippet || 'Interactive element';
             const tag = el.elementType || el.role || 'div';
@@ -445,7 +458,25 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
 
             {/* Individual prompts with element references */}
             <div className="space-y-3">
-              {group.ruleId === 'A3' && group.a3Items ? (
+              {group.ruleId === 'A1' && group.a1Items ? (
+                // A1: use CorrectivePromptItem per confirmed element
+                group.a1Items.map((el, pIdx) => {
+                  const label = el.elementLabel || el.textSnippet || 'Text element';
+                  const tag = el.jsxTag || 'text';
+                  const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+                  const { issueReason, recommendedFix } = buildA1PromptBody(el);
+                  return (
+                    <CorrectivePromptItem
+                      key={pIdx}
+                      elementLabel={label}
+                      roleOrTag={tag}
+                      fileName={fileName}
+                      issueReason={issueReason}
+                      recommendedFix={recommendedFix}
+                    />
+                  );
+                })
+              ) : group.ruleId === 'A3' && group.a3Items ? (
                 // A3: use CorrectivePromptItem per element — single source of truth
                 group.a3Items.map((el, pIdx) => {
                   const label = el.accessibleName || el.elementLabel || el.sourceLabel || el.textSnippet || 'Interactive element';
