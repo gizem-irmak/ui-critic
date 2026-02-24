@@ -1770,6 +1770,7 @@ interface A4Finding {
   confidence: number;
   correctivePrompt?: string;
   deduplicationKey: string;
+  potentialSubtype?: 'borderline' | 'accuracy';
 }
 
 function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
@@ -1819,6 +1820,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     }
 
     // A4.1: Visual heading heuristic — div/span/p with large font + bold but no heading role
+    const fileHasH1 = /<h1\b/gi.test(content);
     const visualHeadingTags = extractJsxOpeningTags(content, 'div|span|p');
     for (const { tag, attrs, index } of visualHeadingTags) {
       const classMatch = attrs.match(/className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[`"']([^`"']+)[`"']\})/);
@@ -1834,22 +1836,51 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       if (text.length < 3 || text.length > 80) continue;
 
       const lineNumber = content.slice(0, index).split('\n').length;
-      const dedupeKey = `A4.1|visual-heading|${filePath}|${lineNumber}`;
-      if (seenKeys.has(dedupeKey)) continue;
-      seenKeys.add(dedupeKey);
+      const totalLines = content.split('\n').length;
 
-      visualHeadingIssues.push({
-        elementLabel: `Visual heading: "${text.substring(0, 40)}"`, elementType: tag, sourceLabel: text.substring(0, 40),
-        filePath, componentName,
-        subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
-        classification: 'confirmed',
-        detection: `visual_heading_missing_semantics: <${tag}> with ${cls.substring(0, 40)} but no <h1–h6> or role="heading"`,
-        evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
-        explanation: `<${tag}> element looks like a heading (large font + bold: "${text.substring(0, 40)}") but lacks semantic heading markup. Screen readers cannot identify this as a heading.`,
-        confidence: 0.92,
-        correctivePrompt: `Replace <${tag}> with an appropriate heading level (<h2>, <h3>, etc.) or add role="heading" aria-level="N".`,
-        deduplicationKey: dedupeKey,
-      });
+      // Determine if this is a top-of-component visual heading without h1
+      // "Near top" = within first 25% of lines in the file
+      const isNearTop = lineNumber <= Math.max(totalLines * 0.25, 20);
+      const isTopHeadingCandidate = isNearTop && !fileHasH1;
+
+      if (isTopHeadingCandidate) {
+        // New heuristic: top-of-page visual heading without any <h1> → Potential/borderline
+        const dedupeKey = `A4.1|top-visual-heading|${filePath}|${lineNumber}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        visualHeadingIssues.push({
+          elementLabel: `Visual heading: "${text.substring(0, 40)}"`, elementType: tag, sourceLabel: text.substring(0, 40),
+          filePath, componentName,
+          subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+          classification: 'potential',
+          detection: `visual_heading_no_h1: Visual heading rendered without semantic heading (<h1> or role="heading" aria-level)`,
+          evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
+          explanation: `<${tag}> appears to be the page title (large font + bold, near top of component, no <h1> in file) but uses no semantic heading. Screen readers cannot identify it as a heading.`,
+          confidence: 0.68,
+          correctivePrompt: `Replace <${tag}> with <h1> (or add role="heading" aria-level="1") since it appears to be the primary page heading.`,
+          deduplicationKey: dedupeKey,
+          potentialSubtype: 'borderline',
+        });
+      } else {
+        // Original heuristic: any visual heading missing semantics → Confirmed
+        const dedupeKey = `A4.1|visual-heading|${filePath}|${lineNumber}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        visualHeadingIssues.push({
+          elementLabel: `Visual heading: "${text.substring(0, 40)}"`, elementType: tag, sourceLabel: text.substring(0, 40),
+          filePath, componentName,
+          subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+          classification: 'confirmed',
+          detection: `visual_heading_missing_semantics: <${tag}> with ${cls.substring(0, 40)} but no <h1–h6> or role="heading"`,
+          evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
+          explanation: `<${tag}> element looks like a heading (large font + bold: "${text.substring(0, 40)}") but lacks semantic heading markup. Screen readers cannot identify this as a heading.`,
+          confidence: 0.92,
+          correctivePrompt: `Replace <${tag}> with an appropriate heading level (<h2>, <h3>, etc.) or add role="heading" aria-level="N".`,
+          deduplicationKey: dedupeKey,
+        });
+      }
     }
 
     // A4.2: Interactive semantics — using multiline JSX parser
@@ -3759,7 +3790,7 @@ ${codeContent}`,
           location: f.filePath, detection: f.detection, evidence: f.evidence,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           classification: f.classification,
-          potentialSubtype: f.classification === 'potential' ? 'borderline' as const : undefined,
+          potentialSubtype: f.classification === 'potential' ? (f.potentialSubtype || 'borderline') as 'borderline' | 'accuracy' : undefined,
           explanation: f.explanation, confidence: f.confidence, correctivePrompt: f.correctivePrompt,
           deduplicationKey: f.deduplicationKey,
         }));
