@@ -1794,9 +1794,9 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   const INTERACTIVE_ROLES = /\brole\s*=\s*["'](button|link|menuitem|tab|option|checkbox|radio|switch|combobox|listbox|slider|treeitem|gridcell)["']/i;
   const KEY_HANDLER_RE = /\b(onKeyDown|onKeyUp|onKeyPress)\s*=/;
   const TABINDEX_GTE0_RE = /tabIndex\s*=\s*\{?\s*(?:0|[1-9])\s*\}?/i;
-  // Visual heading heuristic: large font classes + bold
-  const LARGE_FONT_RE = /\b(?:text-(?:xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)|text-lg)\b/;
-  const BOLD_RE = /\b(?:font-bold|font-semibold|font-extrabold|font-black)\b/;
+  // Visual heading heuristic: large font classes + bold (with responsive prefixes and bracket sizes)
+  const LARGE_FONT_RE = /(?:^|\s)(?:(?:sm|md|lg|xl|2xl):)?(?:text-(?:lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)|text-\[\d+(?:px|rem|em)\])\b/;
+  const BOLD_RE = /(?:^|\s)(?:(?:sm|md|lg|xl|2xl):)?(?:font-bold|font-semibold|font-extrabold|font-black)\b/;
   // A4.4: list-like intent indicators
   const LIST_INTENT_RE = /^(?:\s*[•\-\*\d]+[\.\)]\s|\s*(?:item|card|entry|row|record)\b)/i;
 
@@ -1836,12 +1836,16 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       if (text.length < 3 || text.length > 80) continue;
 
       const lineNumber = content.slice(0, index).split('\n').length;
-      const totalLines = content.split('\n').length;
 
-      // Determine if this is a top-of-component visual heading without h1
-      // "Near top" = within first 25% of lines in the file
-      const isNearTop = lineNumber <= Math.max(totalLines * 0.25, 20);
-      const isTopHeadingCandidate = isNearTop && !fileHasH1;
+      // Determine if this is the first heading-like element within the returned JSX block
+      // Find the first `return (` or `return(` in the file to locate JSX start
+      const returnMatch = content.match(/\breturn\s*\(/);
+      const jsxStartIdx = returnMatch ? (returnMatch.index! + returnMatch[0].length) : 0;
+      // "Top of page" = first visual heading match that appears after the JSX return
+      const isFirstHeadingInJsx = index >= jsxStartIdx && !visualHeadingIssues.some(
+        v => v.filePath === filePath && v.detection.includes('visual_heading_no_h1')
+      );
+      const isTopHeadingCandidate = isFirstHeadingInJsx && !fileHasH1;
 
       if (isTopHeadingCandidate) {
         // New heuristic: top-of-page visual heading without any <h1> → Potential/borderline
