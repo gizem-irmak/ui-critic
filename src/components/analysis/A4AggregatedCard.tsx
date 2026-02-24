@@ -5,7 +5,6 @@ import { cn } from '@/lib/utils';
 import type { Violation, A4ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { PotentialSubtypeBadge, SubtypeAdvisoryGuidance } from './PotentialSubtypeUI';
 
 interface A4AggregatedCardProps {
   violation: Violation;
@@ -19,25 +18,20 @@ const SUB_CHECK_LABELS: Record<string, string> = {
   'A4.4': 'List semantics',
 };
 
-/**
- * Infer sub-check from violation text when a4Elements is missing (fallback).
- */
 function inferA4SubCheck(violation: Violation): 'A4.1' | 'A4.2' | 'A4.3' | 'A4.4' {
   const text = `${violation.diagnosis || ''} ${violation.evidence || ''} ${violation.correctivePrompt || ''}`.toLowerCase();
   if (/interactive|onclick|click handler|role="button"|tabindex|keyboard/.test(text)) return 'A4.2';
   if (/landmark|<main>|role="main"|<nav>/.test(text)) return 'A4.3';
   if (/list|<ul>|<ol>|repeated|sibling/.test(text)) return 'A4.4';
-  return 'A4.1'; // Default to heading semantics
+  return 'A4.1';
 }
 
-function A4ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }: {
+function A4ElementItem({ element, isConfirmed, compact = false }: {
   element: A4ElementSubItem;
   isConfirmed: boolean;
   compact?: boolean;
-  cardDiagnosis?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-
   const displayLabel = element.sourceLabel || element.elementLabel;
 
   return (
@@ -49,7 +43,6 @@ function A4ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }:
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
-        {/* Header row — matches A2/A3 */}
         <CollapsibleTrigger className="w-full">
           <div className="flex items-start justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
@@ -64,17 +57,6 @@ function A4ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }:
                   {element.elementType}
                 </span>
               )}
-              <Badge variant="outline" className="text-xs border-muted-foreground/30 text-muted-foreground">
-                {element.subCheck}
-              </Badge>
-              {element.potentialSubtype === 'borderline' && (
-                <Badge variant="outline" className="text-xs border-warning/50 text-warning">
-                  Borderline
-                </Badge>
-              )}
-              {element.potentialSubtype === 'accuracy' && (
-                <PotentialSubtypeBadge subtype="accuracy" compact={compact} />
-              )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               {isOpen ? (
@@ -86,36 +68,33 @@ function A4ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }:
           </div>
         </CollapsibleTrigger>
 
-        {/* Location (always visible) — matches A2/A3 */}
+        {/* Location */}
         <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
           <span className="font-medium">📍 </span>
           {element.location}
         </div>
 
-        {/* Expandable details — matches A2/A3 row style with w-20 labels */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Sub-check */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Sub-check:</span>
-              <span>{element.subCheckLabel || SUB_CHECK_LABELS[element.subCheck] || element.subCheck}</span>
+            {/* Element */}
+            <div className="flex items-start gap-2">
+              <span className="text-muted-foreground font-medium w-20">Element:</span>
+              <span className="font-mono">{displayLabel}{element.elementType ? ` (${element.elementType})` : ''}</span>
             </div>
 
             {/* Detection */}
             {element.detection && (
-              <div className="flex items-center gap-2">
+              <div className="flex items-start gap-2">
                 <span className="text-muted-foreground font-medium w-20">Detection:</span>
-                <span className="font-mono">{element.detection}</span>
+                <span className="font-mono text-xs">{element.detection}</span>
               </div>
             )}
 
-            {/* Evidence */}
-            {element.evidence && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Evidence:</span>
-                <span className="font-mono text-xs">{element.evidence}</span>
-              </div>
-            )}
+            {/* Requirement */}
+            <div className="flex items-start gap-2">
+              <span className="text-muted-foreground font-medium w-20">Requirement:</span>
+              <span>WCAG 2.1 — 1.3.1 Info and Relationships (Level A)</span>
+            </div>
 
             {/* Confidence — only for potential findings */}
             {!isConfirmed && (
@@ -124,19 +103,6 @@ function A4ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }:
                 <span className="font-mono font-medium text-warning">
                   {Math.round(element.confidence * 100)}%
                 </span>
-              </div>
-            )}
-
-            {/* Requirement */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Requirement:</span>
-              <span>WCAG 2.1 — 1.3.1 Info and Relationships (Level A)</span>
-            </div>
-
-        {/* Explanation — only if different from card-level diagnosis */}
-            {element.explanation && element.explanation !== cardDiagnosis && (
-              <div className="pt-1">
-                <p className="text-foreground leading-relaxed">{element.explanation}</p>
               </div>
             )}
           </div>
@@ -190,7 +156,7 @@ export function A4AggregatedCard({ violation, compact = false }: A4AggregatedCar
           </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {violation.diagnosis}
+          Semantic landmark structure is incomplete.
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -200,18 +166,8 @@ export function A4AggregatedCard({ violation, compact = false }: A4AggregatedCar
             element={element}
             isConfirmed={isConfirmed}
             compact={compact}
-            cardDiagnosis={violation.diagnosis}
           />
         ))}
-
-        {!isConfirmed && (
-          <SubtypeAdvisoryGuidance
-            ruleId="A4"
-            potentialSubtype={violation.potentialSubtype}
-            fallbackGuidance={violation.advisoryGuidance}
-            compact={compact}
-          />
-        )}
       </CardContent>
     </Card>
   );
