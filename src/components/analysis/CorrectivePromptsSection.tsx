@@ -113,15 +113,17 @@ function buildA6PromptBody(el: A6ElementSubItem): { issueReason: string; recomme
   return { issueReason: el.explanation, recommendedFix: el.correctivePrompt || 'Add an accessible name to this interactive element.' };
 }
 
-/** Extract a clean file path from a location string (strip 📍, keep full relative path) */
+/** Extract file name only (not full path) from a location string */
 function extractFilePath(location?: string): string {
   if (!location) return 'Unknown';
   const cleaned = location.replace(/^📍\s*/, '').trim();
   // If it contains " — ", take the part after it (the path)
   const dashIdx = cleaned.indexOf(' — ');
   const pathPart = dashIdx >= 0 ? cleaned.slice(dashIdx + 3).trim() : cleaned;
-  // If it looks like a file path, return it; otherwise return what we have
-  return pathPart || 'Unknown';
+  if (!pathPart) return 'Unknown';
+  // Extract just the filename from the path
+  const match = pathPart.match(/([\w.-]+\.\w+)(?:\s|$)/);
+  return match ? match[1] : pathPart.split('/').pop() || pathPart;
 }
 
 /** Unified location parts extractor for all rules */
@@ -132,8 +134,10 @@ function extractLocationParts(
 ): { label: string; tag: string; filePath: string } {
   // Clean label: remove parenthesized filenames like "Foo (Foo.tsx)"
   let label = rawLabel.replace(/\s*\([^)]*\.\w+\)\s*$/, '').trim();
-  // Remove trailing code snippets after the component name
+  // Remove trailing code snippets (e.g. "text-gray-300 on bg-white …")
   label = label.replace(/\s+text-\S+.*$/, '').trim();
+  // Remove any other trailing snippet-like text after the component name (e.g. " on bg-white in…")
+  label = label.replace(/\s+on\s+bg-\S+.*$/, '').trim();
   // Deduplicate if tag is repeated in label (e.g. "Submit Form button" with tag "button")
   // We keep the label as-is since it may intentionally contain the word
   const tag = rawTag;
@@ -148,7 +152,10 @@ function parseA2ElementRef(ref: string): { label: string; tag: string; filePath:
   // Split on " — "
   const dashIdx = cleaned.indexOf(' — ');
   let namePart = dashIdx >= 0 ? cleaned.slice(0, dashIdx).trim() : cleaned.trim();
-  const filePath = dashIdx >= 0 ? cleaned.slice(dashIdx + 3).trim() : 'Unknown';
+  const rawPath = dashIdx >= 0 ? cleaned.slice(dashIdx + 3).trim() : 'Unknown';
+  // Extract filename only from path
+  const fileMatch = rawPath.match(/([\w.-]+\.\w+)(?:\s|$)/);
+  const filePath = fileMatch ? fileMatch[1] : rawPath.split('/').pop() || rawPath;
 
   // Try to extract (type) from end
   const parenMatch = namePart.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
