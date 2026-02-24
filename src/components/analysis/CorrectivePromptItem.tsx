@@ -18,7 +18,7 @@ export function CorrectivePromptItem({
   return (
     <div className="space-y-1">
       <p className="text-xs text-muted-foreground font-medium pl-1">
-        📍 [{elementLabel} ({roleOrTag})] — {fileName}
+        📍 {elementLabel} ({roleOrTag}) — {fileName}
       </p>
       <div className="text-sm bg-primary/5 p-3 rounded border-l-2 border-primary space-y-2">
         <div>

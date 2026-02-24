@@ -113,6 +113,76 @@ function buildA6PromptBody(el: A6ElementSubItem): { issueReason: string; recomme
   return { issueReason: el.explanation, recommendedFix: el.correctivePrompt || 'Add an accessible name to this interactive element.' };
 }
 
+/** Extract a clean file path from a location string (strip 📍, keep full relative path) */
+function extractFilePath(location?: string): string {
+  if (!location) return 'Unknown';
+  const cleaned = location.replace(/^📍\s*/, '').trim();
+  // If it contains " — ", take the part after it (the path)
+  const dashIdx = cleaned.indexOf(' — ');
+  const pathPart = dashIdx >= 0 ? cleaned.slice(dashIdx + 3).trim() : cleaned;
+  // If it looks like a file path, return it; otherwise return what we have
+  return pathPart || 'Unknown';
+}
+
+/** Unified location parts extractor for all rules */
+function extractLocationParts(
+  rawLabel: string,
+  rawTag: string,
+  location?: string
+): { label: string; tag: string; filePath: string } {
+  // Clean label: remove parenthesized filenames like "Foo (Foo.tsx)"
+  let label = rawLabel.replace(/\s*\([^)]*\.\w+\)\s*$/, '').trim();
+  // Remove trailing code snippets after the component name
+  label = label.replace(/\s+text-\S+.*$/, '').trim();
+  // Deduplicate if tag is repeated in label (e.g. "Submit Form button" with tag "button")
+  // We keep the label as-is since it may intentionally contain the word
+  const tag = rawTag;
+  const filePath = extractFilePath(location);
+  return { label: label || rawLabel, tag, filePath };
+}
+
+/** Parse A2 elementRef string: "Label (type) — path" or "[Label type] — path" */
+function parseA2ElementRef(ref: string): { label: string; tag: string; filePath: string } {
+  // Strip brackets
+  let cleaned = ref.replace(/^\[/, '').replace(/\]/, '');
+  // Split on " — "
+  const dashIdx = cleaned.indexOf(' — ');
+  let namePart = dashIdx >= 0 ? cleaned.slice(0, dashIdx).trim() : cleaned.trim();
+  const filePath = dashIdx >= 0 ? cleaned.slice(dashIdx + 3).trim() : 'Unknown';
+
+  // Try to extract (type) from end
+  const parenMatch = namePart.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  if (parenMatch) {
+    return { label: parenMatch[1].trim(), tag: parenMatch[2].trim(), filePath };
+  }
+  // Fallback: last word is tag if it's a known HTML tag
+  const words = namePart.split(/\s+/);
+  if (words.length >= 2) {
+    const lastWord = words[words.length - 1].toLowerCase();
+    const htmlTags = ['button', 'div', 'a', 'input', 'select', 'textarea', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'label'];
+    if (htmlTags.includes(lastWord)) {
+      return { label: words.slice(0, -1).join(' '), tag: lastWord, filePath };
+    }
+  }
+  return { label: namePart, tag: 'element', filePath };
+}
+
+/** Extract a section from a prompt string by header label */
+function extractSection(prompt: string, header: string): string {
+  const idx = prompt.indexOf(header);
+  if (idx < 0) return prompt;
+  const after = prompt.slice(idx + header.length).trim();
+  // Find next section header
+  const nextHeaders = ['Issue reason:', 'Recommended fix:'];
+  let end = after.length;
+  for (const nh of nextHeaders) {
+    if (nh === header) continue;
+    const nhIdx = after.indexOf(nh);
+    if (nhIdx > 0 && nhIdx < end) end = nhIdx;
+  }
+  return after.slice(0, end).trim();
+}
+
 interface CorrectivePromptsSectionProps {
   violations: Violation[];
 }
@@ -354,43 +424,53 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
         text += `\n[${ruleGroup.ruleId}] ${ruleGroup.ruleName}:\n`;
         if (ruleGroup.ruleId === 'A1' && ruleGroup.a1Items?.length) {
           for (const el of ruleGroup.a1Items) {
-            const label = el.elementLabel || el.textSnippet || 'Text element';
-            const tag = el.jsxTag || 'text';
-            const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+            const { label, tag, filePath } = extractLocationParts(
+              el.elementLabel || el.textSnippet || 'Text element',
+              el.jsxTag || 'text',
+              el.location
+            );
             const { issueReason, recommendedFix } = buildA1PromptBody(el);
-            text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+            text += `\n${label} (${tag}) — ${filePath}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
           }
         } else if (ruleGroup.ruleId === 'A3' && ruleGroup.a3Items?.length) {
           for (const el of ruleGroup.a3Items) {
-            const label = el.accessibleName || el.elementLabel || el.sourceLabel || el.textSnippet || 'Interactive element';
-            const tag = el.elementType || el.role || 'div';
-            const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+            const { label, tag, filePath } = extractLocationParts(
+              el.accessibleName || el.elementLabel || el.sourceLabel || el.textSnippet || 'Interactive element',
+              el.elementType || el.role || 'div',
+              el.location
+            );
             const { issueReason, recommendedFix } = buildA3PromptBody(el);
-            text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+            text += `\n${label} (${tag}) — ${filePath}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
           }
         } else if (ruleGroup.ruleId === 'A4' && ruleGroup.a4Items?.length) {
           for (const el of ruleGroup.a4Items) {
-            const label = el.elementLabel || el.sourceLabel || 'Element';
-            const tag = el.elementType || 'element';
-            const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+            const { label, tag, filePath } = extractLocationParts(
+              el.elementLabel || el.sourceLabel || 'Element',
+              el.elementType || 'element',
+              el.location
+            );
             const { issueReason, recommendedFix } = buildA4PromptBody(el);
-            text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+            text += `\n${label} (${tag}) — ${filePath}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
           }
         } else if (ruleGroup.ruleId === 'A5' && ruleGroup.a5Items?.length) {
           for (const el of ruleGroup.a5Items) {
-            const label = el.elementLabel || el.sourceLabel || 'Form control';
-            const tag = el.elementType || 'input';
-            const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+            const { label, tag, filePath } = extractLocationParts(
+              el.elementLabel || el.sourceLabel || 'Form control',
+              el.elementType || 'input',
+              el.location
+            );
             const { issueReason, recommendedFix } = buildA5PromptBody(el);
-            text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+            text += `\n${label} (${tag}) — ${filePath}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
           }
         } else if (ruleGroup.ruleId === 'A6' && ruleGroup.a6Items?.length) {
           for (const el of ruleGroup.a6Items) {
-            const label = el.elementLabel || el.sourceLabel || 'Interactive element';
-            const tag = el.elementType || 'button';
-            const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+            const { label, tag, filePath } = extractLocationParts(
+              el.elementLabel || el.sourceLabel || 'Interactive element',
+              el.elementType || 'button',
+              el.location
+            );
             const { issueReason, recommendedFix } = buildA6PromptBody(el);
-            text += `\n[${label} (${tag})] — ${fileName}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+            text += `\n${label} (${tag}) — ${filePath}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
           }
         } else {
           for (const item of ruleGroup.prompts) {
@@ -459,90 +539,109 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             {/* Individual prompts with element references */}
             <div className="space-y-3">
               {group.ruleId === 'A1' && group.a1Items ? (
-                // A1: use CorrectivePromptItem per confirmed element
                 group.a1Items.map((el, pIdx) => {
-                  const label = el.elementLabel || el.textSnippet || 'Text element';
-                  const tag = el.jsxTag || 'text';
-                  const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+                  const { label, tag, filePath } = extractLocationParts(
+                    el.elementLabel || el.textSnippet || 'Text element',
+                    el.jsxTag || 'text',
+                    el.location
+                  );
                   const { issueReason, recommendedFix } = buildA1PromptBody(el);
                   return (
                     <CorrectivePromptItem
                       key={pIdx}
                       elementLabel={label}
                       roleOrTag={tag}
-                      fileName={fileName}
+                      fileName={filePath}
                       issueReason={issueReason}
                       recommendedFix={recommendedFix}
                     />
                   );
                 })
+              ) : group.ruleId === 'A2' ? (
+                group.prompts.map((item, pIdx) => {
+                  const parts = parseA2ElementRef(item.elementRef || '');
+                  return (
+                    <CorrectivePromptItem
+                      key={pIdx}
+                      elementLabel={parts.label}
+                      roleOrTag={parts.tag}
+                      fileName={parts.filePath}
+                      issueReason={extractSection(item.prompt, 'Issue reason:')}
+                      recommendedFix={extractSection(item.prompt, 'Recommended fix:')}
+                    />
+                  );
+                })
               ) : group.ruleId === 'A3' && group.a3Items ? (
-                // A3: use CorrectivePromptItem per element — single source of truth
                 group.a3Items.map((el, pIdx) => {
-                  const label = el.accessibleName || el.elementLabel || el.sourceLabel || el.textSnippet || 'Interactive element';
-                  const tag = el.elementType || el.role || 'div';
-                  const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+                  const { label, tag, filePath } = extractLocationParts(
+                    el.accessibleName || el.elementLabel || el.sourceLabel || el.textSnippet || 'Interactive element',
+                    el.elementType || el.role || 'div',
+                    el.location
+                  );
                   const { issueReason, recommendedFix } = buildA3PromptBody(el);
                   return (
                     <CorrectivePromptItem
                       key={pIdx}
                       elementLabel={label}
                       roleOrTag={tag}
-                      fileName={fileName}
+                      fileName={filePath}
                       issueReason={issueReason}
                       recommendedFix={recommendedFix}
                     />
                   );
                 })
               ) : group.ruleId === 'A4' && group.a4Items ? (
-                // A4: use CorrectivePromptItem per element
                 group.a4Items.map((el, pIdx) => {
-                  const label = el.elementLabel || el.sourceLabel || 'Element';
-                  const tag = el.elementType || 'element';
-                  const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+                  const { label, tag, filePath } = extractLocationParts(
+                    el.elementLabel || el.sourceLabel || 'Element',
+                    el.elementType || 'element',
+                    el.location
+                  );
                   const { issueReason, recommendedFix } = buildA4PromptBody(el);
                   return (
                     <CorrectivePromptItem
                       key={pIdx}
                       elementLabel={label}
                       roleOrTag={tag}
-                      fileName={fileName}
+                      fileName={filePath}
                       issueReason={issueReason}
                       recommendedFix={recommendedFix}
                     />
                   );
                 })
               ) : group.ruleId === 'A5' && group.a5Items ? (
-                // A5: use CorrectivePromptItem per confirmed element
                 group.a5Items.map((el, pIdx) => {
-                  const label = el.elementLabel || el.sourceLabel || 'Form control';
-                  const tag = el.elementType || 'input';
-                  const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+                  const { label, tag, filePath } = extractLocationParts(
+                    el.elementLabel || el.sourceLabel || 'Form control',
+                    el.elementType || 'input',
+                    el.location
+                  );
                   const { issueReason, recommendedFix } = buildA5PromptBody(el);
                   return (
                     <CorrectivePromptItem
                       key={pIdx}
                       elementLabel={label}
                       roleOrTag={tag}
-                      fileName={fileName}
+                      fileName={filePath}
                       issueReason={issueReason}
                       recommendedFix={recommendedFix}
                     />
                   );
                 })
               ) : group.ruleId === 'A6' && group.a6Items ? (
-                // A6: use CorrectivePromptItem per confirmed element
                 group.a6Items.map((el, pIdx) => {
-                  const label = el.elementLabel || el.sourceLabel || 'Interactive element';
-                  const tag = el.elementType || 'button';
-                  const fileName = el.location?.replace(/^📍\s*/, '').split('/').pop()?.split(' — ')[0] || el.location || 'Unknown';
+                  const { label, tag, filePath } = extractLocationParts(
+                    el.elementLabel || el.sourceLabel || 'Interactive element',
+                    el.elementType || 'button',
+                    el.location
+                  );
                   const { issueReason, recommendedFix } = buildA6PromptBody(el);
                   return (
                     <CorrectivePromptItem
                       key={pIdx}
                       elementLabel={label}
                       roleOrTag={tag}
-                      fileName={fileName}
+                      fileName={filePath}
                       issueReason={issueReason}
                       recommendedFix={recommendedFix}
                     />
