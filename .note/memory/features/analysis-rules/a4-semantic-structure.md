@@ -7,8 +7,8 @@ Rule A4 (Missing Semantic Structure) requires source code (ZIP/GitHub) and uses 
   - `missing_h1`: No `<h1>` found → **Potential** (apps may define h1 dynamically).
   - `skipped_levels`: Heading hierarchy gaps → **Potential**.
   - `multiple_h1`: More than one `<h1>` → **Potential**.
-  - `visual_heading_missing_semantics`: `<div>`/`<span>`/`<p>` with large font class tokens (`text-xl`+, `text-lg`) AND bold (`font-bold`/`font-semibold`) AND text 3–80 chars AND no `role="heading"` → **Confirmed** (0.92 confidence).
-  - `visual_heading_no_h1`: Same as above BUT element is near top of component (first 25% of lines) AND no `<h1>` in the same file → **Potential/borderline** (0.68 confidence). Detection text: "Visual heading rendered without semantic heading (<h1> or role='heading' aria-level)".
+  - `visual_heading_missing_semantics`: `<div>`/`<span>`/`<p>` with large font class tokens (`text-xl`+, `text-lg`, bracket sizes like `text-[32px]`, with optional responsive prefixes `sm:`/`md:`/`lg:`) AND bold (`font-bold`/`font-semibold`) AND text 3–80 chars AND no `role="heading"` → **Confirmed** (0.92 confidence).
+  - `visual_heading_no_h1`: Same visual heading detection BUT element is the FIRST heading-like match after `return (` in the file AND no `<h1>` in the same file (per-file check) → **Potential/borderline** (0.68 confidence). Detection text: "Visual heading rendered without semantic heading (<h1> or role='heading' aria-level)".
 
 - **A4.2 (Interactive Semantics)** — deliberately avoids overlap with A3:
   - Only fires when a non-semantic element has a pointer handler (`onClick`, etc.) AND keyboard support is present (`tabIndex>=0` AND `onKeyDown`/`onKeyUp`/`onKeyPress`) BUT missing `role="button"`/`role="link"`.
