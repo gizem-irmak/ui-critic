@@ -106,13 +106,13 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
           {element.location}
         </div>
 
-        {/* Expandable details — matches A2 row style with w-20 labels */}
+        {/* Expandable details */}
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Detection */}
+            {/* Element */}
             <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Detection:</span>
-              <span className="font-mono">{detection}</span>
+              <span className="text-muted-foreground font-medium w-20">Element:</span>
+              <span className="font-mono">&lt;{element.elementType || 'element'}&gt;</span>
             </div>
 
             {/* Detection — chips */}
@@ -134,11 +134,6 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
                 WCAG 2.1.1 Keyboard
                 {needsNameRole && ', WCAG 4.1.2 Name, Role, Value'}
               </span>
-            </div>
-
-            {/* Explanation */}
-            <div className="pt-1">
-              <p className="text-foreground leading-relaxed">{impact}</p>
             </div>
 
             {/* Confidence (always last) */}
@@ -203,7 +198,9 @@ export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCar
           </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {violation.diagnosis}
+          {isConfirmed
+            ? 'Interactive elements lack required keyboard semantics and cannot be accessed via keyboard.'
+            : violation.diagnosis}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">

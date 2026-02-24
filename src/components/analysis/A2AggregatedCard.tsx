@@ -66,7 +66,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
         {/* Expandable details */}
         <CollapsibleContent>
           {isConfirmed ? (
-            /* ── Confirmed layout: Element → Detection → Requirement → Explanation (matches A1) ── */
+            /* ── Confirmed layout: Element → Detection → Requirement → Confidence ── */
             <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
               {/* Element */}
               <div className="flex items-center gap-2">
@@ -86,7 +86,6 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                     ? element.focusClasses.join(', ')
                     : '';
                   if (evidence) {
-                    // Only append if the token isn't already in the base string
                     const alreadyPresent = element.focusClasses?.some(cls => base.includes(cls));
                     if (!alreadyPresent) {
                       base = base.replace(/\.?\s*$/, '') + ` (${evidence}).`;
@@ -100,15 +99,6 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground font-medium w-24">Requirement:</span>
                 <span>WCAG 2.4.7 Focus Visible</span>
-              </div>
-
-              {/* Explanation (single sentence) */}
-              <div className="pt-1">
-                <p className="text-foreground leading-relaxed">{
-                  element.explanation.includes('Issue reason:')
-                    ? element.explanation.replace(/^.*?Issue reason:\s*/i, '').replace(/\s*Recommended fix:.*$/i, '').trim()
-                    : element.explanation
-                }</p>
               </div>
 
               {/* Confidence (always last) */}
@@ -266,7 +256,9 @@ export function A2AggregatedCard({ violation, compact = false }: A2AggregatedCar
           </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {violation.diagnosis}
+          {isConfirmed
+            ? 'Elements remove the default browser outline without providing a visible focus replacement.'
+            : violation.diagnosis}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
