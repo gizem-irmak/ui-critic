@@ -81,14 +81,6 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               <span className={cn('font-medium', compact ? 'text-sm' : '')}>
                 {displayLabel}
               </span>
-              {element.elementType && (
-                <span className={cn(
-                  'text-muted-foreground italic truncate max-w-48',
-                  compact ? 'text-xs' : 'text-sm'
-                )}>
-                  {element.elementType}
-                </span>
-              )}
               {element.potentialSubtype === 'borderline' && (
                 <Badge variant="outline" className="text-xs border-warning/50 text-warning">
                   Borderline
@@ -96,11 +88,6 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               )}
               {element.potentialSubtype === 'accuracy' && (
                 <PotentialSubtypeBadge subtype="accuracy" compact={compact} />
-              )}
-              {element.classificationCode && (
-                <Badge variant="outline" className="text-xs border-muted-foreground/30 text-muted-foreground">
-                  {element.classificationCode}
-                </Badge>
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -128,9 +115,9 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               <span className="font-mono">{detection}</span>
             </div>
 
-            {/* Evidence — chips (identical to A2 Classes row) */}
+            {/* Detection — chips */}
             <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20">Evidence:</span>
+              <span className="text-muted-foreground font-medium w-20">Detection:</span>
               <div className="flex flex-wrap gap-1">
                 {evidenceChips.map((chip, i) => (
                   <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
@@ -138,17 +125,6 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
                   </span>
                 ))}
               </div>
-            </div>
-
-            {/* Confidence — matches A2 format */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Confidence:</span>
-              <span className={cn(
-                'font-mono font-medium',
-                isConfirmed ? 'text-destructive' : 'text-warning'
-              )}>
-                {Math.round(element.confidence * 100)}%
-              </span>
             </div>
 
             {/* Requirement */}
@@ -160,9 +136,20 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               </span>
             </div>
 
-            {/* Explanation — matches A2 Explanation row */}
+            {/* Explanation */}
             <div className="pt-1">
               <p className="text-foreground leading-relaxed">{impact}</p>
+            </div>
+
+            {/* Confidence (always last) */}
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground font-medium w-20">Confidence:</span>
+              <span className={cn(
+                'font-mono font-medium',
+                isConfirmed ? 'text-destructive' : 'text-warning'
+              )}>
+                {Math.round(element.confidence * 100)}%
+              </span>
             </div>
           </div>
         </CollapsibleContent>

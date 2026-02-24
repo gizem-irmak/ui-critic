@@ -38,14 +38,6 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <span className={cn('font-medium', compact ? 'text-sm' : '')}>
                 {displayLabel}
               </span>
-              {element.elementType && (
-                <span className={cn(
-                  'text-muted-foreground italic truncate max-w-48',
-                  compact ? 'text-xs' : 'text-sm'
-                )}>
-                  {element.elementType}
-                </span>
-              )}
               {isBorderline && (
                 <Badge variant="outline" className="text-xs border-warning/50 text-warning">
                   Borderline
@@ -88,12 +80,19 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               {/* Detection — merge evidence tokens (focusClasses) into the sentence */}
               <div className="flex items-start gap-2">
                 <span className="text-muted-foreground font-medium w-24">Detection:</span>
-                <span>{(() => {
-                  const base = element.detection || 'Focus indicator removed without visible replacement.';
+              <span>{(() => {
+                  let base = element.detection || 'Focus indicator removed without visible replacement.';
                   const evidence = element.focusClasses?.length
-                    ? ` (${element.focusClasses.join(', ')})`
+                    ? element.focusClasses.join(', ')
                     : '';
-                  return base.replace(/\.?\s*$/, '') + evidence + '.';
+                  if (evidence) {
+                    // Only append if the token isn't already in the base string
+                    const alreadyPresent = element.focusClasses?.some(cls => base.includes(cls));
+                    if (!alreadyPresent) {
+                      base = base.replace(/\.?\s*$/, '') + ` (${evidence}).`;
+                    }
+                  }
+                  return base;
                 })()}</span>
               </div>
 
@@ -111,6 +110,16 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                     : element.explanation
                 }</p>
               </div>
+
+              {/* Confidence (always last) */}
+              {element.confidence !== undefined && (
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground font-medium w-24">Confidence:</span>
+                  <span className="font-mono font-medium text-destructive">
+                    {Math.round(element.confidence * 100)}%
+                  </span>
+                </div>
+              )}
             </div>
           ) : (
             /* ── Potential layout: keep full detail for debugging ── */
