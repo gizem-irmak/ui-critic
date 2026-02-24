@@ -5,27 +5,16 @@ import { cn } from '@/lib/utils';
 import type { Violation, A5ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { PotentialSubtypeBadge, SubtypeAdvisoryGuidance } from './PotentialSubtypeUI';
 
 interface A5AggregatedCardProps {
   violation: Violation;
   compact?: boolean;
 }
 
-const SUB_CHECK_LABELS: Record<string, string> = {
-  'A5.1': 'Missing label association',
-  'A5.2': 'Placeholder used as label',
-  'A5.3': 'Broken label association',
-  'A5.4': 'Generic label text',
-  'A5.5': 'Duplicate label text',
-  'A5.6': 'Noisy aria-labelledby',
-};
-
-function A5ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }: {
+function A5ElementItem({ element, isConfirmed, compact = false }: {
   element: A5ElementSubItem;
   isConfirmed: boolean;
   compact?: boolean;
-  cardDiagnosis?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const displayLabel = element.sourceLabel || element.elementLabel;
@@ -53,9 +42,6 @@ function A5ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }:
                   {element.elementType}{element.inputSubtype ? `[${element.inputSubtype}]` : ''}
                 </span>
               )}
-              <Badge variant="outline" className="text-xs border-muted-foreground/30 text-muted-foreground">
-                {element.subCheck}
-              </Badge>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               {isOpen ? (
@@ -69,48 +55,38 @@ function A5ElementItem({ element, isConfirmed, compact = false, cardDiagnosis }:
 
         <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
           <span className="font-medium">📍 </span>
-          {element.location}
+          {element.filePath || element.location}
         </div>
 
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Sub-check:</span>
-              <span>{element.subCheckLabel || SUB_CHECK_LABELS[element.subCheck] || element.subCheck}</span>
+            {/* Element */}
+            <div className="flex items-start gap-2">
+              <span className="text-muted-foreground font-medium w-24">Element:</span>
+              <span>{element.elementType ? `<${element.elementType}>${element.inputSubtype ? `[${element.inputSubtype}]` : ''}` : displayLabel}</span>
             </div>
 
+            {/* Detection */}
             {element.detection && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Detection:</span>
-                <span className="font-mono">{element.detection}</span>
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-24">Detection:</span>
+                <span className="font-mono text-xs">{element.detection}</span>
               </div>
             )}
 
-            {element.evidence && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Evidence:</span>
-                <span className="font-mono text-xs">{element.evidence}</span>
-              </div>
-            )}
+            {/* Requirement */}
+            <div className="flex items-start gap-2">
+              <span className="text-muted-foreground font-medium w-24">Requirement:</span>
+              <span>WCAG 2.1 — {(element.wcagCriteria || ['1.3.1', '3.3.2']).join(' / ')} (Level A)</span>
+            </div>
 
             {/* Confidence — only for potential findings */}
-            {!isConfirmed && (
+            {!isConfirmed && element.confidence != null && (
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Confidence:</span>
+                <span className="text-muted-foreground font-medium w-24">Confidence:</span>
                 <span className="font-mono font-medium text-warning">
                   {Math.round(element.confidence * 100)}%
                 </span>
-              </div>
-            )}
-
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20">Requirement:</span>
-              <span>WCAG 2.1 — 1.3.1 / 3.3.2 (Level A)</span>
-            </div>
-
-            {element.explanation && element.explanation !== cardDiagnosis && (
-              <div className="pt-1">
-                <p className="text-foreground leading-relaxed">{element.explanation}</p>
               </div>
             )}
           </div>
@@ -126,16 +102,18 @@ export function A5AggregatedCard({ violation, compact = false }: A5AggregatedCar
   const elements: A5ElementSubItem[] = (violation.isA5Aggregated && violation.a5Elements)
     ? violation.a5Elements
     : [{
+        elementKey: `${violation.ruleId}-fallback`,
         elementLabel: violation.evidence || violation.diagnosis?.split('.')[0] || 'Form control',
         elementType: undefined,
         location: violation.evidence || '',
         detection: undefined,
         evidence: violation.evidence,
-        subCheck: 'A5.1',
+        subCheck: 'A5.1' as const,
         subCheckLabel: 'Missing label association',
-        classification: isConfirmed ? 'confirmed' : 'potential',
+        classification: isConfirmed ? 'confirmed' as const : 'potential' as const,
         explanation: violation.diagnosis || '',
-        confidence: violation.confidence,
+        confidence: isConfirmed ? undefined : violation.confidence,
+        wcagCriteria: ['1.3.1', '3.3.2'],
         correctivePrompt: violation.correctivePrompt,
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
@@ -164,7 +142,7 @@ export function A5AggregatedCard({ violation, compact = false }: A5AggregatedCar
           </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {violation.diagnosis}
+          Form controls lack programmatic labels required by WCAG 1.3.1 and 3.3.2.
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -172,20 +150,10 @@ export function A5AggregatedCard({ violation, compact = false }: A5AggregatedCar
           <A5ElementItem
             key={element.deduplicationKey || idx}
             element={element}
-            isConfirmed={isConfirmed}
+            isConfirmed={element.classification === 'confirmed'}
             compact={compact}
-            cardDiagnosis={violation.diagnosis}
           />
         ))}
-
-        {!isConfirmed && (
-          <SubtypeAdvisoryGuidance
-            ruleId="A5"
-            potentialSubtype={violation.potentialSubtype}
-            fallbackGuidance={violation.advisoryGuidance}
-            compact={compact}
-          />
-        )}
       </CardContent>
     </Card>
   );

@@ -2,28 +2,34 @@ import { assertEquals, assert } from "https://deno.land/std@0.168.0/testing/asse
 
 // Inline the detection function for testing
 interface A5Finding {
+  elementKey: string;
+  elementLabel: string;
+  elementType: string;
+  inputSubtype?: string;
+  role?: string;
+  sourceLabel: string;
+  filePath: string;
+  componentName?: string;
   subCheck: 'A5.1' | 'A5.2' | 'A5.3' | 'A5.4' | 'A5.5' | 'A5.6';
   subCheckLabel: string;
   classification: 'confirmed' | 'potential';
-  confidence: number;
-  elementLabel: string;
-  elementType: string;
   detection: string;
   evidence: string;
   explanation: string;
-  deduplicationKey: string;
-  filePath: string;
-  sourceLabel: string;
-  inputSubtype?: string;
-  role?: string;
-  componentName?: string;
+  confidence?: number; // Only for potential findings
+  wcagCriteria: string[];
   correctivePrompt?: string;
   advisoryGuidance?: string;
+  deduplicationKey: string;
   potentialSubtype?: 'accuracy' | 'borderline';
 }
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function makeA5ElementKey(tag: string, id: string, name: string, type: string, filePath: string, lineNumber: number): string {
+  return `a5:${tag}|${id}|${name}|${type}|${filePath}|${lineNumber}`;
 }
 
 function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
@@ -75,6 +81,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const linesBefore = content.slice(0, match.index).split('\n');
       const lineNumber = linesBefore.length;
 
+      const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+      const inputSubtype = tag === 'input' ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
+
       const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
       const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
       const controlIdMatch2 = attrs.match(/(?:^|\s)id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
@@ -96,8 +105,6 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const elementName = nameMatch?.[1] || nameMatch?.[2] || '';
       const label = placeholder || elementName || `<${tag}> control`;
 
-      // title is NOT a valid label source — title-only inputs remain A5.1 Confirmed
-
       if (hasValidLabel) continue;
 
       if (hasPlaceholder && !hasValidLabel) {
@@ -105,10 +112,13 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         if (!seenKeys.has(dedupeKey)) {
           seenKeys.add(dedupeKey);
           findings.push({
+            elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
             elementLabel: label, elementType: tag, sourceLabel: label, filePath,
             subCheck: 'A5.2', subCheckLabel: 'Placeholder used as label', classification: 'confirmed',
             detection: `<${tag}> placeholder-only`, evidence: `placeholder="${placeholder}"`,
-            explanation: `Placeholder is the only label.`, confidence: 0.95, deduplicationKey: dedupeKey,
+            explanation: `Placeholder is the only label.`,
+            wcagCriteria: ['1.3.1', '3.3.2'],
+            deduplicationKey: dedupeKey,
           });
         }
         continue;
@@ -118,16 +128,19 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       if (!seenKeys.has(dedupeKey)) {
         seenKeys.add(dedupeKey);
         findings.push({
+          elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
           elementLabel: label, elementType: tag, sourceLabel: label, filePath,
           subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
           detection: `<${tag}> no label`, evidence: `no label source`,
-          explanation: `No accessible name.`, confidence: 0.97, deduplicationKey: dedupeKey,
+          explanation: `No accessible name.`,
+          wcagCriteria: ['1.3.1', '3.3.2'],
+          deduplicationKey: dedupeKey,
         });
       }
     }
 
-    // ARIA input roles
-    const ariaInputRegex = new RegExp(`<(div|span|p|section)\\b([^>]*role\\s*=\\s*["'](?:textbox|combobox|searchbox|spinbutton)["'][^>]*)>`, 'gi');
+    // ARIA input roles (including listbox)
+    const ariaInputRegex = new RegExp(`<(div|span|p|section)\\b([^>]*role\\s*=\\s*["'](?:textbox|combobox|searchbox|spinbutton|listbox)["'][^>]*)>`, 'gi');
     while ((match = ariaInputRegex.exec(content)) !== null) {
       const tag = match[1];
       const attrs = match[2];
@@ -145,10 +158,13 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
       findings.push({
+        elementKey: makeA5ElementKey(tag, '', '', role, filePath, lineNumber),
         elementLabel: label, elementType: tag, sourceLabel: label, filePath,
         subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
         detection: `<${tag} role="${role}"> no label`, evidence: `no programmatic label`,
-        explanation: `Custom input (role="${role}") has no accessible name.`, confidence: 0.95, deduplicationKey: dedupeKey,
+        explanation: `Custom input (role="${role}") has no accessible name.`,
+        wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
+        deduplicationKey: dedupeKey,
       });
     }
 
@@ -171,10 +187,13 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
       findings.push({
+        elementKey: makeA5ElementKey(tag, '', '', 'contenteditable', filePath, lineNumber2),
         elementLabel: label2, elementType: tag, sourceLabel: label2, filePath,
         subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
         detection: `<${tag} contenteditable="true"> no label`, evidence: `no programmatic label`,
-        explanation: `Contenteditable element has no accessible name.`, confidence: 0.95, deduplicationKey: dedupeKey,
+        explanation: `Contenteditable element has no accessible name.`,
+        wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
+        deduplicationKey: dedupeKey,
       });
     }
 
@@ -185,10 +204,13 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         if (!seenKeys.has(dedupeKey)) {
           seenKeys.add(dedupeKey);
           findings.push({
+            elementKey: makeA5ElementKey('label', forTarget, '', 'label', filePath, 0),
             elementLabel: `label[for="${forTarget}"]`, elementType: 'label', sourceLabel: `Orphan label for="${forTarget}"`, filePath,
             subCheck: 'A5.3', subCheckLabel: 'Broken label association', classification: 'confirmed',
             detection: `<label for="${forTarget}"> references non-existent id`, evidence: `label for="${forTarget}" — no matching id`,
-            explanation: `Label references non-existent id="${forTarget}".`, confidence: 0.90, deduplicationKey: dedupeKey,
+            explanation: `Label references non-existent id="${forTarget}".`,
+            wcagCriteria: ['1.3.1', '3.3.2'],
+            deduplicationKey: dedupeKey,
           });
         }
       }
@@ -309,14 +331,17 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         if (!seenKeys.has(dedupeKey)) {
           seenKeys.add(dedupeKey);
           potentialFindings.push({
+            elementKey: makeA5ElementKey(tag, controlId || '', elementName, tag, filePath, lineNumber),
             elementLabel: accessibleName, elementType: tag, sourceLabel: accessibleName, filePath, componentName,
             subCheck: 'A5.4', subCheckLabel: 'Generic label text',
             classification: 'potential', potentialSubtype: 'borderline',
             detection: `<${tag}> label "${accessibleName}" is generic`,
             evidence: `label text "${accessibleName}" at ${filePath}:${lineNumber}`,
             explanation: `The label "${accessibleName}" is too generic.`,
-            confidence: 0.88, deduplicationKey: dedupeKey,
+            confidence: 0.88,
+            wcagCriteria: ['1.3.1', '3.3.2'],
             advisoryGuidance: 'Use a descriptive label that explains the purpose of this control.',
+            deduplicationKey: dedupeKey,
           });
         }
       }
@@ -329,14 +354,17 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           if (!seenKeys.has(dedupeKey)) {
             seenKeys.add(dedupeKey);
             potentialFindings.push({
+              elementKey: makeA5ElementKey(tag, controlId || '', elementName, tag, filePath, lineNumber),
               elementLabel: label, elementType: tag, sourceLabel: label, filePath, componentName,
               subCheck: 'A5.6', subCheckLabel: 'Noisy aria-labelledby',
               classification: 'potential', potentialSubtype: 'borderline',
               detection: `<${tag}> aria-labelledby resolves to noisy/long text`,
               evidence: `Resolved text: "${accessibleName.slice(0, 80)}" at ${filePath}:${lineNumber}`,
               explanation: `The aria-labelledby resolves to noisy or overly long text.`,
-              confidence: 0.82, deduplicationKey: dedupeKey,
+              confidence: 0.82,
+              wcagCriteria: ['1.3.1', '3.3.2'],
               advisoryGuidance: 'Simplify the referenced label text. Move hints to aria-describedby.',
+              deduplicationKey: dedupeKey,
             });
           }
         }
@@ -352,6 +380,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
       potentialFindings.push({
+        elementKey: makeA5ElementKey(controls[0].tag, '', '', controls[0].tag, controls[0].filePath, controls[0].line),
         elementLabel: controls[0].label, elementType: controls[0].tag, sourceLabel: controls[0].label,
         filePath: controls[0].filePath, componentName: controls[0].componentName,
         subCheck: 'A5.5', subCheckLabel: 'Duplicate label text',
@@ -359,8 +388,10 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         detection: `${controls.length} controls share label "${controls[0].label}"`,
         evidence: `Duplicate label "${controls[0].label}"`,
         explanation: `Multiple controls share the same accessible name.`,
-        confidence: 0.90, deduplicationKey: dedupeKey,
+        confidence: 0.90,
+        wcagCriteria: ['1.3.1', '3.3.2'],
         advisoryGuidance: 'Give each control a unique, descriptive label.',
+        deduplicationKey: dedupeKey,
       });
     }
   }
@@ -377,7 +408,9 @@ Deno.test("A5.1: input with no label triggers missing label", () => {
   assertEquals(results[0].subCheck, "A5.1");
   assertEquals(results[0].subCheckLabel, "Missing label association");
   assertEquals(results[0].classification, "confirmed");
-  assert(results[0].confidence >= 0.95);
+  assert(results[0].confidence === undefined, "Confirmed findings must NOT have confidence");
+  assert(results[0].elementKey.startsWith("a5:"), "Must have elementKey");
+  assert(results[0].wcagCriteria.includes("1.3.1"), "Must include WCAG 1.3.1");
 });
 
 Deno.test("A5.2: input with placeholder only triggers placeholder-as-label", () => {
@@ -387,7 +420,7 @@ Deno.test("A5.2: input with placeholder only triggers placeholder-as-label", () 
   assertEquals(results[0].subCheck, "A5.2");
   assertEquals(results[0].subCheckLabel, "Placeholder used as label");
   assertEquals(results[0].classification, "confirmed");
-  assert(results[0].confidence >= 0.95);
+  assert(results[0].confidence === undefined, "Confirmed findings must NOT have confidence");
 });
 
 Deno.test("A5.3: label for mismatch triggers broken association, suppresses A5.1", () => {
@@ -504,6 +537,21 @@ Deno.test("Contenteditable with aria-label is valid", () => {
   assertEquals(results.length, 0);
 });
 
+Deno.test("role=listbox without label triggers A5.1", () => {
+  const files = new Map([["src/Dropdown.tsx", `<div role="listbox"></div>`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1);
+  assertEquals(results[0].subCheck, "A5.1");
+  assertEquals(results[0].classification, "confirmed");
+  assert(results[0].wcagCriteria.includes("4.1.2"), "ARIA roles should include 4.1.2");
+});
+
+Deno.test("role=listbox with aria-label is valid", () => {
+  const files = new Map([["src/Dropdown.tsx", `<div role="listbox" aria-label="Country selector"></div>`]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0);
+});
+
 Deno.test("Multi-control HTML fixture triggers findings with A5.1 suppressed by A5.3", () => {
   const files = new Map([["form.html", `
     <form>
@@ -599,7 +647,7 @@ Deno.test("A5.4: Generic label text triggers potential finding", () => {
   assert(p1.length >= 1, "Should find A5.4 for generic label 'Input'");
   assertEquals(p1[0].classification, "potential");
   assertEquals(p1[0].subCheckLabel, "Generic label text");
-  assert(p1[0].confidence >= 0.80 && p1[0].confidence <= 0.90, "Confidence should be 80-90%");
+  assert(p1[0].confidence! >= 0.80 && p1[0].confidence! <= 0.90, "Confidence should be 80-90%");
   assert(p1[0].potentialSubtype === 'borderline');
 });
 
@@ -620,7 +668,7 @@ Deno.test("A5.5: Duplicate label text triggers potential finding", () => {
   assert(p2.length >= 1, "Should find A5.5 for duplicate label 'Name'");
   assertEquals(p2[0].classification, "potential");
   assertEquals(p2[0].subCheckLabel, "Duplicate label text");
-  assert(p2[0].confidence >= 0.85 && p2[0].confidence <= 0.95, "Confidence should be 85-95%");
+  assert(p2[0].confidence! >= 0.85 && p2[0].confidence! <= 0.95, "Confidence should be 85-95%");
 });
 
 Deno.test("A5.5: Unique labels do NOT trigger", () => {
@@ -643,7 +691,7 @@ Deno.test("A5.6: Noisy aria-labelledby triggers potential finding", () => {
   assert(p4.length >= 1, "Should find A5.6 for noisy aria-labelledby");
   assertEquals(p4[0].classification, "potential");
   assertEquals(p4[0].subCheckLabel, "Noisy aria-labelledby");
-  assert(p4[0].confidence >= 0.70 && p4[0].confidence <= 0.85, "Confidence should be 70-85%");
+  assert(p4[0].confidence! >= 0.70 && p4[0].confidence! <= 0.85, "Confidence should be 70-85%");
 });
 
 Deno.test("A5.6: 'used for' token triggers noisy finding", () => {
@@ -681,4 +729,29 @@ Deno.test("Existing confirmed tests still pass - mixed file", () => {
   assert(results.length >= 1);
   assertEquals(results[0].subCheck, "A5.1");
   assertEquals(results[0].classification, "confirmed");
+});
+
+// ===== ELEMENT KEY STABILITY TESTS =====
+
+Deno.test("elementKey is stable and unique per element", () => {
+  const files = new Map([["src/Form.tsx", `
+    <input type="text" name="email" />
+    <input type="password" name="pass" />
+  `]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 2, "Should have 2 findings");
+  assert(results[0].elementKey !== results[1].elementKey, "Each element must have a unique elementKey");
+  // Run again — same keys
+  const results2 = detectA5FormLabels(files);
+  assertEquals(results[0].elementKey, results2[0].elementKey, "elementKey must be stable across runs");
+});
+
+Deno.test("Confirmed elementKey suppresses potential for same element", () => {
+  // Input with placeholder "Input" — triggers A5.2 (confirmed), should NOT also trigger A5.4 (potential)
+  const files = new Map([["src/Form.tsx", `<input type="text" placeholder="Input" />`]]);
+  const results = detectA5FormLabels(files);
+  const confirmed = results.filter(r => r.classification === 'confirmed');
+  const potential = results.filter(r => r.classification === 'potential');
+  assert(confirmed.length >= 1, "Should have confirmed A5.2");
+  assertEquals(potential.length, 0, "Potential must be suppressed for same element with confirmed finding");
 });

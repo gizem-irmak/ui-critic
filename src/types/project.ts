@@ -370,6 +370,7 @@ export interface A4ElementSubItem {
 
 // A5 Element sub-item for aggregated form label reporting
 export interface A5ElementSubItem {
+  elementKey: string; // Stable identity: hash of tag + id + name + type + filePath + lineNumber
   elementLabel: string;
   elementType?: string; // input, select, textarea, etc.
   inputSubtype?: string; // text, email, password, etc.
@@ -379,6 +380,7 @@ export interface A5ElementSubItem {
   selectorHint?: string;
   textSnippet?: string;
   location: string;
+  filePath?: string;
   
   detection?: string;
   evidence?: string;
@@ -389,7 +391,8 @@ export interface A5ElementSubItem {
   potentialSubtype?: 'accuracy' | 'borderline';
   
   explanation: string;
-  confidence: number;
+  confidence?: number; // Only for potential findings — confirmed items must NOT include confidence
+  wcagCriteria: string[]; // e.g., ["1.3.1", "3.3.2"] or ["1.3.1", "3.3.2", "4.1.2"]
   
   correctivePrompt?: string;
   deduplicationKey: string;
