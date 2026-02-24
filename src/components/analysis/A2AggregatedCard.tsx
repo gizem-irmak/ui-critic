@@ -101,15 +101,6 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 <span>WCAG 2.4.7 Focus Visible</span>
               </div>
 
-              {/* Confidence (always last) */}
-              {element.confidence !== undefined && (
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-24">Confidence:</span>
-                  <span className="font-mono font-medium text-destructive">
-                    {Math.round(element.confidence * 100)}%
-                  </span>
-                </div>
-              )}
             </div>
           ) : (
             /* ── Potential layout: keep full detail for debugging ── */
