@@ -682,6 +682,183 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
   return findings;
 }
 
+// =====================
+// U2 Navigation Detection (sub-checks U2.D1, U2.D2, U2.D3)
+// =====================
+
+interface U2Finding {
+  subCheck: 'U2.D1' | 'U2.D2' | 'U2.D3';
+  subCheckLabel: string;
+  classification: 'potential';
+  elementLabel: string;
+  elementType: string;
+  filePath: string;
+  detection: string;
+  evidence: string;
+  explanation: string;
+  confidence: number;
+  advisoryGuidance: string;
+  deduplicationKey: string;
+}
+
+function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
+  const findings: U2Finding[] = [];
+  const seenKeys = new Set<string>();
+
+  // --- Collect structural navigation signals across all files ---
+  let routeCount = 0;
+  let hasNavElement = false;
+  let hasRoleNavigation = false;
+  let hasNavLinks = false;
+  let hasBreadcrumb = false;
+  let hasBreadcrumbImport = false;
+  let hasBreadcrumbRendered = false;
+  let hasBackButton = false;
+  const routeFiles: string[] = [];
+  const nestedRouteFiles: string[] = [];
+  const breadcrumbImportFiles: string[] = [];
+  const layoutFiles: string[] = [];
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx|ts|js|html|htm)$/.test(filePath)) continue;
+    if (filePath.includes('node_modules/')) continue;
+    if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+
+    const contentLower = content.toLowerCase();
+
+    // Detect route definitions (React Router, Next.js, etc.)
+    const routePatterns = [
+      /<Route\b/gi,
+      /path\s*[:=]\s*["']\//gi,
+      /createBrowserRouter/gi,
+      /useRoutes/gi,
+    ];
+    let fileRouteCount = 0;
+    for (const pat of routePatterns) {
+      const matches = content.match(pat);
+      if (matches) fileRouteCount += matches.length;
+    }
+    if (fileRouteCount > 0) {
+      routeCount += fileRouteCount;
+      routeFiles.push(filePath);
+    }
+
+    // Detect nested routes (children property or nested <Route> inside <Route>)
+    if (/<Route\b[^>]*>\s*<Route\b/s.test(content) || /children\s*:\s*\[/s.test(content)) {
+      nestedRouteFiles.push(filePath);
+    }
+
+    // Detect <nav> element
+    if (/<nav\b/i.test(content)) hasNavElement = true;
+    if (/role\s*=\s*["']navigation["']/i.test(content)) hasRoleNavigation = true;
+
+    // Detect navigation link components
+    if (/<(?:Link|NavLink|a)\b[^>]*(?:href|to)\s*=/i.test(content)) {
+      // Only count if in a layout-like file
+      if (/layout|sidebar|navbar|header|navigation|menu|app\./i.test(filePath)) {
+        hasNavLinks = true;
+        layoutFiles.push(filePath);
+      }
+    }
+
+    // Detect breadcrumb
+    if (/breadcrumb/i.test(content)) {
+      hasBreadcrumb = true;
+      if (/import\s.*breadcrumb/i.test(content) || /from\s+['"].*breadcrumb/i.test(content)) {
+        hasBreadcrumbImport = true;
+        breadcrumbImportFiles.push(filePath);
+      }
+      if (/<Breadcrumb\b/i.test(content) || /role\s*=\s*["']breadcrumb["']/i.test(content) || /<nav\b[^>]*aria-label\s*=\s*["']breadcrumb["']/i.test(content)) {
+        hasBreadcrumbRendered = true;
+      }
+    }
+
+    // Detect back button / back navigation
+    if (/(?:back|go\s*back|navigate\(-1\)|history\.back|router\.back|useNavigate.*-1)/i.test(content)) {
+      hasBackButton = true;
+    }
+    if (/<(?:Button|button|a|Link)\b[^>]*>(?:[^<]*(?:Back|Go back|Return|← Back)[^<]*)<\//i.test(content)) {
+      hasBackButton = true;
+    }
+  }
+
+  const hasNavContainer = hasNavElement || hasRoleNavigation;
+
+  // --- U2.D1: No navigation container ---
+  // Trigger if: multiple routes AND no <nav>/role="navigation" AND no visible nav links in layouts
+  if (routeCount >= 3 && !hasNavContainer && !hasNavLinks) {
+    const dedupeKey = 'U2.D1|global';
+    if (!seenKeys.has(dedupeKey)) {
+      seenKeys.add(dedupeKey);
+      findings.push({
+        subCheck: 'U2.D1',
+        subCheckLabel: 'No navigation container',
+        classification: 'potential',
+        elementLabel: 'Application routing',
+        elementType: 'navigation',
+        filePath: routeFiles[0] || 'Unknown',
+        detection: `${routeCount} routes detected without <nav> element or role="navigation"`,
+        evidence: `Route definitions found in: ${routeFiles.slice(0, 3).join(', ')}${routeFiles.length > 3 ? ` (+${routeFiles.length - 3} more)` : ''}. No <nav> or role="navigation" detected in any file. No navigation links found in layout files.`,
+        explanation: `The application defines ${routeCount} routes but lacks a visible navigation container (<nav> or role="navigation"). Users may not have a clear way to navigate between sections.`,
+        confidence: 0.70,
+        advisoryGuidance: 'Add a <nav> element or role="navigation" container with links to main application routes. Ensure users can discover and navigate between sections.',
+        deduplicationKey: dedupeKey,
+      });
+    }
+  }
+
+  // --- U2.D2: No back affordance in nested route ---
+  // Trigger if: nested routes detected AND no back button AND no breadcrumb
+  if (nestedRouteFiles.length > 0 && !hasBackButton && !hasBreadcrumbRendered) {
+    const dedupeKey = 'U2.D2|global';
+    if (!seenKeys.has(dedupeKey)) {
+      seenKeys.add(dedupeKey);
+      findings.push({
+        subCheck: 'U2.D2',
+        subCheckLabel: 'No back affordance in nested route',
+        classification: 'potential',
+        elementLabel: 'Nested route navigation',
+        elementType: 'navigation',
+        filePath: nestedRouteFiles[0],
+        detection: 'Nested routes without back button or breadcrumb navigation',
+        evidence: `Nested route structure detected in: ${nestedRouteFiles.slice(0, 3).join(', ')}. No back button (navigate(-1), history.back, "Back" label) or breadcrumb component found.`,
+        explanation: 'Nested routes exist but no back navigation affordance (back button or breadcrumb) was detected. Users in child routes may not have a clear way to return to parent views.',
+        confidence: 0.68,
+        advisoryGuidance: 'Add a back button or breadcrumb trail in nested route views so users can navigate to parent routes.',
+        deduplicationKey: dedupeKey,
+      });
+    }
+  }
+
+  // --- U2.D3: Breadcrumb inconsistency ---
+  // Trigger if: breadcrumb imported but not rendered, OR role="breadcrumb" with no children
+  if (hasBreadcrumbImport && !hasBreadcrumbRendered) {
+    const dedupeKey = 'U2.D3|global';
+    if (!seenKeys.has(dedupeKey)) {
+      seenKeys.add(dedupeKey);
+      findings.push({
+        subCheck: 'U2.D3',
+        subCheckLabel: 'Breadcrumb inconsistency',
+        classification: 'potential',
+        elementLabel: 'Breadcrumb component',
+        elementType: 'navigation',
+        filePath: breadcrumbImportFiles[0] || 'Unknown',
+        detection: 'Breadcrumb component imported but not rendered',
+        evidence: `Breadcrumb import detected in: ${breadcrumbImportFiles.join(', ')}. No <Breadcrumb> rendering or role="breadcrumb" usage found.`,
+        explanation: 'A breadcrumb component is imported but does not appear to be rendered. This may indicate incomplete navigation implementation.',
+        confidence: 0.72,
+        advisoryGuidance: 'Render the breadcrumb component in relevant views or remove the unused import.',
+        deduplicationKey: dedupeKey,
+      });
+    }
+  }
+
+  console.log(`[U2] Detection: routes=${routeCount}, hasNav=${hasNavContainer}, hasNavLinks=${hasNavLinks}, hasBreadcrumb=${hasBreadcrumbRendered}, hasBackButton=${hasBackButton}, nested=${nestedRouteFiles.length}, findings=${findings.length}`);
+
+  return findings;
+}
+
 // Tailwind color mappings — full default palette
 const TAILWIND_COLORS: Record<string, string> = {
   // White/Black
@@ -2013,7 +2190,7 @@ ${accessibilityRulesForLLM.map(r => `- ${r.id}: ${r.name}`).join('\n')}
 ## PASS 2 — Usability (HCI) - Code Pattern Analysis
 Analyze code structure for usability patterns:
 - Button hierarchy and primary action clarity (U1)
-- Navigation structure, routing patterns, and wayfinding (U2)
+- Navigation structure, routing patterns, and wayfinding (U2) — NOTE: U2 deterministic pre-pass runs separately; you provide contextual enrichment
 - Content truncation, overflow handling, and text visibility (U3)
 - Recognition vs recall: visible options, labels, contextual cues (U4)
 - Interaction feedback: loading states, confirmations, error messages (U5)
@@ -2211,6 +2388,38 @@ U1 must produce output ONLY when a violation is detected. All other cases must b
 - Reference detected components or file paths
 - Use heuristic language ("may reduce clarity", "may increase cognitive load")
 - Confidence: 65–80% depending on clarity of evidence
+
+### U2 (Incomplete / Unclear Navigation) — CONTEXTUAL ASSESSMENT:
+**NOTE:** U2 deterministic sub-checks (U2.D1, U2.D2, U2.D3) run separately via static analysis.
+Your role is to provide contextual enrichment for navigation assessment:
+
+**EVALUATE:**
+- Wayfinding clarity: Can a user understand where they are and how to move between sections?
+- Navigation density: Are there too many or too few navigation options?
+- Ambiguity: Are navigation labels clear and distinct?
+- Redundant links: Are there duplicate navigation paths that create confusion?
+- Inconsistent routing patterns: Do navigation conventions vary across views?
+- Missing hierarchy cues: Is the navigation hierarchy clear (primary → secondary)?
+
+**CLASSIFICATION:**
+- U2 findings are ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
+- Use evaluationMethod: "hybrid_llm_fallback"
+- Confidence: 0.60–0.75
+- Ground your assessment in observable code patterns (route definitions, nav components, link structures)
+
+**OUTPUT FOR U2:**
+\`\`\`json
+{
+  "ruleId": "U2",
+  "ruleName": "Incomplete / Unclear navigation",
+  "category": "usability",
+  "status": "potential",
+  "diagnosis": "Evidence-based navigation clarity assessment...",
+  "evidence": "Specific code patterns observed...",
+  "contextualHint": "Short guidance on improving navigation...",
+  "confidence": 0.65
+}
+\`\`\`
 
 Usability rules to check:
 ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name}`).join('\n')}
@@ -4533,7 +4742,55 @@ ${codeContent}`,
     }
 
     // Merge aggregated A1 with AI violations (no raw contrast violations)
-    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
+    // ========== Deterministic U2 (navigation sub-checks) ==========
+    const aggregatedU2List: any[] = [];
+    if (selectedRulesSet.has('U2')) {
+      const u2Findings = detectU2Navigation(allFiles);
+      if (u2Findings.length > 0) {
+        // Remove any LLM-generated U2 findings — deterministic takes precedence
+        aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'U2');
+
+        const u2Elements = u2Findings.map(f => ({
+          elementLabel: f.elementLabel, elementType: f.elementType,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
+          classification: f.classification,
+          explanation: f.explanation, confidence: f.confidence,
+          advisoryGuidance: f.advisoryGuidance, deduplicationKey: f.deduplicationKey,
+        }));
+
+        const overallConfidence = Math.max(...u2Findings.map(f => f.confidence));
+        aggregatedU2List.push({
+          ruleId: 'U2', ruleName: 'Incomplete / Unclear navigation', category: 'usability',
+          status: 'potential',
+          blocksConvergence: false,
+          inputType: 'zip', isU2Aggregated: true, u2Elements, evaluationMethod: 'hybrid_structural',
+          diagnosis: `Navigation clarity issues: ${u2Findings.length} potential risk(s) detected via structural analysis.`,
+          contextualHint: 'Ensure clear navigation paths with visible indicators of current location.',
+          advisoryGuidance: 'Review navigation structure: ensure <nav> containers, breadcrumbs, and back affordances are present in multi-route applications.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        });
+
+        console.log(`U2 aggregated: ${u2Findings.length} findings → 1 potential violation object`);
+      } else {
+        // If no deterministic signals, keep LLM U2 findings but ensure they are Potential
+        aiViolations = aiViolations.map((v: any) => {
+          if (v.ruleId === 'U2') {
+            return {
+              ...v,
+              status: 'potential',
+              blocksConvergence: false,
+              evaluationMethod: 'hybrid_llm_fallback',
+              confidence: Math.min(v.confidence || 0.65, 0.75),
+            };
+          }
+          return v;
+        });
+        console.log('U2: No deterministic signals found, LLM findings (if any) preserved as Potential');
+      }
+    }
+
+    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
 
     console.log(`Code analysis complete: ${allViolations.length} violations found`);
 
