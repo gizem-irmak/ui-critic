@@ -56,42 +56,12 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
       )}>
         {/* Header row */}
         <CollapsibleTrigger className="w-full">
-          <div className="flex items-start justify-between gap-2 cursor-pointer">
-            <div className="flex items-center gap-2 flex-wrap text-left">
-              <span className={cn('font-medium', compact ? 'text-sm' : '')}>
-                {cleanLabel}
-              </span>
-              {/* Only show snippet on potential cards; confirmed cards show it in body */}
-              {!isConfirmed && element.textSnippet && (
-                <span className={cn(
-                  'text-muted-foreground italic truncate max-w-48',
-                  compact ? 'text-xs' : 'text-sm'
-                )}>
-                  "{element.textSnippet}"
+            <div className="flex items-start justify-between gap-2 cursor-pointer">
+              <div className="flex items-center gap-2 flex-wrap text-left">
+                <span className={cn('font-medium', compact ? 'text-sm' : '')}>
+                  {cleanLabel}
                 </span>
-              )}
-              {/* Method badges — only on non-confirmed (potential/perceptual) */}
-              {!isConfirmed && isHybridPixel && (
-                <Badge variant="outline" className="text-xs border-emerald-500/50 text-emerald-600">
-                  LLM→Pixel
-                </Badge>
-              )}
-              {!isConfirmed && isLLMOnly && (
-                <Badge variant="outline" className="text-xs border-amber-500/50 text-amber-600">
-                  LLM-only (measurement failed)
-                </Badge>
-              )}
-              {!isConfirmed && isPerceptual && !isLLMOnly && (
-                <Badge variant="outline" className="text-xs border-violet-500/50 text-violet-600">
-                  Perceptual Estimate
-                </Badge>
-              )}
-              {!isPerceptual && !isHybridPixel && !isLLMOnly && element.nearThreshold && (
-                <Badge variant="outline" className="text-xs border-warning/50 text-warning">
-                  near-threshold
-                </Badge>
-              )}
-            </div>
+              </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
@@ -233,21 +203,17 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
               </>
             ) : (
               <>
-                {/* POTENTIAL STRUCTURAL MODE — keep original detailed layout */}
-                {/* Element tag */}
+                {/* POTENTIAL STRUCTURAL MODE — mirrors confirmed layout */}
+
+                {/* 1) Element */}
                 {element.jsxTag && (
                   <div className="flex items-center gap-2">
                     <span className="text-muted-foreground font-medium w-20">Element:</span>
                     <code className="text-foreground font-mono">&lt;{element.jsxTag}&gt;</code>
-                    {element.textType && (
-                      <Badge variant="outline" className="text-xs">
-                        {element.textType === 'large' ? 'Large text' : 'Normal text'}
-                      </Badge>
-                    )}
                   </div>
                 )}
 
-                {/* Foreground */}
+                {/* 2) Foreground */}
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground font-medium w-20">Foreground:</span>
                   {element.foregroundHex ? (
@@ -257,61 +223,34 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                         className="w-3 h-3 rounded border border-border" 
                         style={{ backgroundColor: element.foregroundHex }} 
                       />
-                      {element.foregroundConfidence !== undefined && (
-                        <span className="text-muted-foreground">
-                          ({Math.round(element.foregroundConfidence * 100)}% conf)
-                        </span>
-                      )}
                     </span>
                   ) : (
                     <span className="text-muted-foreground italic">not measured</span>
                   )}
                 </div>
-                
-                {/* Background */}
-                <div className="flex items-start gap-2">
+
+                {/* 3) Background */}
+                <div className="flex items-center gap-2">
                   <span className="text-muted-foreground font-medium w-20">Background:</span>
-                  <div>
-                    {element.backgroundStatus === 'certain' && element.backgroundHex ? (
-                      <span className="flex items-center gap-1">
-                        <span className="font-mono">{element.backgroundHex}</span>
-                        <span 
-                          className="w-3 h-3 rounded border border-border" 
-                          style={{ backgroundColor: element.backgroundHex }} 
-                        />
-                        <span className="text-muted-foreground">(certain)</span>
-                      </span>
-                    ) : element.backgroundStatus === 'uncertain' && element.backgroundCandidates?.length ? (
-                      <div className="space-y-1">
-                        <span className="text-warning">(uncertain — multiple candidates)</span>
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          {element.backgroundCandidates.map((c, i) => (
-                            <span key={i} className="flex items-center gap-1">
-                              <span className="font-mono text-xs">{c.hex}</span>
-                              <span 
-                                className="w-3 h-3 rounded border border-border" 
-                                style={{ backgroundColor: c.hex }} 
-                              />
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    ) : element.backgroundHex ? (
-                      <span className="flex items-center gap-1">
-                        <span className="font-mono">{element.backgroundHex}</span>
-                        <span 
-                          className="w-3 h-3 rounded border border-border" 
-                          style={{ backgroundColor: element.backgroundHex }} 
-                        />
-                        <span className="text-warning">({element.backgroundStatus})</span>
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground italic">unmeasurable</span>
-                    )}
-                  </div>
+                  {element.backgroundHex ? (
+                    <span className="flex items-center gap-1">
+                      <span className="font-mono">{element.backgroundHex}</span>
+                      <span 
+                        className="w-3 h-3 rounded border border-border" 
+                        style={{ backgroundColor: element.backgroundHex }} 
+                      />
+                      {element.backgroundStatus === 'uncertain' && (
+                        <Badge variant="outline" className="text-xs border-warning/50 text-warning">
+                          uncertain
+                        </Badge>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground italic">unmeasurable</span>
+                  )}
                 </div>
-                
-                {/* Contrast */}
+
+                {/* 4) Contrast */}
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground font-medium w-20">Contrast:</span>
                   {element.contrastNotMeasurable ? (
@@ -321,42 +260,32 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                       <span className="font-mono font-medium text-warning">
                         {element.contrastRange.min.toFixed(1)}:1 – {element.contrastRange.max.toFixed(1)}:1
                       </span>
-                      <span className="text-muted-foreground ml-1">(range)</span>
+                      <span className="text-muted-foreground ml-1">
+                        vs {element.thresholdUsed}:1
+                      </span>
                     </span>
                   ) : element.contrastRatio !== undefined ? (
-                    <span className="font-mono font-medium text-warning">
-                      {element.contrastRatio.toFixed(1)}:1
+                    <span>
+                      <span className="font-mono font-medium text-warning">
+                        {element.contrastRatio.toFixed(1)}:1
+                      </span>
+                      <span className="text-muted-foreground ml-1">
+                        vs {element.thresholdUsed}:1
+                      </span>
                     </span>
                   ) : (
                     <span className="text-muted-foreground italic">not computed</span>
                   )}
-                  <span className="text-muted-foreground">
-                    vs {element.thresholdUsed}:1 threshold
+                </div>
+
+                {/* 5) Requirement */}
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground font-medium w-20">Requirement:</span>
+                  <span>
+                    WCAG 1.4.3 — {element.textType === 'large' ? 'Large text' : 'Normal text'} — {element.appliedThreshold || element.thresholdUsed}:1
                   </span>
                 </div>
 
-                {/* Explanation */}
-                <div className="pt-1">
-                  <p className="text-foreground leading-relaxed">{element.explanation}</p>
-                </div>
-                
-                {/* Reason codes (for structural potential findings only) */}
-                {element.reasonCodes && element.reasonCodes.length > 0 && (
-                  <div className="flex items-start gap-2 pt-1">
-                    <Info className="h-3 w-3 text-warning mt-0.5 flex-shrink-0" />
-                    <div className="flex flex-wrap gap-1">
-                      {element.reasonCodes.map((code) => (
-                        <Badge 
-                          key={code} 
-                          variant="outline" 
-                          className="text-xs border-warning/50 text-warning"
-                        >
-                          {reasonCodeLabels[code] || code}
-                        </Badge>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </>
             )}
           </div>
@@ -398,7 +327,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           )}>
             {elements.length} element{elements.length !== 1 ? 's' : ''}
           </Badge>
-          {/* Modality label — suppress redundant badges on confirmed structural */}
+          {/* Modality label — only for screenshot modes */}
           {isHybrid ? (
             <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
               LLM→Pixel Hybrid (Screenshot)
@@ -407,28 +336,12 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
             <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-violet-500/10 text-violet-600 border-violet-500/20">
               LLM-Assisted (Perceptual – Screenshot Modality)
             </span>
-          ) : !isConfirmed ? (
-            <>
-              <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-blue-500/10 text-blue-600 border-blue-500/20">
-                Deterministic (Structural Evidence)
-              </span>
-              {violation.evidenceLevel && (
-                <span className={cn(
-                  "text-[10px] px-1.5 py-0.5 rounded border font-medium",
-                  violation.evidenceLevel === 'structural_deterministic'
-                    ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
-                    : "bg-amber-500/10 text-amber-600 border-amber-500/20"
-                )}>
-                  {violation.evidenceLevel === 'structural_deterministic' ? 'Token-Resolved BG' : 'Estimated BG'}
-                </span>
-              )}
-            </>
           ) : null}
         </CardTitle>
-          <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
+        <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
           {isConfirmed
             ? 'Text contrast falls below WCAG AA minimum thresholds.'
-            : violation.diagnosis}
+            : 'Static analysis detected a potential contrast issue. Background or text size could not be fully verified.'}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -463,20 +376,6 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           </div>
         )}
         
-        {/* Advisory guidance for potential findings */}
-        {!isConfirmed && !isPerceptual && violation.advisoryGuidance && (
-          <div className={cn(
-            'rounded-lg bg-muted/30 border border-border mt-3',
-            compact ? 'p-2' : 'p-3'
-          )}>
-            <p className={cn('font-medium text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-              💡 Advisory Guidance
-            </p>
-            <p className={cn('text-muted-foreground mt-1', compact ? 'text-xs' : 'text-sm')}>
-              {violation.advisoryGuidance}
-            </p>
-          </div>
-        )}
       </CardContent>
     </Card>
   );
