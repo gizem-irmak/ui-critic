@@ -5596,37 +5596,10 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
         };
       });
 
-    // ========== A2 SOURCE-LEVEL PRE-FILTER ==========
-    // Deterministically scan source files for className strings where outline-none
-    // co-occurs with a valid focus replacement (ring-*, border-*, shadow-*, outline-*)
-    // in the SAME className/class string. These are NOT violations.
-    const a2SafeFiles = new Set<string>();
-    for (const [filePath, content] of allFiles) {
-      if (!/\.(tsx|jsx|html|vue|svelte)$/i.test(filePath)) continue;
-      // Match className="..." or class="..." strings
-      const classStrings = content.match(/(?:className|class)\s*=\s*(?:"[^"]*"|'[^']*'|{`[^`]*`})/g) || [];
-      // Also match cva/cn/clsx calls with template literals or strings
-      const cvaStrings = content.match(/(?:cva|cn|clsx)\s*\([^)]{10,}\)/g) || [];
-      const allClassStrings = [...classStrings, ...cvaStrings];
-      for (const cls of allClassStrings) {
-        const lower = cls.toLowerCase();
-        const hasSuppression = /(?:focus-visible:|focus:)?outline-none|(?:focus-visible:|focus:)?ring-0/.test(lower);
-        if (!hasSuppression) continue;
-        // Check for ANY valid focus replacement in the SAME string
-        const hasRingReplacement = /focus(?:-visible)?:ring-[1-9]|focus(?:-visible)?:ring-ring|focus(?:-visible)?:ring-\w/.test(lower);
-        const hasBorderReplacement = /focus(?:-visible)?:border-(?!0|none)/.test(lower);
-        const hasShadowReplacement = /focus(?:-visible)?:shadow-(?!none)/.test(lower);
-        const hasOutlineReplacement = /focus(?:-visible)?:outline-(?!none)/.test(lower);
-        const hasRingOffset = /focus(?:-visible)?:ring-offset-[1-9]/.test(lower);
-        if (hasRingReplacement || hasBorderReplacement || hasShadowReplacement || hasOutlineReplacement || hasRingOffset) {
-          // This file has outline-none WITH a valid replacement — not a violation
-          const normalizedPath = filePath.replace(/^.*?(?=src\/)/, '').replace(/^.*\//, '');
-          a2SafeFiles.add(filePath);
-          a2SafeFiles.add(normalizedPath); // also add filename-only for matching
-          console.log(`A2 PRE-FILTER SAFE: ${filePath} (outline-none + replacement in same class string)`);
-        }
-      }
-    }
+    // ========== A2 SOURCE-LEVEL PRE-FILTER — REMOVED ==========
+    // File-level pre-filter was too aggressive (suppressed ALL findings from a file
+    // if ANY className in that file had outline-none + replacement).
+    // Classification is now done per-finding only.
 
     // ========== A2 AGGREGATION LOGIC (Focus Visibility — Deterministic) ==========
     // Process and aggregate A2 violations into a single result object
@@ -5658,77 +5631,52 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       const diagnosis = (v.diagnosis || '').toLowerCase();
       const combined = evidenceLower + ' ' + diagnosis;
       
-      // ABSOLUTE RULE: Only evaluate elements that explicitly remove the browser outline or zero the ring/border
-      const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none|ring-0|focus:ring-0|focus-visible:ring-0|focus:border-0|focus-visible:border-0/.test(combined);
-      if (!mentionsOutlineRemoval) {
+      // STEP 1: outlineRemoved — does the element remove the default focus outline?
+      const outlineRemoved = /(?:^|\s|"|')outline-none|focus:outline-none|focus-visible:outline-none/i.test(combined) ||
+                              /outline\s*:\s*none/i.test(combined);
+      if (!outlineRemoved) {
         console.log(`A2 SKIP (no outline removal): ${evidence}`);
         continue;
       }
       
-      // Extract EXACT class tokens from the evidence — do NOT normalize or fabricate prefixes
-      // We extract tokens that actually appear in the source evidence string
-      const focusClassTokens: string[] = evidence.match(/(?:focus(?:-visible)?:)?(?:outline-none|ring-0|ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?)/gi) || [];
-      const weakFocusTokens: string[] = evidence.match(/focus(?:-visible)?:(?:bg-\w+|text-\w+|underline|opacity-\w+|font-\w+)/gi) || [];
-      // Also capture bare (non-focus-prefixed) weak tokens that appear in the evidence
-      const bareWeakTokens: string[] = evidence.match(/(?<!\w)(?:bg-\w+|text-\w+)(?=\s|"|'|$)/gi) || [];
+      // STEP 2: hasStrongReplacement — ONLY focus-scoped tokens count
+      // Must start with "focus:" or "focus-visible:" AND include ring-/border-/shadow-/outline-(not none)
+      const hasStrongReplacement = /(?:^|\s|"|')focus(?:-visible)?:ring-(?!0\b)/i.test(combined) ||
+                                    /(?:^|\s|"|')focus(?:-visible)?:border-(?!0\b|none)/i.test(combined) ||
+                                    /(?:^|\s|"|')focus(?:-visible)?:shadow-(?!none)/i.test(combined) ||
+                                    /(?:^|\s|"|')focus(?:-visible)?:outline-(?!none)/i.test(combined);
       
-      // Check for STRONG visible focus replacement indicators
-      // Strong = focus:ring-* (any width), focus:border-*, focus:shadow-*, focus:outline-* (not none)
-      const hasStrongReplacement = /focus(?:-visible)?:ring-(?!0\b)/.test(combined) ||
-                                    /focus(?:-visible)?:border-(?!0\b|none)/.test(combined) ||
-                                    /focus(?:-visible)?:shadow-(?!none)/.test(combined) ||
-                                    /focus(?:-visible)?:outline-(?!none)/.test(combined);
+      if (hasStrongReplacement) {
+        console.log(`A2 PASS (focus-scoped strong replacement): ${evidence}`);
+        continue;
+      }
       
-      const hasVisibleReplacement = hasStrongReplacement;
+      // STEP 3: hasWeakFocusStyling — ONLY focus-scoped tokens count
+      const hasWeakFocusStyling = /(?:^|\s|"|')focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/i.test(combined);
       
       // Check if explicitly marked as pass/acceptable
       const mentionsAcceptable = /(?<!no\s)(?<!without\s)(?<!lacks?\s)(?<!missing\s)(?:acceptable|compliant|has visible|proper focus|adequate focus|valid focus)/i.test(combined);
       const explicitlyPasses = /\bpass\b(?!word)/i.test(combined) && !/does not pass|doesn't pass|fail/i.test(combined);
-      
-      // If evidence shows valid replacement or acceptable, this is a PASS - skip entirely
-      if (hasVisibleReplacement) {
-        console.log(`A2 PASS (has strong focus replacement): ${evidence} [tokens: ${focusClassTokens.join(', ')}]`);
-        continue;
-      }
-      
-      // SOURCE-LEVEL PRE-FILTER: Check if the file referenced in this finding is in the safe set
-      // (i.e., the actual source code has outline-none + replacement in the same className string)
-      const findingFile = v.filePath || '';
-      const findingFileName = findingFile.replace(/^.*\//, '');
-      const findingComponent = v.componentName || '';
-      const evidenceFileMatch = evidence.match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
-      const evidenceFileName = evidenceFileMatch?.[1] || '';
-      
-      const isInSafeSet = a2SafeFiles.has(findingFile) || 
-                          a2SafeFiles.has(findingFileName) ||
-                          a2SafeFiles.has(evidenceFileName) ||
-                          [...a2SafeFiles].some(sf => sf.includes(findingFileName) || (evidenceFileName && sf.includes(evidenceFileName)));
-      
-      if (isInSafeSet) {
-        console.log(`A2 PASS (source pre-filter: file has outline-none + replacement): ${findingFile || evidenceFileName} — ${evidence.substring(0, 80)}`);
-        continue;
-      }
       
       if (mentionsAcceptable || explicitlyPasses) {
         console.log(`A2 PASS (explicitly acceptable): ${evidence}`);
         continue;
       }
       
-      // ── Borderline vs Confirmed classification ──
-      // Weak/ambiguous focus styles: focus:bg-*, focus:text-*, focus:underline, focus:opacity-*, focus:font-*
-      const hasWeakFocusStyling = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
-      
-      // Classification:
-      // - outlineRemoved AND hasWeakFocusStyling → Borderline (Potential)
-      // - outlineRemoved AND NOT hasWeakFocusStyling → Confirmed (Blocking)
+      // STEP 4: Classification
       const isBorderline = hasWeakFocusStyling;
       
-      // This is a valid violation - add it
-      console.log(`A2 VIOLATION: ${evidence} [borderline: ${isBorderline}]`);
+      // Extract matched tokens for display
+      const outlineTokens = evidence.match(/(?:focus(?:-visible)?:)?outline-none/gi) || [];
+      const focusScopedTokens = evidence.match(/focus(?:-visible)?:(?:ring-[\w-]+|border-[\w-]+|shadow-[\w-]+|outline-[\w-]+|bg-[\w-]+|text-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/gi) || [];
+      const allMatchedTokens = [...new Set([...outlineTokens, ...focusScopedTokens])];
+      
+      console.log(`A2 VIOLATION: ${evidence} [borderline=${isBorderline}, outlineRemoved=${outlineRemoved}, hasStrong=${hasStrongReplacement}, hasWeak=${hasWeakFocusStyling}, tokens=${allMatchedTokens.join(',')}]`);
       a2ValidViolations.push({
         ...v,
         isBorderline,
-        detectedFocusClasses: focusClassTokens,
+        detectedFocusClasses: allMatchedTokens,
+        _a2Debug: { outlineRemoved, hasStrongReplacement, hasWeakFocusStyling, matchedTokens: allMatchedTokens },
       });
     }
     
@@ -5785,13 +5733,11 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       else if (/\btab\b/i.test(combined)) elementType = 'tab';
       else if (/\bmenu/i.test(combined)) elementType = 'menuitem';
       
-      // Extract EXACT focus-related class tokens from the evidence — preserve original form
+      // Extract tokens: outline removal tokens + focus-scoped tokens only (no bare ring-*/border-* etc.)
       const focusClasses: string[] = [];
-      // Match tokens exactly as they appear: with or without focus prefix
-      const classMatches = evidence.match(/(?:focus(?:-visible)?:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/gi);
-      if (classMatches) {
-        focusClasses.push(...new Set(classMatches));
-      }
+      const outlineMatches = evidence.match(/(?:focus(?:-visible)?:)?outline-none/gi) || [];
+      const scopedMatches = evidence.match(/focus(?:-visible)?:(?:ring-[\w-]+|border-[\w-]+|shadow-[\w-]+|outline-[\w-]+|bg-[\w-]+|text-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/gi) || [];
+      focusClasses.push(...new Set([...outlineMatches, ...scopedMatches]));
       
       // Build detection string with descriptive text
       let detection: string;
@@ -5939,6 +5885,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
             ? `[${sourceLabel} ${item.element_type}] — ${item.file_path || 'Source file'}\n\nIssue reason:\nFocus indicator is removed (${item.focus_classes.filter(c => /outline-none|ring-0/.test(c)).join(', ') || 'outline-none'}) without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2 or an outline/border/underline) and apply consistently across all instances.`
             : undefined,
           deduplicationKey: `${item.file_path}|${item.component_name}`,
+          _a2Debug: (item as any)._a2Debug,
         };
       });
       
