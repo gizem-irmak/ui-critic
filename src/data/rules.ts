@@ -170,8 +170,9 @@ export const rules: Rule[] = [
     method: 'HYBRID',
     supportedModalities: { zip: 'supported', github: 'supported', screenshot: 'limited' },
     deterministicSignals: [
-      'U2-D1: Multi-route app without breadcrumb or back navigation component',
-      'U2-D2: Router with >3 routes but no <nav> or navigation component detected',
+      'U2-D1: Multi-route app (≥3 routes) without <nav>, role="navigation", or navigation links in layout files',
+      'U2-D2: Nested route structure without back button or breadcrumb component',
+      'U2-D3: Breadcrumb component imported but not rendered',
     ],
     llmFallbackConditions: [
       'Deterministic signals inconclusive (navigation may exist in unanalyzed files)',
