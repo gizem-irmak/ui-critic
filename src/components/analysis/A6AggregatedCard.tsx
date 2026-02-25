@@ -53,12 +53,6 @@ function A6ElementItem({ element, compact = false }: {
 
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {element.elementType && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Element:</span>
-                <code className="font-mono text-xs">&lt;{element.elementType.replace(/^<|>$/g, '')}&gt;</code>
-              </div>
-            )}
 
             {element.detection && (
               <div className="flex items-center gap-2">
