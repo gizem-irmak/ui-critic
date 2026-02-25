@@ -22,26 +22,26 @@ interface A2ClassificationResult {
 function classifyA2Finding(evidence: string, diagnosis: string = ''): A2ClassificationResult | 'skip' | 'pass' {
   const combined = (evidence + ' ' + diagnosis).toLowerCase();
 
-  // PREREQUISITE: Must mention focus suppression
-  const hasSuppression = /outline-none|focus:outline-none|focus-visible:outline-none|ring-0|focus:ring-0|focus-visible:ring-0|focus:border-0|focus-visible:border-0/.test(combined);
-  if (!hasSuppression) {
+  // STEP 1: outlineRemoved — must mention outline suppression
+  const outlineRemoved = /(?:^|\s|"|')outline-none|focus:outline-none|focus-visible:outline-none/i.test(combined) ||
+                          /outline\s*:\s*none/i.test(combined);
+  if (!outlineRemoved) {
     return 'skip';
   }
 
-  // Check for STRONG visible replacement → PASS
-  // Any focus:ring-* (not ring-0), focus:border-* (not border-0/none), focus:shadow-* (not none), focus:outline-* (not none)
-  const hasStrongReplacement = /focus(?:-visible)?:ring-(?!0\b)/.test(combined) ||
-                                /focus(?:-visible)?:border-(?!0\b|none)/.test(combined) ||
-                                /focus(?:-visible)?:shadow-(?!none)/.test(combined) ||
-                                /focus(?:-visible)?:outline-(?!none)/.test(combined);
+  // STEP 2: hasStrongReplacement — ONLY focus-scoped tokens count
+  // Bare ring-*, border-*, shadow-* do NOT count as replacement
+  const hasStrongReplacement = /(?:^|\s|"|')focus(?:-visible)?:ring-(?!0\b)/i.test(combined) ||
+                                /(?:^|\s|"|')focus(?:-visible)?:border-(?!0\b|none)/i.test(combined) ||
+                                /(?:^|\s|"|')focus(?:-visible)?:shadow-(?!none)/i.test(combined) ||
+                                /(?:^|\s|"|')focus(?:-visible)?:outline-(?!none)/i.test(combined);
 
   if (hasStrongReplacement) {
     return 'pass';
   }
 
-  // Check for WEAK/AMBIGUOUS focus styling → Potential (Borderline)
-  // Includes: focus:bg-*, focus:text-*, focus:underline, focus:opacity-*, focus:font-*
-  const hasWeakFocusStyling = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
+  // STEP 3: hasWeakFocusStyling — ONLY focus-scoped tokens count
+  const hasWeakFocusStyling = /(?:^|\s|"|')focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/i.test(combined);
 
   if (hasWeakFocusStyling) {
     return {
@@ -131,10 +131,10 @@ Deno.test("A2: outline-none + focus:shadow-md → PASS (strong shadow)", () => {
   assertEquals(result, 'pass', "Shadow-md should be a strong replacement (PASS)");
 });
 
-Deno.test("A2: focus:border-0 + ring-1 + ring-zinc-200 → PASS (focus:ring-1 is valid)", () => {
+Deno.test("A2: focus:border-0 + ring-1 + ring-zinc-200 → SKIP (no outline-none present)", () => {
   const evidence = "focus:border-0 focus:ring-1 ring-zinc-200";
   const result = classifyA2Finding(evidence);
-  assertEquals(result, 'pass', "focus:ring-1 is a valid replacement → PASS");
+  assertEquals(result, 'skip', "No outline-none detected → SKIP (border-0 is not outline removal)");
 });
 
 Deno.test("A2: outline-none + focus:ring-1 (no muted color) → PASS (focus:ring-1 is valid)", () => {
@@ -208,5 +208,46 @@ Deno.test("A2: outline-none + focus:opacity-80 → Potential (weak focus style)"
   if (typeof result === 'object') {
     assertEquals(result.isPotential, true, "Opacity change is a weak focus style");
     assertEquals(result.isConfirmed, false, "Should NOT be confirmed");
+  }
+});
+
+// ============================================================
+// CRITICAL: Bare (non-focus-scoped) tokens must NOT suppress A2
+// ============================================================
+
+Deno.test("A2: outline-none + bare ring-2 (no focus prefix) → Confirmed (bare tokens don't count)", () => {
+  const evidence = "outline-none ring-2 ring-blue-500";
+  const result = classifyA2Finding(evidence);
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, true, "Bare ring-2 without focus: prefix must NOT count as replacement");
+    assertEquals(result.isPotential, false, "Should NOT be potential");
+  }
+});
+
+Deno.test("A2: outline-none + bare border-2 + bare shadow-md → Confirmed (no focus-scoped replacement)", () => {
+  const evidence = "outline-none border-2 border-gray-300 shadow-md";
+  const result = classifyA2Finding(evidence);
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, true, "Bare border/shadow without focus: prefix must NOT count");
+  }
+});
+
+Deno.test("A2: outline-none + bare bg-accent + bare text-accent-foreground → Confirmed (bare weak tokens don't count)", () => {
+  const evidence = "outline-none bg-accent text-accent-foreground";
+  const result = classifyA2Finding(evidence);
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, true, "Bare bg/text without focus: prefix must NOT count as weak replacement");
+  }
+});
+
+Deno.test("A2: outline-none + data-[state=open]:bg-accent → Confirmed (data-state is not focus-scoped)", () => {
+  const evidence = "outline-none data-[state=open]:bg-accent data-[state=open]:text-accent-foreground";
+  const result = classifyA2Finding(evidence);
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, true, "data-state styles are not focus indicators");
   }
 });

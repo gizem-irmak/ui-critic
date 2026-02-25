@@ -4010,29 +4010,8 @@ serve(async (req) => {
       console.log(`A1 aggregated (GitHub): ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
     
-    // ========== A2 Source-Level Pre-Filter ==========
-    // Scan source files for className strings with outline-none + valid replacement
-    const a2SafeFilesGH = new Set<string>();
-    for (const [filePath, content] of allFiles) {
-      if (!/\.(tsx|jsx|html|vue|svelte)$/i.test(filePath)) continue;
-      const classStrings = content.match(/(?:className|class)\s*=\s*(?:"[^"]*"|'[^']*'|{`[^`]*`})/g) || [];
-      const cvaStrings = content.match(/(?:cva|cn|clsx)\s*\([^)]{10,}\)/g) || [];
-      for (const cls of [...classStrings, ...cvaStrings]) {
-        const lower = cls.toLowerCase();
-        const hasSuppression = /(?:focus-visible:|focus:)?outline-none|(?:focus-visible:|focus:)?ring-0/.test(lower);
-        if (!hasSuppression) continue;
-        const hasReplacement = /focus(?:-visible)?:ring-[1-9]|focus(?:-visible)?:ring-ring|focus(?:-visible)?:ring-\w/.test(lower) ||
-          /focus(?:-visible)?:border-(?!0|none)/.test(lower) ||
-          /focus(?:-visible)?:shadow-(?!none)/.test(lower) ||
-          /focus(?:-visible)?:outline-(?!none)/.test(lower) ||
-          /focus(?:-visible)?:ring-offset-[1-9]/.test(lower);
-        if (hasReplacement) {
-          a2SafeFilesGH.add(filePath);
-          a2SafeFilesGH.add(filePath.replace(/^.*\//, ''));
-          console.log(`A2 PRE-FILTER SAFE (GitHub): ${filePath}`);
-        }
-      }
-    }
+    // ========== A2 SOURCE-LEVEL PRE-FILTER — REMOVED ==========
+    // File-level pre-filter was too aggressive. Classification is now per-finding only.
 
     // ========== A2 Focus Visibility — Aggregate from AI findings ==========
     const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2' || v.ruleId === 'A5');
@@ -4043,33 +4022,25 @@ serve(async (req) => {
       // Filter valid focus violations
       const validA2 = a2AiViolations.filter((v: any) => {
         const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
-        const mentionsOutlineRemoval = /outline-none|focus:outline-none|focus-visible:outline-none|ring-0|focus:ring-0|focus-visible:ring-0|focus:border-0|focus-visible:border-0/.test(combined);
-        if (!mentionsOutlineRemoval) {
+        
+        // STEP 1: outlineRemoved
+        const outlineRemoved = /(?:^|\s|"|')outline-none|focus:outline-none|focus-visible:outline-none/i.test(combined) ||
+                                /outline\s*:\s*none/i.test(combined);
+        if (!outlineRemoved) {
           console.log(`A2 SKIP (no outline removal): ${(v.evidence || '').substring(0, 80)}`);
           return false;
         }
-        // Check for STRONG visible replacement = PASS (any focus:ring-*, focus:border-*, focus:shadow-*, focus:outline-* not none)
-        const hasStrongReplacement = /focus(?:-visible)?:ring-(?!0\b)/.test(combined) ||
-                                      /focus(?:-visible)?:border-(?!0\b|none)/.test(combined) ||
-                                      /focus(?:-visible)?:shadow-(?!none)/.test(combined) ||
-                                      /focus(?:-visible)?:outline-(?!none)/.test(combined);
+        
+        // STEP 2: hasStrongReplacement — ONLY focus-scoped tokens
+        const hasStrongReplacement = /(?:^|\s|"|')focus(?:-visible)?:ring-(?!0\b)/i.test(combined) ||
+                                      /(?:^|\s|"|')focus(?:-visible)?:border-(?!0\b|none)/i.test(combined) ||
+                                      /(?:^|\s|"|')focus(?:-visible)?:shadow-(?!none)/i.test(combined) ||
+                                      /(?:^|\s|"|')focus(?:-visible)?:outline-(?!none)/i.test(combined);
         if (hasStrongReplacement) {
-          console.log(`A2 PASS (has strong replacement): ${(v.evidence || '').substring(0, 80)}`);
+          console.log(`A2 PASS (focus-scoped strong replacement): ${(v.evidence || '').substring(0, 80)}`);
           return false;
         }
-        // SOURCE-LEVEL PRE-FILTER: check if file has outline-none + replacement in same className
-        const findingFile = v.filePath || '';
-        const findingFileName = findingFile.replace(/^.*\//, '');
-        const evidenceFileMatch = (v.evidence || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
-        const evidenceFileName = evidenceFileMatch?.[1] || '';
-        const isInSafeSet = a2SafeFilesGH.has(findingFile) || 
-                            a2SafeFilesGH.has(findingFileName) ||
-                            a2SafeFilesGH.has(evidenceFileName) ||
-                            [...a2SafeFilesGH].some(sf => sf.includes(findingFileName) || (evidenceFileName && sf.includes(evidenceFileName)));
-        if (isInSafeSet) {
-          console.log(`A2 PASS (source pre-filter): ${findingFile || evidenceFileName}`);
-          return false;
-        }
+        
         return true;
       });
       
@@ -4089,14 +4060,19 @@ serve(async (req) => {
           else if (/\binput\b/i.test(combined)) elementType = 'input';
           
           // ── Borderline vs Confirmed classification ──
-          // Weak/ambiguous: focus:bg-*, focus:text-*, focus:underline, focus:opacity-*, focus:font-*
-          const hasWeakFocusStyling = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
+          // Weak/ambiguous: ONLY focus-scoped bg-*, text-*, underline, opacity-*, font-*
+          const hasWeakFocusStyling = /(?:^|\s|"|')focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/i.test(combined);
           const isBorderline = hasWeakFocusStyling;
           const isConfirmed = !isBorderline;
           // Confirmed: 90-95% deterministic; Borderline: 60-75%
           const confidence = isConfirmed ? 0.92 : 0.68;
           
-          const focusClasses = (evidence.match(/(?:focus(?:-visible)?:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/gi) || []);
+          // Extract tokens: outline removal + focus-scoped tokens only
+          const outlineTokens = evidence.match(/(?:focus(?:-visible)?:)?outline-none/gi) || [];
+          const focusScopedTokens = evidence.match(/focus(?:-visible)?:(?:ring-[\w-]+|border-[\w-]+|shadow-[\w-]+|outline-[\w-]+|bg-[\w-]+|text-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/gi) || [];
+          const focusClasses = [...new Set([...outlineTokens, ...focusScopedTokens])];
+          
+          const _a2Debug = { outlineRemoved: true, hasStrongReplacement: false, hasWeakFocusStyling, matchedTokens: focusClasses };
           
           // Build descriptive detection text
           let detection: string;
@@ -4157,6 +4133,7 @@ serve(async (req) => {
               ? `[${sourceLabel} ${elementType}] — ${location}\n\nIssue reason:\nFocus indicator is removed without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2) and apply consistently across all instances.`
               : undefined,
             deduplicationKey: `${location}|${elementLabel}`,
+            _a2Debug,
           };
         });
         
