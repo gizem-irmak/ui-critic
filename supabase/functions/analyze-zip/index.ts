@@ -1004,6 +1004,173 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
   return capped;
 }
 
+
+// =====================
+// U5 Interaction Feedback Detection (sub-checks U5.D1, U5.D2, U5.D3)
+// =====================
+
+interface U5Finding {
+  subCheck: 'U5.D1' | 'U5.D2' | 'U5.D3';
+  subCheckLabel: string;
+  elementLabel: string;
+  elementType: string;
+  filePath: string;
+  detection: string;
+  evidence: string;
+  confidence: number;
+  deduplicationKey: string;
+}
+
+function detectU5InteractionFeedback(allFiles: Map<string, string>): U5Finding[] {
+  const findings: U5Finding[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
+    if (/\.(test|spec)\./i.test(filePath)) continue;
+    if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
+
+    const fileName = filePath.split('/').pop() || filePath;
+
+    // --- U5.D1: Async action without loading/disabled feedback ---
+    // Look for onClick/onSubmit handlers containing async patterns
+    const asyncHandlerRe = /(?:onClick|onSubmit)\s*=\s*\{[^}]*(?:async\s|await\s|fetch\s*\(|axios[.\(]|\.then\s*\(|setTimeout\s*\(|useMutation|mutateAsync|mutate\s*\()/gi;
+    let ahm;
+    while ((ahm = asyncHandlerRe.exec(content)) !== null) {
+      const pos = ahm.index;
+      const lineNumber = content.slice(0, pos).split('\n').length;
+
+      // Check broader component context for loading indicators
+      const componentContext = content; // check whole file for state
+      const hasLoadingState = /\b(?:isLoading|isSubmitting|isPending|loading|submitting)\b/i.test(componentContext);
+      const hasDisabledBinding = /disabled\s*=\s*\{[^}]*(?:isLoading|isSubmitting|isPending|loading|submitting)/i.test(componentContext);
+      const hasAriaBusy = /aria-busy/i.test(componentContext);
+      const hasSpinner = /(?:Spinner|Loader|Loading|CircularProgress|<Oval|<Rings|<TailSpin)\b/i.test(componentContext);
+      const hasLabelSwap = /(?:Saving|Loading|Submitting|Processing|Please wait)\.\.\./i.test(componentContext);
+
+      // If ANY feedback mechanism exists, skip
+      if (hasLoadingState || hasDisabledBinding || hasAriaBusy || hasSpinner || hasLabelSwap) continue;
+
+      // Extract handler label from nearby context
+      const beforeHandler = content.slice(Math.max(0, pos - 200), pos);
+      const afterHandler = content.slice(pos, Math.min(content.length, pos + 300));
+      const btnTextMatch = afterHandler.match(/>([^<]{2,30})</);
+      const ariaLabelMatch = beforeHandler.match(/aria-label\s*=\s*["']([^"']+)["']/i) || afterHandler.match(/aria-label\s*=\s*["']([^"']+)["']/i);
+      const elementLabel = ariaLabelMatch?.[1] || btnTextMatch?.[1]?.replace(/\{[^}]*\}/g, '').trim() || 'Async action button';
+
+      const dedupeKey = `U5.D1|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      // Confidence: base 0.65 + bonuses
+      let conf = 0.65;
+      conf += 0.10; // D1 trigger (strong async)
+      if (!hasDisabledBinding) conf += 0.05;
+      if (!hasSpinner && !hasLabelSwap) conf += 0.05;
+
+      findings.push({
+        subCheck: 'U5.D1',
+        subCheckLabel: 'Async action without loading/disabled feedback',
+        elementLabel: `"${elementLabel}" button`,
+        elementType: 'button',
+        filePath,
+        detection: `Async handler without loading state, disabled binding, or spinner`,
+        evidence: `onClick/onSubmit with async pattern at ${fileName}:${lineNumber} — no isLoading, disabled, aria-busy, or spinner detected in component`,
+        confidence: Math.min(conf, 0.85),
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // --- U5.D2: Form submit without success/error feedback ---
+    const formRe = /<form\b[^>]*onSubmit/gi;
+    let fm;
+    while ((fm = formRe.exec(content)) !== null) {
+      const pos = fm.index;
+      const lineNumber = content.slice(0, pos).split('\n').length;
+
+      // Check component for feedback patterns
+      const hasToast = /\btoast\s*\(|useToast|Sonner|Snackbar|notification\s*\./i.test(content);
+      const hasSuccessError = /\b(?:success|error|message|status)\b\s*&&/i.test(content) ||
+        /\{(?:success|error|message)\s*&&\s*/i.test(content) ||
+        /(?:success|error)\s*\?\s*/i.test(content);
+      const hasAlertOrMessage = /\balert\s*\(|Alert|FormMessage|ErrorMessage|SuccessMessage/i.test(content);
+
+      if (hasToast || hasSuccessError || hasAlertOrMessage) continue;
+
+      // Already flagged as D1? Skip to avoid noise
+      const d1Key = `U5.D1|${filePath}|${lineNumber}`;
+      if (seenKeys.has(d1Key)) continue;
+
+      const dedupeKey = `U5.D2|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      let conf = 0.65;
+      if (!hasToast && !hasSuccessError) conf += 0.05;
+
+      findings.push({
+        subCheck: 'U5.D2',
+        subCheckLabel: 'Form submit without success/error feedback',
+        elementLabel: 'Form submit',
+        elementType: 'form',
+        filePath,
+        detection: `Form onSubmit without toast, alert, or success/error state rendering`,
+        evidence: `<form onSubmit> at ${fileName}:${lineNumber} — no toast(), Snackbar, error/success conditional rendering detected`,
+        confidence: Math.min(conf, 0.85),
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // --- U5.D3: Toggle/state change without visible state indication (weaker) ---
+    const toggleRe = /onClick\s*=\s*\{[^}]*(?:set\w+\s*\(\s*!\w+|set\w+\s*\(\s*prev\s*=>\s*!prev)/gi;
+    let tm;
+    while ((tm = toggleRe.exec(content)) !== null) {
+      const pos = tm.index;
+      const lineNumber = content.slice(0, pos).split('\n').length;
+      const context = content.slice(Math.max(0, pos - 300), Math.min(content.length, pos + 300));
+
+      // Check for ARIA state or className conditional
+      const hasAriaState = /aria-pressed|aria-checked|role\s*=\s*["']switch["']/i.test(context);
+      const hasClassConditional = /className\s*=\s*\{[^}]*\?\s*/i.test(context) || /\?\s*["'][^"']*["']\s*:\s*["']/i.test(context);
+      const hasTextSwap = /\?\s*["'](?:On|Off|Active|Inactive|Enabled|Disabled|Show|Hide|Open|Close)["']/i.test(context);
+
+      if (hasAriaState || hasClassConditional || hasTextSwap) continue;
+
+      const dedupeKey = `U5.D3|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      findings.push({
+        subCheck: 'U5.D3',
+        subCheckLabel: 'Toggle without visible state indication',
+        elementLabel: 'Toggle control',
+        elementType: 'toggle',
+        filePath,
+        detection: `Boolean toggle without aria-pressed/checked, className conditional, or text swap`,
+        evidence: `onClick toggles boolean state at ${fileName}:${lineNumber} — no aria-pressed, aria-checked, className ternary, or text swap found`,
+        confidence: 0.65,
+        deduplicationKey: dedupeKey,
+      });
+    }
+  }
+
+  // Cap per file to avoid noise (max 3 per file)
+  const byFile = new Map<string, U5Finding[]>();
+  for (const f of findings) {
+    const ex = byFile.get(f.filePath) || [];
+    ex.push(f);
+    byFile.set(f.filePath, ex);
+  }
+  const capped: U5Finding[] = [];
+  for (const [, ff] of byFile) {
+    capped.push(...ff.slice(0, 3));
+  }
+
+  console.log(`[U5] Detection: ${findings.length} raw findings, ${capped.length} after capping`);
+  return capped;
+}
+
 // =====================
 // U2 Navigation Detection (sub-checks U2.D1, U2.D2, U2.D3)
 // =====================
@@ -5417,7 +5584,55 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}`,
       }
     }
 
-    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
+    // ========== Deterministic U5 (Insufficient Interaction Feedback) ==========
+    const aggregatedU5List: any[] = [];
+    if (selectedRulesSet.has('U5')) {
+      const u5Findings = detectU5InteractionFeedback(allFiles);
+      if (u5Findings.length > 0) {
+        // Remove any LLM-generated U5 findings — deterministic takes precedence
+        aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'U5');
+
+        const u5Elements = u5Findings.map(f => ({
+          elementLabel: f.elementLabel, elementType: f.elementType,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          subCheck: f.subCheck,
+          confidence: f.confidence,
+          evaluationMethod: 'deterministic_structural' as const,
+          deduplicationKey: f.deduplicationKey,
+        }));
+
+        const overallConfidence = Math.max(...u5Findings.map(f => f.confidence));
+        aggregatedU5List.push({
+          ruleId: 'U5', ruleName: 'Insufficient interaction feedback', category: 'usability',
+          status: 'potential',
+          blocksConvergence: false,
+          inputType: 'zip', isU5Aggregated: true, u5Elements, evaluationMethod: 'hybrid_deterministic',
+          diagnosis: `Interaction feedback issues: ${u5Findings.length} potential risk(s) detected via structural analysis.`,
+          contextualHint: 'Provide loading/progress state, disable controls during async actions, and show success/error confirmation.',
+          advisoryGuidance: 'Provide loading/progress state, disable controls during async actions, and show success/error confirmation.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        });
+
+        console.log(`U5 aggregated: ${u5Findings.length} findings → 1 potential violation object`);
+      } else {
+        // Ensure any LLM U5 findings are Potential
+        aiViolations = aiViolations.map((v: any) => {
+          if (v.ruleId === 'U5') {
+            return {
+              ...v,
+              status: 'potential',
+              blocksConvergence: false,
+              evaluationMethod: 'hybrid_llm_fallback',
+              confidence: Math.min(v.confidence || 0.65, 0.75),
+            };
+          }
+          return v;
+        });
+        console.log('U5: No deterministic signals found, LLM findings (if any) preserved as Potential');
+      }
+    }
+
+    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...aggregatedU5List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
 
     console.log(`Code analysis complete: ${allViolations.length} violations found`);
 

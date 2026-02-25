@@ -218,6 +218,12 @@ export interface Violation {
   // ============================================================
   isU4Aggregated?: boolean;
   u4Elements?: U4ElementSubItem[];
+  
+  // ============================================================
+  // U5 AGGREGATED ELEMENT REPORTING (Insufficient Interaction Feedback)
+  // ============================================================
+  isU5Aggregated?: boolean;
+  u5Elements?: U5ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -497,6 +503,19 @@ export interface U4ElementSubItem {
   evidence?: string;      // Specific evidence citations from the bundle
   recommendedFix?: string; // Actionable fix suggestion
   confidence: number;     // Capped at 0.80
+  deduplicationKey: string;
+}
+
+// U5 Element sub-item for aggregated interaction feedback reporting
+export interface U5ElementSubItem {
+  elementLabel: string;   // e.g., '"Save" button', 'Form submit', 'Toggle'
+  elementType?: string;   // button, form, toggle, etc.
+  location: string;       // file path
+  detection?: string;     // Summary of what was detected
+  evidence?: string;      // Specific evidence citations
+  subCheck?: 'U5.D1' | 'U5.D2' | 'U5.D3'; // Which sub-check triggered (deterministic only)
+  confidence: number;     // 0.60–0.85
+  evaluationMethod?: 'deterministic_structural' | 'hybrid_llm_fallback' | 'vision_llm';
   deduplicationKey: string;
 }
 
