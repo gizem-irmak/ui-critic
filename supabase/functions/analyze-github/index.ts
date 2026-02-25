@@ -2338,21 +2338,60 @@ interface U3Finding {
 }
 
 function extractU3TextPreview(content: string, pos: number): string | undefined {
-  const after = content.slice(pos, Math.min(content.length, pos + 600));
-  const jsxTextMatch = after.match(/>([^<]{5,})</);
-  if (jsxTextMatch) {
-    const raw = jsxTextMatch[1].trim();
-    if (raw.length > 0) return raw.length > 120 ? raw.slice(0, 117) + '…' : raw;
+  const after = content.slice(pos, Math.min(content.length, pos + 800));
+
+  const cap = (s: string): string => s.length > 120 ? s.slice(0, 117) + '…' : s;
+
+  const looksLikeClasses = (s: string): boolean =>
+    /^[\w\s\-/[\]:!.#]+$/.test(s) && /\b(text-|bg-|flex|grid|p-|m-|w-|h-|rounded|border|font-|block|inline|hidden|overflow|relative|absolute|max-|min-)/.test(s);
+
+  // 1) Visible JSX text nodes between > and <
+  const textParts: string[] = [];
+  const jsxTextRe = />([^<>{]+)</g;
+  let tm;
+  while ((tm = jsxTextRe.exec(after)) !== null) {
+    const raw = tm[1].trim();
+    if (raw.length < 3) continue;
+    if (looksLikeClasses(raw)) continue;
+    if (!/[a-zA-Z]/.test(raw)) continue;
+    textParts.push(raw);
   }
-  const stringLitMatch = after.match(/[=:]\s*["'`]([^"'`]{10,})["'`]/);
-  if (stringLitMatch) {
-    const raw = stringLitMatch[1].trim();
-    if (raw.length > 0 && !/^[\w-]+$/.test(raw)) return raw.length > 120 ? raw.slice(0, 117) + '…' : raw;
+  if (textParts.length > 0) {
+    const joined = textParts.join(' ').trim();
+    if (joined.length > 0) return cap(joined);
   }
-  const dynMatch = after.match(/\{([a-zA-Z_][\w.]*)\}/);
-  if (dynMatch) return `(dynamic text: ${dynMatch[1]})`;
-  const dynBroad = after.match(/\{([^}]{3,30})\}/);
-  if (dynBroad && /[a-zA-Z]/.test(dynBroad[1])) return '(dynamic text)';
+
+  // 2) String literal children: >{`text`}< or >{"text"}<
+  const childStringRe = />\s*\{\s*[`"']([^`"']{5,})[`"']\s*\}\s*</g;
+  let csm;
+  while ((csm = childStringRe.exec(after)) !== null) {
+    const raw = csm[1].trim();
+    if (raw.length > 0 && !looksLikeClasses(raw)) return cap(raw);
+  }
+
+  // 3) Dynamic variable children: >{variable}<
+  const dynChildRe = />\s*\{([a-zA-Z_][\w.]*)\}\s*</g;
+  let dm;
+  const dynNames: string[] = [];
+  while ((dm = dynChildRe.exec(after)) !== null) {
+    const varName = dm[1];
+    if (/^(className|style|key|ref|id|onClick|onChange|onSubmit|disabled|checked|value|type|src|href|alt)$/.test(varName)) continue;
+    dynNames.push(varName);
+  }
+  if (dynNames.length > 0) {
+    const meaningful = dynNames.find(n => /^(title|name|label|description|text|content|message|email|url|summary|body|comment|note|caption|heading|subtitle|placeholder|address|bio|detail)$/i.test(n) || n.includes('.'));
+    if (meaningful) return `(dynamic text: ${meaningful})`;
+    return `(dynamic text: ${dynNames[0]})`;
+  }
+
+  // 4) Broader dynamic children
+  const dynBroadRe = />\s*\{([^}]{3,40})\}\s*</g;
+  let db;
+  while ((db = dynBroadRe.exec(after)) !== null) {
+    const expr = db[1].trim();
+    if (/[a-zA-Z]/.test(expr) && !/className|style|onClick/i.test(expr)) return '(dynamic text)';
+  }
+
   return undefined;
 }
 
