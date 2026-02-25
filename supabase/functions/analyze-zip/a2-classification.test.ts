@@ -28,21 +28,12 @@ function classifyA2Finding(evidence: string, diagnosis: string = ''): A2Classifi
     return 'skip';
   }
 
-  // Extract focus-related class tokens
-  const focusClassTokens: string[] = evidence.match(/focus(?:-visible)?:(?:ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?|bg-\w+|text-\w+)/gi) || [];
-
   // Check for STRONG visible replacement → PASS
-  const hasStrongRing = focusClassTokens.some((t: string) => /focus(?:-visible)?:ring-[2-9]/i.test(t));
-  const hasBorder = focusClassTokens.some((t: string) => /focus(?:-visible)?:border(?!-0)/i.test(t));
-  const hasStrongShadow = focusClassTokens.some((t: string) => /focus(?:-visible)?:shadow-(?!none|sm\b)/i.test(t));
-  const hasOutline = focusClassTokens.some((t: string) => /focus(?:-visible)?:outline-(?!none)/i.test(t));
-
-  const hasStrongRingInDiag = /focus(?:-visible)?:ring-[2-9]|ring-offset-[2-9]/.test(combined);
-  const hasBorderInDiag = /focus(?:-visible)?:border-(?!0)/.test(combined);
-  const hasStrongShadowInDiag = /focus(?:-visible)?:shadow-(?!none|sm\b)/.test(combined);
-
-  const hasStrongReplacement = hasStrongRing || hasBorder || hasStrongShadow || hasOutline ||
-                                hasStrongRingInDiag || hasBorderInDiag || hasStrongShadowInDiag;
+  // Any focus:ring-* (not ring-0), focus:border-* (not border-0/none), focus:shadow-* (not none), focus:outline-* (not none)
+  const hasStrongReplacement = /focus(?:-visible)?:ring-(?!0\b)/.test(combined) ||
+                                /focus(?:-visible)?:border-(?!0\b|none)/.test(combined) ||
+                                /focus(?:-visible)?:shadow-(?!none)/.test(combined) ||
+                                /focus(?:-visible)?:outline-(?!none)/.test(combined);
 
   if (hasStrongReplacement) {
     return 'pass';
@@ -50,17 +41,9 @@ function classifyA2Finding(evidence: string, diagnosis: string = ''): A2Classifi
 
   // Check for WEAK/AMBIGUOUS focus styling → Potential (Borderline)
   // Includes: focus:bg-*, focus:text-*, focus:underline, focus:opacity-*, focus:font-*
-  const hasWeakFocusStyle = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
+  const hasWeakFocusStyling = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
 
-  const hasBgToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:bg-/i.test(t));
-  const hasTextToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:text-/i.test(t));
-  const hasRing1 = /(?:focus(?:-visible)?:)?ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]/.test(combined);
-  const hasMutedRingColor = /ring-(?:gray|slate|zinc)-(?:100|200)\b/.test(combined);
-  const hasShadowSmOnly = /focus(?:-visible)?:shadow-sm\b/.test(combined);
-
-  const hasAnyWeakReplacement = hasWeakFocusStyle || hasBgToken || hasTextToken || hasRing1 || hasMutedRingColor || hasShadowSmOnly;
-
-  if (hasAnyWeakReplacement) {
+  if (hasWeakFocusStyling) {
     return {
       isConfirmed: false,
       isPotential: true,
@@ -81,16 +64,10 @@ function classifyA2Finding(evidence: string, diagnosis: string = ''): A2Classifi
 // TEST CASES
 // ============================================================
 
-Deno.test("A2: ring-1 + gray-200 + ring-offset-0 → Potential (replacement exists, perceptibility unverifiable)", () => {
+Deno.test("A2: ring-1 + gray-200 + ring-offset-0 → PASS (focus:ring-1 is a valid replacement)", () => {
   const evidence = "focus:outline-none focus:ring-1 focus:ring-gray-200 ring-offset-0";
   const result = classifyA2Finding(evidence);
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isPotential, true, "Should be potential");
-    assertEquals(result.isConfirmed, false, "Should NOT be confirmed");
-    assertEquals(result.confidenceRange[0] >= 0.60, true, "Confidence min >= 60%");
-    assertEquals(result.confidenceRange[1] <= 0.75, true, "Confidence max <= 75%");
-  }
+  assertEquals(result, 'pass', "Should PASS — focus:ring-1 is a valid focus replacement");
 });
 
 Deno.test("A2: outline-none + ring-0 → Confirmed (no replacement)", () => {
@@ -130,24 +107,16 @@ Deno.test("A2: outline-none + focus:bg-accent → Potential (bg is valid replace
   }
 });
 
-Deno.test("A2: outline-none + focus:shadow-sm → Potential (subtle replacement)", () => {
+Deno.test("A2: outline-none + focus:shadow-sm → PASS (focus:shadow-sm is a valid replacement)", () => {
   const evidence = "focus:outline-none focus:shadow-sm";
   const result = classifyA2Finding(evidence);
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isPotential, true, "Shadow-sm should be potential");
-    assertEquals(result.isConfirmed, false, "Should NOT be confirmed");
-  }
+  assertEquals(result, 'pass', "focus:shadow-sm is a valid focus replacement → PASS");
 });
 
-Deno.test("A2: outline-none + ring-slate-200 → Potential (muted color)", () => {
+Deno.test("A2: outline-none + ring-slate-200 + focus:ring-1 → PASS (focus:ring-1 is valid)", () => {
   const evidence = "focus:outline-none focus:ring-1 ring-slate-200";
   const result = classifyA2Finding(evidence);
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isPotential, true, "Muted ring color should be potential");
-    assertEquals(result.isConfirmed, false, "Should NOT be confirmed");
-  }
+  assertEquals(result, 'pass', "focus:ring-1 is a valid replacement → PASS");
 });
 
 Deno.test("A2: no outline removal mentioned → SKIP", () => {
@@ -162,24 +131,16 @@ Deno.test("A2: outline-none + focus:shadow-md → PASS (strong shadow)", () => {
   assertEquals(result, 'pass', "Shadow-md should be a strong replacement (PASS)");
 });
 
-Deno.test("A2: focus:border-0 + ring-1 + ring-zinc-200 → Potential", () => {
+Deno.test("A2: focus:border-0 + ring-1 + ring-zinc-200 → PASS (focus:ring-1 is valid)", () => {
   const evidence = "focus:border-0 focus:ring-1 ring-zinc-200";
   const result = classifyA2Finding(evidence);
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isPotential, true, "border-0 + ring-1 + muted color should be potential");
-    assertEquals(result.isConfirmed, false, "Should NOT be confirmed");
-  }
+  assertEquals(result, 'pass', "focus:ring-1 is a valid replacement → PASS");
 });
 
-Deno.test("A2: outline-none + focus:ring-1 (no muted color) → Potential (ring-1 is subtle)", () => {
+Deno.test("A2: outline-none + focus:ring-1 (no muted color) → PASS (focus:ring-1 is valid)", () => {
   const evidence = "outline-none focus:ring-1 focus:ring-primary";
   const result = classifyA2Finding(evidence);
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isPotential, true, "ring-1 should be potential (subtle)");
-    assertEquals(result.isConfirmed, false, "Should NOT be confirmed — ring-1 is a valid replacement");
-  }
+  assertEquals(result, 'pass', "focus:ring-1 is a valid replacement → PASS");
 });
 
 Deno.test("A2: outline-none + focus-visible:border-primary → PASS (border replacement)", () => {
@@ -188,14 +149,10 @@ Deno.test("A2: outline-none + focus-visible:border-primary → PASS (border repl
   assertEquals(result, 'pass', "Border replacement should PASS");
 });
 
-Deno.test("A2: focus-visible:outline-none + focus-visible:ring-1 + focus-visible:ring-ring → Potential (ring-1 is subtle but valid replacement)", () => {
+Deno.test("A2: focus-visible:outline-none + focus-visible:ring-1 + focus-visible:ring-ring → PASS (ring-1 is valid)", () => {
   const evidence = "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
   const result = classifyA2Finding(evidence);
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isPotential, true, "Should be potential (ring-1 is subtle)");
-    assertEquals(result.isConfirmed, false, "Should NOT be confirmed — ring-1 is a valid replacement");
-  }
+  assertEquals(result, 'pass', "Should PASS — focus-visible:ring-1 is a valid replacement");
 });
 
 Deno.test("A2: focus-visible:outline-none + focus-visible:ring-2 + focus-visible:ring-ring + focus-visible:ring-offset-2 → PASS (strong replacement)", () => {
