@@ -2586,6 +2586,20 @@ Assess whether choice options are presented with meaningful visual/linguistic im
 }
 \`\`\`
 
+### E3 (Obscured or Restricted User Control) — LLM PERCEPTUAL:
+Assess whether the UI restricts or obscures user control (e.g., no visible cancel/back/close, forced progression, no opt-out).
+- Look for: missing close/dismiss buttons on modals, forms without cancel/back, forced consent checkboxes, multi-step flows without back navigation.
+- Use neutral language and do not infer intent.
+- E3 is ALWAYS "Potential" — NEVER "Confirmed". Confidence: 0.60–0.75.
+- Return structured e3Elements:
+\`\`\`json
+{
+  "ruleId": "E3", "ruleName": "Obscured or restricted user control", "category": "ethics",
+  "status": "potential", "isE3Aggregated": true,
+  "e3Elements": [{ "elementLabel": "...", "elementType": "dialog", "location": "Screenshot #1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.65 }]
+}
+\`\`\`
+
 Ethics rules to check:
 ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name} — ${r.diagnosis}`).join('\n')}
 
@@ -4338,12 +4352,60 @@ serve(async (req) => {
       }
     }
 
+    // ========== E3 POST-PROCESSING (Screenshot — LLM perceptual) ==========
+    const aggregatedE3UIList: any[] = [];
+    if (selectedRulesSet.has('E3')) {
+      const e3FromLLM = filteredOtherViolations.filter((v: any) => v.ruleId === 'E3');
+      filteredOtherViolations = filteredOtherViolations.filter((v: any) => v.ruleId !== 'E3');
+
+      if (e3FromLLM.length > 0) {
+        const aggregatedOne = e3FromLLM.find((v: any) => v.isE3Aggregated && v.e3Elements?.length > 0);
+        const e3Elements = aggregatedOne
+          ? (aggregatedOne.e3Elements || []).map((el: any) => ({
+              elementLabel: el.elementLabel || 'Control restriction',
+              elementType: el.elementType || 'unknown',
+              location: el.location || 'Screenshot',
+              subCheck: el.subCheck,
+              detection: el.detection || '',
+              evidence: el.evidence || '',
+              recommendedFix: el.recommendedFix || '',
+              confidence: Math.min(el.confidence || 0.60, 0.75),
+              evaluationMethod: 'llm_perceptual' as const,
+              deduplicationKey: el.deduplicationKey || `E3|${el.location || ''}|${el.elementLabel || ''}`,
+            }))
+          : e3FromLLM.map((v: any) => ({
+              elementLabel: v.evidence?.split('.')[0] || 'Control restriction',
+              elementType: 'unknown',
+              location: 'Screenshot',
+              detection: v.diagnosis || '',
+              evidence: v.evidence || '',
+              recommendedFix: v.contextualHint || '',
+              confidence: Math.min(v.confidence || 0.60, 0.75),
+              evaluationMethod: 'llm_perceptual' as const,
+              deduplicationKey: `E3|${v.evidence || 'unknown'}`,
+            }));
+
+        const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.75);
+        aggregatedE3UIList.push({
+          ruleId: 'E3', ruleName: 'Obscured or restricted user control', category: 'ethics',
+          status: 'potential', blocksConvergence: false,
+          inputType: 'screenshots', isE3Aggregated: true, e3Elements, evaluationMethod: 'llm_assisted',
+          diagnosis: `Control restriction issues: ${e3Elements.length} potential risk(s) detected via visual analysis.`,
+          contextualHint: 'Ensure users can easily dismiss, cancel, or opt out of actions.',
+          advisoryGuidance: 'Provide clear dismissal, cancellation, or opt-out mechanisms and ensure users can easily reverse or exit actions.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        });
+        console.log(`E3 aggregated (UI): ${e3FromLLM.length} finding(s) → ${e3Elements.length} element(s)`);
+      }
+    }
+
     // Combine all violations - A1 uses aggregated cards (max 2), A2 uses aggregated card
     const enhancedViolations = [
       ...filteredOtherViolations,
       ...aggregatedA1Violations,
       ...aggregatedE1UIList,
       ...aggregatedE2UIList,
+      ...aggregatedE3UIList,
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
       ...(aggregatedA3UI ? [aggregatedA3UI] : []),
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),

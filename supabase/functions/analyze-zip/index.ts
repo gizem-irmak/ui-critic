@@ -3240,6 +3240,53 @@ Look for patterns that may undermine user autonomy or informed consent:
 - If NO E2 issues found, do NOT include E2 in the violations array.
 - Each e2Element MUST cite evidence from the provided choice bundle (labels, style tokens — NOT file names).
 
+### E3 (Obscured or Restricted User Control) — HYBRID EVALUATION:
+**NOTE:** E3 uses pre-extracted control restriction evidence bundles appended as \`[E3_CONTROL_RESTRICTION_EVIDENCE]\`. Use ONLY the provided structural evidence to validate whether user control is meaningfully restricted or obscured.
+
+**CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
+- Do NOT use file names, component names, or test wording as evidence.
+- Do NOT infer malicious intent. Use neutral language ("control restriction risk", "dismissal mechanism may be missing").
+- Base conclusions ONLY on the extracted structural signals (missing close buttons, forced opt-ins, missing back navigation).
+- If evidence is insufficient to demonstrate meaningful control restriction, return NO E3 finding — do not guess.
+
+**EVALUATE (using ONLY the evidence bundle content):**
+- Missing dismissal: modals/dialogs without close/cancel buttons or escape handlers
+- Missing cancel path: forms with submit but no cancel/back/exit option
+- Forced opt-in: required checkboxes for marketing/consent with no opt-out alternative
+- Missing back navigation: multi-step flows without back/previous controls
+
+**CLASSIFICATION:**
+- E3 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
+- Confidence: 0.60–0.85 (cap at 0.85)
+
+**OUTPUT FOR E3 — STRUCTURED e3Elements:**
+\`\`\`json
+{
+  "ruleId": "E3",
+  "ruleName": "Obscured or restricted user control",
+  "category": "ethics",
+  "status": "potential",
+  "isE3Aggregated": true,
+  "e3Elements": [
+    {
+      "elementLabel": "Dialog component",
+      "elementType": "dialog",
+      "location": "src/components/Modal.tsx",
+      "subCheck": "E3.D1",
+      "detection": "Modal without visible dismissal mechanism",
+      "evidence": "<Dialog> found without close button, onClose handler, or escape key handler",
+      "recommendedFix": "Add a close/cancel button and ensure the dialog can be dismissed via escape key",
+      "confidence": 0.75
+    }
+  ],
+  "diagnosis": "Summary of control restriction issues...",
+  "contextualHint": "Short guidance...",
+  "confidence": 0.75
+}
+\`\`\`
+- If NO E3 issues found, do NOT include E3 in the violations array.
+- Each e3Element MUST cite evidence from the provided structural signals — NOT file names.
+
 Ethics rules to check:
 ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name}`).join('\n')}
 
@@ -3594,6 +3641,205 @@ function formatE2ChoiceBundleForPrompt(bundles: E2ChoiceBundle[]): string {
     if (b.nearbyMicrocopy.length > 0) lines.push(`  Nearby text: ${b.nearbyMicrocopy.join(' | ')}`);
   }
   lines.push('[/E2_CHOICE_BUNDLE]');
+  return lines.join('\n');
+}
+
+// ========== E3 DETERMINISTIC DETECTION (Obscured or Restricted User Control) ==========
+interface E3Finding {
+  filePath: string;
+  line: number;
+  subCheck: 'E3.D1' | 'E3.D2' | 'E3.D3' | 'E3.D4';
+  elementLabel: string;
+  elementType: string;
+  detection: string;
+  evidence: string;
+  recommendedFix: string;
+  confidence: number;
+  deduplicationKey: string;
+}
+
+const E3_CLOSE_PATTERNS = /\b(onClose|onDismiss|handleClose|handleDismiss|closeModal|dismissModal|setOpen\(false\)|setIsOpen\(false\)|setShow\(false\)|onOpenChange)\b/i;
+const E3_CLOSE_BUTTON_RE = /<(?:Button|button)\b[^>]*>([^<]*(?:close|cancel|dismiss|×|✕|X)[^<]*)<\/(?:Button|button)>/gi;
+const E3_ESCAPE_RE = /\b(Escape|escape|onEscapeKeyDown|closeOnEsc|closeOnOverlayClick|closeOnBackdropClick)\b/i;
+
+const E3_CANCEL_LABELS = /\b(cancel|back|close|go\s*back|return|previous|exit|skip|dismiss|decline|no\s*thanks)\b/i;
+const E3_MARKETING_LABELS = /\b(marketing|newsletter|promotions?|offers?|updates?|emails?|subscribe|notifications?|tracking|analytics|consent|opt.?in|communications?)\b/i;
+const E3_STEP_INDICATORS = /\b(step\s*\d|step\s*\w+\s*of\s*\d|\d\s*of\s*\d|\d\s*\/\s*\d|progress|stepper|wizard|multi.?step|onboarding)\b/i;
+const E3_BACK_BUTTON = /<(?:Button|button|a)\b[^>]*>([^<]*(?:back|previous|go\s*back|return|←|⬅|ArrowLeft)[^<]*)<\/(?:Button|button|a)>/gi;
+
+function detectE3ControlRestrictions(allFiles: Map<string, string>): E3Finding[] {
+  const findings: E3Finding[] = [];
+  const seen = new Set<string>();
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
+    if (/\.(test|spec)\./i.test(filePath)) continue;
+    if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
+
+    const lines = content.split('\n');
+
+    // E3.D1 — Modal/Dialog Without Dismissal
+    const dialogRe = /<(?:Dialog|dialog|Modal|AlertDialog|Drawer|Sheet)\b([^>]*)>/gi;
+    let dm;
+    while ((dm = dialogRe.exec(content)) !== null) {
+      const lineNum = content.substring(0, dm.index).split('\n').length;
+      // Check surrounding region (800 chars after dialog open)
+      const regionEnd = Math.min(content.length, dm.index + 800);
+      const region = content.slice(dm.index, regionEnd);
+
+      const hasCloseHandler = E3_CLOSE_PATTERNS.test(region);
+      const hasCloseButton = E3_CLOSE_BUTTON_RE.test(region);
+      E3_CLOSE_BUTTON_RE.lastIndex = 0;
+      const hasEscapeHandler = E3_ESCAPE_RE.test(region);
+      // DialogClose is a Radix pattern for close buttons
+      const hasDialogClose = /DialogClose|SheetClose|DrawerClose/i.test(region);
+
+      if (!hasCloseHandler && !hasCloseButton && !hasEscapeHandler && !hasDialogClose) {
+        const key = `${filePath}|E3|E3.D1|${lineNum}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          const tagName = dm[0].match(/<(\w+)/)?.[1] || 'Dialog';
+          findings.push({
+            filePath, line: lineNum, subCheck: 'E3.D1',
+            elementLabel: `${tagName} component`,
+            elementType: 'dialog',
+            detection: `Modal/dialog without visible dismissal mechanism`,
+            evidence: `<${tagName}> found without close button, onClose handler, escape key handler, or DialogClose component`,
+            recommendedFix: 'Add a close/cancel button and ensure the dialog can be dismissed via escape key or backdrop click',
+            confidence: 0.75,
+            deduplicationKey: key,
+          });
+        }
+      }
+    }
+
+    // E3.D2 — Form Without Cancel / Back Option
+    const formRe = /<form\b([^>]*)>/gi;
+    let fm;
+    while ((fm = formRe.exec(content)) !== null) {
+      const lineNum = content.substring(0, fm.index).split('\n').length;
+      const regionEnd = Math.min(content.length, fm.index + 1200);
+      const region = content.slice(fm.index, regionEnd);
+
+      // Count inputs to detect simple login forms
+      const inputCount = (region.match(/<(?:Input|input)\b/gi) || []).length;
+
+      // Check for submit buttons
+      const hasSubmit = /<(?:Button|button)\b[^>]*(?:type\s*=\s*["']submit["'])[^>]*>|<(?:Button|button)\b[^>]*>([^<]*(?:submit|continue|confirm|save|send|next|create|sign\s*up|register|log\s*in|sign\s*in)[^<]*)<\/(?:Button|button)>/gi.test(region);
+
+      // Check for cancel/back
+      const hasCancelButton = E3_CANCEL_LABELS.test(
+        (region.match(/<(?:Button|button|a)\b[^>]*>([^<]{1,40})<\/(?:Button|button|a)>/gi) || [])
+          .map(m => m.replace(/<[^>]*>/g, '')).join(' ')
+      );
+
+      // Exclude simple login forms (≤2 inputs + submit)
+      const isSimpleLogin = inputCount <= 2 && /\b(log\s*in|sign\s*in|login|password)\b/i.test(region);
+
+      if (hasSubmit && !hasCancelButton && !isSimpleLogin && inputCount >= 1) {
+        const key = `${filePath}|E3|E3.D2|${lineNum}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          findings.push({
+            filePath, line: lineNum, subCheck: 'E3.D2',
+            elementLabel: 'Form without cancel/back',
+            elementType: 'form',
+            detection: `Form has submit action but no cancel, back, or close option`,
+            evidence: `<form> with ${inputCount} input(s) and submit button but no cancel/back/close CTA in the same region`,
+            recommendedFix: 'Add a cancel or back button to allow users to exit the form without submitting',
+            confidence: 0.65,
+            deduplicationKey: key,
+          });
+        }
+      }
+    }
+
+    // E3.D3 — Forced Required Opt-In
+    const checkboxRe = /<(?:Input|input|Checkbox)\b([^>]*(?:type\s*=\s*["']checkbox["']|checkbox)[^>]*)(?:\/>|>)/gi;
+    let cm;
+    while ((cm = checkboxRe.exec(content)) !== null) {
+      const attrs = cm[1] || '';
+      const isRequired = /\brequired\b/i.test(attrs);
+      if (!isRequired) continue;
+
+      const lineNum = content.substring(0, cm.index).split('\n').length;
+      // Check nearby label text
+      const regionStart = Math.max(0, cm.index - 200);
+      const regionEnd = Math.min(content.length, cm.index + 300);
+      const region = content.slice(regionStart, regionEnd);
+
+      if (E3_MARKETING_LABELS.test(region)) {
+        const key = `${filePath}|E3|E3.D3|${lineNum}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          // Extract label text
+          const labelMatch = region.match(/<(?:Label|label)\b[^>]*>([^<]{3,80})<\/(?:Label|label)>/i);
+          const labelText = labelMatch ? labelMatch[1].replace(/\{[^}]*\}/g, '').trim() : 'marketing/consent checkbox';
+
+          findings.push({
+            filePath, line: lineNum, subCheck: 'E3.D3',
+            elementLabel: `Required opt-in: "${labelText}"`,
+            elementType: 'checkbox',
+            detection: `Required checkbox for marketing/consent with no opt-out alternative`,
+            evidence: `<input type="checkbox" required> with label relating to marketing/consent ("${labelText}") and no visible opt-out path`,
+            recommendedFix: 'Make the opt-in optional or provide a visible alternative that does not require consent to proceed',
+            confidence: 0.75,
+            deduplicationKey: key,
+          });
+        }
+      }
+    }
+
+    // E3.D4 — Multi-Step Flow Without Back
+    if (E3_STEP_INDICATORS.test(content)) {
+      // Find step indicator locations
+      const stepRe = new RegExp(E3_STEP_INDICATORS.source, 'gi');
+      let sm;
+      while ((sm = stepRe.exec(content)) !== null) {
+        const lineNum = content.substring(0, sm.index).split('\n').length;
+        // Check for back navigation in file
+        E3_BACK_BUTTON.lastIndex = 0;
+        const hasBackButton = E3_BACK_BUTTON.test(content);
+        const hasPrevStep = /\b(prevStep|previousStep|goBack|handleBack|onBack|stepBack|setStep\s*\(\s*(?:step|currentStep)\s*-\s*1\))\b/i.test(content);
+
+        if (!hasBackButton && !hasPrevStep) {
+          const key = `${filePath}|E3|E3.D4|${lineNum}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            findings.push({
+              filePath, line: lineNum, subCheck: 'E3.D4',
+              elementLabel: 'Multi-step flow without back navigation',
+              elementType: 'stepper',
+              detection: `Step indicator detected but no back/previous button or navigation control`,
+              evidence: `Step indicator pattern ("${sm[0]}") found without back button or previous-step handler in the same file`,
+              recommendedFix: 'Add a back/previous button to allow users to navigate to earlier steps',
+              confidence: 0.70,
+              deduplicationKey: key,
+            });
+          }
+          break; // One finding per file for D4
+        }
+      }
+    }
+  }
+
+  return findings.slice(0, 30);
+}
+
+function formatE3FindingsForPrompt(findings: E3Finding[]): string {
+  if (findings.length === 0) return '';
+  const lines = [
+    '[E3_CONTROL_RESTRICTION_EVIDENCE]',
+    'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence. Assess ONLY the structural control restriction signals below.',
+  ];
+  for (const f of findings) {
+    lines.push(`\n--- Location: ${f.filePath}:${f.line} (${f.subCheck}) ---`);
+    lines.push(`  Element: ${f.elementLabel} (${f.elementType})`);
+    lines.push(`  Detection: ${f.detection}`);
+    lines.push(`  Evidence: ${f.evidence}`);
+  }
+  lines.push('[/E3_CONTROL_RESTRICTION_EVIDENCE]');
   return lines.join('\n');
 }
 
@@ -4872,6 +5118,11 @@ serve(async (req) => {
     const e2ChoiceBundles = selectedRulesSet.has('E2') ? extractE2ChoiceBundle(allFiles) : [];
     const e2BundleText = formatE2ChoiceBundleForPrompt(e2ChoiceBundles);
 
+    // Extract E3 control restriction evidence (deterministic detection)
+    const e3Findings = selectedRulesSet.has('E3') ? detectE3ControlRestrictions(allFiles) : [];
+    const e3BundleText = formatE3FindingsForPrompt(e3Findings);
+    console.log(`E3 deterministic: ${e3Findings.length} candidate(s) found`);
+
     // Build analysis prompt
     const systemPrompt = buildCodeAnalysisPrompt(selectedRules);
 
@@ -4883,7 +5134,7 @@ serve(async (req) => {
         
 Perform the complete 3-pass analysis (Accessibility, Usability, Ethics) based on the code patterns and return findings in the specified JSON format.
 
-${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n' + u6BundleText : ''}${e1BundleText ? '\n\n' + e1BundleText : ''}${e2BundleText ? '\n\n' + e2BundleText : ''}`,
+${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n' + u6BundleText : ''}${e1BundleText ? '\n\n' + e1BundleText : ''}${e2BundleText ? '\n\n' + e2BundleText : ''}${e3BundleText ? '\n\n' + e3BundleText : ''}`,
       },
     ];
 
@@ -6442,7 +6693,84 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       }
     }
 
-    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...aggregatedU5List, ...aggregatedU6List, ...aggregatedE1List, ...aggregatedE2List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
+    // ========== E3 POST-PROCESSING (Obscured/Restricted User Control — HYBRID) ==========
+    const aggregatedE3List: any[] = [];
+    if (selectedRulesSet.has('E3')) {
+      // Start with deterministic findings
+      const deterministicE3 = e3Findings;
+
+      // Check for LLM-validated E3 findings
+      const e3FromLLM = aiViolations.filter((v: any) => v.ruleId === 'E3');
+      aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'E3');
+
+      // Merge: deterministic findings + LLM validations
+      const e3Elements: any[] = [];
+
+      // Add deterministic findings
+      for (const f of deterministicE3) {
+        let confidence = f.confidence;
+        // Check if LLM reinforced this finding
+        const llmReinforced = e3FromLLM.some((v: any) =>
+          v.e3Elements?.some((el: any) => el.subCheck === f.subCheck && el.location?.includes(f.filePath.split('/').pop() || ''))
+        );
+        if (llmReinforced) confidence = Math.min(confidence + 0.05, 0.85);
+
+        e3Elements.push({
+          elementLabel: f.elementLabel,
+          elementType: f.elementType,
+          location: f.filePath,
+          subCheck: f.subCheck,
+          detection: f.detection,
+          evidence: f.evidence,
+          recommendedFix: f.recommendedFix,
+          confidence: Math.min(confidence, 0.85),
+          evaluationMethod: llmReinforced ? 'hybrid_structural_llm' as const : 'deterministic_structural' as const,
+          deduplicationKey: f.deduplicationKey,
+        });
+      }
+
+      // Add LLM-only findings that weren't already covered by deterministic
+      if (e3FromLLM.length > 0) {
+        const aggregatedLLM = e3FromLLM.find((v: any) => v.isE3Aggregated && v.e3Elements?.length > 0);
+        if (aggregatedLLM) {
+          for (const el of (aggregatedLLM.e3Elements || [])) {
+            const alreadyCovered = e3Elements.some(e => e.subCheck === el.subCheck && e.location === el.location);
+            if (!alreadyCovered) {
+              e3Elements.push({
+                elementLabel: el.elementLabel || 'Control restriction',
+                elementType: el.elementType || 'unknown',
+                location: el.location || 'Unknown',
+                subCheck: el.subCheck,
+                detection: el.detection || '',
+                evidence: el.evidence || '',
+                recommendedFix: el.recommendedFix || '',
+                confidence: Math.min(el.confidence || 0.65, 0.85),
+                evaluationMethod: 'hybrid_structural_llm' as const,
+                deduplicationKey: el.deduplicationKey || `E3|${el.location || ''}|${el.elementLabel || ''}`,
+              });
+            }
+          }
+        }
+      }
+
+      if (e3Elements.length > 0) {
+        const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.85);
+        aggregatedE3List.push({
+          ruleId: 'E3', ruleName: 'Obscured or restricted user control', category: 'ethics',
+          status: 'potential', blocksConvergence: false,
+          inputType: 'zip', isE3Aggregated: true, e3Elements, evaluationMethod: 'hybrid_deterministic',
+          diagnosis: `Control restriction issues: ${e3Elements.length} potential risk(s) detected.`,
+          contextualHint: 'Ensure users can easily dismiss, cancel, or opt out of actions.',
+          advisoryGuidance: 'Provide clear dismissal, cancellation, or opt-out mechanisms and ensure users can easily reverse or exit actions.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        });
+        console.log(`E3 aggregated: ${deterministicE3.length} deterministic + ${e3FromLLM.length} LLM → ${e3Elements.length} element(s)`);
+      } else {
+        console.log('E3: No findings for control restrictions');
+      }
+    }
+
+    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...aggregatedU5List, ...aggregatedU6List, ...aggregatedE1List, ...aggregatedE2List, ...aggregatedE3List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
 
     console.log(`Code analysis complete: ${allViolations.length} violations found`);
 

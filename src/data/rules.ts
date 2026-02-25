@@ -263,10 +263,13 @@ export const rules: Rule[] = [
     method: 'HYBRID',
     supportedModalities: { zip: 'supported', github: 'supported', screenshot: 'limited' },
     deterministicSignals: [
-      'E3-D1: Cancel/dismiss/opt-out button with visually suppressed styling (text-xs, opacity-*, hidden, sr-only) compared to confirm/accept sibling',
+      'E3-D1: Modal/Dialog without visible dismissal (close/cancel button, onClose, escape handler)',
+      'E3-D2: Form without cancel/back option (single primary action, no exit path)',
+      'E3-D3: Forced required opt-in (required checkbox with marketing/consent label, no opt-out alternative)',
+      'E3-D4: Multi-step flow without back navigation (step indicators without back button)',
     ],
     llmFallbackConditions: [
-      'Complex UI patterns where control suppression is context-dependent',
+      'Deterministic signals weak or ambiguous — LLM validates structural evidence',
       'Screenshot modality (visual assessment of control visibility)',
     ],
   },
