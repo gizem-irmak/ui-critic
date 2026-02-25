@@ -40,24 +40,31 @@ function U4ElementItem({ element, compact = false }: {
           <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
             {element.detection && (
               <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Detection:</span>
-                <span className="font-mono text-xs">{element.detection}</span>
+                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Detection:</span>
+                <span>{element.detection}</span>
               </div>
             )}
 
             {element.evidence && (
               <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Evidence:</span>
-                <span className="font-mono text-xs">{element.evidence}</span>
+                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Evidence:</span>
+                <span>{element.evidence}</span>
               </div>
             )}
 
             {element.confidence != null && (
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Confidence:</span>
+                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Confidence:</span>
                 <span className="font-mono font-medium text-warning">
                   {Math.round(element.confidence * 100)}%
                 </span>
+              </div>
+            )}
+
+            {element.recommendedFix && (
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Fix:</span>
+                <span>{element.recommendedFix}</span>
               </div>
             )}
           </div>
@@ -91,7 +98,7 @@ export function U4AggregatedCard({ violation, compact = false }: U4AggregatedCar
     <Card className="border border-warning/30">
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
         <CardTitle className="flex items-center gap-2 flex-wrap text-base">
-          <span className="category-badge flex-shrink-0 text-xs bg-warning/10 text-warning border border-warning/20">
+          <span className="category-badge flex-shrink-0 text-xs category-usability">
             U4
           </span>
           <span className="font-bold text-base">Recognition-to-Recall Regression</span>
@@ -100,7 +107,7 @@ export function U4AggregatedCard({ violation, compact = false }: U4AggregatedCar
           </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          AI analysis flagged UI regions that may force users to recall information from memory instead of recognizing it from visible cues.
+          UI regions that may force users to recall information from memory instead of recognizing it from visible cues.
         </p>
       </CardHeader>
       <CardContent className="space-y-2">

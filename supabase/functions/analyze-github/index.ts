@@ -2288,7 +2288,17 @@ ${rules.usability.filter(r => selectedRulesSet.has(r.id) && r.id !== 'U1').map(r
 ### U4 (Recognition-to-Recall Regression) — LLM-ASSISTED EVALUATION:
 **NOTE:** U4 uses pre-extracted evidence bundles appended as \`[U4_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted UI text/evidence to decide if the UI forces recall rather than recognition.
 
-**EVALUATE (using ONLY the evidence bundle, not raw code):**
+**CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
+- Do NOT use file names, component names, page titles, variable names, or any "test" wording (e.g., "U4 Recall Test", "RecallPage") as evidence or reasoning.
+- Do NOT infer developer intent from naming conventions — a file named "RecallTest.tsx" does NOT mean the UI forces recall.
+- The evidence bundle header lines showing file paths are for LOCATION REFERENCE ONLY — they are NOT UI content and MUST NOT be cited as evidence of recall issues.
+- Base conclusions ONLY on user-visible UI content extracted in the bundle:
+  - CTA labels, headings, form field labels/placeholders, step indicators
+  - Presence/absence of summary/review content (use the boolean flags as hints, not proof)
+  - Whether CTAs explain what happens next
+- If the extracted evidence is insufficient to demonstrate a concrete recall burden, return NO U4 finding — do not guess.
+
+**EVALUATE (using ONLY the evidence bundle content, not file/component names):**
 - Missing summaries: Forms or multi-step flows that don't show what the user previously selected
 - Missing examples: Input fields without helper text, examples, or format hints
 - Generic CTAs without context: Buttons labeled "Continue", "Next", "Submit" without indicating what happens next
@@ -2298,7 +2308,7 @@ ${rules.usability.filter(r => selectedRulesSet.has(r.id) && r.id !== 'U1').map(r
 - U4 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
 - Confidence represents strength of observable cues, NOT model probability
 - Confidence cap: 0.80 maximum
-- Confidence range: 0.55–0.80
+- Confidence range: 0.60–0.80
 
 **OUTPUT FOR U4 — STRUCTURED u4Elements:**
 \`\`\`json
@@ -2310,12 +2320,12 @@ ${rules.usability.filter(r => selectedRulesSet.has(r.id) && r.id !== 'U1').map(r
   "isU4Aggregated": true,
   "u4Elements": [
     {
-      "elementLabel": "Registration form",
+      "elementLabel": "Checkout confirmation step",
       "elementType": "form",
-      "location": "src/components/RegisterForm.tsx",
-      "detection": "Form has 5 fields with generic placeholder text and no helper examples",
-      "evidence": "Fields: email (placeholder='Email'), password (no helper), name (placeholder='Name')",
-      "recommendedFix": "Add helper text with format examples (e.g., 'user@example.com')",
+      "location": "src/components/Checkout.tsx",
+      "detection": "Multi-step checkout with generic 'Confirm' CTA and no order summary visible",
+      "evidence": "CTAs: 'Confirm', 'Back' | Headings: 'Step 3 of 3 — Confirm Order' | No summary of selected items shown",
+      "recommendedFix": "Add an order summary showing previously selected items before the final confirmation",
       "confidence": 0.70
     }
   ],
@@ -2442,9 +2452,12 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
 
 function formatU4EvidenceBundleForPrompt(bundles: U4EvidenceBundle[]): string {
   if (bundles.length === 0) return '';
-  const lines = ['[U4_EVIDENCE_BUNDLE]'];
+  const lines = [
+    '[U4_EVIDENCE_BUNDLE]',
+    'IMPORTANT: The location references below are for traceability ONLY. Do NOT use file names, component names, or page titles as evidence of recall issues. Evaluate ONLY the extracted UI text (CTAs, headings, form fields, step indicators).',
+  ];
   for (const b of bundles) {
-    lines.push(`\n--- ${b.componentName} (${b.filePath}) ---`);
+    lines.push(`\n--- Location: ${b.filePath} ---`);
     if (b.ctaLabels.length > 0) lines.push(`  CTAs: ${b.ctaLabels.join(', ')}`);
     if (b.headings.length > 0) lines.push(`  Headings: ${b.headings.join(' | ')}`);
     if (b.formFields.length > 0) { for (const f of b.formFields) { let row = `  Field: ${f.label}`; if (f.placeholder) row += ` (placeholder: "${f.placeholder}")`; if (f.helperText) row += ` — helper: "${f.helperText}"`; lines.push(row); } }
