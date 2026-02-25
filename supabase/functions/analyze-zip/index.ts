@@ -5769,19 +5769,15 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       });
 
     // ========== A2 Focus Visibility — Fully Deterministic ==========
-    let aggregatedA2: any = null;
+    // Split into up to TWO violation objects: one confirmed, one potential (like U1)
+    const aggregatedA2List: any[] = [];
     if (selectedRulesSet.has('A2')) {
       const a2Findings = detectA2FocusVisibility(allFiles);
       if (a2Findings.length > 0) {
         const confirmedFindings = a2Findings.filter(f => f.classification === 'confirmed');
         const potentialFindings = a2Findings.filter(f => f.classification === 'potential');
-        const confirmedCount = confirmedFindings.length;
-        const heuristicCount = potentialFindings.length;
-        const hasConfirmedItems = confirmedCount > 0;
-        const overallConfidence = Math.max(...a2Findings.map(f => f.confidence));
-        const a2Status = hasConfirmedItems ? 'confirmed' : 'potential';
-        
-        const a2Elements = a2Findings.map(f => ({
+
+        const mapA2Elements = (list: typeof a2Findings) => list.map(f => ({
           elementLabel: f.sourceLabel,
           elementType: f.elementType,
           role: f.elementType,
@@ -5801,33 +5797,45 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           deduplicationKey: f.deduplicationKey,
           _a2Debug: f._a2Debug,
         }));
-        
-        const typeBreakdown = [
-          confirmedCount > 0 ? `${confirmedCount} confirmed violation(s)` : '',
-          heuristicCount > 0 ? `${heuristicCount} borderline risk(s)` : '',
-        ].filter(Boolean).join(' and ');
-        
-        aggregatedA2 = {
-          ruleId: 'A2',
-          ruleName: 'Poor focus visibility',
-          category: 'accessibility',
-          status: a2Status,
-          potentialSubtype: hasConfirmedItems ? undefined : 'borderline',
-          blocksConvergence: a2Status === 'confirmed',
-          inputType: 'zip',
-          isA2Aggregated: true,
-          a2Elements,
-          evaluationMethod: 'deterministic',
-          diagnosis: `Focus visibility issues detected: ${typeBreakdown}. Elements that remove the default focus outline without a visible focus indicator.`,
-          contextualHint: 'Interactive elements remove the default focus outline without a visible replacement indicator.',
-          correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline.',
-          confidence: Math.round(overallConfidence * 100) / 100,
-          ...(a2Status === 'potential' ? {
+
+        if (confirmedFindings.length > 0) {
+          aggregatedA2List.push({
+            ruleId: 'A2',
+            ruleName: 'Poor focus visibility',
+            category: 'accessibility',
+            status: 'confirmed',
+            blocksConvergence: true,
+            inputType: 'zip',
+            isA2Aggregated: true,
+            a2Elements: mapA2Elements(confirmedFindings),
+            evaluationMethod: 'deterministic',
+            diagnosis: `Focus visibility issues detected: ${confirmedFindings.length} confirmed violation(s). Elements remove the default focus outline without any visible replacement.`,
+            contextualHint: 'Interactive elements remove the default focus outline without a visible replacement indicator.',
+            correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline.',
+            confidence: Math.max(...confirmedFindings.map(f => f.confidence)),
+          });
+        }
+
+        if (potentialFindings.length > 0) {
+          aggregatedA2List.push({
+            ruleId: 'A2',
+            ruleName: 'Poor focus visibility',
+            category: 'accessibility',
+            status: 'potential',
+            potentialSubtype: 'borderline',
+            blocksConvergence: false,
+            inputType: 'zip',
+            isA2Aggregated: true,
+            a2Elements: mapA2Elements(potentialFindings),
+            evaluationMethod: 'deterministic',
+            diagnosis: `Focus visibility issues detected: ${potentialFindings.length} borderline risk(s). Elements have weak focus styling that may not be sufficiently visible.`,
+            contextualHint: 'Interactive elements have subtle focus indicators — verify visibility manually.',
             advisoryGuidance: 'Focus styling exists but may be too subtle. Consider using a clearer focus-visible indicator.',
-          } : {}),
-        };
-        
-        console.log(`A2 deterministic: ${a2Findings.length} findings → 1 result (${confirmedCount} confirmed, ${heuristicCount} borderline)`);
+            confidence: Math.max(...potentialFindings.map(f => f.confidence)),
+          });
+        }
+
+        console.log(`A2 deterministic: ${a2Findings.length} findings → ${aggregatedA2List.length} violation object(s) (${confirmedFindings.length} confirmed, ${potentialFindings.length} borderline)`);
       } else {
         console.log('A2 deterministic: No violations found');
       }
@@ -5835,7 +5843,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
     
     let aiViolations = [
       ...filteredOtherViolations,
-      ...(aggregatedA2 ? [aggregatedA2] : []),
+      ...aggregatedA2List,
     ];
 
     // ========== Deterministic U1 (primary action sub-checks) ==========
