@@ -3193,6 +3193,53 @@ Look for patterns that may undermine user autonomy or informed consent:
 - If NO E1 issues found, do NOT include E1 in the violations array.
 - Each e1Element MUST cite evidence from the provided evidence bundle (CTA labels, nearby text — NOT file names).
 
+### E2 (Imbalanced or Manipulative Choice Architecture) — LLM-ASSISTED EVALUATION:
+**NOTE:** E2 uses pre-extracted choice bundle data appended as \`[E2_CHOICE_BUNDLE]\`. Use ONLY the provided extracted CTA labels, style tokens, and nearby microcopy to assess choice balance.
+
+**CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
+- Do NOT use file names, component names, or test wording as evidence.
+- Do NOT infer malicious intent. Use neutral phrasing ("imbalance risk", "may nudge").
+- Do NOT flag normal primary/secondary button patterns unless the alternative is materially de-emphasized or obscured.
+- Base conclusions ONLY on the extracted labels, style tokens, prominence cues, and nearby microcopy.
+- If evidence is insufficient to demonstrate meaningful imbalance, return NO E2 finding — do not guess.
+
+**EVALUATE (using ONLY the choice bundle content):**
+- Visual dominance: one option has significantly larger size, bolder color, or higher contrast than alternatives
+- Obscured decline: opt-out/cancel/decline option uses muted color, smaller text, or link-style vs button
+- Asymmetric wording: accept uses action-oriented language while decline uses passive/negative framing
+- Pre-selection bias: default state nudges toward one option
+
+**CLASSIFICATION:**
+- E2 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
+- Confidence: 0.60–0.80 (cap at 0.80)
+
+**OUTPUT FOR E2 — STRUCTURED e2Elements:**
+\`\`\`json
+{
+  "ruleId": "E2",
+  "ruleName": "Imbalanced or manipulative choice architecture",
+  "category": "ethics",
+  "status": "potential",
+  "isE2Aggregated": true,
+  "e2Elements": [
+    {
+      "elementLabel": "Upgrade dialog choices",
+      "elementType": "button-group",
+      "location": "src/components/UpgradeModal.tsx",
+      "detection": "Primary option visually dominates: bg-blue-600 px-8 vs text-gray-400 text-sm link for decline",
+      "evidence": "Accept: 'Upgrade Now' (bg-blue-600, text-white, px-8, py-3, font-bold) | Decline: 'Maybe later' (text-gray-400, text-sm, underline)",
+      "recommendedFix": "Balance button prominence: make decline a visible secondary button with adequate contrast and size",
+      "confidence": 0.70
+    }
+  ],
+  "diagnosis": "Summary of choice imbalance issues...",
+  "contextualHint": "Short guidance...",
+  "confidence": 0.70
+}
+\`\`\`
+- If NO E2 issues found, do NOT include E2 in the violations array.
+- Each e2Element MUST cite evidence from the provided choice bundle (labels, style tokens — NOT file names).
+
 Ethics rules to check:
 ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name}`).join('\n')}
 
@@ -3460,6 +3507,94 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
   }
 
   return bundles.slice(0, 20);
+}
+
+// ========== E2 CHOICE BUNDLE EXTRACTION (Imbalanced Choice Architecture) ==========
+interface E2ChoiceBundle {
+  filePath: string;
+  ctaLabels: { label: string; styleTokens: string; position: number }[];
+  nearbyMicrocopy: string[];
+}
+
+function extractE2ChoiceBundle(allFiles: Map<string, string>): E2ChoiceBundle[] {
+  const bundles: E2ChoiceBundle[] = [];
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
+    if (/\.(test|spec)\./i.test(filePath)) continue;
+    if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
+
+    // Find containers with 2+ CTAs (buttons/links)
+    const btnRe = /<(?:Button|button|a)\b([^>]*)>([^<]{1,80})<\/(?:Button|button|a)>/gi;
+    const ctaMatches: { label: string; attrs: string; index: number }[] = [];
+    let bm;
+    while ((bm = btnRe.exec(content)) !== null) {
+      const label = bm[2].replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
+      if (!label || label.length < 2) continue;
+      ctaMatches.push({ label, attrs: bm[1] || '', index: bm.index });
+    }
+
+    // Group CTAs by proximity (within 500 chars of each other)
+    const groups: typeof ctaMatches[] = [];
+    let currentGroup: typeof ctaMatches = [];
+    for (const cta of ctaMatches) {
+      if (currentGroup.length === 0 || cta.index - currentGroup[currentGroup.length - 1].index < 500) {
+        currentGroup.push(cta);
+      } else {
+        if (currentGroup.length >= 2) groups.push([...currentGroup]);
+        currentGroup = [cta];
+      }
+    }
+    if (currentGroup.length >= 2) groups.push(currentGroup);
+
+    for (const group of groups) {
+      // Extract style tokens from className/variant
+      const ctaLabels = group.map((cta, idx) => {
+        const classMatch = cta.attrs.match(/className\s*=\s*(?:{`([^`]*)`}|"([^"]*)"|'([^']*)')/);
+        const variantMatch = cta.attrs.match(/variant\s*=\s*(?:"([^"]*)"|'([^']*)')/);
+        const sizeMatch = cta.attrs.match(/size\s*=\s*(?:"([^"]*)"|'([^']*)')/);
+        const tokens: string[] = [];
+        if (classMatch) tokens.push(classMatch[1] || classMatch[2] || classMatch[3] || '');
+        if (variantMatch) tokens.push(`variant=${variantMatch[1] || variantMatch[2]}`);
+        if (sizeMatch) tokens.push(`size=${sizeMatch[1] || sizeMatch[2]}`);
+        return { label: cta.label, styleTokens: tokens.join(' ').trim(), position: idx };
+      });
+
+      // Extract nearby microcopy
+      const regionStart = Math.max(0, group[0].index - 200);
+      const regionEnd = Math.min(content.length, group[group.length - 1].index + 300);
+      const region = content.slice(regionStart, regionEnd);
+      const nearbyMicrocopy: string[] = [];
+      const textRe = /<(?:p|span|h[1-6]|div)\b[^>]*>([^<]{3,100})<\/(?:p|span|h[1-6]|div)>/gi;
+      let tm;
+      while ((tm = textRe.exec(region)) !== null) {
+        const text = tm[1].replace(/\{[^}]*\}/g, '').trim();
+        if (text.length >= 3) nearbyMicrocopy.push(text);
+      }
+
+      bundles.push({ filePath, ctaLabels, nearbyMicrocopy: [...new Set(nearbyMicrocopy)].slice(0, 5) });
+    }
+  }
+
+  return bundles.slice(0, 20);
+}
+
+function formatE2ChoiceBundleForPrompt(bundles: E2ChoiceBundle[]): string {
+  if (bundles.length === 0) return '';
+  const lines = [
+    '[E2_CHOICE_BUNDLE]',
+    'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence. Evaluate ONLY the extracted CTA labels, style tokens, and nearby microcopy.',
+  ];
+  for (const b of bundles) {
+    lines.push(`\n--- Location: ${b.filePath} ---`);
+    for (const cta of b.ctaLabels) {
+      lines.push(`  CTA #${cta.position + 1}: "${cta.label}" | styles: ${cta.styleTokens || '(none detected)'}`);
+    }
+    if (b.nearbyMicrocopy.length > 0) lines.push(`  Nearby text: ${b.nearbyMicrocopy.join(' | ')}`);
+  }
+  lines.push('[/E2_CHOICE_BUNDLE]');
+  return lines.join('\n');
 }
 
 function formatE1EvidenceBundleForPrompt(bundles: E1EvidenceBundle[]): string {
@@ -4733,6 +4868,10 @@ serve(async (req) => {
     const e1EvidenceBundles = selectedRulesSet.has('E1') ? extractE1EvidenceBundle(allFiles) : [];
     const e1BundleText = formatE1EvidenceBundleForPrompt(e1EvidenceBundles);
 
+    // Extract E2 choice bundle (choice architecture balance)
+    const e2ChoiceBundles = selectedRulesSet.has('E2') ? extractE2ChoiceBundle(allFiles) : [];
+    const e2BundleText = formatE2ChoiceBundleForPrompt(e2ChoiceBundles);
+
     // Build analysis prompt
     const systemPrompt = buildCodeAnalysisPrompt(selectedRules);
 
@@ -4744,7 +4883,7 @@ serve(async (req) => {
         
 Perform the complete 3-pass analysis (Accessibility, Usability, Ethics) based on the code patterns and return findings in the specified JSON format.
 
-${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n' + u6BundleText : ''}${e1BundleText ? '\n\n' + e1BundleText : ''}`,
+${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n' + u6BundleText : ''}${e1BundleText ? '\n\n' + e1BundleText : ''}${e2BundleText ? '\n\n' + e2BundleText : ''}`,
       },
     ];
 
@@ -6241,7 +6380,69 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       }
     }
 
-    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...aggregatedU5List, ...aggregatedU6List, ...aggregatedE1List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
+    // ========== E2 POST-PROCESSING (Imbalanced Choice Architecture — LLM-assisted) ==========
+    const aggregatedE2List: any[] = [];
+    if (selectedRulesSet.has('E2')) {
+      const e2FromLLM = aiViolations.filter((v: any) => v.ruleId === 'E2');
+      aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'E2');
+
+      if (e2FromLLM.length > 0) {
+        const aggregatedOne = e2FromLLM.find((v: any) => v.isE2Aggregated && v.e2Elements?.length > 0);
+        if (aggregatedOne) {
+          const e2Elements = (aggregatedOne.e2Elements || []).map((el: any) => ({
+            elementLabel: el.elementLabel || 'Choice group',
+            elementType: el.elementType || 'button-group',
+            location: el.location || el.filePath || 'Unknown',
+            detection: el.detection || '',
+            evidence: el.evidence || '',
+            recommendedFix: el.recommendedFix || '',
+            confidence: Math.min(el.confidence || 0.65, 0.80),
+            evaluationMethod: 'llm_only_code' as const,
+            deduplicationKey: el.deduplicationKey || `E2|${el.location || ''}|${el.elementLabel || ''}`,
+          }));
+
+          const overallConfidence = Math.min(Math.max(...e2Elements.map((e: any) => e.confidence)), 0.80);
+          aggregatedE2List.push({
+            ruleId: 'E2', ruleName: 'Imbalanced or manipulative choice architecture', category: 'ethics',
+            status: 'potential', blocksConvergence: false,
+            inputType: 'zip', isE2Aggregated: true, e2Elements, evaluationMethod: 'llm_assisted',
+            diagnosis: aggregatedOne.diagnosis || `Choice architecture issues: ${e2Elements.length} potential risk(s) detected via AI analysis.`,
+            contextualHint: aggregatedOne.contextualHint || 'Present choices with equal visual weight and neutral defaults.',
+            advisoryGuidance: 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.',
+            confidence: Math.round(overallConfidence * 100) / 100,
+          });
+        } else {
+          // Fallback: wrap non-aggregated E2 findings
+          const e2Elements = e2FromLLM.map((v: any) => ({
+            elementLabel: v.evidence?.split('.')[0] || 'Choice group',
+            elementType: 'button-group',
+            location: v.evidence || 'Unknown',
+            detection: v.diagnosis || '',
+            evidence: v.evidence || '',
+            recommendedFix: v.contextualHint || '',
+            confidence: Math.min(v.confidence || 0.65, 0.80),
+            evaluationMethod: 'llm_only_code' as const,
+            deduplicationKey: `E2|${v.evidence || 'unknown'}`,
+          }));
+
+          const overallConfidence = Math.min(Math.max(...e2FromLLM.map((v: any) => v.confidence || 0.65)), 0.80);
+          aggregatedE2List.push({
+            ruleId: 'E2', ruleName: 'Imbalanced or manipulative choice architecture', category: 'ethics',
+            status: 'potential', blocksConvergence: false,
+            inputType: 'zip', isE2Aggregated: true, e2Elements, evaluationMethod: 'llm_assisted',
+            diagnosis: `Choice architecture issues: ${e2Elements.length} potential risk(s) detected via AI analysis.`,
+            contextualHint: 'Present choices with equal visual weight and neutral defaults.',
+            advisoryGuidance: 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.',
+            confidence: Math.round(overallConfidence * 100) / 100,
+          });
+        }
+        console.log(`E2 aggregated: ${e2FromLLM.length} LLM finding(s) → ${aggregatedE2List[0]?.e2Elements?.length || 0} element(s)`);
+      } else {
+        console.log('E2: No LLM findings for choice architecture');
+      }
+    }
+
+    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...aggregatedU5List, ...aggregatedU6List, ...aggregatedE1List, ...aggregatedE2List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
 
     console.log(`Code analysis complete: ${allViolations.length} violations found`);
 

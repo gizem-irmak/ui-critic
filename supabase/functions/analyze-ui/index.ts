@@ -2571,6 +2571,21 @@ Assess whether high-impact actions (delete, purchase, subscribe, reset) visibly 
 }
 \`\`\`
 
+### E2 (Imbalanced or Manipulative Choice Architecture) — LLM PERCEPTUAL:
+Assess whether choice options are presented with meaningful visual/linguistic imbalance that may nudge users.
+- Look for: button size/contrast/placement imbalance, obscured decline/cancel, asymmetric wording (action vs passive), pre-selected defaults.
+- Do NOT flag normal primary/secondary patterns unless the alternative is materially de-emphasized or obscured.
+- Do NOT infer malicious intent. Use neutral phrasing ("imbalance risk", "may nudge").
+- E2 is ALWAYS "Potential" — NEVER "Confirmed". Confidence: 0.60–0.80.
+- Return structured e2Elements:
+\`\`\`json
+{
+  "ruleId": "E2", "ruleName": "Imbalanced or manipulative choice architecture", "category": "ethics",
+  "status": "potential", "isE2Aggregated": true,
+  "e2Elements": [{ "elementLabel": "...", "elementType": "button-group", "location": "Screenshot #1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.70 }]
+}
+\`\`\`
+
 Ethics rules to check:
 ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name} — ${r.diagnosis}`).join('\n')}
 
@@ -4277,11 +4292,58 @@ serve(async (req) => {
       }
     }
 
+    // ========== E2 POST-PROCESSING (Screenshot — LLM perceptual) ==========
+    const aggregatedE2UIList: any[] = [];
+    if (selectedRulesSet.has('E2')) {
+      const e2FromLLM = filteredOtherViolations.filter((v: any) => v.ruleId === 'E2');
+      filteredOtherViolations = filteredOtherViolations.filter((v: any) => v.ruleId !== 'E2');
+
+      if (e2FromLLM.length > 0) {
+        const aggregatedOne = e2FromLLM.find((v: any) => v.isE2Aggregated && v.e2Elements?.length > 0);
+        const e2Elements = aggregatedOne
+          ? (aggregatedOne.e2Elements || []).map((el: any) => ({
+              elementLabel: el.elementLabel || 'Choice group',
+              elementType: el.elementType || 'button-group',
+              location: el.location || 'Screenshot',
+              detection: el.detection || '',
+              evidence: el.evidence || '',
+              recommendedFix: el.recommendedFix || '',
+              confidence: Math.min(el.confidence || 0.65, 0.80),
+              evaluationMethod: 'llm_perceptual' as const,
+              deduplicationKey: el.deduplicationKey || `E2|${el.location || ''}|${el.elementLabel || ''}`,
+            }))
+          : e2FromLLM.map((v: any) => ({
+              elementLabel: v.evidence?.split('.')[0] || 'Choice group',
+              elementType: 'button-group',
+              location: 'Screenshot',
+              detection: v.diagnosis || '',
+              evidence: v.evidence || '',
+              recommendedFix: v.contextualHint || '',
+              confidence: Math.min(v.confidence || 0.65, 0.80),
+              evaluationMethod: 'llm_perceptual' as const,
+              deduplicationKey: `E2|${v.evidence || 'unknown'}`,
+            }));
+
+        const overallConfidence = Math.min(Math.max(...e2Elements.map((e: any) => e.confidence)), 0.80);
+        aggregatedE2UIList.push({
+          ruleId: 'E2', ruleName: 'Imbalanced or manipulative choice architecture', category: 'ethics',
+          status: 'potential', blocksConvergence: false,
+          inputType: 'screenshots', isE2Aggregated: true, e2Elements, evaluationMethod: 'llm_assisted',
+          diagnosis: `Choice architecture issues: ${e2Elements.length} potential risk(s) detected via visual analysis.`,
+          contextualHint: 'Present choices with equal visual weight and neutral defaults.',
+          advisoryGuidance: 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        });
+        console.log(`E2 aggregated (UI): ${e2FromLLM.length} finding(s) → ${e2Elements.length} element(s)`);
+      }
+    }
+
     // Combine all violations - A1 uses aggregated cards (max 2), A2 uses aggregated card
     const enhancedViolations = [
       ...filteredOtherViolations,
       ...aggregatedA1Violations,
       ...aggregatedE1UIList,
+      ...aggregatedE2UIList,
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
       ...(aggregatedA3UI ? [aggregatedA3UI] : []),
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),
