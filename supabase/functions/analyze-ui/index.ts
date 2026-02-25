@@ -2554,9 +2554,22 @@ Consider:
 
 ## PASS 3 — Ethics
 Reason about patterns that may undermine user autonomy or informed consent:
-- High-impact actions without confirmation or consequence disclosure (E1)
 - Imbalanced choice architecture: visual weight, pre-selection, or ordering that nudges users (E2)
 - Obscured user controls: opt-out, cancel, dismiss, or unsubscribe options that are suppressed (E3)
+
+### E1 (Insufficient Transparency in High-Impact Actions) — LLM PERCEPTUAL:
+Assess whether high-impact actions (delete, purchase, subscribe, reset) visibly disclose consequences, costs, or data implications.
+- Look for: visible price/billing near purchase buttons, irreversibility warnings near destructive actions, confirmation steps, data/consent explanations.
+- E1 is ALWAYS "Potential" — NEVER "Confirmed". Confidence: 0.60–0.80.
+- Do NOT infer malicious intent. Use neutral language.
+- Return structured e1Elements:
+\`\`\`json
+{
+  "ruleId": "E1", "ruleName": "Insufficient transparency in high-impact actions", "category": "ethics",
+  "status": "potential", "isE1Aggregated": true,
+  "e1Elements": [{ "elementLabel": "...", "elementType": "button", "location": "Screenshot #1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.70 }]
+}
+\`\`\`
 
 Ethics rules to check:
 ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name} — ${r.diagnosis}`).join('\n')}
@@ -4218,10 +4231,57 @@ serve(async (req) => {
       };
     }
     
+    // ========== E1 POST-PROCESSING (Screenshot — LLM perceptual) ==========
+    const aggregatedE1UIList: any[] = [];
+    if (selectedRulesSet.has('E1')) {
+      const e1FromLLM = filteredOtherViolations.filter((v: any) => v.ruleId === 'E1');
+      filteredOtherViolations = filteredOtherViolations.filter((v: any) => v.ruleId !== 'E1');
+
+      if (e1FromLLM.length > 0) {
+        const aggregatedOne = e1FromLLM.find((v: any) => v.isE1Aggregated && v.e1Elements?.length > 0);
+        const e1Elements = aggregatedOne
+          ? (aggregatedOne.e1Elements || []).map((el: any) => ({
+              elementLabel: el.elementLabel || 'High-impact action',
+              elementType: el.elementType || 'action',
+              location: el.location || 'Screenshot',
+              detection: el.detection || '',
+              evidence: el.evidence || '',
+              recommendedFix: el.recommendedFix || '',
+              confidence: Math.min(el.confidence || 0.65, 0.80),
+              evaluationMethod: 'llm_perceptual' as const,
+              deduplicationKey: el.deduplicationKey || `E1|${el.location || ''}|${el.elementLabel || ''}`,
+            }))
+          : e1FromLLM.map((v: any) => ({
+              elementLabel: v.evidence?.split('.')[0] || 'High-impact action',
+              elementType: 'action',
+              location: 'Screenshot',
+              detection: v.diagnosis || '',
+              evidence: v.evidence || '',
+              recommendedFix: v.contextualHint || '',
+              confidence: Math.min(v.confidence || 0.65, 0.80),
+              evaluationMethod: 'llm_perceptual' as const,
+              deduplicationKey: `E1|${v.evidence || 'unknown'}`,
+            }));
+
+        const overallConfidence = Math.min(Math.max(...e1Elements.map((e: any) => e.confidence)), 0.80);
+        aggregatedE1UIList.push({
+          ruleId: 'E1', ruleName: 'Insufficient transparency in high-impact actions', category: 'ethics',
+          status: 'potential', blocksConvergence: false,
+          inputType: 'screenshots', isE1Aggregated: true, e1Elements, evaluationMethod: 'llm_assisted',
+          diagnosis: `Transparency issues: ${e1Elements.length} potential risk(s) detected via visual analysis.`,
+          contextualHint: 'Ensure high-impact actions disclose consequences, costs, or data implications.',
+          advisoryGuidance: 'Add confirmation steps with clear consequence disclosure for irreversible or high-impact actions.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        });
+        console.log(`E1 aggregated (UI): ${e1FromLLM.length} finding(s) → ${e1Elements.length} element(s)`);
+      }
+    }
+
     // Combine all violations - A1 uses aggregated cards (max 2), A2 uses aggregated card
     const enhancedViolations = [
       ...filteredOtherViolations,
       ...aggregatedA1Violations,
+      ...aggregatedE1UIList,
       ...(aggregatedA2UI ? [aggregatedA2UI] : []),
       ...(aggregatedA3UI ? [aggregatedA3UI] : []),
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),

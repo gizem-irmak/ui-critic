@@ -242,15 +242,8 @@ export const rules: Rule[] = [
     name: 'Insufficient transparency in high-impact actions',
     diagnosis: 'High-impact actions (delete, purchase, subscribe, share data) lack adequate disclosure, confirmation, or consequence explanation.',
     correctivePrompt: 'Add confirmation steps with clear consequence disclosure for irreversible or high-impact actions. Ensure users understand what will happen before committing.',
-    method: 'HYBRID',
-    supportedModalities: { zip: 'supported', github: 'supported', screenshot: 'limited' },
-    deterministicSignals: [
-      'E1-D1: onClick handler with delete/remove/destroy action without confirmation dialog (AlertDialog, confirm(), modal)',
-    ],
-    llmFallbackConditions: [
-      'Complex action flows where confirmation may exist in parent component or utility function',
-      'Screenshot modality (visual assessment of destructive action flows)',
-    ],
+    method: 'LLM_ASSISTED',
+    supportedModalities: { zip: 'supported', github: 'supported', screenshot: 'supported' },
   },
   {
     id: 'E2',

@@ -230,6 +230,12 @@ export interface Violation {
   // ============================================================
   isU6Aggregated?: boolean;
   u6Elements?: U6ElementSubItem[];
+  
+  // ============================================================
+  // E1 AGGREGATED ELEMENT REPORTING (Insufficient Transparency)
+  // ============================================================
+  isE1Aggregated?: boolean;
+  e1Elements?: E1ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -532,6 +538,19 @@ export interface U6ElementSubItem {
   location: string;       // file path
   detection?: string;     // Summary of what was detected
   evidence?: string;      // Specific evidence citations from the bundle
+  recommendedFix?: string; // Actionable fix suggestion
+  confidence: number;     // 0.60–0.80
+  evaluationMethod?: 'llm_only_code' | 'llm_perceptual';
+  deduplicationKey: string;
+}
+
+// E1 Element sub-item for aggregated transparency reporting
+export interface E1ElementSubItem {
+  elementLabel: string;   // e.g., '"Delete Account" action', '"Subscribe" button'
+  elementType?: string;   // button, link, form, etc.
+  location: string;       // file path
+  detection?: string;     // Summary of what was detected (missing disclosure)
+  evidence?: string;      // Specific evidence citations
   recommendedFix?: string; // Actionable fix suggestion
   confidence: number;     // 0.60–0.80
   evaluationMethod?: 'llm_only_code' | 'llm_perceptual';
