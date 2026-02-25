@@ -341,6 +341,8 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
     // U1.2: Check action groups for competing primaries
+    // Collect labels from groups that trigger U1.2 so we can suppress U1.3 for those labels
+    const u12SuppressedLabels = new Set<string>();
     if (buttonImpl) {
       const actionGroups = extractActionGroups(content, buttonLocalNames);
       for (const group of actionGroups) {
@@ -380,16 +382,22 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
               advisoryGuidance: 'Visually distinguish the primary action and demote secondary actions to outline/ghost/link variants.',
               deduplicationKey: `U1.2|${filePath}|${group.containerType}`,
             });
+            // Suppress U1.3 for all button labels within this U1.2 group
+            for (const cta of ctas) {
+              u12SuppressedLabels.add(cta.label.trim().toLowerCase());
+            }
           }
         }
       }
     }
 
-    // U1.3: Generic CTA labels
+    // U1.3: Generic CTA labels (suppressed if label already covered by U1.2 in same file)
     const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
     for (const btn of allButtons) {
       const labelLower = btn.label.trim().toLowerCase();
       if (GENERIC_LABELS.has(labelLower)) {
+        // Skip if this label was part of a U1.2 competing-CTAs group in this file
+        if (u12SuppressedLabels.has(labelLower)) continue;
         const dedupeKey = `U1.3|${filePath}|${labelLower}`;
         if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
         findings.push({
