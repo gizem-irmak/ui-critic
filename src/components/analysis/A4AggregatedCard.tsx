@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import type { Violation, A4ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { LocationBadge } from './LocationBadge';
 
 interface A4AggregatedCardProps {
   violation: Violation;
@@ -37,28 +38,19 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <div className={cn(
-        'rounded-lg border space-y-2',
+        'rounded-lg border space-y-0',
         isConfirmed
           ? 'bg-destructive/5 border-destructive/20'
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
         <CollapsibleTrigger className="w-full">
-          <div className="flex items-start justify-between gap-2 cursor-pointer">
-            <div className="flex items-center gap-2 flex-wrap text-left">
-              <span className={cn('font-medium', compact ? 'text-sm' : '')}>
-                {displayLabel}
-              </span>
-              {element.elementType && (
-                <span className={cn(
-                  'text-muted-foreground italic truncate max-w-48',
-                  compact ? 'text-xs' : 'text-sm'
-                )}>
-                  {element.elementType}
-                </span>
-              )}
-            </div>
+          <div className="flex items-center justify-between gap-2 cursor-pointer">
+            <span className={cn('font-medium text-left', compact ? 'text-sm' : '')}>
+              {displayLabel}
+            </span>
             <div className="flex items-center gap-2 flex-shrink-0">
+              <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
@@ -68,20 +60,8 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
 
-        {/* Location */}
-        <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-          <span className="font-medium">📍 </span>
-          {element.location}
-        </div>
-
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Element */}
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20">Element:</span>
-              <span className="font-mono">{displayLabel}{element.elementType ? ` (${element.elementType})` : ''}</span>
-            </div>
-
+          <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
             {/* Detection */}
             {element.detection && (
               <div className="flex items-start gap-2">

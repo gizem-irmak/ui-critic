@@ -1,4 +1,5 @@
 import { AlertTriangle, AlertCircle, ShieldCheck, Info } from 'lucide-react';
+import { LocationBadge } from './LocationBadge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -47,8 +48,8 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
   
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className={cn(
-        'rounded-lg border space-y-2',
+       <div className={cn(
+        'rounded-lg border space-y-0',
         isConfirmed 
           ? 'bg-destructive/5 border-destructive/20' 
           : 'bg-warning/5 border-warning/20',
@@ -56,13 +57,12 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
       )}>
         {/* Header row */}
         <CollapsibleTrigger className="w-full">
-            <div className="flex items-start justify-between gap-2 cursor-pointer">
-              <div className="flex items-center gap-2 flex-wrap text-left">
-                <span className={cn('font-medium', compact ? 'text-sm' : '')}>
-                  {cleanLabel}
-                </span>
-              </div>
+            <div className="flex items-center justify-between gap-2 cursor-pointer">
+              <span className={cn('font-medium text-left', compact ? 'text-sm' : '')}>
+                {cleanLabel}
+              </span>
             <div className="flex items-center gap-2 flex-shrink-0">
+              <LocationBadge filePath={cleanLocation} compact={compact} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
@@ -71,12 +71,6 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
             </div>
           </div>
         </CollapsibleTrigger>
-        
-        {/* Location (always visible) — clean file path only */}
-        <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-          <span className="font-medium">📍 </span>
-          {cleanLocation}
-        </div>
         
         {/* Expandable details */}
         <CollapsibleContent>
