@@ -3329,17 +3329,19 @@ interface U3Finding {
   advisoryGuidance: string;
   textPreview?: string;
   deduplicationKey: string;
+  truncationType?: string;
+  textLength?: number | 'dynamic';
+  triggerReason?: string;
+  expandDetected?: boolean;
+  elementTag?: string;
 }
 
 function extractU3TextPreview(content: string, pos: number): string | undefined {
   const after = content.slice(pos, Math.min(content.length, pos + 800));
-
   const cap = (s: string): string => s.length > 120 ? s.slice(0, 117) + '…' : s;
-
   const looksLikeClasses = (s: string): boolean =>
     /^[\w\s\-/[\]:!.#]+$/.test(s) && /\b(text-|bg-|flex|grid|p-|m-|w-|h-|rounded|border|font-|block|inline|hidden|overflow|relative|absolute|max-|min-)/.test(s);
 
-  // 1) Visible JSX text nodes between > and <
   const textParts: string[] = [];
   const jsxTextRe = />([^<>{]+)</g;
   let tm;
@@ -3355,7 +3357,6 @@ function extractU3TextPreview(content: string, pos: number): string | undefined 
     if (joined.length > 0) return cap(joined);
   }
 
-  // 2) String literal children: >{`text`}< or >{"text"}<
   const childStringRe = />\s*\{\s*[`"']([^`"']{5,})[`"']\s*\}\s*</g;
   let csm;
   while ((csm = childStringRe.exec(after)) !== null) {
@@ -3363,7 +3364,6 @@ function extractU3TextPreview(content: string, pos: number): string | undefined 
     if (raw.length > 0 && !looksLikeClasses(raw)) return cap(raw);
   }
 
-  // 3) Dynamic variable children: >{variable}<
   const dynChildRe = />\s*\{([a-zA-Z_][\w.]*)\}\s*</g;
   let dm;
   const dynNames: string[] = [];
@@ -3378,15 +3378,45 @@ function extractU3TextPreview(content: string, pos: number): string | undefined 
     return `(dynamic text: ${dynNames[0]})`;
   }
 
-  // 4) Broader dynamic children
   const dynBroadRe = />\s*\{([^}]{3,40})\}\s*</g;
   let db;
   while ((db = dynBroadRe.exec(after)) !== null) {
     const expr = db[1].trim();
     if (/[a-zA-Z]/.test(expr) && !/className|style|onClick/i.test(expr)) return '(dynamic text)';
   }
-
   return undefined;
+}
+
+function u3IsDynamic(preview: string | undefined): boolean {
+  if (!preview) return false;
+  return preview.startsWith('(dynamic text');
+}
+
+function u3StaticTextLength(preview: string | undefined): number {
+  if (!preview) return -1;
+  if (u3IsDynamic(preview)) return -1;
+  return preview.replace(/…$/, '').length;
+}
+
+function u3HasExpandMechanism(content: string, pos: number, windowLines: number): boolean {
+  const lines = content.split('\n');
+  const currentLine = content.slice(0, pos).split('\n').length - 1;
+  const startLine = Math.max(0, currentLine - windowLines);
+  const endLine = Math.min(lines.length - 1, currentLine + windowLines);
+  const window = lines.slice(startLine, endLine + 1).join('\n');
+  return /show\s*more|see\s*more|see\s*all|view\s*more|expand|read\s*more|collapse/i.test(window) ||
+    /\b(expanded|setExpanded|isOpen|setIsOpen|isExpanded|setOpen|toggleOpen|toggleExpand)\b/.test(window) ||
+    /title\s*=|<Tooltip|data-tooltip|aria-describedby/i.test(window);
+}
+
+function u3HasWideContainer(context: string): boolean {
+  if (/\bw-full\b/.test(context) && !/\bmax-w-/.test(context)) return true;
+  if (/\bflex-1\b/.test(context) && !/\bmax-w-/.test(context) && !/\bw-\d+\b/.test(context)) return true;
+  return false;
+}
+
+function u3HasWidthConstraint(context: string): boolean {
+  return /\bw-\d+\b/.test(context) || /\bmax-w-\w+\b/.test(context);
 }
 
 function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[] {
@@ -3404,7 +3434,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
     // --- U3.D1: Line clamp / ellipsis truncation without expand ---
     const truncationPatterns = [
-      { re: /\bline-clamp-[1-3]\b/g, label: 'line-clamp' },
+      { re: /\bline-clamp-[1-6]\b/g, label: 'line-clamp' },
       { re: /\btruncate\b/g, label: 'truncate' },
       { re: /\btext-ellipsis\b/g, label: 'text-ellipsis' },
     ];
@@ -3414,24 +3444,52 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       while ((m = re.exec(content)) !== null) {
         const pos = m.index;
         const lineNumber = content.slice(0, pos).split('\n').length;
-        const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300)).toLowerCase();
-        const hasExpand = /show\s*more|expand|read\s*more|see\s*all|view\s*more|toggle|title\s*=|tooltip/i.test(context);
-        if (hasExpand) continue;
+        const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
+
         if (/overflow-(?:auto|y-auto|x-auto|scroll)\b/.test(context)) continue;
+
+        const textPreview = extractU3TextPreview(content, pos);
+        const isDynamic = u3IsDynamic(textPreview);
+        const staticLen = u3StaticTextLength(textPreview);
+
+        if (!isDynamic && staticLen >= 0 && staticLen <= 12) continue;
+        if (!isDynamic && staticLen >= 0 && staticLen <= 30 && u3HasWideContainer(context)) continue;
+        if (u3HasExpandMechanism(content, pos, 20)) continue;
+
+        let confidence = 0.70;
+        let triggerReason = '';
+        if (isDynamic) {
+          confidence = 0.75;
+          triggerReason = 'Dynamic content with truncation class';
+        } else if (staticLen >= 20) {
+          confidence = 0.72;
+          triggerReason = `Static text (${staticLen} chars) may exceed container`;
+        } else if (u3HasWidthConstraint(context)) {
+          confidence = 0.72;
+          triggerReason = 'Width constraint + truncation on text';
+        } else {
+          triggerReason = 'Truncation class on content without expand mechanism';
+        }
 
         const dedupeKey = `U3.D1|${filePath}|${lineNumber}`;
         if (seenKeys.has(dedupeKey)) continue;
         seenKeys.add(dedupeKey);
 
+        const tagMatch = context.slice(0, 200).match(/<([a-zA-Z][\w.]*)\s/);
+        const elementTag = tagMatch ? tagMatch[1] : undefined;
+
         findings.push({
           subCheck: 'U3.D1', subCheckLabel: 'Line clamp / ellipsis truncation', classification: 'potential',
           elementLabel: `Truncated text (${label})`, elementType: 'text', filePath,
           detection: `${m[0]} without expand mechanism`,
-          evidence: `${m[0]} at ${fileName}:${lineNumber} — no "Show more", toggle, or title tooltip found nearby`,
+          evidence: `${m[0]} at ${fileName}:${lineNumber} — no expand/tooltip found nearby`,
           explanation: `Text is truncated using ${label} without a visible mechanism to reveal full content.`,
-          confidence: 0.70, textPreview: extractU3TextPreview(content, pos),
+          confidence, textPreview,
           advisoryGuidance: 'Ensure truncated content has an accessible expand mechanism.',
           deduplicationKey: dedupeKey,
+          truncationType: label,
+          textLength: isDynamic ? 'dynamic' : (staticLen >= 0 ? staticLen : undefined),
+          triggerReason, expandDetected: false, elementTag,
         });
       }
     }
@@ -3443,19 +3501,33 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       const pos = nwm.index;
       const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
       if (!/overflow-hidden\b/.test(context)) continue;
-      if (/show\s*more|expand|read\s*more|title\s*=|tooltip/i.test(context)) continue;
+
+      const textPreview = extractU3TextPreview(content, pos);
+      const isDynamic = u3IsDynamic(textPreview);
+      const staticLen = u3StaticTextLength(textPreview);
+
+      if (!isDynamic && staticLen >= 0 && staticLen <= 12) continue;
+      if (!isDynamic && staticLen >= 0 && staticLen <= 30 && u3HasWideContainer(context)) continue;
+      if (u3HasExpandMechanism(content, pos, 20)) continue;
+
       const lineNumber = content.slice(0, pos).split('\n').length;
       const dedupeKey = `U3.D1|${filePath}|${lineNumber}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
+
+      const triggerReason = isDynamic ? 'Dynamic content with nowrap + overflow-hidden' : `Text (${staticLen} chars) with nowrap + overflow-hidden`;
+
       findings.push({
         subCheck: 'U3.D1', subCheckLabel: 'Line clamp / ellipsis truncation', classification: 'potential',
         elementLabel: 'Truncated text (nowrap + overflow)', elementType: 'text', filePath,
         detection: 'whitespace-nowrap + overflow-hidden without expand mechanism',
         evidence: `whitespace-nowrap + overflow-hidden at ${fileName}:${lineNumber}`,
         explanation: 'Text is forced to a single line with overflow hidden, potentially clipping important content.',
-        confidence: 0.70, textPreview: extractU3TextPreview(content, pos),
+        confidence: 0.70, textPreview,
         advisoryGuidance: 'Add a title attribute or expand mechanism.', deduplicationKey: dedupeKey,
+        truncationType: 'nowrap',
+        textLength: isDynamic ? 'dynamic' : (staticLen >= 0 ? staticLen : undefined),
+        triggerReason, expandDetected: false,
       });
     }
 
@@ -3469,7 +3541,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (/overflow-(?:auto|scroll|y-auto|y-scroll)\b/.test(context)) continue;
       const hasTextContent = /<p\b|<span\b|<div\b[^>]*>[^<]{20,}|children|text|description|content|message/i.test(context);
       if (!hasTextContent) continue;
-      if (/show\s*more|expand|read\s*more|see\s*all|toggle/i.test(context)) continue;
+      if (u3HasExpandMechanism(content, pos, 20)) continue;
 
       const lineNumber = content.slice(0, pos).split('\n').length;
       const dedupeKey = `U3.D2|${filePath}|${lineNumber}`;
@@ -3483,6 +3555,9 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         explanation: `Container has a fixed height (${hm[0]}) with overflow-hidden, which may clip text content.`,
         confidence: 0.72, textPreview: extractU3TextPreview(content, pos),
         advisoryGuidance: 'Use overflow-auto or add an expand mechanism.', deduplicationKey: dedupeKey,
+        truncationType: 'overflow-clip',
+        triggerReason: `Fixed height (${hm[0]}) + overflow-hidden on text container`,
+        expandDetected: false,
       });
     }
 
@@ -3507,50 +3582,77 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         evidence: `Multiple overflow-y-scroll/auto within fixed-height region at ${fileName}:${lineNumber}`,
         explanation: 'Nested scrollable containers may create a scroll trap.',
         confidence: 0.68, advisoryGuidance: 'Avoid nesting scrollable containers.', deduplicationKey: dedupeKey,
+        truncationType: 'scroll-trap',
+        triggerReason: 'Nested scroll containers within fixed-height parent',
+        expandDetected: false,
       });
     }
 
     // --- U3.D4: Hidden content without control ---
-    const hiddenPatterns = [
-      { re: /aria-hidden\s*=\s*["']true["']/gi, label: 'aria-hidden="true"' },
-      { re: /\bhidden\b(?!\s*=\s*["']false)/g, label: 'hidden attribute' },
-    ];
-    for (const { re, label } of hiddenPatterns) {
-      let hm2;
-      while ((hm2 = re.exec(content)) !== null) {
-        const pos = hm2.index;
-        const context = content.slice(Math.max(0, pos - 100), Math.min(content.length, pos + 400));
-        if (/\bsvg\b|icon|separator|divider|decorat/i.test(context.slice(0, 150))) continue;
-        if (/sr-only|visually-hidden/i.test(context)) continue;
-        const hasMeaningful = /<(?:p|h[1-6]|span|div|form|input|button|a)\b[^>]*>[^<]{5,}/i.test(context.slice(100)) ||
-          /\b(?:description|message|content|paragraph|text|label)\b/i.test(context);
-        if (!hasMeaningful) continue;
-        if (/toggle|show|expand|open|visible|setVisible|setOpen|setShow|useState/i.test(context)) continue;
+    const hiddenRe = /\bhidden\b/g;
+    let hm3;
+    while ((hm3 = hiddenRe.exec(content)) !== null) {
+      const pos = hm3.index;
+      const lineNumber = content.slice(0, pos).split('\n').length;
+      const context = content.slice(Math.max(0, pos - 150), Math.min(content.length, pos + 500));
+      const localOffset = Math.min(pos, 150);
 
-        const lineNumber = content.slice(0, pos).split('\n').length;
-        const dedupeKey = `U3.D4|${filePath}|${lineNumber}`;
-        if (seenKeys.has(dedupeKey)) continue;
-        seenKeys.add(dedupeKey);
-        findings.push({
-          subCheck: 'U3.D4', subCheckLabel: 'Hidden content without control', classification: 'potential',
-          elementLabel: `Hidden content (${label})`, elementType: 'content', filePath,
-          detection: `${label} on content element without visible toggle`,
-          evidence: `${label} at ${fileName}:${lineNumber} — meaningful content hidden without toggle`,
-          explanation: `Content is hidden using ${label} without a visible mechanism to reveal it.`,
-          confidence: 0.68, textPreview: extractU3TextPreview(content, pos),
-          advisoryGuidance: 'Provide a visible toggle to reveal hidden content.', deduplicationKey: dedupeKey,
-        });
-      }
+      const afterMatch = content.slice(pos + 6, pos + 30);
+      if (/^\s*=\s*["']?false/.test(afterMatch)) continue;
+      if (/^\s*=\s*\{false\}/.test(afterMatch)) continue;
+
+      // SUPPRESS: responsive hidden variants
+      const lineStart = content.lastIndexOf('\n', pos) + 1;
+      const lineEnd = content.indexOf('\n', pos);
+      const currentLineText = content.slice(lineStart, lineEnd === -1 ? content.length : lineEnd);
+      if (/\b(?:sm|md|lg|xl|2xl):hidden\b/.test(currentLineText)) continue;
+      const nearbyLines = content.slice(Math.max(0, pos - 300), Math.min(content.length, pos + 300));
+      if (/hidden\s+(?:sm|md|lg|xl|2xl):(?:block|flex|inline|grid)\b/.test(nearbyLines)) continue;
+      if (/(?:block|flex|inline|grid)\s+(?:sm|md|lg|xl|2xl):hidden\b/.test(nearbyLines)) continue;
+
+      // SUPPRESS: aria-hidden
+      if (/aria-hidden\s*=\s*["']true["']/.test(context.slice(Math.max(0, localOffset - 30), localOffset + 40))) continue;
+
+      if (/\bsvg\b|icon|separator|divider|decorat/i.test(context.slice(0, 200))) continue;
+      if (/sr-only|visually-hidden/i.test(context)) continue;
+
+      const contentAfter = context.slice(localOffset);
+      const hasMeaningfulText = /<(?:p|h[1-6]|span|div|li)\b[^>]*>[^<]{15,}/i.test(contentAfter);
+      const hasDynamic = />\s*\{[a-zA-Z_][\w.]*\}\s*</.test(contentAfter);
+      const hasDescriptiveContent = /\b(?:description|message|content|paragraph|body|summary|bio|detail)\b/i.test(contentAfter);
+      if (!hasMeaningfulText && !hasDynamic && !hasDescriptiveContent) continue;
+
+      if (u3HasExpandMechanism(content, pos, 25)) continue;
+
+      const widerWindow = content.slice(Math.max(0, pos - 500), Math.min(content.length, pos + 500));
+      if (/aria-controls|aria-expanded/i.test(widerWindow)) continue;
+      if (/<(?:button|a)\b[^>]*>[^<]*(?:Menu|Open|Close|Show|Hide|Toggle)[^<]*/i.test(widerWindow)) continue;
+
+      const dedupeKey = `U3.D4|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      const textPreview = extractU3TextPreview(content, pos);
+      findings.push({
+        subCheck: 'U3.D4', subCheckLabel: 'Hidden content without control', classification: 'potential',
+        elementLabel: 'Hidden content (hidden attribute)', elementType: 'content', filePath,
+        detection: 'hidden attribute on content element without visible toggle',
+        evidence: `hidden at ${fileName}:${lineNumber} — meaningful content hidden without toggle`,
+        explanation: 'Content is hidden without a visible mechanism to reveal it.',
+        confidence: 0.68, textPreview,
+        advisoryGuidance: 'Provide a visible toggle to reveal hidden content.', deduplicationKey: dedupeKey,
+        truncationType: 'hidden',
+        triggerReason: hasDynamic ? 'Dynamic content hidden without toggle' : 'Meaningful text (≥15 chars) hidden without toggle',
+        expandDetected: false,
+      });
     }
   }
 
-  // Cap per file
   const byFile = new Map<string, U3Finding[]>();
   for (const f of findings) { const ex = byFile.get(f.filePath) || []; ex.push(f); byFile.set(f.filePath, ex); }
   const capped: U3Finding[] = [];
   for (const [, ff] of byFile) { capped.push(...ff.slice(0, 3)); }
 
-  // Confidence bonus per additional sub-check
   const subChecks = new Set(capped.map(f => f.subCheck));
   const bonus = Math.min((subChecks.size - 1) * 0.05, 0.15);
   for (const f of capped) { f.confidence = Math.min(f.confidence + bonus, 0.85); }
@@ -4024,6 +4126,9 @@ serve(async (req) => {
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           confidence: f.confidence,
           advisoryGuidance: f.advisoryGuidance, deduplicationKey: f.deduplicationKey,
+          truncationType: f.truncationType, textLength: f.textLength,
+          triggerReason: f.triggerReason, expandDetected: f.expandDetected,
+          elementTag: f.elementTag,
         }));
 
         const overallConfidence = Math.max(...u3Findings.map((f: any) => f.confidence));

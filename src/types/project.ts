@@ -525,6 +525,12 @@ export interface U3ElementSubItem {
   confidence: number;
   advisoryGuidance?: string;
   deduplicationKey: string;
+  // Element metadata
+  truncationType?: string; // truncate, line-clamp, hidden, overflow-clip, nowrap, scroll-trap
+  textLength?: number | 'dynamic'; // static char count or 'dynamic'
+  triggerReason?: string; // why NOT suppressed
+  expandDetected?: boolean; // whether expand/tooltip/toggle was found nearby
+  elementTag?: string; // HTML/JSX tag name
 }
 
 // U4 Element sub-item for aggregated recognition-to-recall reporting
