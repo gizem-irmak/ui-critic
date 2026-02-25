@@ -1088,31 +1088,48 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       });
     }
 
-    // --- U3.D5: Unbroken text overflow risk ---
-    // Detect dynamic/user-controlled text in containers without word-break protection
-    const U3_FREEFORM_KEYS = /\b(?:reason|notes|description|message|subject|bio|comment|address|details|feedback|body|content|summary|remarks)\b/i;
-    const U3_DYNAMIC_VAR = /\{(?:[a-zA-Z_][\w]*\.)?(?:reason|notes|description|message|subject|bio|comment|address|details|feedback|body|content|summary|remarks|label|value|text|name|title)\b[^}]*\}/;
+    // --- U3.D5: Unbroken text overflow risk (with semantic risk tiers) ---
     const U3_WRAP_SAFE = /\bbreak-words\b|\bbreak-all\b|\boverflow-wrap[:\s]*anywhere\b|\boverflowWrap\s*:\s*["']?anywhere/;
-    const U3_OVERFLOW_RISK = /\bwhitespace-nowrap\b|\btruncate\b|\btext-ellipsis\b|\boverflow-hidden\b|\bw-\d|\bmax-w-|\bmin-w-/;
     const U3_TABLE_CELL = /<(?:td|th|TableCell)\b/i;
     const U3_GRID_NARROW = /\bgrid\b.*\bcol(?:s|-span)/;
+    const U3_EXPLICIT_OVERFLOW = /\bwhitespace-nowrap\b|\btruncate\b|\boverflow-hidden\b|\btext-ellipsis\b/;
+    const U3_FIXED_WIDTH = /\bw-\d|\bmax-w-|\bmin-w-/;
+    const U3_WIDE_CONTAINER = /\bw-full\b|\bflex-1\b|\bmin-w-0\b/;
 
-    // Scan for dynamic expressions that render free-form text
-    const dynamicExprRe = /\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}/g;
+    // Semantic risk tiers for variable names
+    const U3_HIGH_RISK = /\b(?:reason|notes|bio|description|message|subject|comment|details|address|diagnosis|complaint|feedback|body|content|summary|remarks)\b/i;
+    const U3_MEDIUM_RISK = /\b(?:specialty|title|label|name)\b/i;
+    const U3_LOW_RISK = /\b(?:location|status|type|date|time|id|role|email|phone|count|price|amount|code|key|slug|url|href)\b/i;
+
+    // All variable names we scan for (union of all tiers)
+    const U3_ALL_VARS = /\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}/g;
+
     let dxm;
-    while ((dxm = dynamicExprRe.exec(content)) !== null) {
+    while ((dxm = U3_ALL_VARS.exec(content)) !== null) {
       const varName = dxm[1];
       const pos = dxm.index;
 
-      // (A) Must be a free-form text variable
-      const isFreeformVar = U3_FREEFORM_KEYS.test(varName);
-      if (!isFreeformVar) {
-        // Check nearby context for free-form key names (prop names, labels)
+      // Extract the last segment of the variable for risk classification
+      const segments = varName.split('.');
+      const lastSeg = segments[segments.length - 1];
+
+      // Determine risk tier
+      let riskTier: 'High' | 'Medium' | 'Low' | 'None';
+      if (U3_HIGH_RISK.test(lastSeg)) riskTier = 'High';
+      else if (U3_MEDIUM_RISK.test(lastSeg)) riskTier = 'Medium';
+      else if (U3_LOW_RISK.test(lastSeg)) riskTier = 'Low';
+      else {
+        // Check nearby context for high/medium risk key names
         const nearby = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 200));
-        if (!U3_FREEFORM_KEYS.test(nearby)) continue;
+        if (U3_HIGH_RISK.test(nearby)) riskTier = 'High';
+        else if (U3_MEDIUM_RISK.test(nearby)) riskTier = 'Medium';
+        else riskTier = 'None';
       }
 
-      // Get context window around the expression
+      // Skip variables with no risk association at all
+      if (riskTier === 'None') continue;
+
+      // Get context window
       const ctxStart = Math.max(0, pos - 300);
       const ctxEnd = Math.min(content.length, pos + 300);
       const context = content.slice(ctxStart, ctxEnd);
@@ -1120,24 +1137,41 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       // (B) Suppress if wrap-safe classes are present
       if (U3_WRAP_SAFE.test(context)) continue;
 
-      // Suppress if this is a code/monospace block with horizontal scroll
+      // Suppress if code/monospace block with horizontal scroll
       if (/\bfont-mono\b|\bmonospace\b|<code\b|<pre\b/i.test(context) && /overflow-x-auto\b/.test(context)) continue;
 
-      // (C) Check for overflow-risk styling
-      const hasOverflowRisk = U3_OVERFLOW_RISK.test(context);
+      // (C) Check overflow conditions
+      const hasExplicitOverflow = U3_EXPLICIT_OVERFLOW.test(context);
+      const hasFixedWidth = U3_FIXED_WIDTH.test(context);
       const isTableCell = U3_TABLE_CELL.test(context);
       const isGridNarrow = U3_GRID_NARROW.test(context);
 
-      if (!hasOverflowRisk && !isTableCell && !isGridNarrow) continue;
+      if (!hasExplicitOverflow && !hasFixedWidth && !isTableCell && !isGridNarrow) continue;
+
+      // Low-risk variables: only report if explicit overflow classes present
+      if (riskTier === 'Low' && !hasExplicitOverflow) continue;
 
       const lineNumber = content.slice(0, pos).split('\n').length;
       const dedupeKey = `U3.D5|${filePath}|${lineNumber}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
-      // Confidence: higher if nowrap/truncate, lower if only width constraints
-      const hasNowrapOrTruncate = /\bwhitespace-nowrap\b|\btruncate\b|\boverflow-hidden\b/.test(context);
-      const confidence = hasNowrapOrTruncate ? 0.80 : 0.65;
+      // --- Confidence scoring ---
+      let confidence = 0.70;
+      // Additions
+      if (hasExplicitOverflow) confidence += 0.15;
+      if (riskTier === 'High') confidence += 0.10;
+      else if (riskTier === 'Medium') confidence += 0.05;
+      // Reductions
+      if (riskTier === 'Low') confidence -= 0.15;
+      const hasWideContainer = U3_WIDE_CONTAINER.test(context) && !/\bmax-w-/.test(context);
+      if (hasWideContainer) confidence -= 0.10;
+      if (/\btitle\s*=|\btooltip\b|<Tooltip/i.test(context)) confidence -= 0.10;
+      // Clamp
+      confidence = Math.max(0.55, Math.min(0.90, confidence));
+
+      // Suppress if confidence too low
+      if (confidence < 0.65) continue;
 
       const matchedClasses: string[] = [];
       if (/\bwhitespace-nowrap\b/.test(context)) matchedClasses.push('whitespace-nowrap');
@@ -1160,7 +1194,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         elementType: 'text',
         filePath,
         detection: 'Long unbroken text may overflow (no wrap protection)',
-        evidence: `{${varName}} at ${fileName}:${lineNumber} — classes: ${matchedClasses.join(', ')} — no break-words/overflow-wrap`,
+        evidence: `{${varName}} [${riskTier}] at ${fileName}:${lineNumber} — signals: ${matchedClasses.join(', ')} — no wrap protection`,
         explanation: 'User-generated text without spaces (e.g., long URLs, codes) can overflow the container or break layout when word-break protection is missing.',
         confidence,
         textPreview: `(dynamic text: ${varName})`,
@@ -1168,7 +1202,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         deduplicationKey: dedupeKey,
         truncationType: 'unbroken-overflow',
         textLength: 'dynamic',
-        triggerReason: `Dynamic variable {${varName}} in container with ${matchedClasses.join(' + ')} but no wrap protection`,
+        triggerReason: `{${varName}} [${riskTier}-risk] in container with ${matchedClasses.join(' + ')} but no wrap protection`,
         expandDetected: false,
         elementTag,
       });

@@ -3691,25 +3691,40 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       });
     }
 
-    // --- U3.D5: Unbroken text overflow risk ---
-    const U3_FREEFORM_KEYS = /\b(?:reason|notes|description|message|subject|bio|comment|address|details|feedback|body|content|summary|remarks)\b/i;
-    const U3_DYNAMIC_VAR = /\{(?:[a-zA-Z_][\w]*\.)?(?:reason|notes|description|message|subject|bio|comment|address|details|feedback|body|content|summary|remarks|label|value|text|name|title)\b[^}]*\}/;
+    // --- U3.D5: Unbroken text overflow risk (with semantic risk tiers) ---
     const U3_WRAP_SAFE = /\bbreak-words\b|\bbreak-all\b|\boverflow-wrap[:\s]*anywhere\b|\boverflowWrap\s*:\s*["']?anywhere/;
-    const U3_OVERFLOW_RISK = /\bwhitespace-nowrap\b|\btruncate\b|\btext-ellipsis\b|\boverflow-hidden\b|\bw-\d|\bmax-w-|\bmin-w-/;
     const U3_TABLE_CELL = /<(?:td|th|TableCell)\b/i;
     const U3_GRID_NARROW = /\bgrid\b.*\bcol(?:s|-span)/;
+    const U3_EXPLICIT_OVERFLOW = /\bwhitespace-nowrap\b|\btruncate\b|\boverflow-hidden\b|\btext-ellipsis\b/;
+    const U3_FIXED_WIDTH = /\bw-\d|\bmax-w-|\bmin-w-/;
+    const U3_WIDE_CONTAINER = /\bw-full\b|\bflex-1\b|\bmin-w-0\b/;
 
-    const dynamicExprRe = /\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}/g;
+    const U3_HIGH_RISK = /\b(?:reason|notes|bio|description|message|subject|comment|details|address|diagnosis|complaint|feedback|body|content|summary|remarks)\b/i;
+    const U3_MEDIUM_RISK = /\b(?:specialty|title|label|name)\b/i;
+    const U3_LOW_RISK = /\b(?:location|status|type|date|time|id|role|email|phone|count|price|amount|code|key|slug|url|href)\b/i;
+
+    const U3_ALL_VARS = /\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}/g;
+
     let dxm;
-    while ((dxm = dynamicExprRe.exec(content)) !== null) {
+    while ((dxm = U3_ALL_VARS.exec(content)) !== null) {
       const varName = dxm[1];
       const pos = dxm.index;
 
-      const isFreeformVar = U3_FREEFORM_KEYS.test(varName);
-      if (!isFreeformVar) {
+      const segments = varName.split('.');
+      const lastSeg = segments[segments.length - 1];
+
+      let riskTier: 'High' | 'Medium' | 'Low' | 'None';
+      if (U3_HIGH_RISK.test(lastSeg)) riskTier = 'High';
+      else if (U3_MEDIUM_RISK.test(lastSeg)) riskTier = 'Medium';
+      else if (U3_LOW_RISK.test(lastSeg)) riskTier = 'Low';
+      else {
         const nearby = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 200));
-        if (!U3_FREEFORM_KEYS.test(nearby)) continue;
+        if (U3_HIGH_RISK.test(nearby)) riskTier = 'High';
+        else if (U3_MEDIUM_RISK.test(nearby)) riskTier = 'Medium';
+        else riskTier = 'None';
       }
+
+      if (riskTier === 'None') continue;
 
       const ctxStart = Math.max(0, pos - 300);
       const ctxEnd = Math.min(content.length, pos + 300);
@@ -3718,19 +3733,31 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (U3_WRAP_SAFE.test(context)) continue;
       if (/\bfont-mono\b|\bmonospace\b|<code\b|<pre\b/i.test(context) && /overflow-x-auto\b/.test(context)) continue;
 
-      const hasOverflowRisk = U3_OVERFLOW_RISK.test(context);
+      const hasExplicitOverflow = U3_EXPLICIT_OVERFLOW.test(context);
+      const hasFixedWidth = U3_FIXED_WIDTH.test(context);
       const isTableCell = U3_TABLE_CELL.test(context);
       const isGridNarrow = U3_GRID_NARROW.test(context);
 
-      if (!hasOverflowRisk && !isTableCell && !isGridNarrow) continue;
+      if (!hasExplicitOverflow && !hasFixedWidth && !isTableCell && !isGridNarrow) continue;
+
+      if (riskTier === 'Low' && !hasExplicitOverflow) continue;
 
       const lineNumber = content.slice(0, pos).split('\n').length;
       const dedupeKey = `U3.D5|${filePath}|${lineNumber}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
-      const hasNowrapOrTruncate = /\bwhitespace-nowrap\b|\btruncate\b|\boverflow-hidden\b/.test(context);
-      const confidence = hasNowrapOrTruncate ? 0.80 : 0.65;
+      let confidence = 0.70;
+      if (hasExplicitOverflow) confidence += 0.15;
+      if (riskTier === 'High') confidence += 0.10;
+      else if (riskTier === 'Medium') confidence += 0.05;
+      if (riskTier === 'Low') confidence -= 0.15;
+      const hasWideContainer = U3_WIDE_CONTAINER.test(context) && !/\bmax-w-/.test(context);
+      if (hasWideContainer) confidence -= 0.10;
+      if (/\btitle\s*=|\btooltip\b|<Tooltip/i.test(context)) confidence -= 0.10;
+      confidence = Math.max(0.55, Math.min(0.90, confidence));
+
+      if (confidence < 0.65) continue;
 
       const matchedClasses: string[] = [];
       if (/\bwhitespace-nowrap\b/.test(context)) matchedClasses.push('whitespace-nowrap');
@@ -3753,15 +3780,15 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         elementType: 'text',
         filePath,
         detection: 'Long unbroken text may overflow (no wrap protection)',
-        evidence: `{${varName}} at ${fileName}:${lineNumber} — classes: ${matchedClasses.join(', ')} — no break-words/overflow-wrap`,
-        explanation: 'User-generated text without spaces can overflow the container or break layout when word-break protection is missing.',
+        evidence: `{${varName}} [${riskTier}] at ${fileName}:${lineNumber} — signals: ${matchedClasses.join(', ')} — no wrap protection`,
+        explanation: 'User-generated text without spaces (e.g., long URLs, codes) can overflow the container or break layout when word-break protection is missing.',
         confidence,
         textPreview: `(dynamic text: ${varName})`,
         advisoryGuidance: 'Add break-words / overflow-wrap:anywhere and allow multi-line display, or clamp with "Show more".',
         deduplicationKey: dedupeKey,
         truncationType: 'unbroken-overflow',
         textLength: 'dynamic',
-        triggerReason: `Dynamic variable {${varName}} in container with ${matchedClasses.join(' + ')} but no wrap protection`,
+        triggerReason: `{${varName}} [${riskTier}-risk] in container with ${matchedClasses.join(' + ')} but no wrap protection`,
         expandDetected: false,
         elementTag,
       });
