@@ -703,30 +703,68 @@ interface U3Finding {
 }
 
 function extractU3TextPreview(content: string, pos: number): string | undefined {
-  // Look for text content near the match position
-  const after = content.slice(pos, Math.min(content.length, pos + 600));
+  const after = content.slice(pos, Math.min(content.length, pos + 800));
 
-  // 1) Try JSX text nodes: >some text< patterns
-  const jsxTextMatch = after.match(/>([^<]{5,})</);
-  if (jsxTextMatch) {
-    const raw = jsxTextMatch[1].trim();
-    if (raw.length > 0) return raw.length > 120 ? raw.slice(0, 117) + '…' : raw;
+  // Helper: cap at 120 chars
+  const cap = (s: string): string => s.length > 120 ? s.slice(0, 117) + '…' : s;
+
+  // Helper: check if a string looks like CSS/className tokens
+  const looksLikeClasses = (s: string): boolean =>
+    /^[\w\s\-/[\]:!.#]+$/.test(s) && /\b(text-|bg-|flex|grid|p-|m-|w-|h-|rounded|border|font-|block|inline|hidden|overflow|relative|absolute|max-|min-)/.test(s);
+
+  // 1) Collect visible JSX text nodes: text between > and <
+  //    but skip anything inside attribute positions
+  const textParts: string[] = [];
+  const jsxTextRe = />([^<>{]+)</g;
+  let tm;
+  while ((tm = jsxTextRe.exec(after)) !== null) {
+    const raw = tm[1].trim();
+    if (raw.length < 3) continue;
+    // Skip if it looks like CSS class tokens leaked
+    if (looksLikeClasses(raw)) continue;
+    // Skip pure whitespace/punctuation
+    if (!/[a-zA-Z]/.test(raw)) continue;
+    textParts.push(raw);
   }
 
-  // 2) Try string literals in props: "some text" or 'some text' or {`template`}
-  const stringLitMatch = after.match(/[=:]\s*["'`]([^"'`]{10,})["'`]/);
-  if (stringLitMatch) {
-    const raw = stringLitMatch[1].trim();
-    if (raw.length > 0 && !/^[\w-]+$/.test(raw)) return raw.length > 120 ? raw.slice(0, 117) + '…' : raw;
+  if (textParts.length > 0) {
+    const joined = textParts.join(' ').trim();
+    if (joined.length > 0) return cap(joined);
   }
 
-  // 3) Dynamic expressions: {description}, {item.title}, etc.
-  const dynMatch = after.match(/\{([a-zA-Z_][\w.]*)\}/);
-  if (dynMatch) return `(dynamic text: ${dynMatch[1]})`;
+  // 2) Look for string literal CHILDREN (not attribute values)
+  //    Match patterns like: >{`some template text`}< or >{"literal"}<
+  const childStringRe = />\s*\{\s*[`"']([^`"']{5,})[`"']\s*\}\s*</g;
+  let csm;
+  while ((csm = childStringRe.exec(after)) !== null) {
+    const raw = csm[1].trim();
+    if (raw.length > 0 && !looksLikeClasses(raw)) return cap(raw);
+  }
 
-  // 4) Broader dynamic: {someFunc()} or complex expressions
-  const dynBroad = after.match(/\{([^}]{3,30})\}/);
-  if (dynBroad && /[a-zA-Z]/.test(dynBroad[1])) return '(dynamic text)';
+  // 3) Dynamic expressions as children: >{variable}< or > {item.title} <
+  //    Must appear between > and < to be a child, not an attribute
+  const dynChildRe = />\s*\{([a-zA-Z_][\w.]*)\}\s*</g;
+  let dm;
+  const dynNames: string[] = [];
+  while ((dm = dynChildRe.exec(after)) !== null) {
+    const varName = dm[1];
+    // Skip common non-text props that might appear in children expressions
+    if (/^(className|style|key|ref|id|onClick|onChange|onSubmit|disabled|checked|value|type|src|href|alt)$/.test(varName)) continue;
+    dynNames.push(varName);
+  }
+  if (dynNames.length > 0) {
+    const meaningful = dynNames.find(n => /^(title|name|label|description|text|content|message|email|url|summary|body|comment|note|caption|heading|subtitle|placeholder|address|bio|detail)$/i.test(n) || n.includes('.'));
+    if (meaningful) return `(dynamic text: ${meaningful})`;
+    return `(dynamic text: ${dynNames[0]})`;
+  }
+
+  // 4) Broader dynamic children: >{someExpression}<
+  const dynBroadRe = />\s*\{([^}]{3,40})\}\s*</g;
+  let db;
+  while ((db = dynBroadRe.exec(after)) !== null) {
+    const expr = db[1].trim();
+    if (/[a-zA-Z]/.test(expr) && !/className|style|onClick/i.test(expr)) return '(dynamic text)';
+  }
 
   return undefined;
 }
