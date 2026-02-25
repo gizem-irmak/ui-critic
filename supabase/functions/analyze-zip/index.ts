@@ -2514,7 +2514,7 @@ Analyze code structure for usability patterns:
 - Button hierarchy and primary action clarity (U1)
 - Navigation structure, routing patterns, and wayfinding (U2) — NOTE: U2 deterministic pre-pass runs separately; you provide contextual enrichment
 - Content truncation, overflow handling, and text visibility (U3)
-- Recognition vs recall: visible options, labels, contextual cues (U4)
+- Recognition vs recall: visible options, labels, contextual cues (U4) — NOTE: U4 has a DEDICATED SECTION below with pre-extracted evidence bundles. Follow the U4 instructions precisely.
 - Interaction feedback: loading states, confirmations, error messages (U5)
 - Layout grouping, alignment, and visual coherence (U6)
 
@@ -2743,6 +2743,49 @@ Your role is to provide contextual enrichment for navigation assessment:
 }
 \`\`\`
 
+### U4 (Recognition-to-Recall Regression) — LLM-ASSISTED EVALUATION:
+**NOTE:** U4 uses pre-extracted evidence bundles appended as \`[U4_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted UI text/evidence to decide if the UI forces recall rather than recognition.
+
+**EVALUATE (using ONLY the evidence bundle, not raw code):**
+- Missing summaries: Forms or multi-step flows that don't show what the user previously selected
+- Missing examples: Input fields without helper text, examples, or format hints
+- Generic CTAs without context: Buttons labeled "Continue", "Next", "Submit" without indicating what happens next
+- Multi-step flows lacking review: Step indicators without a final review/summary step
+
+**CLASSIFICATION:**
+- U4 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
+- Confidence represents strength of observable cues, NOT model probability
+- Confidence cap: 0.80 maximum
+- Confidence range: 0.55–0.80
+
+**OUTPUT FOR U4 — STRUCTURED u4Elements:**
+Return U4 findings using a \`u4Elements\` array so findings can be aggregated per UI region:
+\`\`\`json
+{
+  "ruleId": "U4",
+  "ruleName": "Recognition-to-recall regression",
+  "category": "usability",
+  "status": "potential",
+  "isU4Aggregated": true,
+  "u4Elements": [
+    {
+      "elementLabel": "Registration form",
+      "elementType": "form",
+      "location": "src/components/RegisterForm.tsx",
+      "detection": "Form has 5 fields with generic placeholder text and no helper examples",
+      "evidence": "Fields: email (placeholder='Email'), password (no helper), name (placeholder='Name')",
+      "recommendedFix": "Add helper text with format examples (e.g., 'user@example.com')",
+      "confidence": 0.70
+    }
+  ],
+  "diagnosis": "Summary of recognition-to-recall issues...",
+  "contextualHint": "Short guidance...",
+  "confidence": 0.70
+}
+\`\`\`
+- If NO U4 issues found, do NOT include U4 in the violations array.
+- Each u4Element MUST cite evidence from the provided evidence bundle.
+
 Usability rules to check:
 ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name}`).join('\n')}
 
@@ -2789,6 +2832,130 @@ IMPORTANT CONSTRAINTS:
   },
   "stackDetected": "React/Vite"
 }`;
+}
+
+// ========== U4 EVIDENCE BUNDLE EXTRACTION (Recognition-to-Recall) ==========
+// Extracts compact context per file/page for LLM assessment — NOT deterministic triggers
+interface U4EvidenceBundle {
+  componentName: string;
+  filePath: string;
+  ctaLabels: string[];       // button text
+  headings: string[];        // h1-h6 text near CTAs
+  formFields: { label: string; placeholder?: string; helperText?: string }[];
+  stepIndicators: string[];  // "Step X", "Next", "Back" patterns
+  hasSummaryWords: boolean;
+  hasHelperExamples: boolean;
+  hasGenericCTA: boolean;
+}
+
+function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundle[] {
+  const bundles: U4EvidenceBundle[] = [];
+  const GENERIC_CTA_RE = /\b(Continue|Next|Submit|Save|Confirm|OK|Done|Proceed|Go)\b/i;
+  const STEP_RE = /\b(Step\s+\d+|step\s*[-–—]\s*\d+|Next|Back|Previous)\b/gi;
+  const SUMMARY_WORDS = /\b(summary|review|confirm|overview|receipt|total|selected)\b/i;
+  const HELPER_EXAMPLE_RE = /\b(e\.g\.|example|format|hint|such as|like\s+\"|must be|at least|pattern)\b/i;
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
+    if (/\.(test|spec)\./i.test(filePath)) continue;
+    if (filePath.includes('components/ui/') || filePath.includes('node_modules')) continue;
+
+    // Component name
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx|html)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+
+    // CTA labels (button text)
+    const ctaLabels: string[] = [];
+    const btnRe = /<(?:Button|button)\b[^>]*>([^<]{1,60})<\/(?:Button|button)>/gi;
+    let bm;
+    while ((bm = btnRe.exec(content)) !== null) {
+      const label = bm[1].replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
+      if (label.length >= 2 && label.length <= 50) ctaLabels.push(label);
+    }
+
+    // Headings near CTAs
+    const headings: string[] = [];
+    const hRe = /<h([1-6])\b[^>]*>([^<]{2,80})<\/h\1>/gi;
+    let hm;
+    while ((hm = hRe.exec(content)) !== null) {
+      const text = hm[2].replace(/\{[^}]*\}/g, '').trim();
+      if (text.length >= 2) headings.push(text);
+    }
+
+    // Form fields
+    const formFields: U4EvidenceBundle['formFields'] = [];
+    const inputRe = /<(?:Input|input|textarea|Textarea|select|Select)\b([^>]*)(?:\/>|>[^<]*<\/)/gi;
+    let im;
+    while ((im = inputRe.exec(content)) !== null) {
+      const attrs = im[1] || '';
+      const labelMatch = attrs.match(/(?:label|aria-label)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/i);
+      const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/i);
+      const label = labelMatch?.[1] || labelMatch?.[2] || labelMatch?.[3] || '';
+      const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2] || placeholderMatch?.[3] || '';
+      if (label || placeholder) {
+        // Look for nearby helper text
+        const afterInput = content.slice(im.index, Math.min(content.length, im.index + 300));
+        const helperMatch = afterInput.match(/<(?:p|span|div)\b[^>]*(?:helper|hint|description|muted|text-sm|text-xs)[^>]*>([^<]{3,80})</i);
+        formFields.push({
+          label: label || placeholder,
+          placeholder: placeholder || undefined,
+          helperText: helperMatch?.[1]?.trim() || undefined,
+        });
+      }
+    }
+
+    // Step indicators
+    const stepIndicators: string[] = [];
+    let sm;
+    while ((sm = STEP_RE.exec(content)) !== null) {
+      stepIndicators.push(sm[1]);
+    }
+
+    // Skip files with no relevant content
+    if (ctaLabels.length === 0 && formFields.length === 0 && stepIndicators.length === 0 && headings.length === 0) continue;
+
+    const hasGenericCTA = ctaLabels.some(l => GENERIC_CTA_RE.test(l));
+    const hasSummaryWords = SUMMARY_WORDS.test(content);
+    const hasHelperExamples = HELPER_EXAMPLE_RE.test(content);
+
+    bundles.push({
+      componentName,
+      filePath,
+      ctaLabels: [...new Set(ctaLabels)].slice(0, 8),
+      headings: [...new Set(headings)].slice(0, 6),
+      formFields: formFields.slice(0, 8),
+      stepIndicators: [...new Set(stepIndicators)].slice(0, 6),
+      hasSummaryWords,
+      hasHelperExamples,
+      hasGenericCTA,
+    });
+  }
+
+  return bundles.slice(0, 15); // Cap at 15 files
+}
+
+function formatU4EvidenceBundleForPrompt(bundles: U4EvidenceBundle[]): string {
+  if (bundles.length === 0) return '';
+  const lines = ['[U4_EVIDENCE_BUNDLE]'];
+  for (const b of bundles) {
+    lines.push(`\n--- ${b.componentName} (${b.filePath}) ---`);
+    if (b.ctaLabels.length > 0) lines.push(`  CTAs: ${b.ctaLabels.join(', ')}`);
+    if (b.headings.length > 0) lines.push(`  Headings: ${b.headings.join(' | ')}`);
+    if (b.formFields.length > 0) {
+      for (const f of b.formFields) {
+        let row = `  Field: ${f.label}`;
+        if (f.placeholder) row += ` (placeholder: "${f.placeholder}")`;
+        if (f.helperText) row += ` — helper: "${f.helperText}"`;
+        lines.push(row);
+      }
+    }
+    if (b.stepIndicators.length > 0) lines.push(`  Steps: ${b.stepIndicators.join(', ')}`);
+    lines.push(`  Flags: summary=${b.hasSummaryWords}, helpers=${b.hasHelperExamples}, genericCTA=${b.hasGenericCTA}`);
+  }
+  lines.push('[/U4_EVIDENCE_BUNDLE]');
+  return lines.join('\n');
 }
 
 // ========== A4 DETERMINISTIC DETECTION (Missing Semantic Structure) ==========
@@ -3901,6 +4068,10 @@ serve(async (req) => {
       .map(([path, content]) => `### File: ${path}\n\`\`\`\n${content.slice(0, 5000)}\n\`\`\``)
       .join('\n\n');
 
+    // Extract U4 evidence bundle (context for LLM, not deterministic triggers)
+    const u4EvidenceBundles = selectedRulesSet.has('U4') ? extractU4EvidenceBundle(allFiles) : [];
+    const u4BundleText = formatU4EvidenceBundleForPrompt(u4EvidenceBundles);
+
     // Build analysis prompt
     const systemPrompt = buildCodeAnalysisPrompt(selectedRules);
 
@@ -3912,7 +4083,7 @@ serve(async (req) => {
         
 Perform the complete 3-pass analysis (Accessibility, Usability, Ethics) based on the code patterns and return findings in the specified JSON format.
 
-${codeContent}`,
+${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}`,
       },
     ];
 
@@ -5160,7 +5331,80 @@ ${codeContent}`,
       }
     }
 
-    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
+    // ========== U4 POST-PROCESSING (Recognition-to-Recall — LLM-assisted) ==========
+    // U4 is fully LLM-assisted. Extract aggregated U4 findings from aiViolations and
+    // ensure they are always Potential with confidence capped at 0.80.
+    const aggregatedU4List: any[] = [];
+    if (selectedRulesSet.has('U4')) {
+      const u4FromLLM = aiViolations.filter((v: any) => v.ruleId === 'U4');
+      aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'U4');
+
+      if (u4FromLLM.length > 0) {
+        // Prefer the structured aggregated form (isU4Aggregated + u4Elements)
+        const aggregatedOne = u4FromLLM.find((v: any) => v.isU4Aggregated && v.u4Elements?.length > 0);
+        if (aggregatedOne) {
+          const u4Elements = (aggregatedOne.u4Elements || []).map((el: any) => ({
+            elementLabel: el.elementLabel || 'UI region',
+            elementType: el.elementType || 'component',
+            location: el.location || el.filePath || 'Unknown',
+            detection: el.detection || '',
+            evidence: el.evidence || '',
+            recommendedFix: el.recommendedFix || '',
+            confidence: Math.min(el.confidence || 0.65, 0.80),
+            deduplicationKey: el.deduplicationKey || `U4|${el.location || ''}|${el.elementLabel || ''}`,
+          }));
+
+          const overallConfidence = Math.min(
+            Math.max(...u4Elements.map((e: any) => e.confidence)),
+            0.80
+          );
+
+          aggregatedU4List.push({
+            ruleId: 'U4', ruleName: 'Recognition-to-recall regression', category: 'usability',
+            status: 'potential',
+            blocksConvergence: false,
+            inputType: 'zip', isU4Aggregated: true, u4Elements, evaluationMethod: 'llm_assisted',
+            diagnosis: aggregatedOne.diagnosis || `Recognition-to-recall issues: ${u4Elements.length} potential risk(s) detected via AI analysis.`,
+            contextualHint: aggregatedOne.contextualHint || 'Make options, labels, and actions visible to reduce reliance on user memory.',
+            advisoryGuidance: 'Ensure important choices, actions, and data are visible or easily retrievable. Provide contextual cues, previews, and labels.',
+            confidence: Math.round(overallConfidence * 100) / 100,
+          });
+        } else {
+          // Fallback: wrap non-aggregated U4 findings into aggregated form
+          const u4Elements = u4FromLLM.map((v: any) => ({
+            elementLabel: v.evidence?.split('.')[0] || 'UI region',
+            elementType: 'component',
+            location: v.evidence || 'Unknown',
+            detection: v.diagnosis || '',
+            evidence: v.evidence || '',
+            recommendedFix: v.contextualHint || '',
+            confidence: Math.min(v.confidence || 0.65, 0.80),
+            deduplicationKey: `U4|${v.evidence || 'unknown'}`,
+          }));
+
+          const overallConfidence = Math.min(
+            Math.max(...u4FromLLM.map((v: any) => v.confidence || 0.65)),
+            0.80
+          );
+
+          aggregatedU4List.push({
+            ruleId: 'U4', ruleName: 'Recognition-to-recall regression', category: 'usability',
+            status: 'potential',
+            blocksConvergence: false,
+            inputType: 'zip', isU4Aggregated: true, u4Elements, evaluationMethod: 'llm_assisted',
+            diagnosis: `Recognition-to-recall issues: ${u4Elements.length} potential risk(s) detected via AI analysis.`,
+            contextualHint: 'Make options, labels, and actions visible to reduce reliance on user memory.',
+            advisoryGuidance: 'Ensure important choices, actions, and data are visible or easily retrievable. Provide contextual cues, previews, and labels.',
+            confidence: Math.round(overallConfidence * 100) / 100,
+          });
+        }
+        console.log(`U4 aggregated: ${u4FromLLM.length} LLM finding(s) → ${aggregatedU4List[0]?.u4Elements?.length || 0} element(s)`);
+      } else {
+        console.log('U4: No LLM findings for recognition-to-recall');
+      }
+    }
+
+    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
 
     console.log(`Code analysis complete: ${allViolations.length} violations found`);
 
