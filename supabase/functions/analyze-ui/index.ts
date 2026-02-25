@@ -2516,6 +2516,42 @@ Consider:
 - Confidence range: 0.60–0.75 (cap at 0.75).
 - Each U5 finding must reference specific visible UI elements as evidence.
 
+### U6 (Weak Grouping / Layout Coherence) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
+- Assess grouping/layout coherence based on what is visually observable:
+  - Section separation: Are related elements visually grouped?
+  - Spacing consistency: Is spacing between elements consistent and hierarchical?
+  - Alignment: Are elements aligned properly?
+  - Visual hierarchy: Is the content hierarchy clear?
+  - Clutter: Are there areas with too many elements without visual separation?
+- U6 is ALWAYS "status": "potential" — NEVER "confirmed".
+- Confidence range: 0.60–0.80 (cap at 0.80).
+- Do NOT use page/component/test names as evidence.
+- Each U6 finding must reference specific visible layout patterns as evidence.
+- Output U6 using structured u6Elements format:
+\`\`\`json
+{
+  "ruleId": "U6",
+  "ruleName": "Weak grouping / layout coherence",
+  "category": "usability",
+  "status": "potential",
+  "isU6Aggregated": true,
+  "u6Elements": [
+    {
+      "elementLabel": "Form section",
+      "elementType": "section",
+      "location": "Screenshot #1",
+      "detection": "Related form fields lack visual grouping",
+      "evidence": "Input fields for name, email, and phone appear as a flat list without section headers or visual containers",
+      "recommendedFix": "Group related fields under section headings or visual containers",
+      "confidence": 0.70
+    }
+  ],
+  "diagnosis": "Summary...",
+  "confidence": 0.70
+}
+\`\`\`
+- If NO U6 issues found, do NOT include U6 in the violations array.
+
 ## PASS 3 — Ethics
 Reason about patterns that may undermine user autonomy or informed consent:
 - High-impact actions without confirmation or consequence disclosure (E1)
@@ -3373,9 +3409,10 @@ serve(async (req) => {
     const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
-        // HARD GUARDRAIL: U4 and U5 are ALWAYS Potential (non-blocking), never Confirmed
+        // HARD GUARDRAIL: U4, U5, U6 are ALWAYS Potential (non-blocking), never Confirmed
         const isU4 = v.ruleId === 'U4';
         const isU5 = v.ruleId === 'U5';
+        const isU6 = v.ruleId === 'U6';
         // Tag with evaluationMethod — all screenshot LLM violations are llm_assisted
         return {
           ...v,
@@ -3390,6 +3427,12 @@ serve(async (req) => {
             status: 'potential',
             blocksConvergence: false,
             confidence: Math.min(v.confidence || 0.60, 0.75),
+          } : {}),
+          ...(isU6 ? {
+            status: 'potential',
+            blocksConvergence: false,
+            confidence: Math.min(v.confidence || 0.65, 0.80),
+            isU6Aggregated: v.isU6Aggregated || false,
           } : {}),
         };
       });
