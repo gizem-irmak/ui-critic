@@ -1,4 +1,3 @@
-import { MapPin } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface LocationBadgeProps {
@@ -11,9 +10,8 @@ interface LocationBadgeProps {
 
 function extractBasename(path: string): string {
   if (!path) return '';
-  const cleaned = path.replace(/\\/g, '/');
-  const parts = cleaned.split('/');
-  return parts[parts.length - 1] || path;
+  const cleaned = path.replace(/\\/g, '/').split('/');
+  return cleaned[cleaned.length - 1] || path;
 }
 
 export function LocationBadge({
@@ -27,11 +25,11 @@ export function LocationBadge({
 
   return (
     <span className={cn(
-      'inline-flex items-center gap-1 text-muted-foreground flex-shrink-0',
-      compact ? 'text-xs' : 'text-sm',
+      'inline-flex items-center gap-0.5 text-muted-foreground flex-shrink-0',
+      compact ? 'text-xs' : 'text-xs',
       className
     )}>
-      {showIcon && <MapPin className="h-3 w-3" />}
+      {showIcon && <span className="font-medium">📍</span>}
       <span className="truncate max-w-40">{label}</span>
     </span>
   );
