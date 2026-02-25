@@ -242,6 +242,12 @@ export interface Violation {
   // ============================================================
   isE2Aggregated?: boolean;
   e2Elements?: E2ElementSubItem[];
+  
+  // ============================================================
+  // E3 AGGREGATED ELEMENT REPORTING (Obscured/Restricted User Control)
+  // ============================================================
+  isE3Aggregated?: boolean;
+  e3Elements?: E3ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -573,6 +579,20 @@ export interface E2ElementSubItem {
   recommendedFix?: string; // Actionable fix suggestion
   confidence: number;     // 0.60–0.80
   evaluationMethod?: 'llm_only_code' | 'llm_perceptual';
+  deduplicationKey: string;
+}
+
+// E3 Element sub-item for aggregated user control reporting
+export interface E3ElementSubItem {
+  elementLabel: string;   // e.g., "Dialog component", "Subscription form"
+  elementType?: string;   // dialog, form, checkbox, stepper, etc.
+  location: string;       // file path
+  subCheck?: 'E3.D1' | 'E3.D2' | 'E3.D3' | 'E3.D4'; // Which sub-check triggered
+  detection?: string;     // Summary of restriction detected
+  evidence?: string;      // Specific evidence citations
+  recommendedFix?: string; // Actionable fix suggestion
+  confidence: number;     // 0.60–0.85
+  evaluationMethod?: 'deterministic_structural' | 'hybrid_structural_llm' | 'llm_perceptual';
   deduplicationKey: string;
 }
 
