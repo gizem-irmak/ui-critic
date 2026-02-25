@@ -86,13 +86,20 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     }
 
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
-    const controlRegex = /<(input|textarea|select)\b([^>]*)(?:>|\/>)/gi;
+    // Native tags (case-sensitive, lowercase only) + React component controls
+    const controlRegex = /(<(?:input|textarea|select)\b([^>]*)(?:>|\/>))|(<(?:Input|Textarea|SelectTrigger)\b([^>]*)(?:>|\/>))/g;
     let match;
     while ((match = controlRegex.exec(content)) !== null) {
-      const tag = match[1].toLowerCase();
-      const attrs = match[2];
+      const fullMatch = match[1] || match[3];
+      const rawTag = fullMatch.match(/^<(\w+)/)?.[1] || '';
+      const attrs = match[2] || match[4] || '';
+      const isReactComponent = /^[A-Z]/.test(rawTag);
+      const tag = isReactComponent ? rawTag : rawTag.toLowerCase();
+      if (tag === 'Select') continue;
+      const tagLower = tag.toLowerCase();
+      const displayTag = tag === 'SelectTrigger' ? 'SelectTrigger (role=combobox)' : tagLower;
 
-      if (tag === 'input') {
+      if (tagLower === 'input') {
         const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
         const inputType = (typeMatch?.[1] || typeMatch?.[2] || 'text').toLowerCase();
         if (EXCLUDED_INPUT_TYPES.has(inputType)) continue;
@@ -104,7 +111,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const lineNumber = linesBefore.length;
 
       const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
-      const inputSubtype = tag === 'input' ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
+      const inputSubtype = tagLower === 'input' ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
 
       const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
       const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
@@ -127,7 +134,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const elementName = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
-      const label = placeholder || elementName || `<${tag}> control`;
+      const label = placeholder || elementName || `<${displayTag}> control`;
 
       if (hasValidLabel) continue;
 
@@ -137,7 +144,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           seenKeys.add(dedupeKey);
           findings.push({
             elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
-            elementLabel: label, elementType: tag, sourceLabel: label, filePath,
+            elementLabel: label, elementType: displayTag, sourceLabel: label, filePath,
             subCheck: 'A5.2', subCheckLabel: 'Placeholder used as label', classification: 'confirmed',
             detection: `<${tag}> placeholder-only`, evidence: `placeholder="${placeholder}"`,
             explanation: `Placeholder is the only label.`,
@@ -153,7 +160,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         seenKeys.add(dedupeKey);
         findings.push({
           elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
-          elementLabel: label, elementType: tag, sourceLabel: label, filePath,
+          elementLabel: label, elementType: displayTag, sourceLabel: label, filePath,
           subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
           detection: `<${tag}> no label`, evidence: `no label source`,
           explanation: `No accessible name.`,
@@ -279,13 +286,17 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     const fileLabels = labelsByFile.get(filePath)!;
 
     const EXCLUDED_INPUT_TYPES2 = new Set(['hidden', 'submit', 'reset', 'button']);
-    const controlRegex2 = /<(input|textarea|select)\b([^>]*)(?:>|\/>)/gi;
+    const controlRegex2 = /(<(?:input|textarea|select)\b([^>]*)(?:>|\/>))|(<(?:Input|Textarea|SelectTrigger)\b([^>]*)(?:>|\/>))/g;
     let match2;
     while ((match2 = controlRegex2.exec(content)) !== null) {
-      const tag = match2[1].toLowerCase();
-      const attrs = match2[2];
+      const fullMatch2 = match2[1] || match2[3];
+      const rawTag2 = fullMatch2.match(/^<(\w+)/)?.[1] || '';
+      const attrs = match2[2] || match2[4] || '';
+      const tag = /^[A-Z]/.test(rawTag2) ? rawTag2 : rawTag2.toLowerCase();
+      if (tag === 'Select') continue;
+      const tagLower2 = tag.toLowerCase();
 
-      if (tag === 'input') {
+      if (tagLower2 === 'input') {
         const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
         const inputType = (typeMatch?.[1] || typeMatch?.[2] || 'text').toLowerCase();
         if (EXCLUDED_INPUT_TYPES2.has(inputType)) continue;
@@ -842,4 +853,63 @@ Deno.test("Wrapped in uppercase Label = no violation", () => {
   const files = new Map([["src/Form.tsx", `<Label>Name <input type="text" /></Label>`]]);
   const results = detectA5FormLabels(files);
   assertEquals(results.length, 0, "Wrapped in <Label> = valid");
+});
+
+// ===== SELECTTRIGGER TESTS =====
+
+Deno.test("SelectTrigger with Label htmlFor + id linkage = no violation", () => {
+  const files = new Map([["src/Doctors.tsx", `
+    <Label htmlFor="doc-specialty">Specialty</Label>
+    <Select>
+      <SelectTrigger id="doc-specialty">
+        <SelectValue placeholder="Select specialty" />
+      </SelectTrigger>
+    </Select>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Label htmlFor + SelectTrigger id = labeled");
+});
+
+Deno.test("SelectTrigger without any label = flagged", () => {
+  const files = new Map([["src/Filter.tsx", `
+    <Select>
+      <SelectTrigger>
+        <SelectValue placeholder="Filter..." />
+      </SelectTrigger>
+    </Select>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "SelectTrigger with no label should be flagged");
+  assert(results[0].elementType.includes("SelectTrigger"), "Should report as SelectTrigger");
+});
+
+Deno.test("SelectTrigger with aria-label = no violation", () => {
+  const files = new Map([["src/Filter.tsx", `
+    <SelectTrigger aria-label="Filter by status" id="status-filter">
+      <SelectValue placeholder="Status" />
+    </SelectTrigger>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "aria-label on SelectTrigger = labeled");
+});
+
+Deno.test("Uppercase <Select> wrapper is NOT matched as a control", () => {
+  const files = new Map([["src/Form.tsx", `
+    <Label htmlFor="my-select">Pick one</Label>
+    <Select>
+      <SelectTrigger id="my-select">
+        <SelectValue placeholder="Choose" />
+      </SelectTrigger>
+    </Select>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "<Select> wrapper should not be flagged");
+});
+
+Deno.test("Input with aria-label = no violation", () => {
+  const files = new Map([["src/Search.tsx", `
+    <Input type="search" aria-label="Search patients" placeholder="Search..." />
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "aria-label on Input = labeled");
 });

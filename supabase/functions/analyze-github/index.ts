@@ -1918,13 +1918,20 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     }
 
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
-    const controlRegex = /<(input|textarea|select)\b([^>]*)(?:>|\/>)/gi;
+    // Native tags (case-sensitive, lowercase only) + React component controls
+    // Do NOT match <Select> (Radix wrapper — not the actual interactive element)
+    const controlRegex = /(<(?:input|textarea|select)\b([^>]*)(?:>|\/>))|(<(?:Input|Textarea|SelectTrigger)\b([^>]*)(?:>|\/>))/g;
     let match;
     while ((match = controlRegex.exec(content)) !== null) {
-      const tag = match[1].toLowerCase();
-      const attrs = match[2];
+      const fullMatch = match[1] || match[3];
+      const rawTag = fullMatch.match(/^<(\w+)/)?.[1] || '';
+      const attrs = match[2] || match[4] || '';
+      const isReactComponent = /^[A-Z]/.test(rawTag);
+      const tag = isReactComponent ? rawTag : rawTag.toLowerCase();
+      if (tag === 'Select') continue;
 
-      if (tag === 'input') {
+      const tagLower = tag.toLowerCase();
+      if (tagLower === 'input') {
         const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
         const inputType = (typeMatch?.[1] || typeMatch?.[2] || 'text').toLowerCase();
         if (EXCLUDED_INPUT_TYPES.has(inputType)) continue;
@@ -1934,8 +1941,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const linesBefore = content.slice(0, match.index).split('\n');
       const lineNumber = linesBefore.length;
+      const displayTag = tag === 'SelectTrigger' ? 'SelectTrigger (role=combobox)' : tagLower;
       const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
-      const inputSubtype = tag === 'input' ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
+      const inputSubtype = tagLower === 'input' ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
 
       const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
       const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
@@ -1958,7 +1966,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const elementName = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
-      const label = placeholder || elementName || `<${tag}> control`;
+      const label = placeholder || elementName || `<${displayTag}> control`;
       const fileName = filePath.split('/').pop() || filePath;
 
       // Build selector hints
@@ -1982,12 +1990,12 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           if (!seenKeys.has(dedupeKey)) {
             seenKeys.add(dedupeKey);
             findings.push({
-              elementLabel: label, elementType: tag, inputSubtype, sourceLabel: label, filePath, componentName,
+              elementLabel: label, elementType: displayTag, inputSubtype, sourceLabel: label, filePath, componentName,
               subCheck: 'A5.3', subCheckLabel: 'Broken label association', classification: 'confirmed',
-              detection: `Duplicate id="${controlId}"`, evidence: `<${tag} id="${controlId}"> at ${filePath}:${lineNumber}`,
+              detection: `Duplicate id="${controlId}"`, evidence: `<${displayTag} id="${controlId}"> at ${filePath}:${lineNumber}`,
               explanation: `Multiple elements share id="${controlId}", creating ambiguous label association.`,
               confidence: 0.92,
-              correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nDuplicate id="${controlId}".\n\nRecommended fix:\nAssign unique ids and update <label for> attributes.`,
+              correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nDuplicate id="${controlId}".\n\nRecommended fix:\nAssign unique ids and update <label for> attributes.`,
               deduplicationKey: dedupeKey,
               selectorHints, controlId, labelingMethod: 'broken (duplicate id)',
             });
@@ -2003,12 +2011,12 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         if (!seenKeys.has(dedupeKey)) {
           seenKeys.add(dedupeKey);
           findings.push({
-            elementLabel: label, elementType: tag, inputSubtype, sourceLabel: label, filePath, componentName,
+            elementLabel: label, elementType: displayTag, inputSubtype, sourceLabel: label, filePath, componentName,
             subCheck: 'A5.2', subCheckLabel: 'Placeholder used as label', classification: 'confirmed',
-            detection: `<${tag}> placeholder-only label`, evidence: `<${tag} placeholder="${placeholder}"> at ${filePath}:${lineNumber}`,
+            detection: `<${displayTag}> placeholder-only label`, evidence: `<${displayTag} placeholder="${placeholder}"> at ${filePath}:${lineNumber}`,
             explanation: `Placeholder "${placeholder}" is the only label. Placeholders are not sufficient labels.`,
             confidence: 0.95,
-            correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nPlaceholder-only label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
+            correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nPlaceholder-only label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
             deduplicationKey: dedupeKey,
             selectorHints, controlId, labelingMethod: 'none (placeholder only)',
           });
@@ -2020,12 +2028,12 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       if (!seenKeys.has(dedupeKey)) {
         seenKeys.add(dedupeKey);
         findings.push({
-          elementLabel: label, elementType: tag, inputSubtype, sourceLabel: label, filePath, componentName,
+          elementLabel: label, elementType: displayTag, inputSubtype, sourceLabel: label, filePath, componentName,
           subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
-          detection: `<${tag}> has no label`, evidence: `<${tag}> at ${filePath}:${lineNumber}`,
+          detection: `<${displayTag}> has no label`, evidence: `<${displayTag}> at ${filePath}:${lineNumber}`,
           explanation: `Form control has no accessible name.`,
           confidence: 0.97,
-          correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nNo programmatic label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
+          correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nNo programmatic label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
           deduplicationKey: dedupeKey,
           selectorHints, controlId, labelingMethod: 'none',
         });
