@@ -34,14 +34,6 @@ function A5ElementItem({ element, isConfirmed, compact = false }: {
               <span className={cn('font-medium', compact ? 'text-sm' : '')}>
                 {displayLabel}
               </span>
-              {element.elementType && (
-                <span className={cn(
-                  'text-muted-foreground italic truncate max-w-48',
-                  compact ? 'text-xs' : 'text-sm'
-                )}>
-                  {element.elementType}{element.inputSubtype ? `[${element.inputSubtype}]` : ''}
-                </span>
-              )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               {isOpen ? (
@@ -60,11 +52,6 @@ function A5ElementItem({ element, isConfirmed, compact = false }: {
 
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Element */}
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-24">Element:</span>
-              <span>{element.elementType ? `<${element.elementType}>${element.inputSubtype ? `[${element.inputSubtype}]` : ''}` : displayLabel}</span>
-            </div>
 
             {/* Detection */}
             {element.detection && (
