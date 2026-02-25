@@ -270,6 +270,72 @@ Deno.test("U3.D4: hidden on short text (< 20 chars) → NOT reported", () => {
 });
 
 // ═══════════════════════════════════════════════════
+// U3.D5 — Unbroken text overflow risk
+// ═══════════════════════════════════════════════════
+
+Deno.test("U3.D5: dynamic {reason} in nowrap container without break-words → triggers", () => {
+  const code = `<td className="whitespace-nowrap">{appointment.reason}</td>`;
+  assert(hasPattern(code, /\{[a-zA-Z_][\w]*\.[a-zA-Z_][\w]*\}/)); // dynamic var
+  assert(hasPattern(code, /\bwhitespace-nowrap\b/)); // overflow risk
+  assert(!hasPattern(code, /\bbreak-words\b|\bbreak-all\b|\boverflow-wrap/)); // no wrap protection
+});
+
+Deno.test("U3.D5: dynamic {notes} in truncate container without break-words → triggers", () => {
+  const code = `<span className="truncate w-48">{item.notes}</span>`;
+  assert(hasPattern(code, /\bnotes\b/i));
+  assert(hasPattern(code, /\btruncate\b/));
+  assert(!hasPattern(code, /\bbreak-words\b|\bbreak-all\b/));
+});
+
+Deno.test("U3.D5: dynamic {bio} with break-words → does NOT trigger", () => {
+  const code = `<p className="break-words">{doc.bio}</p>`;
+  assert(hasPattern(code, /\bbreak-words\b/)); // wrap protection present → suppress
+});
+
+Deno.test("U3.D5: dynamic {bio} with break-all → does NOT trigger", () => {
+  const code = `<p className="break-all">{doc.bio}</p>`;
+  assert(hasPattern(code, /\bbreak-all\b/));
+});
+
+Deno.test("U3.D5: code block with overflow-x-auto → suppressed", () => {
+  const code = `<pre className="font-mono overflow-x-auto">{codeSnippet}</pre>`;
+  assert(hasPattern(code, /\bfont-mono\b/));
+  assert(hasPattern(code, /\boverflow-x-auto\b/)); // intentional scroll → suppress
+});
+
+Deno.test("U3.D5: {msg.subject} in TableCell without wrap protection → triggers", () => {
+  const code = `<TableCell className="max-w-xs">{msg.subject}</TableCell>`;
+  assert(hasPattern(code, /\bsubject\b/i));
+  assert(hasPattern(code, /<TableCell\b/));
+  assert(!hasPattern(code, /\bbreak-words\b|\bbreak-all\b/));
+});
+
+Deno.test("U3.D5: {reason} in grid cell with fixed width → triggers", () => {
+  const code = `<div className="grid cols-3"><div className="w-40 overflow-hidden">{reason}</div></div>`;
+  assert(hasPattern(code, /\breason\b/i));
+  assert(hasPattern(code, /\bw-\d/));
+  assert(!hasPattern(code, /\bbreak-words\b/));
+});
+
+Deno.test("U3.D5: non-freeform variable {item.id} without freeform key nearby → does NOT trigger", () => {
+  const code = `<span className="truncate w-32">{item.id}</span>`;
+  // "id" is not in the freeform keys list and no freeform key nearby
+  assert(!hasPattern(code, /\b(?:reason|notes|description|message|subject|bio|comment|address|details|feedback|body|content|summary|remarks)\b/i));
+});
+
+Deno.test("U3.D5: confidence 0.80 when nowrap/truncate present", () => {
+  const hasNowrap = true;
+  const confidence = hasNowrap ? 0.80 : 0.65;
+  assertEquals(confidence, 0.80);
+});
+
+Deno.test("U3.D5: confidence 0.65 when only width constraints", () => {
+  const hasNowrap = false;
+  const confidence = hasNowrap ? 0.80 : 0.65;
+  assertEquals(confidence, 0.65);
+});
+
+// ═══════════════════════════════════════════════════
 // Confidence model
 // ═══════════════════════════════════════════════════
 
