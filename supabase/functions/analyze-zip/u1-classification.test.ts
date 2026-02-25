@@ -100,6 +100,36 @@ function classifyButtonEmphasis(params: {
   return { emphasis: 'unknown', styleKey: null };
 }
 
+// Unified CTA emphasis classifier — tool-agnostic
+function classifyCTAEmphasis(params: {
+  variant: string | null;
+  variantConfig: CvaVariantConfig | null;
+  className: string;
+}): { emphasis: Emphasis; cue: string } {
+  const { variant, variantConfig, className } = params;
+  const s = (className || '').toLowerCase();
+  if (variantConfig && (variant || variantConfig.defaultVariant)) {
+    const resolvedVariant = variant || variantConfig.defaultVariant || 'default';
+    const result = classifyButtonEmphasis({ resolvedVariant, variantConfig, instanceClassName: className });
+    if (result.emphasis !== 'unknown') return { emphasis: result.emphasis, cue: `variant="${resolvedVariant}"` };
+  }
+  if (/\bbg-primary\b/.test(s)) return { emphasis: 'high', cue: 'bg-primary' };
+  if (/\bbg-\w+-[6-8]00\b/.test(s)) { const m = s.match(/\b(bg-\w+-[6-8]00)\b/); return { emphasis: 'high', cue: m?.[1] || 'bg-dark' }; }
+  if (/\btext-white\b/.test(s) && /\bbg-/.test(s) && !/\bbg-transparent\b/.test(s)) { const bgM = s.match(/\b(bg-\S+)\b/); return { emphasis: 'high', cue: `${bgM?.[1] || 'bg-*'} + text-white` }; }
+  if (/\b(?:btn-primary|button-primary|cta-primary|main-action)\b/.test(s)) return { emphasis: 'high', cue: 'semantic:btn-primary' };
+  if (/\bprimary\b/.test(s) && !/\b(?:text-primary|bg-primary|border-primary|ring-primary|outline-primary)\b/.test(s)) return { emphasis: 'high', cue: 'semantic:primary' };
+  if (/style\s*=/.test(s) && /background-?color/i.test(s) && /color\s*:\s*(?:white|#fff)/i.test(s)) return { emphasis: 'high', cue: 'inline-style:filled' };
+  if (/\b(?:ghost|link)\b/.test(s)) return { emphasis: 'low', cue: 'semantic:ghost/link' };
+  if (/\bborder\b/.test(s) && !/\bbg-/.test(s)) return { emphasis: 'low', cue: 'border-only' };
+  if (/\bbg-transparent\b/.test(s)) return { emphasis: 'low', cue: 'bg-transparent' };
+  if (/\bunderline\b/.test(s)) return { emphasis: 'low', cue: 'underline' };
+  if (/\b(?:btn-outline|button-outline|btn-ghost|btn-link|btn-text)\b/.test(s)) return { emphasis: 'low', cue: 'semantic:outline' };
+  if (/\b(?:secondary|btn-secondary|button-secondary)\b/.test(s)) return { emphasis: 'medium', cue: 'semantic:secondary' };
+  if (/\bbg-(secondary|muted|gray-\d+|slate-\d+)\b/.test(s)) return { emphasis: 'medium', cue: 'bg-muted' };
+  if (/\b(?:outline)\b/.test(s) && !/\b(?:btn-outline|button-outline)\b/.test(s)) return { emphasis: 'medium', cue: 'outline' };
+  return { emphasis: 'unknown', cue: '' };
+}
+
 interface ButtonUsage {
   label: string;
   variant: string | null;
@@ -133,87 +163,80 @@ function extractButtonUsagesFromJsx(content: string, buttonLocalNames: Set<strin
   return usages;
 }
 
+// Extract all CTA candidates: buttons + anchor-as-button
+function extractCTAElements(content: string, buttonLocalNames: Set<string>, baseOffset = 0): ButtonUsage[] {
+  const usages = extractButtonUsagesFromJsx(content, buttonLocalNames, baseOffset);
+  const anchorRegex = /<a\b([^>]*)>([^<]*(?:<(?!\/a)[^<]*)*)<\/a>/gi;
+  let aMatch;
+  while ((aMatch = anchorRegex.exec(content)) !== null) {
+    const attrs = aMatch[1] || '';
+    const children = aMatch[2] || '';
+    const isRoleButton = /role\s*=\s*["']button["']/i.test(attrs);
+    const hasButtonClass = /\b(?:btn|button|cta)\b/i.test(attrs);
+    if (!isRoleButton && !hasButtonClass) continue;
+    const classMatch = attrs.match(/(?:className|class)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[`"']([^`"']+)[`"']\})/);
+    const className = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
+    let label = children.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    if (!label) {
+      const ariaMatch = attrs.match(/(?:aria-label|title)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      label = ariaMatch ? (ariaMatch[1] || ariaMatch[2] || 'Link') : 'Link';
+    }
+    usages.push({ label, variant: null, className, hasOnClick: /onClick\s*=/.test(attrs), offset: baseOffset + aMatch.index });
+  }
+  return usages;
+}
+
 interface ActionGroup {
   containerType: string;
   buttons: ButtonUsage[];
   lineContext: string;
   offset: number;
+  containerEnd: number;
 }
 
 function extractActionGroups(content: string, buttonLocalNames: Set<string>): ActionGroup[] {
   const groups: ActionGroup[] = [];
-
-  const openerRegex = /<(CardFooter|ButtonGroup|div|footer|section|nav)\b([^>]*)>/gi;
+  const NAMED_CONTAINERS = 'CardFooter|ModalFooter|DialogFooter|DialogActions|ButtonGroup|Actions|Toolbar|HeaderActions|FormActions';
+  const LAYOUT_CLASS_RE = /(?:flex|grid|gap-|justify-|items-|space-x-|space-y-|actions|footer|toolbar|button-group)/;
+  const openerRegex = new RegExp(`<(${NAMED_CONTAINERS}|div|footer|section|nav|header|aside|span)\\b([^>]*)>`, 'gi');
   let openerMatch;
   while ((openerMatch = openerRegex.exec(content)) !== null) {
     const tagName = openerMatch[1];
     const attrs = openerMatch[2] || '';
-    const isNamedContainer = /^(CardFooter|ButtonGroup)$/i.test(tagName);
-
-    if (!isNamedContainer) {
-      const hasLayoutClass = /(?:flex|grid|gap-|justify-|items-|space-x-|space-y-)/.test(attrs);
-      if (!hasLayoutClass) continue;
-    }
-
+    const isNamedContainer = new RegExp(`^(${NAMED_CONTAINERS})$`, 'i').test(tagName);
+    if (!isNamedContainer) { if (!LAYOUT_CLASS_RE.test(attrs)) continue; }
     const containerType = isNamedContainer ? tagName : 'FlexContainer';
     const openTagEnd = openerMatch.index + openerMatch[0].length;
-
     const nestRegex = new RegExp(`<(/?)(${tagName})\\b`, 'gi');
     nestRegex.lastIndex = openTagEnd;
     let depth = 1;
     let nestMatch;
     let containerEnd = -1;
     while ((nestMatch = nestRegex.exec(content)) !== null) {
-      if (nestMatch[1] === '/') {
-        depth--;
-        if (depth === 0) {
-          const closeIdx = content.indexOf('>', nestMatch.index);
-          containerEnd = closeIdx >= 0 ? closeIdx + 1 : nestMatch.index + nestMatch[0].length;
-          break;
-        }
-      } else {
-        depth++;
-      }
+      if (nestMatch[1] === '/') { depth--; if (depth === 0) { const closeIdx = content.indexOf('>', nestMatch.index); containerEnd = closeIdx >= 0 ? closeIdx + 1 : nestMatch.index + nestMatch[0].length; break; } } else { depth++; }
     }
     if (containerEnd < 0) continue;
-
     const containerContent = content.slice(openTagEnd, containerEnd);
-    const buttons = extractButtonUsagesFromJsx(containerContent, buttonLocalNames, openTagEnd);
-
+    const buttons = extractCTAElements(containerContent, buttonLocalNames, openTagEnd);
     if (buttons.length >= 2) {
-      groups.push({
-        containerType,
-        buttons,
-        lineContext: content.slice(openerMatch.index, Math.min(openerMatch.index + 200, containerEnd)),
-        offset: openerMatch.index,
-      });
+      groups.push({ containerType, buttons, lineContext: content.slice(openerMatch.index, Math.min(openerMatch.index + 200, containerEnd)), offset: openerMatch.index, containerEnd });
     }
   }
-
   const sorted = groups.sort((a, b) => a.offset - b.offset);
   const deduped: ActionGroup[] = [];
   for (const g of sorted) {
-    const gEnd = g.offset + g.lineContext.length;
-    const containedByExisting = deduped.some(d => {
-      const dEnd = d.offset + d.lineContext.length;
-      return d.offset <= g.offset && dEnd >= gEnd;
-    });
+    const gEnd = g.containerEnd;
+    const containedByExisting = deduped.some(d => d.offset <= g.offset && d.containerEnd >= gEnd);
     if (!containedByExisting) {
-      for (let i = deduped.length - 1; i >= 0; i--) {
-        const dEnd = deduped[i].offset + deduped[i].lineContext.length;
-        if (g.offset <= deduped[i].offset && gEnd >= dEnd) {
-          deduped.splice(i, 1);
-        }
-      }
+      for (let i = deduped.length - 1; i >= 0; i--) { if (g.offset <= deduped[i].offset && gEnd >= deduped[i].containerEnd) { deduped.splice(i, 1); } }
       deduped.push(g);
     }
   }
-
   return deduped;
 }
 
 // =====================
-// Inline detectU1PrimaryAction (same as in index.ts)
+// Inline detectU1PrimaryAction (matches generalized index.ts)
 // =====================
 
 interface U1Finding {
@@ -292,7 +315,6 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     if (!/\.(tsx|jsx)$/.test(filePath)) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
-    // No longer skip entire file — scoped suppression handled below
 
     const buttonLocalNames = new Set<string>();
     const importRegex = /import\s*\{([^}]+)\}\s*from\s*["']([^"']*components\/ui\/button[^"']*)["']/g;
@@ -309,61 +331,78 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
     if (exportedFn?.[1]) componentName = exportedFn[1];
 
+    // U1.2: tool-agnostic detection with line-window fallback
     const u12SuppressedLabels = new Set<string>();
     const actionGroups = extractActionGroups(content, buttonLocalNames);
-    for (const group of actionGroups) {
-      // Scoped suppression: skip if inside a U1.1 form
-      if (isInsideU11Form(filePath, group.offset)) continue;
-      const ctas: Array<{ label: string; emphasis: Emphasis; styleKey: string | null }> = [];
-      for (const btn of group.buttons) {
-        if (buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)) {
-          const resolvedVariant = btn.variant || buttonImpl.config.defaultVariant || 'default';
-          const classified = classifyButtonEmphasis({ resolvedVariant, variantConfig: buttonImpl.config, instanceClassName: btn.className });
-          ctas.push({ label: btn.label, emphasis: classified.emphasis, styleKey: classified.styleKey });
-        } else {
-          const twEmphasis = classifyTailwindEmphasis(btn.className);
-          const styleKey = twEmphasis === 'high' ? 'tw-filled' : twEmphasis === 'low' ? 'tw-outline' : twEmphasis === 'medium' ? 'tw-secondary' : null;
-          ctas.push({ label: btn.label, emphasis: twEmphasis, styleKey });
-        }
+    const coveredOffsets = new Set<number>();
+
+    const processU12Region = (
+      ctaUsages: ButtonUsage[],
+      regionLabel: string,
+      regionType: 'container' | 'line-window',
+    ) => {
+      const ctas: Array<{ label: string; emphasis: Emphasis; cue: string }> = [];
+      for (const btn of ctaUsages) {
+        const result = classifyCTAEmphasis({
+          variant: btn.variant,
+          variantConfig: buttonImpl?.config || null,
+          className: btn.className,
+        });
+        ctas.push({ label: btn.label, emphasis: result.emphasis, cue: result.cue });
       }
-      if (ctas.some(c => c.emphasis === 'unknown' || !c.styleKey)) continue;
       const highs = ctas.filter(c => c.emphasis === 'high');
-      if (highs.length >= 2) {
-        const highStyleKeys = new Set(highs.map(h => h.styleKey));
-        if (highStyleKeys.size === 1) {
-          const groupKey = `${filePath}|${group.containerType}`;
-          if (seenU12Groups.has(groupKey)) continue;
-          seenU12Groups.add(groupKey);
-          const labels = ctas.map(c => c.label);
-          const sharedToken = highs[0].styleKey || 'default';
+      if (highs.length < 2) return;
+      const groupKey = `${filePath}|${regionLabel}`;
+      if (seenU12Groups.has(groupKey)) return;
+      seenU12Groups.add(groupKey);
+      const labels = ctas.map(c => c.label);
+      const cueList = highs.map(h => h.cue).join(', ');
+      let u12Confidence = 0.60;
+      if (regionType === 'container') u12Confidence += 0.10;
+      const strongCues = highs.filter(h => /variant=|bg-\w+-[6-8]00|bg-primary|btn-primary|semantic:/.test(h.cue));
+      if (strongCues.length === highs.length) u12Confidence += 0.10;
+      const offsets = ctaUsages.map(b => b.offset);
+      if (offsets.length >= 2 && Math.max(...offsets) - Math.min(...offsets) < 500) u12Confidence += 0.05;
+      u12Confidence = Math.min(u12Confidence, 0.90);
+      findings.push({
+        subCheck: 'U1.2', subCheckLabel: 'Multiple equivalent CTAs', classification: 'potential',
+        elementLabel: `${componentName} — ${regionLabel}`, elementType: 'button group', filePath,
+        detection: `${highs.length}+ equivalent high-emphasis CTAs in the same region`,
+        evidence: `${labels.join(', ')} — emphasis cues: [${cueList}] (${regionType === 'container' ? regionLabel : 'line-window proximity'})`,
+        explanation: `${highs.length} CTA buttons share equivalent high-emphasis styling in the same UI region.`,
+        confidence: u12Confidence,
+        advisoryGuidance: 'Visually distinguish the primary action.',
+        deduplicationKey: `U1.2|${filePath}|${regionLabel}`,
+      });
+      for (const cta of ctas) { u12SuppressedLabels.add(cta.label.trim().toLowerCase()); }
+    };
 
-          // Signal-based confidence for U1.2
-          let u12Confidence = 0.60;
-          u12Confidence += 0.10; // same parent container
-          u12Confidence += 0.10; // same high-emphasis styling
-          if (group.containerType === 'CardFooter' || /flex.*row|flex-row|gap-|space-x-/.test(group.lineContext)) {
-            u12Confidence += 0.05;
-          }
-          const hasSemanticDiff = group.buttons.some(b => /aria-describedby/.test(b.className || ''));
-          if (!hasSemanticDiff) {
-            u12Confidence += 0.05;
-          }
-          u12Confidence = Math.min(u12Confidence, 0.90);
+    for (const group of actionGroups) {
+      if (isInsideU11Form(filePath, group.offset)) continue;
+      for (const btn of group.buttons) coveredOffsets.add(btn.offset);
+      processU12Region(group.buttons, group.containerType, 'container');
+    }
 
-          findings.push({
-            subCheck: 'U1.2', subCheckLabel: 'Multiple equivalent CTAs', classification: 'potential',
-            elementLabel: `${componentName} — ${group.containerType}`, elementType: 'button group', filePath,
-            detection: `${highs.length} CTAs share high-emphasis styling`,
-            evidence: `${labels.join(', ')} — all use same high-emphasis styling (${sharedToken})`,
-            explanation: `${highs.length} sibling CTA buttons share identical high-emphasis styling.`,
-            confidence: u12Confidence,
-            advisoryGuidance: 'Visually distinguish the primary action.',
-            deduplicationKey: `U1.2|${filePath}|${group.containerType}`,
-          });
-          for (const cta of ctas) {
-            u12SuppressedLabels.add(cta.label.trim().toLowerCase());
+    // Line-window fallback
+    const LINE_WINDOW_CHARS = 1600;
+    const allCTAsInFile = extractCTAElements(content, buttonLocalNames);
+    const orphanedCTAs = allCTAsInFile.filter(c => !coveredOffsets.has(c.offset));
+    if (orphanedCTAs.length >= 2) {
+      const sortedOrphans = orphanedCTAs.sort((a, b) => a.offset - b.offset);
+      let windowStart = 0;
+      while (windowStart < sortedOrphans.length) {
+        const windowCTAs = [sortedOrphans[windowStart]];
+        let windowEnd = windowStart + 1;
+        while (windowEnd < sortedOrphans.length && sortedOrphans[windowEnd].offset - sortedOrphans[windowStart].offset <= LINE_WINDOW_CHARS) {
+          windowCTAs.push(sortedOrphans[windowEnd]); windowEnd++;
+        }
+        if (windowCTAs.length >= 2) {
+          const notInForm = windowCTAs.filter(c => !isInsideU11Form(filePath, c.offset));
+          if (notInForm.length >= 2) {
+            processU12Region(notInForm, `line-window@${sortedOrphans[windowStart].offset}`, 'line-window');
           }
         }
+        windowStart = windowEnd;
       }
     }
 
@@ -371,34 +410,20 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     for (const btn of allButtons) {
       const labelLower = btn.label.trim().toLowerCase();
       if (GENERIC_LABELS.has(labelLower)) {
-        // Scoped suppression: skip if inside a U1.1 form
         if (isInsideU11Form(filePath, btn.offset)) continue;
         if (u12SuppressedLabels.has(labelLower)) continue;
         const dedupeKey = `U1.3|${filePath}|${labelLower}`;
         if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
-
-        // Signal-based confidence for U1.3
         const HIGH_RISK_GENERICS = new Set(['continue', 'next', 'submit', 'save', 'confirm', 'ok']);
         let u13Confidence = 0.55;
-        if (HIGH_RISK_GENERICS.has(labelLower)) {
-          u13Confidence += 0.10;
-        }
+        if (HIGH_RISK_GENERICS.has(labelLower)) u13Confidence += 0.10;
         const hasNearbyHeading = /<(?:h[1-6]|label|legend)\b[^>]*>/.test(content);
-        if (!hasNearbyHeading) {
-          u13Confidence += 0.05;
-        }
+        if (!hasNearbyHeading) u13Confidence += 0.05;
         const btnEmphasis = buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)
-          ? classifyButtonEmphasis({
-              resolvedVariant: btn.variant || buttonImpl.config.defaultVariant || 'default',
-              variantConfig: buttonImpl.config,
-              instanceClassName: btn.className,
-            }).emphasis
+          ? classifyButtonEmphasis({ resolvedVariant: btn.variant || buttonImpl.config.defaultVariant || 'default', variantConfig: buttonImpl.config, instanceClassName: btn.className }).emphasis
           : classifyTailwindEmphasis(btn.className);
-        if (btnEmphasis === 'high') {
-          u13Confidence += 0.05;
-        }
+        if (btnEmphasis === 'high') u13Confidence += 0.05;
         u13Confidence = Math.min(u13Confidence, 0.80);
-
         findings.push({
           subCheck: 'U1.3', subCheckLabel: 'Ambiguous CTA label', classification: 'potential',
           elementLabel: `"${btn.label}" button`, elementType: 'button', filePath,
@@ -805,4 +830,114 @@ export default function Actions() {
   const results = detectU1PrimaryAction(files);
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assert(u12 !== undefined, "Expected U1.2 for bg-primary siblings in flex container");
+});
+
+// ========== GENERALIZED U1.2 TESTS ==========
+
+Deno.test("U1.2: Semantic class 'btn-primary' on both → fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/CustomActions.tsx", `
+export default function CustomActions() {
+  return (
+    <div className="flex gap-2">
+      <button className="btn-primary px-4 py-2">Create</button>
+      <button className="btn-primary px-4 py-2">Import</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for btn-primary semantic class");
+  assert(u12!.evidence.includes("btn-primary") || u12!.evidence.includes("semantic"), "Evidence should mention semantic cue");
+});
+
+Deno.test("U1.2: Anchor role=button with btn-primary → fires alongside button", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/MixedCTAs.tsx", `
+export default function MixedCTAs() {
+  return (
+    <div className="flex gap-4">
+      <button className="bg-primary text-white px-4 py-2">Save</button>
+      <a role="button" className="btn-primary px-4 py-2">Export</a>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for mixed button + anchor CTAs");
+  assert(u12!.evidence.includes("Export"), "Evidence should include anchor CTA label");
+});
+
+Deno.test("U1.2: Different emphasis (btn-primary + btn-secondary) → no fire", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/GoodHierarchy.tsx", `
+export default function GoodHierarchy() {
+  return (
+    <div className="flex gap-2">
+      <button className="btn-primary px-4 py-2">Save</button>
+      <button className="btn-secondary px-4 py-2">Cancel</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assertEquals(u12, undefined, "Should NOT fire when emphasis tiers differ");
+});
+
+Deno.test("U1.2: ModalFooter named container → fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ConfirmDialog.tsx", `
+export default function ConfirmDialog() {
+  return (
+    <ModalFooter>
+      <button className="bg-red-700 text-white px-4 py-2">Delete</button>
+      <button className="bg-blue-700 text-white px-4 py-2">Archive</button>
+    </ModalFooter>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for ModalFooter with two high-emphasis CTAs");
+  assert(u12!.elementLabel.includes("ModalFooter"), "Element label should reference ModalFooter");
+});
+
+Deno.test("U1.2: Line-window fallback for orphaned CTAs → fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/FlatPage.tsx", `
+export default function FlatPage() {
+  return (
+    <div>
+      <h1>Welcome</h1>
+      <button className="bg-primary text-white px-4 py-2">Sign Up</button>
+      <p>Some text</p>
+      <button className="bg-primary text-white px-4 py-2">Get Started</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 via line-window fallback for orphaned CTAs");
+  assert(u12!.evidence.includes("line-window"), "Evidence should mention line-window proximity");
+});
+
+Deno.test("U1.2: DialogFooter named container → fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/EditDialog.tsx", `
+export default function EditDialog() {
+  return (
+    <DialogFooter>
+      <button className="bg-blue-600 text-white">Apply</button>
+      <button className="bg-blue-600 text-white">Revert</button>
+    </DialogFooter>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for DialogFooter");
 });
