@@ -1124,6 +1124,174 @@ function isSummaryInDetails(content: string, position: number, tag: string): boo
   return isInsideInteractiveAncestor(content, position);
 }
 
+// ============================================================
+// A2 Focus Visibility — Fully Deterministic Detection (GitHub)
+// ============================================================
+
+interface A2Finding {
+  elementLabel: string;
+  elementType: string;
+  sourceLabel: string;
+  filePath: string;
+  lineNumber: number;
+  componentName: string;
+  classification: 'confirmed' | 'potential';
+  detection: string;
+  explanation: string;
+  confidence: number;
+  focusClasses: string[];
+  correctivePrompt?: string;
+  potentialSubtype?: 'borderline';
+  potentialReason?: string;
+  deduplicationKey: string;
+  _a2Debug: {
+    outlineRemoved: boolean;
+    hasStrongReplacement: boolean;
+    hasWeakFocusStyling: boolean;
+    matchedTokens: string[];
+  };
+}
+
+function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
+  const findings: A2Finding[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx|ts|js|html|htm)$/.test(filePath)) continue;
+    if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+    if (filePath.includes('node_modules/')) continue;
+
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+    else if (exportedConst?.[1]) componentName = exportedConst[1];
+
+    const fileName = filePath.split('/').pop() || filePath;
+
+    const classNameRegex = /className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[^}]*(?:`([^`]+)`|["']([^"']+)["'])[^}]*\})/g;
+    const classRegex = /\bclass\s*=\s*(?:"([^"]+)"|'([^']+)')/g;
+    const cvaBaseRegex = /(?:cva|cn)\(\s*["'`]([^"'`]+)["'`]/g;
+
+    const classStrings: Array<{ classStr: string; line: number }> = [];
+
+    let match;
+    while ((match = classNameRegex.exec(content)) !== null) {
+      const classStr = match[1] || match[2] || match[3] || match[4] || '';
+      if (!classStr) continue;
+      const line = content.slice(0, match.index).split('\n').length;
+      classStrings.push({ classStr, line });
+    }
+    while ((match = classRegex.exec(content)) !== null) {
+      const classStr = match[1] || match[2] || '';
+      if (!classStr) continue;
+      const line = content.slice(0, match.index).split('\n').length;
+      classStrings.push({ classStr, line });
+    }
+    while ((match = cvaBaseRegex.exec(content)) !== null) {
+      const classStr = match[1] || '';
+      if (!classStr) continue;
+      const line = content.slice(0, match.index).split('\n').length;
+      classStrings.push({ classStr, line });
+    }
+
+    for (const { classStr, line } of classStrings) {
+      const tokens = classStr.split(/\s+/).filter(Boolean);
+
+      const outlineRemovalTokens = tokens.filter(t =>
+        t === 'outline-none' ||
+        t === 'focus:outline-none' ||
+        t === 'focus-visible:outline-none'
+      );
+      const outlineRemoved = outlineRemovalTokens.length > 0;
+      if (!outlineRemoved) continue;
+
+      const strongReplacementTokens = tokens.filter(t =>
+        /^focus(?:-visible)?:ring-(?!0$)/i.test(t) ||
+        /^focus(?:-visible)?:border-(?!0$|none$)/i.test(t) ||
+        /^focus(?:-visible)?:shadow-(?!none$)/i.test(t) ||
+        /^focus(?:-visible)?:outline-(?!none$)/i.test(t)
+      );
+      const hasStrongReplacement = strongReplacementTokens.length > 0;
+
+      if (hasStrongReplacement) {
+        console.log(`A2 PASS (deterministic): ${filePath}:${line} — strong replacement [${strongReplacementTokens.join(', ')}]`);
+        continue;
+      }
+
+      const weakFocusTokens = tokens.filter(t =>
+        /^focus(?:-visible)?:bg-/i.test(t) ||
+        /^focus(?:-visible)?:text-/i.test(t) ||
+        /^focus(?:-visible)?:underline$/i.test(t) ||
+        /^focus(?:-visible)?:opacity-/i.test(t) ||
+        /^focus(?:-visible)?:font-/i.test(t)
+      );
+      const hasWeakFocusStyling = weakFocusTokens.length > 0;
+
+      const contextBefore = content.slice(Math.max(0, content.lastIndexOf('\n', content.indexOf(classStr) - 1)), content.indexOf(classStr));
+      let elementType = 'interactive element';
+      if (/\bbutton\b|<button|<Button/i.test(contextBefore)) elementType = 'button';
+      else if (/\binput\b|<input|<Input/i.test(contextBefore)) elementType = 'input';
+      else if (/\bselect\b|<select|<Select/i.test(contextBefore)) elementType = 'select';
+      else if (/\btextarea\b|<textarea|<Textarea/i.test(contextBefore)) elementType = 'textarea';
+      else if (/\bmenuitem|MenuItem|DropdownMenu|ContextMenu/i.test(contextBefore)) elementType = 'menuitem';
+      else if (/\btab\b|<Tab/i.test(contextBefore)) elementType = 'tab';
+      else if (/\ba\b|<a\b|<Link/i.test(contextBefore)) elementType = 'link';
+
+      const isBorderline = hasWeakFocusStyling;
+      const allMatchedTokens = [...outlineRemovalTokens, ...(isBorderline ? weakFocusTokens : [])];
+
+      const dedupeKey = `${filePath}|${componentName}|${line}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      let detection: string;
+      if (isBorderline) {
+        const details = [...outlineRemovalTokens, ...weakFocusTokens].join(', ');
+        detection = `Focus indicated only by background/text color change (${details}) after outline removal — contrast not verifiable statically`;
+      } else {
+        detection = `Focus indicator removed (${outlineRemovalTokens.join(', ')}) without visible replacement`;
+      }
+
+      const explanation = isBorderline
+        ? 'Issue reason: Outline removed; focus relies only on bg/text change; contrast can\'t be verified statically.\n\nRecommended fix: Add a clear focus-visible indicator (e.g., focus-visible:ring-2 + focus-visible:ring-offset-2) or restore outline.'
+        : 'Element removes the default browser outline without providing a visible focus replacement.';
+
+      const confidence = isBorderline ? 0.68 : 0.92;
+      const sourceLabel = componentName || fileName.replace(/\.\w+$/, '');
+
+      console.log(`A2 ${isBorderline ? 'BORDERLINE' : 'CONFIRMED'} (deterministic): ${filePath}:${line} tokens=[${allMatchedTokens.join(',')}]`);
+
+      findings.push({
+        elementLabel: sourceLabel,
+        elementType,
+        sourceLabel,
+        filePath,
+        lineNumber: line,
+        componentName,
+        classification: isBorderline ? 'potential' : 'confirmed',
+        detection,
+        explanation,
+        confidence,
+        focusClasses: allMatchedTokens,
+        correctivePrompt: isBorderline ? undefined : `[${sourceLabel} ${elementType}] — ${filePath}\n\nIssue reason:\nFocus indicator is removed (${outlineRemovalTokens.join(', ')}) without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2).`,
+        potentialSubtype: isBorderline ? 'borderline' : undefined,
+        potentialReason: isBorderline ? 'Custom focus styles exist but perceptibility cannot be statically verified.' : undefined,
+        deduplicationKey: dedupeKey,
+        _a2Debug: {
+          outlineRemoved,
+          hasStrongReplacement,
+          hasWeakFocusStyling,
+          matchedTokens: allMatchedTokens,
+        },
+      });
+    }
+  }
+
+  return findings;
+}
+
 const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl|summary';
 const INTERACTIVE_ROLES_RE = /\brole\s*=\s*["'](button|link|menuitem|tab|option|checkbox|radio|switch|combobox|listbox|slider|treeitem|gridcell)["']/i;
 const POINTER_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
@@ -2188,20 +2356,19 @@ function detectStack(files: Map<string, string>): string {
 // ============================================================
 // TWO-LAYER HYBRID ARCHITECTURE — Rule Routing (GitHub)
 // ============================================================
-const DETERMINISTIC_CODE_RULES = new Set(['A1', 'A3', 'A4', 'A5', 'A6']);
+const DETERMINISTIC_CODE_RULES = new Set(['A1', 'A2', 'A3', 'A4', 'A5', 'A6']);
 const HYBRID_RULES_SET_GH = new Set(['U1', 'U2', 'U3', 'U5', 'E1', 'E3']);
 
 function buildCodeAnalysisPrompt(selectedRules: string[]) {
   const selectedRulesSet = new Set(selectedRules);
-  // DETERMINISTIC rules (A1, A3-A6) are NEVER sent to LLM
+  // DETERMINISTIC rules (A1, A2, A3-A6) are NEVER sent to LLM
   const accessibilityRulesForLLM = rules.accessibility.filter(r => 
     !DETERMINISTIC_CODE_RULES.has(r.id) && selectedRulesSet.has(r.id)
   );
   
   return `You are an expert UI/UX code auditor performing static analysis of source code from a GitHub repository.
 This analysis uses a Two-Layer Hybrid Architecture:
-- Accessibility rules A1, A3, A4, A5, A6 are evaluated by the DETERMINISTIC engine (regex/static analysis). Do NOT report findings for these rules.
-- A2 (focus visibility) is evaluated by YOU (LLM-assisted) with deterministic post-processing.
+- Accessibility rules A1, A2, A3, A4, A5, A6 are evaluated by the DETERMINISTIC engine (regex/static analysis). Do NOT report findings for these rules.
 - Usability and Ethics rules are evaluated by YOU.
 
 ## IMPORTANT: STATIC ANALYSIS CONTEXT
@@ -4010,160 +4177,67 @@ serve(async (req) => {
       console.log(`A1 aggregated (GitHub): ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
     
-    // ========== A2 SOURCE-LEVEL PRE-FILTER — REMOVED ==========
-    // File-level pre-filter was too aggressive. Classification is now per-finding only.
-
-    // ========== A2 Focus Visibility — Aggregate from AI findings ==========
-    const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2' || v.ruleId === 'A5');
-    const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4' && v.ruleId !== 'A5' && v.ruleId !== 'A6' && v.ruleId !== 'U1');
-    
+    // ========== A2 Focus Visibility — Fully Deterministic ==========
     let aggregatedA2GitHub: any = null;
-    if (a2AiViolations.length > 0) {
-      // Filter valid focus violations
-      const validA2 = a2AiViolations.filter((v: any) => {
-        const combined = ((v.diagnosis || '') + ' ' + (v.evidence || '')).toLowerCase();
+    if (selectedRulesSet.has('A2')) {
+      const a2Findings = detectA2FocusVisibility(allFiles);
+      if (a2Findings.length > 0) {
+        const confirmedCount = a2Findings.filter(f => f.classification === 'confirmed').length;
+        const heuristicCount = a2Findings.filter(f => f.classification === 'potential').length;
+        const hasConfirmedItems = confirmedCount > 0;
+        const overallConfidence = Math.max(...a2Findings.map(f => f.confidence));
+        const a2Status = hasConfirmedItems ? 'confirmed' : 'potential';
         
-        // STEP 1: outlineRemoved
-        const outlineRemoved = /(?:^|\s|"|')outline-none|focus:outline-none|focus-visible:outline-none/i.test(combined) ||
-                                /outline\s*:\s*none/i.test(combined);
-        if (!outlineRemoved) {
-          console.log(`A2 SKIP (no outline removal): ${(v.evidence || '').substring(0, 80)}`);
-          return false;
-        }
-        
-        // STEP 2: hasStrongReplacement — ONLY focus-scoped tokens
-        const hasStrongReplacement = /(?:^|\s|"|')focus(?:-visible)?:ring-(?!0\b)/i.test(combined) ||
-                                      /(?:^|\s|"|')focus(?:-visible)?:border-(?!0\b|none)/i.test(combined) ||
-                                      /(?:^|\s|"|')focus(?:-visible)?:shadow-(?!none)/i.test(combined) ||
-                                      /(?:^|\s|"|')focus(?:-visible)?:outline-(?!none)/i.test(combined);
-        if (hasStrongReplacement) {
-          console.log(`A2 PASS (focus-scoped strong replacement): ${(v.evidence || '').substring(0, 80)}`);
-          return false;
-        }
-        
-        return true;
-      });
-      
-      if (validA2.length > 0) {
-        const a2Elements = validA2.map((v: any, idx: number) => {
-          const evidence = v.evidence || '';
-          const combined = ((v.diagnosis || '') + ' ' + evidence).toLowerCase();
-          const componentMatch = evidence.match(/([A-Z][a-zA-Z0-9]*(?:Button|Link|Input|Select|Card|Dialog|Nav|Toggle|Trigger)?)/);
-          const fileMatch = (evidence || v.contextualHint || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
-          const elementLabel = componentMatch?.[1] || fileMatch?.[1]?.replace(/\.\w+$/, '') || `Interactive element ${idx + 1}`;
-          const location = fileMatch?.[1] || v.contextualHint || 'Unknown file';
-          
-          // Determine element type
-          let elementType = 'interactive element';
-          if (/\bbutton\b/i.test(combined)) elementType = 'button';
-          else if (/\blink\b|\ba\b/i.test(combined)) elementType = 'link';
-          else if (/\binput\b/i.test(combined)) elementType = 'input';
-          
-          // ── Borderline vs Confirmed classification ──
-          // Weak/ambiguous: ONLY focus-scoped bg-*, text-*, underline, opacity-*, font-*
-          const hasWeakFocusStyling = /(?:^|\s|"|')focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/i.test(combined);
-          const isBorderline = hasWeakFocusStyling;
-          const isConfirmed = !isBorderline;
-          // Confirmed: 90-95% deterministic; Borderline: 60-75%
-          const confidence = isConfirmed ? 0.92 : 0.68;
-          
-          // Extract tokens: outline removal + focus-scoped tokens only
-          const outlineTokens = evidence.match(/(?:focus(?:-visible)?:)?outline-none/gi) || [];
-          const focusScopedTokens = evidence.match(/focus(?:-visible)?:(?:ring-[\w-]+|border-[\w-]+|shadow-[\w-]+|outline-[\w-]+|bg-[\w-]+|text-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/gi) || [];
-          const focusClasses = [...new Set([...outlineTokens, ...focusScopedTokens])];
-          
-          const _a2Debug = { outlineRemoved: true, hasStrongReplacement: false, hasWeakFocusStyling, matchedTokens: focusClasses };
-          
-          // Build descriptive detection text
-          let detection: string;
-          if (isBorderline) {
-            const subtleDetails = focusClasses.join(', ') || 'bg/text change only';
-            const hasRing1 = /ring-1\b/.test(subtleDetails);
-            const hasMuted = /(?:gray|slate|zinc)-(?:100|200)/.test(subtleDetails);
-            const hasShadowSm = /shadow-sm/.test(subtleDetails);
-          const hasBgTextOnly = /(?:focus|focus-visible):(?:bg-|text-)/.test(subtleDetails) && 
-                                 !/ring-[1-9]|border-|shadow-|outline-(?!none)/.test(subtleDetails);
-          
-          if (hasBgTextOnly) {
-              detection = `Focus indicated only by background/text color change (${subtleDetails}) after outline removal — contrast not verifiable statically`;
-            } else if (hasRing1 && hasMuted) {
-              detection = `Subtle focus ring (${subtleDetails}) without offset after outline removal — may be hard to perceive`;
-            } else if (hasShadowSm) {
-              detection = `Focus uses shadow-sm only (${subtleDetails}) without ring/outline/border — may be too subtle`;
-            } else {
-              detection = `Focus styling may be too subtle (${subtleDetails})`;
-            }
-          } else {
-            detection = `Focus indicator removed without visible replacement`;
-          }
-          
-          // Derive identity fields from AI output
-          const role = v.role || elementType;
-          const accessibleName = v.accessibleName ?? '';
-          const sourceLabel = v.sourceLabel || elementLabel;
-          const selectorHint = v.selectorHint || 
-            (location !== 'Unknown file' ? `<${elementType || 'element'}> in ${location}` : undefined);
-          
-          return {
-            elementLabel: sourceLabel,
-            elementType,
-            role,
-            accessibleName,
-            sourceLabel,
-            selectorHint,
-            location,
-            detection,
-            detectionMethod: 'deterministic' as const,
-            focusClasses: [...new Set(focusClasses)], // Report exact tokens, no deduplication
-            classification: isConfirmed ? 'confirmed' as const : 'potential' as const,
-            potentialSubtype: isConfirmed ? undefined : 'borderline' as const,
-            potentialReason: isConfirmed ? undefined : 'Custom focus styles exist but perceptibility cannot be statically verified.',
-            explanation: (() => {
-              if (isConfirmed) return v.diagnosis || 'Element removes the default browser outline without providing a visible focus replacement.';
-              const classStr = focusClasses.join(' ');
-              const hasBgTextOnly = /(?:focus|focus-visible):(?:bg-|text-)/.test(classStr) && 
-                                     !/ring-[1-9]|border-|shadow-|outline-(?!none)/.test(classStr);
-              if (hasBgTextOnly) {
-                return 'Issue reason: Outline removed; focus relies only on bg/text change; contrast can\'t be verified statically.\n\nRecommended fix: Add a clear focus-visible indicator (e.g., focus-visible:ring-2 + focus-visible:ring-offset-2) or restore outline.';
-              }
-              return v.diagnosis || 'Focus indication relies on a subtle or low-contrast indicator (e.g., ring-1 with muted color, shadow-sm only), which may be insufficient for users with visual impairments.';
-            })(),
-            confidence,
-            correctivePrompt: isConfirmed
-              ? `[${sourceLabel} ${elementType}] — ${location}\n\nIssue reason:\nFocus indicator is removed without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2) and apply consistently across all instances.`
-              : undefined,
-            deduplicationKey: `${location}|${elementLabel}`,
-            _a2Debug,
-          };
-        });
-        
-        const hasConfirmed = a2Elements.some((el: any) => el.classification === 'confirmed');
-        const a2Status = hasConfirmed ? 'confirmed' : 'potential';
-        const avgConf = a2Elements.reduce((s: number, e: any) => s + e.confidence, 0) / a2Elements.length;
+        const a2Elements = a2Findings.map(f => ({
+          elementLabel: f.sourceLabel,
+          elementType: f.elementType,
+          role: f.elementType,
+          accessibleName: '',
+          sourceLabel: f.sourceLabel,
+          selectorHint: `<${f.elementType || 'element'}> in ${f.filePath}`,
+          location: f.filePath,
+          detection: f.detection,
+          detectionMethod: 'deterministic' as const,
+          focusClasses: f.focusClasses,
+          classification: f.classification,
+          potentialSubtype: f.potentialSubtype,
+          potentialReason: f.potentialReason,
+          explanation: f.explanation,
+          confidence: f.confidence,
+          correctivePrompt: f.correctivePrompt,
+          deduplicationKey: f.deduplicationKey,
+          _a2Debug: f._a2Debug,
+        }));
         
         aggregatedA2GitHub = {
           ruleId: 'A2',
           ruleName: 'Poor focus visibility',
           category: 'accessibility',
           status: a2Status,
-          potentialSubtype: a2Status === 'potential' ? 'borderline' : undefined,
+          potentialSubtype: hasConfirmedItems ? undefined : 'borderline',
           blocksConvergence: a2Status === 'confirmed',
-           inputType: 'github',
-           isA2Aggregated: true,
-           a2Elements,
-           evaluationMethod: 'llm_assisted',
-          diagnosis: `${a2Elements.length} interactive element${a2Elements.length !== 1 ? 's' : ''} with focus visibility issues detected.`,
+          inputType: 'github',
+          isA2Aggregated: true,
+          a2Elements,
+          evaluationMethod: 'deterministic',
+          diagnosis: `Focus visibility issues detected: ${confirmedCount} confirmed, ${heuristicCount} borderline.`,
           contextualHint: 'Add visible focus-visible indicators for keyboard accessibility.',
           correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline.',
-          confidence: Math.round(avgConf * 100) / 100,
+          confidence: Math.round(overallConfidence * 100) / 100,
           ...(a2Status === 'potential' ? {
-            advisoryGuidance: 'Focus styling exists but may be too subtle. Consider using a clearer focus-visible indicator (e.g., ring-2 with offset) and ensure it is visually distinct.',
+            advisoryGuidance: 'Focus styling exists but may be too subtle. Consider using a clearer focus-visible indicator.',
           } : {}),
         };
         
-        console.log(`A2 aggregated (GitHub): ${validA2.length} → 1 card with ${a2Elements.length} elements (${a2Status})`);
+        console.log(`A2 deterministic (GitHub): ${a2Findings.length} findings (${confirmedCount} confirmed, ${heuristicCount} borderline)`);
+      } else {
+        console.log('A2 deterministic (GitHub): No violations found');
       }
     }
+    
+    // Filter out any LLM A2 findings (deterministic takes over)
+    const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4' && v.ruleId !== 'A5' && v.ruleId !== 'A6' && v.ruleId !== 'U1');
+    
     
     // A4 - Semantic structure (reuse same detector)
     let aggregatedA4GitHub: any = null;

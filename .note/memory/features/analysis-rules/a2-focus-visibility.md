@@ -1,21 +1,31 @@
 # Memory: features/analysis-rules/a2-focus-visibility
 Updated: now
 
-Rule A2 (Poor Focus Visibility) evaluates WCAG 2.4.7 with simplified severity logic:
+Rule A2 (Poor Focus Visibility) evaluates WCAG 2.4.7 — now **fully deterministic** (no LLM dependency).
 
-## Classification (ZIP/GitHub — Deterministic)
+## Detection Method
+- **Deterministic**: `detectA2FocusVisibility(allFiles)` scans ALL className/class/cva strings in source files
+- Parses full class strings into tokens, then applies classification per-element
+- No longer relies on LLM evidence (which was incomplete and caused false positives)
+
+## Classification Logic
 
 **Pass (No violation):**
 - No outline suppression detected (browser defaults preserved)
-- OR outline removed + ANY focus-scoped strong replacement: `focus:ring-*`, `focus-visible:ring-*`, `focus:border-*`, `focus:shadow-*`, `focus:outline-*` (not outline-none)
+- OR outline removed + ANY focus-scoped strong replacement token:
+  - `focus:ring-*` / `focus-visible:ring-*` (not ring-0)
+  - `focus:border-*` / `focus-visible:border-*` (not border-0/none)
+  - `focus:shadow-*` / `focus-visible:shadow-*` (not shadow-none)
+  - `focus:outline-*` / `focus-visible:outline-*` (not outline-none)
 
 **Borderline (Potential):**
-- Outline removed + ONLY focus-scoped weak styling: `focus:bg-*`, `focus:text-*`, `focus:underline`, `focus:opacity-*`, `focus:font-*`
+- Outline removed + ONLY focus-scoped weak styling:
+  - `focus:bg-*`, `focus:text-*`, `focus:underline`, `focus:opacity-*`, `focus:font-*`
 - Confidence: 60–75%
 
 **Confirmed (Blocking):**
 - Outline removed + NO focus-scoped replacement at all
-- Bare (non-focus-prefixed) tokens like `ring-2`, `border-2`, `bg-accent` do NOT count as replacements
+- Bare tokens (`ring-2`, `border-2`, `bg-accent`) do NOT count
 - Confidence: 90–95%
 
 ## CRITICAL: Focus-Scoped Only
@@ -24,23 +34,16 @@ Rule A2 (Poor Focus Visibility) evaluates WCAG 2.4.7 with simplified severity lo
 - `data-[state=*]:bg-*` is NOT a focus indicator
 
 ## Token Reporting
-- Detection shows EXACT matched tokens from source — no normalization or fabrication
-- If source has `outline-none`, report `outline-none` (not `focus:outline-none`)
-
-## Pre-filter
-- File-level pre-filter REMOVED (was too aggressive, suppressed all A2 from files with any replacement)
-- Classification is now per-finding only
+- Detection shows EXACT matched tokens from source
+- Outline removal tokens: `outline-none`, `focus:outline-none`, `focus-visible:outline-none`
 
 ## Debug
 - Each A2 element includes `_a2Debug` field with: outlineRemoved, hasStrongReplacement, hasWeakFocusStyling, matchedTokens
 
-## Screenshot (LLM-Assisted)
-- Three-tier: Not Evaluated / Potential / Pass
-- Never Confirmed from screenshot
-- detectionMethod: 'llm_assisted'
-
 ## Key Design Decisions
-- `focus:ring-1` is a PASS (valid replacement), not Potential
-- `focus:shadow-sm` is a PASS (valid replacement), not Potential
-- Only `focus:bg-*`/`focus:text-*` type changes are Borderline
-- Bare ring-2, border-2, shadow-md WITHOUT focus prefix = Confirmed
+- `focus:ring-1` / `focus-visible:ring-1` = PASS
+- `focus:shadow-sm` = PASS
+- Button with `focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring` = PASS (no A2)
+- Input with `focus-visible:outline-none focus-visible:ring-2` = PASS (no A2)
+- Menu item with `outline-none focus:bg-accent focus:text-accent-foreground` = Borderline
+- CommandInput with just `outline-none` = Confirmed
