@@ -2446,11 +2446,13 @@ function isSummaryInDetails(content: string, position: number, tag: string): boo
 interface A2Finding {
   elementLabel: string;
   elementType: string;
+  elementTag: string; // actual HTML tag: input, div, button, a, etc.
   sourceLabel: string;
   filePath: string;
   lineNumber: number;
+  lineEnd?: number;
   componentName: string;
-  classification: 'confirmed' | 'potential';
+  classification: 'confirmed' | 'potential' | 'not_applicable';
   detection: string;
   explanation: string;
   confidence: number;
@@ -2459,11 +2461,15 @@ interface A2Finding {
   potentialSubtype?: 'borderline';
   potentialReason?: string;
   deduplicationKey: string;
+  // Element metadata
+  focusable: 'yes' | 'no' | 'unknown';
+  selectorHints: string[]; // e.g., ['id="email"', 'role="menuitem"']
   _a2Debug: {
     outlineRemoved: boolean;
     hasStrongReplacement: boolean;
     hasWeakFocusStyling: boolean;
     matchedTokens: string[];
+    focusable: string;
   };
 }
 
@@ -2552,8 +2558,38 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       );
       const hasWeakFocusStyling = weakFocusTokens.length > 0;
 
-      // Determine element type from surrounding context
-      const contextBefore = content.slice(Math.max(0, content.lastIndexOf('\n', content.indexOf(classStr) - 1)), content.indexOf(classStr));
+      // ── Extract element tag and attributes from surrounding JSX context ──
+      const classStrPos = content.indexOf(classStr, 0);
+      // Walk backward to find the opening < tag
+      const lineStart = content.lastIndexOf('\n', classStrPos) + 1;
+      // Grab a wider window: up to 5 lines before className match
+      const contextStart = Math.max(0, classStrPos - 500);
+      const contextBefore = content.slice(contextStart, classStrPos);
+      // Find the nearest opening tag
+      const tagMatch = contextBefore.match(/<(\w+)(?:\s|$)[^>]*$/);
+      const elementTag = tagMatch ? tagMatch[1].toLowerCase() : 'unknown';
+      // Get the full tag opening (up to 1000 chars after < to find >)
+      const tagOpenStart = contextBefore.lastIndexOf('<');
+      const fullTagRegion = content.slice(contextStart + (tagOpenStart >= 0 ? tagOpenStart : 0), classStrPos + classStr.length + 200);
+      
+      // Extract selector hints
+      const selectorHints: string[] = [];
+      const idMatch = fullTagRegion.match(/\bid\s*=\s*["']([^"']+)["']/);
+      if (idMatch) selectorHints.push(`id="${idMatch[1]}"`);
+      const nameMatch = fullTagRegion.match(/\bname\s*=\s*["']([^"']+)["']/);
+      if (nameMatch) selectorHints.push(`name="${nameMatch[1]}"`);
+      const ariaLabelMatch = fullTagRegion.match(/\baria-label\s*=\s*["']([^"']+)["']/);
+      if (ariaLabelMatch) selectorHints.push(`aria-label="${ariaLabelMatch[1]}"`);
+      const roleMatch = fullTagRegion.match(/\brole\s*=\s*["']([^"']+)["']/);
+      if (roleMatch) selectorHints.push(`role="${roleMatch[1]}"`);
+      const tabIndexMatch = fullTagRegion.match(/\btabIndex\s*=\s*\{?\s*(-?\d+)\s*\}?/);
+      if (tabIndexMatch) selectorHints.push(`tabIndex=${tabIndexMatch[1]}`);
+      const hrefMatch = fullTagRegion.match(/\bhref\s*=/);
+      if (hrefMatch) selectorHints.push(`href`);
+      const contentEditableMatch = fullTagRegion.match(/\bcontentEditable/i);
+      if (contentEditableMatch) selectorHints.push(`contentEditable`);
+
+      // Determine element type (human-friendly)
       let elementType = 'interactive element';
       if (/\bbutton\b|<button|<Button/i.test(contextBefore)) elementType = 'button';
       else if (/\binput\b|<input|<Input/i.test(contextBefore)) elementType = 'input';
@@ -2563,12 +2599,53 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       else if (/\btab\b|<Tab/i.test(contextBefore)) elementType = 'tab';
       else if (/\ba\b|<a\b|<Link/i.test(contextBefore)) elementType = 'link';
 
+      // ── Determine focusable status ──
+      const INHERENTLY_FOCUSABLE = /^(input|textarea|select|button|a)$/;
+      const FOCUSABLE_ROLES = /^(button|link|menuitem|option|combobox|tab|checkbox|radio|switch|listbox|slider|treeitem|gridcell)$/;
+      const parsedRole = roleMatch ? roleMatch[1].toLowerCase() : '';
+      const parsedTabIndex = tabIndexMatch ? parseInt(tabIndexMatch[1], 10) : null;
+
+      let focusable: 'yes' | 'no' | 'unknown' = 'unknown';
+      if (INHERENTLY_FOCUSABLE.test(elementTag)) {
+        focusable = 'yes';
+      } else if (parsedTabIndex !== null && parsedTabIndex >= 0) {
+        focusable = 'yes';
+      } else if (contentEditableMatch) {
+        focusable = 'yes';
+      } else if (FOCUSABLE_ROLES.test(parsedRole)) {
+        focusable = 'yes';
+      } else if (/^(div|span|p|section|article|header|footer|aside|nav|figure|main)$/.test(elementTag)) {
+        focusable = parsedTabIndex !== null && parsedTabIndex < 0 ? 'no' : (parsedTabIndex === null ? 'no' : 'yes');
+      }
+      // Component wrappers (capitalized tag) → unknown unless we found hints
+      if (elementTag === 'unknown' || /^[A-Z]/.test(tagMatch?.[1] || '')) {
+        // If component name maps to known focusable type
+        if (/input|button|select|textarea|command/i.test(componentName)) focusable = 'yes';
+        else if (/content|wrapper|container|card|popover|hover/i.test(componentName)) focusable = parsedTabIndex !== null && parsedTabIndex >= 0 ? 'yes' : 'unknown';
+      }
+
+      // ── Estimate line range ──
+      const lineEnd = Math.min(line + 5, content.split('\n').length);
+
+      // ── Classification with focusable gate ──
       const isBorderline = hasWeakFocusStyling;
       const allMatchedTokens = [...outlineRemovalTokens, ...(isBorderline ? weakFocusTokens : [])];
+
+      let classification: 'confirmed' | 'potential' | 'not_applicable';
+      if (isBorderline) {
+        classification = 'potential';
+      } else if (focusable === 'no') {
+        classification = 'not_applicable';
+        console.log(`A2 NOT_APPLICABLE (deterministic): ${filePath}:${line} — non-focusable ${elementTag}`);
+      } else {
+        classification = 'confirmed';
+      }
 
       const dedupeKey = `${filePath}|${componentName}|${line}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
+
+      if (classification === 'not_applicable') continue; // suppress entirely
 
       let detection: string;
       if (isBorderline) {
@@ -2585,16 +2662,18 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       const confidence = isBorderline ? 0.68 : 0.92;
       const sourceLabel = componentName || fileName.replace(/\.\w+$/, '');
 
-      console.log(`A2 ${isBorderline ? 'BORDERLINE' : 'CONFIRMED'} (deterministic): ${filePath}:${line} tokens=[${allMatchedTokens.join(',')}]`);
+      console.log(`A2 ${isBorderline ? 'BORDERLINE' : 'CONFIRMED'} (deterministic): ${filePath}:${line} tag=${elementTag} focusable=${focusable} tokens=[${allMatchedTokens.join(',')}]`);
 
       findings.push({
         elementLabel: sourceLabel,
         elementType,
+        elementTag,
         sourceLabel,
         filePath,
         lineNumber: line,
+        lineEnd,
         componentName,
-        classification: isBorderline ? 'potential' : 'confirmed',
+        classification,
         detection,
         explanation,
         confidence,
@@ -2603,11 +2682,14 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
         potentialSubtype: isBorderline ? 'borderline' : undefined,
         potentialReason: isBorderline ? 'Custom focus styles exist but perceptibility cannot be statically verified.' : undefined,
         deduplicationKey: dedupeKey,
+        focusable,
+        selectorHints,
         _a2Debug: {
           outlineRemoved,
           hasStrongReplacement,
           hasWeakFocusStyling,
           matchedTokens: allMatchedTokens,
+          focusable,
         },
       });
     }
@@ -5780,21 +5862,25 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
         const mapA2Elements = (list: typeof a2Findings) => list.map(f => ({
           elementLabel: f.sourceLabel,
           elementType: f.elementType,
+          elementTag: f.elementTag,
           role: f.elementType,
           accessibleName: '',
           sourceLabel: f.sourceLabel,
-          selectorHint: `<${f.elementType || 'element'}> in ${f.filePath}`,
+          selectorHint: `<${f.elementTag || f.elementType || 'element'}> in ${f.filePath}`,
+          selectorHints: f.selectorHints,
           location: f.filePath,
+          lineRange: f.lineEnd ? `${f.lineNumber}–${f.lineEnd}` : `${f.lineNumber}`,
           detection: f.detection,
           detectionMethod: 'deterministic' as const,
           focusClasses: f.focusClasses,
-          classification: f.classification,
+          classification: f.classification as 'confirmed' | 'potential',
           potentialSubtype: f.potentialSubtype,
           potentialReason: f.potentialReason,
           explanation: f.explanation,
           confidence: f.confidence,
           correctivePrompt: f.correctivePrompt,
           deduplicationKey: f.deduplicationKey,
+          focusable: f.focusable,
           _a2Debug: f._a2Debug,
         }));
 
