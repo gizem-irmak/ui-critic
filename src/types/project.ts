@@ -200,6 +200,12 @@ export interface Violation {
   // ============================================================
   isU1Aggregated?: boolean;
   u1Elements?: U1ElementSubItem[];
+  
+  // ============================================================
+  // U2 AGGREGATED ELEMENT REPORTING (Navigation)
+  // ============================================================
+  isU2Aggregated?: boolean;
+  u2Elements?: U2ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -436,6 +442,20 @@ export interface U1ElementSubItem {
   subCheckLabel: string;
   classification: 'confirmed' | 'potential';
   explanation: string;
+  confidence: number;
+  advisoryGuidance?: string;
+  deduplicationKey: string;
+}
+
+// U2 Element sub-item for aggregated navigation reporting
+export interface U2ElementSubItem {
+  elementLabel: string;
+  elementType?: string;
+  location: string;
+  detection?: string;
+  evidence?: string;
+  subCheck: 'U2.D1' | 'U2.D2' | 'U2.D3' | 'U2.S1';
+  subCheckLabel: string;
   confidence: number;
   advisoryGuidance?: string;
   deduplicationKey: string;
