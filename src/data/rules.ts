@@ -188,9 +188,10 @@ export const rules: Rule[] = [
     method: 'HYBRID',
     supportedModalities: { zip: 'supported', github: 'supported', screenshot: 'limited' },
     deterministicSignals: [
-      'U3-D1: truncate/text-ellipsis class without expand affordance in same component',
-      'U3-D2: line-clamp-[1-3] without show-more/expand control',
-      'U3-D3: overflow-hidden + fixed height/max-height without scroll or expand',
+      'U3-D1: truncate/text-ellipsis/line-clamp/whitespace-nowrap + overflow-hidden without expand affordance',
+      'U3-D2: max-h-*/h-* + overflow-hidden without scroll or expand mechanism',
+      'U3-D3: Nested overflow-y-scroll/auto inside fixed height container (scroll trap risk)',
+      'U3-D4: aria-hidden="true"/hidden/display:none on meaningful content without toggle control',
     ],
     llmFallbackConditions: [
       'Complex layout where truncation intent is unclear from static analysis',

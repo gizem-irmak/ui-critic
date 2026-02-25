@@ -206,6 +206,12 @@ export interface Violation {
   // ============================================================
   isU2Aggregated?: boolean;
   u2Elements?: U2ElementSubItem[];
+  
+  // ============================================================
+  // U3 AGGREGATED ELEMENT REPORTING (Content Accessibility)
+  // ============================================================
+  isU3Aggregated?: boolean;
+  u3Elements?: U3ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -455,6 +461,20 @@ export interface U2ElementSubItem {
   detection?: string;
   evidence?: string;
   subCheck: 'U2.D1' | 'U2.D2' | 'U2.D3' | 'U2.S1';
+  subCheckLabel: string;
+  confidence: number;
+  advisoryGuidance?: string;
+  deduplicationKey: string;
+}
+
+// U3 Element sub-item for aggregated content accessibility reporting
+export interface U3ElementSubItem {
+  elementLabel: string;
+  elementType?: string;
+  location: string;
+  detection?: string;
+  evidence?: string;
+  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4';
   subCheckLabel: string;
   confidence: number;
   advisoryGuidance?: string;
