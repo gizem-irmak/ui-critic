@@ -224,6 +224,12 @@ export interface Violation {
   // ============================================================
   isU5Aggregated?: boolean;
   u5Elements?: U5ElementSubItem[];
+  
+  // ============================================================
+  // U6 AGGREGATED ELEMENT REPORTING (Weak Grouping / Layout Coherence)
+  // ============================================================
+  isU6Aggregated?: boolean;
+  u6Elements?: U6ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -516,6 +522,19 @@ export interface U5ElementSubItem {
   subCheck?: 'U5.D1' | 'U5.D2' | 'U5.D3'; // Which sub-check triggered (deterministic only)
   confidence: number;     // 0.60–0.85
   evaluationMethod?: 'deterministic_structural' | 'hybrid_llm_fallback' | 'vision_llm';
+  deduplicationKey: string;
+}
+
+// U6 Element sub-item for aggregated layout coherence reporting
+export interface U6ElementSubItem {
+  elementLabel: string;   // e.g., "Main content area", "Form section", "Card grid"
+  elementType?: string;   // section, div, form, page, etc.
+  location: string;       // file path
+  detection?: string;     // Summary of what was detected
+  evidence?: string;      // Specific evidence citations from the bundle
+  recommendedFix?: string; // Actionable fix suggestion
+  confidence: number;     // 0.60–0.80
+  evaluationMethod?: 'llm_only_code' | 'llm_perceptual';
   deduplicationKey: string;
 }
 

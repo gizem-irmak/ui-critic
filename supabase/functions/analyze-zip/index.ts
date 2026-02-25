@@ -3092,6 +3092,53 @@ Return U4 findings using a \`u4Elements\` array so findings can be aggregated pe
 - If NO U4 issues found, do NOT include U4 in the violations array.
 - Each u4Element MUST cite evidence from the provided evidence bundle (CTA labels, headings, form fields — NOT file names).
 
+### U6 (Weak Grouping / Layout Coherence) — LLM-ASSISTED EVALUATION:
+**NOTE:** U6 uses pre-extracted layout evidence bundles appended as \`[U6_LAYOUT_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted layout cues to assess grouping/hierarchy.
+
+**CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
+- Do NOT use file names, component names, page titles, or "test" wording as evidence.
+- Do NOT infer developer intent from naming conventions.
+- Base conclusions ONLY on the extracted layout evidence: headings, container counts, flex/grid usage, spacing tokens, repeated patterns, flat-stack cues.
+- If evidence is insufficient to demonstrate weak grouping, return NO U6 finding — do not guess.
+
+**EVALUATE (using ONLY the layout evidence bundle, not file names):**
+- Missing section separation: Related content not grouped into visual containers
+- Inconsistent spacing hierarchy: Uneven or missing spacing tokens between groups
+- Unclear grouping of related elements: Flat stacks of inputs/buttons without headings or wrappers
+- Misalignment patterns: Mixed flex/grid usage suggesting alignment issues
+- Clutter: Too many sibling elements at same nesting level without separation
+
+**CLASSIFICATION:**
+- U6 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
+- Confidence: 0.60–0.80 (cap at 0.80)
+
+**OUTPUT FOR U6 — STRUCTURED u6Elements:**
+\`\`\`json
+{
+  "ruleId": "U6",
+  "ruleName": "Weak grouping / layout coherence",
+  "category": "usability",
+  "status": "potential",
+  "isU6Aggregated": true,
+  "u6Elements": [
+    {
+      "elementLabel": "Main form section",
+      "elementType": "section",
+      "location": "src/components/Form.tsx",
+      "detection": "Long sequence of inputs without heading or visual grouping",
+      "evidence": "12 sibling inputs without section headings or fieldset wrappers; no gap/space-y tokens between logical groups",
+      "recommendedFix": "Group related fields into fieldsets with legends or add section headings",
+      "confidence": 0.70
+    }
+  ],
+  "diagnosis": "Summary of grouping/layout issues...",
+  "contextualHint": "Short guidance...",
+  "confidence": 0.70
+}
+\`\`\`
+- If NO U6 issues found, do NOT include U6 in the violations array.
+- Each u6Element MUST cite evidence from the provided layout evidence bundle (container counts, spacing, headings — NOT file names).
+
 Usability rules to check:
 ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name}`).join('\n')}
 
@@ -3264,6 +3311,139 @@ function formatU4EvidenceBundleForPrompt(bundles: U4EvidenceBundle[]): string {
     lines.push(`  Flags: summary=${b.hasSummaryWords}, helpers=${b.hasHelperExamples}, genericCTA=${b.hasGenericCTA}`);
   }
   lines.push('[/U4_EVIDENCE_BUNDLE]');
+  return lines.join('\n');
+}
+
+// ========== U6 LAYOUT EVIDENCE BUNDLE EXTRACTION (Weak Grouping / Layout Coherence) ==========
+interface U6LayoutEvidence {
+  filePath: string;
+  headings: string[];
+  sectionCount: number;
+  fieldsetCount: number;
+  articleCount: number;
+  cardWrapperCount: number;
+  maxDivDepth: number;
+  flexCount: number;
+  gridCount: number;
+  spacingTokens: string[];
+  repeatedBlockCount: number;
+  flatStackCues: string[];
+}
+
+function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidence[] {
+  const bundles: U6LayoutEvidence[] = [];
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
+    if (/\.(test|spec)\./i.test(filePath)) continue;
+    if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
+
+    // 1) Headings and section titles
+    const headings: string[] = [];
+    const hRe = /<h([1-6])\b[^>]*>([^<]{2,80})<\/h\1>/gi;
+    let hm;
+    while ((hm = hRe.exec(content)) !== null) {
+      const text = hm[2].replace(/\{[^}]*\}/g, '').trim();
+      if (text.length >= 2) headings.push(`h${hm[1]}: ${text}`);
+    }
+    // role=heading
+    const roleHeadingRe = /role\s*=\s*["']heading["'][^>]*>([^<]{2,60})</gi;
+    let rhm;
+    while ((rhm = roleHeadingRe.exec(content)) !== null) {
+      headings.push(`role=heading: ${rhm[1].trim()}`);
+    }
+    // Tailwind large text as pseudo-headings
+    const twHeadingRe = /className\s*=\s*["'][^"']*\b(text-(?:xl|2xl|3xl|4xl|5xl|6xl))\b[^"']*font-bold[^"']*["'][^>]*>([^<]{2,60})/gi;
+    let thm;
+    while ((thm = twHeadingRe.exec(content)) !== null) {
+      headings.push(`styled-heading (${thm[1]}): ${thm[2].trim()}`);
+    }
+
+    // 2) Container structure
+    const sectionCount = (content.match(/<section\b/gi) || []).length;
+    const fieldsetCount = (content.match(/<fieldset\b/gi) || []).length;
+    const articleCount = (content.match(/<article\b/gi) || []).length;
+    const cardWrapperCount = (content.match(/<(?:Card|div)\b[^>]*(?:card|Card)[^>]*>/gi) || []).length;
+
+    // Rough div depth
+    let maxDepth = 0, curDepth = 0;
+    const divOpenRe = /<div\b/gi;
+    const divCloseRe = /<\/div>/gi;
+    let pos = 0;
+    for (const ch of content) {
+      pos++;
+    }
+    // Simple approach: count max nesting
+    const opens = (content.match(/<div\b/gi) || []).length;
+    const closes = (content.match(/<\/div>/gi) || []).length;
+    maxDepth = Math.min(opens, closes); // rough proxy
+
+    // 3) Layout primitives
+    const flexCount = (content.match(/\bflex\b/g) || []).length;
+    const gridCount = (content.match(/\bgrid\b/g) || []).length;
+
+    // Spacing tokens
+    const spacingTokenSet = new Set<string>();
+    const spacingRe = /\b(gap-\d+|space-[xy]-\d+|mb-\d+|mt-\d+|py-\d+|px-\d+|p-\d+|m-\d+)\b/g;
+    let sm;
+    while ((sm = spacingRe.exec(content)) !== null) {
+      spacingTokenSet.add(sm[1]);
+    }
+
+    // 4) Repeated blocks (map patterns)
+    const mapCount = (content.match(/\.map\s*\(/g) || []).length;
+
+    // 5) Flat stack cues: long sequences of sibling inputs/buttons without headings/wrappers
+    const flatStackCues: string[] = [];
+    const siblingInputRe = /(<(?:input|Input|textarea|Textarea|select|Select|button|Button)\b[^>]*(?:\/>|>[^<]*<\/(?:input|Input|textarea|Textarea|select|Select|button|Button)>)\s*\n?\s*){3,}/gi;
+    if (siblingInputRe.test(content)) {
+      flatStackCues.push('3+ sibling form controls without headings/wrappers');
+    }
+    // Multiple sibling divs without section/fieldset parent
+    const flatDivRe = /(?:<div\b[^>]*>[^<]*<\/div>\s*\n?\s*){5,}/gi;
+    if (flatDivRe.test(content)) {
+      flatStackCues.push('5+ flat sibling divs');
+    }
+
+    // Skip files with minimal layout content
+    if (headings.length === 0 && sectionCount === 0 && fieldsetCount === 0 && flexCount < 2 && spacingTokenSet.size === 0 && flatStackCues.length === 0) continue;
+
+    bundles.push({
+      filePath,
+      headings: [...new Set(headings)].slice(0, 8),
+      sectionCount,
+      fieldsetCount,
+      articleCount,
+      cardWrapperCount,
+      maxDivDepth: maxDepth,
+      flexCount,
+      gridCount,
+      spacingTokens: [...spacingTokenSet].slice(0, 12),
+      repeatedBlockCount: mapCount,
+      flatStackCues,
+    });
+  }
+
+  return bundles.slice(0, 15);
+}
+
+function formatU6LayoutEvidenceForPrompt(bundles: U6LayoutEvidence[]): string {
+  if (bundles.length === 0) return '';
+  const lines = [
+    '[U6_LAYOUT_EVIDENCE_BUNDLE]',
+    'IMPORTANT: Location references below are for traceability ONLY. Do NOT use file names or component names as evidence. Evaluate ONLY the extracted layout cues.',
+  ];
+  for (const b of bundles) {
+    lines.push(`\n--- Location: ${b.filePath} ---`);
+    if (b.headings.length > 0) lines.push(`  Headings: ${b.headings.join(' | ')}`);
+    lines.push(`  Containers: ${b.sectionCount} <section>, ${b.fieldsetCount} <fieldset>, ${b.articleCount} <article>, ${b.cardWrapperCount} card-like`);
+    lines.push(`  Layout: ${b.flexCount} flex, ${b.gridCount} grid, div depth ~${b.maxDivDepth}`);
+    if (b.spacingTokens.length > 0) lines.push(`  Spacing tokens: ${b.spacingTokens.join(', ')}`);
+    if (b.repeatedBlockCount > 0) lines.push(`  Repeated blocks (map): ${b.repeatedBlockCount}`);
+    if (b.flatStackCues.length > 0) lines.push(`  Flat-stack cues: ${b.flatStackCues.join('; ')}`);
+  }
+  lines.push('[/U6_LAYOUT_EVIDENCE_BUNDLE]');
   return lines.join('\n');
 }
 
@@ -4381,6 +4561,10 @@ serve(async (req) => {
     const u4EvidenceBundles = selectedRulesSet.has('U4') ? extractU4EvidenceBundle(allFiles) : [];
     const u4BundleText = formatU4EvidenceBundleForPrompt(u4EvidenceBundles);
 
+    // Extract U6 layout evidence bundle (context for LLM layout assessment)
+    const u6LayoutBundles = selectedRulesSet.has('U6') ? extractU6LayoutEvidence(allFiles) : [];
+    const u6BundleText = formatU6LayoutEvidenceForPrompt(u6LayoutBundles);
+
     // Build analysis prompt
     const systemPrompt = buildCodeAnalysisPrompt(selectedRules);
 
@@ -4392,7 +4576,7 @@ serve(async (req) => {
         
 Perform the complete 3-pass analysis (Accessibility, Usability, Ethics) based on the code patterns and return findings in the specified JSON format.
 
-${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}`,
+${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n' + u6BundleText : ''}`,
       },
     ];
 
@@ -5761,7 +5945,71 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}`,
       }
     }
 
-    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...aggregatedU5List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
+    // ========== U6 POST-PROCESSING (Weak Grouping / Layout Coherence — LLM-assisted) ==========
+    const aggregatedU6List: any[] = [];
+    if (selectedRulesSet.has('U6')) {
+      const u6FromLLM = aiViolations.filter((v: any) => v.ruleId === 'U6');
+      aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'U6');
+
+      if (u6FromLLM.length > 0) {
+        const aggregatedOne = u6FromLLM.find((v: any) => v.isU6Aggregated && v.u6Elements?.length > 0);
+        if (aggregatedOne) {
+          const u6Elements = (aggregatedOne.u6Elements || []).map((el: any) => ({
+            elementLabel: el.elementLabel || 'Layout region',
+            elementType: el.elementType || 'section',
+            location: el.location || el.filePath || 'Unknown',
+            detection: el.detection || '',
+            evidence: el.evidence || '',
+            recommendedFix: el.recommendedFix || '',
+            confidence: Math.min(el.confidence || 0.65, 0.80),
+            evaluationMethod: 'llm_only_code' as const,
+            deduplicationKey: el.deduplicationKey || `U6|${el.location || ''}|${el.elementLabel || ''}`,
+          }));
+
+          const overallConfidence = Math.min(Math.max(...u6Elements.map((e: any) => e.confidence)), 0.80);
+
+          aggregatedU6List.push({
+            ruleId: 'U6', ruleName: 'Weak grouping / layout coherence', category: 'usability',
+            status: 'potential', blocksConvergence: false,
+            inputType: 'zip', isU6Aggregated: true, u6Elements, evaluationMethod: 'llm_assisted',
+            diagnosis: aggregatedOne.diagnosis || `Layout coherence issues: ${u6Elements.length} potential risk(s) detected via AI analysis.`,
+            contextualHint: aggregatedOne.contextualHint || 'Improve grouping, alignment, and spacing to clarify content relationships.',
+            advisoryGuidance: 'Use consistent spacing, section headings, and visual containers to group related elements. Establish clear visual hierarchy through alignment, whitespace, and background differentiation.',
+            confidence: Math.round(overallConfidence * 100) / 100,
+          });
+        } else {
+          // Fallback: wrap non-aggregated U6 findings
+          const u6Elements = u6FromLLM.map((v: any) => ({
+            elementLabel: v.evidence?.split('.')[0] || 'Layout region',
+            elementType: 'section',
+            location: v.evidence || 'Unknown',
+            detection: v.diagnosis || '',
+            evidence: v.evidence || '',
+            recommendedFix: v.contextualHint || '',
+            confidence: Math.min(v.confidence || 0.65, 0.80),
+            evaluationMethod: 'llm_only_code' as const,
+            deduplicationKey: `U6|${v.evidence || 'unknown'}`,
+          }));
+
+          const overallConfidence = Math.min(Math.max(...u6FromLLM.map((v: any) => v.confidence || 0.65)), 0.80);
+
+          aggregatedU6List.push({
+            ruleId: 'U6', ruleName: 'Weak grouping / layout coherence', category: 'usability',
+            status: 'potential', blocksConvergence: false,
+            inputType: 'zip', isU6Aggregated: true, u6Elements, evaluationMethod: 'llm_assisted',
+            diagnosis: `Layout coherence issues: ${u6Elements.length} potential risk(s) detected via AI analysis.`,
+            contextualHint: 'Improve grouping, alignment, and spacing to clarify content relationships.',
+            advisoryGuidance: 'Use consistent spacing, section headings, and visual containers to group related elements.',
+            confidence: Math.round(overallConfidence * 100) / 100,
+          });
+        }
+        console.log(`U6 aggregated: ${u6FromLLM.length} LLM finding(s) → ${aggregatedU6List[0]?.u6Elements?.length || 0} element(s)`);
+      } else {
+        console.log('U6: No LLM findings for layout coherence');
+      }
+    }
+
+    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...aggregatedU5List, ...aggregatedU6List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
 
     console.log(`Code analysis complete: ${allViolations.length} violations found`);
 
