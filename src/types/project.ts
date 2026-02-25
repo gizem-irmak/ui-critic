@@ -408,16 +408,18 @@ export interface A6ElementSubItem {
   selectorHint?: string;
   textSnippet?: string;
   location: string; // file path or "Screenshot" label
+  filePath?: string; // Original file path for deduplication context
   
   detection?: string;
   evidence?: string;
   subCheck: 'A6.1' | 'A6.2';
   subCheckLabel: string;
+  wcagCriteria: string[]; // Always ["4.1.2"]
   
-  classification: 'confirmed';
+  classification: 'confirmed'; // A6 is always confirmed — no potential classification
   
   explanation: string;
-  confidence: number;
+  // No confidence field — A6 findings are deterministic and always confirmed
   
   correctivePrompt?: string;
   deduplicationKey: string;

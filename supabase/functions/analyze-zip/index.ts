@@ -2825,7 +2825,7 @@ interface A6Finding {
   detection: string;
   evidence: string;
   explanation: string;
-  confidence: number;
+  wcagCriteria: string[]; // Always ["4.1.2"]
   correctivePrompt?: string;
   deduplicationKey: string;
 }
@@ -2902,7 +2902,7 @@ function detectA6AccessibleNames(allFiles: Map<string, string>): A6Finding[] {
             detection: `aria-labelledby references ${missingIds.length > 0 ? 'missing ID(s): ' + missingIds.join(', ') : 'empty text'}`,
             evidence: `<${tag} aria-labelledby="${ariaLabelledByVal}"> at ${filePath}:${lineNumber}`,
             explanation: `aria-labelledby references ${missingIds.length > 0 ? 'non-existent ID(s) (' + missingIds.join(', ') + ')' : 'IDs that resolve to empty text'}, so no accessible name is exposed.`,
-            confidence: 0.97,
+            wcagCriteria: ['4.1.2'],
             correctivePrompt: `[${label}] — ${fileName}\n\nIssue reason:\naria-labelledby references ${missingIds.length > 0 ? 'missing' : 'empty'} IDs.\n\nRecommended fix:\nEnsure aria-labelledby references existing element IDs with label text, or use aria-label.`,
             deduplicationKey: dedupeKey,
           });
@@ -2968,7 +2968,7 @@ function detectA6AccessibleNames(allFiles: Map<string, string>): A6Finding[] {
         detection: `<${tag.toLowerCase()}> has no accessible name`,
         evidence: `<${tag.toLowerCase()}> at ${filePath}:${lineNumber} — checked: ${nameSources.join(', ')}`,
         explanation: `Interactive element <${tag.toLowerCase()}>${role !== tag.toLowerCase() ? ' (role="' + role + '")' : ''} has no programmatic accessible name. Screen readers cannot identify its purpose.`,
-        confidence: 0.97,
+        wcagCriteria: ['4.1.2'],
         correctivePrompt: `[${label}] — ${fileName}\n\nIssue reason:\nNo accessible name.\n\nRecommended fix:\nAdd visible text, aria-label, or aria-labelledby.`,
         deduplicationKey: dedupeKey,
       });
@@ -4131,10 +4131,10 @@ ${codeContent}`,
         const overallConfidence = Math.max(...a6Findings.map(f => f.confidence));
         const a6Elements = a6Findings.map(f => ({
           elementLabel: f.sourceLabel, elementType: f.elementType, role: f.role, sourceLabel: f.sourceLabel,
-          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          location: f.filePath, filePath: f.filePath, detection: f.detection, evidence: f.evidence,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           classification: f.classification,
-          explanation: f.explanation, confidence: f.confidence,
+          explanation: f.explanation, wcagCriteria: f.wcagCriteria,
           correctivePrompt: f.correctivePrompt,
           deduplicationKey: f.deduplicationKey,
         }));
@@ -4150,7 +4150,7 @@ ${codeContent}`,
           diagnosis: `Accessible name issues detected: ${a6Findings.length} confirmed (${breakdown}). WCAG 4.1.2 requires interactive elements to have programmatic accessible names.`,
           contextualHint: 'Add visible text, aria-label, or aria-labelledby to interactive elements.',
           correctivePrompt: 'Add visible text content, aria-label, or aria-labelledby to interactive elements. For icon-only buttons/links, add an aria-label.',
-          confidence: Math.round(overallConfidence * 100) / 100,
+          confidence: 1,
         };
         console.log(`A6 aggregated: ${a6Findings.length} findings (${a61Count} missing names, ${a62Count} broken refs)`);
       } else {

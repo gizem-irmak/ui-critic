@@ -14,7 +14,7 @@ interface A6Finding {
   detection: string;
   evidence: string;
   explanation: string;
-  confidence: number;
+  wcagCriteria: string[];
   correctivePrompt?: string;
   deduplicationKey: string;
 }
@@ -83,7 +83,7 @@ function detectA6AccessibleNames(allFiles: Map<string, string>): A6Finding[] {
             detection: `aria-labelledby references ${missingIds.length > 0 ? 'missing ID(s): ' + missingIds.join(', ') : 'empty text'}`,
             evidence: `<${tag} aria-labelledby="${ariaLabelledByVal}"> at ${filePath}:${lineNumber}`,
             explanation: `aria-labelledby references ${missingIds.length > 0 ? 'non-existent ID(s) (' + missingIds.join(', ') + ')' : 'IDs that resolve to empty text'}, so no accessible name is exposed.`,
-            confidence: 0.97,
+            wcagCriteria: ['4.1.2'],
             correctivePrompt: `[${label}] — ${fileName}\n\nIssue reason:\naria-labelledby references ${missingIds.length > 0 ? 'missing' : 'empty'} IDs.\n\nRecommended fix:\nEnsure aria-labelledby references existing element IDs with label text, or use aria-label.`,
             deduplicationKey: dedupeKey,
           });
@@ -139,7 +139,7 @@ function detectA6AccessibleNames(allFiles: Map<string, string>): A6Finding[] {
         detection: `<${tag.toLowerCase()}> has no accessible name`,
         evidence: `<${tag.toLowerCase()}> at ${filePath}:${lineNumber} — checked: ${nameSources.join(', ')}`,
         explanation: `Interactive element <${tag.toLowerCase()}>${role !== tag.toLowerCase() ? ' (role="' + role + '")' : ''} has no programmatic accessible name. Screen readers cannot identify its purpose.`,
-        confidence: 0.97,
+        wcagCriteria: ['4.1.2'],
         correctivePrompt: `[${label}] — ${fileName}\n\nIssue reason:\nNo accessible name.\n\nRecommended fix:\nAdd visible text, aria-label, or aria-labelledby.`,
         deduplicationKey: dedupeKey,
       });
@@ -184,7 +184,6 @@ export default function IconButton() {
   const finding = results.find(f => f.subCheck === 'A6.1');
   assert(finding !== undefined, "Expected A6.1 finding");
   assertEquals(finding!.classification, "confirmed");
-  assert(finding!.confidence >= 0.95, `Expected confidence >= 0.95, got ${finding!.confidence}`);
 });
 
 Deno.test("A6.1: Icon-only link without label → Confirmed", () => {
@@ -228,7 +227,6 @@ export default function BrokenRef() {
   const a62 = results.find(f => f.subCheck === 'A6.2');
   assert(a62 !== undefined, "Expected A6.2 finding");
   assertEquals(a62!.classification, "confirmed");
-  assert(a62!.confidence >= 0.95, `Expected confidence >= 0.95, got ${a62!.confidence}`);
   // A6.1 should NOT exist for the same element (suppressed by A6.2)
   const a61 = results.filter(f => f.subCheck === 'A6.1' && f.filePath.includes('BrokenRef'));
   assertEquals(a61.length, 0, "A6.2 should suppress A6.1 for same element");
