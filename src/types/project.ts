@@ -236,6 +236,12 @@ export interface Violation {
   // ============================================================
   isE1Aggregated?: boolean;
   e1Elements?: E1ElementSubItem[];
+  
+  // ============================================================
+  // E2 AGGREGATED ELEMENT REPORTING (Choice Architecture)
+  // ============================================================
+  isE2Aggregated?: boolean;
+  e2Elements?: E2ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -551,6 +557,19 @@ export interface E1ElementSubItem {
   location: string;       // file path
   detection?: string;     // Summary of what was detected (missing disclosure)
   evidence?: string;      // Specific evidence citations
+  recommendedFix?: string; // Actionable fix suggestion
+  confidence: number;     // 0.60–0.80
+  evaluationMethod?: 'llm_only_code' | 'llm_perceptual';
+  deduplicationKey: string;
+}
+
+// E2 Element sub-item for aggregated choice architecture reporting
+export interface E2ElementSubItem {
+  elementLabel: string;   // e.g., "Upgrade dialog choices", "Cookie consent options"
+  elementType?: string;   // button group, dialog, modal, etc.
+  location: string;       // file path
+  detection?: string;     // Summary of imbalance detected
+  evidence?: string;      // Specific evidence citations (style tokens, sizing, wording)
   recommendedFix?: string; // Actionable fix suggestion
   confidence: number;     // 0.60–0.80
   evaluationMethod?: 'llm_only_code' | 'llm_perceptual';

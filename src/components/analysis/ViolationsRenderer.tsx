@@ -16,6 +16,7 @@ import { U4AggregatedCard } from './U4AggregatedCard';
 import { U5AggregatedCard } from './U5AggregatedCard';
 import { U6AggregatedCard } from './U6AggregatedCard';
 import { E1AggregatedCard } from './E1AggregatedCard';
+import { E2AggregatedCard } from './E2AggregatedCard';
 import { getRuleById } from '@/data/rules';
 
 const categoryColors: Record<string, string> = {
@@ -99,6 +100,7 @@ function isAggregated(v: Violation): boolean {
   if (v.ruleId === 'U5' && v.isU5Aggregated) return true;
   if (v.ruleId === 'U6' && v.isU6Aggregated) return true;
   if (v.ruleId === 'E1' && v.isE1Aggregated) return true;
+  if (v.ruleId === 'E2' && v.isE2Aggregated) return true;
   return !!(v.ruleId === 'A1' && v.isA1Aggregated) || !!(v.ruleId === 'A2' && v.isA2Aggregated);
 }
 
@@ -141,6 +143,9 @@ function AggregatedCard({ violation, compact }: { violation: Violation; compact?
   }
   if (violation.ruleId === 'E1' && violation.isE1Aggregated) {
     return <E1AggregatedCard violation={violation} compact={compact} />;
+  }
+  if (violation.ruleId === 'E2' && violation.isE2Aggregated) {
+    return <E2AggregatedCard violation={violation} compact={compact} />;
   }
   return null;
 }
