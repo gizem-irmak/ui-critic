@@ -235,7 +235,7 @@ export function A2AggregatedCard({ violation, compact = false }: A2AggregatedCar
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
           {isConfirmed
-            ? 'Elements remove the default browser outline without providing a visible focus replacement.'
+            ? 'Elements remove the default focus outline. Flag as a violation only if no visible focus indicator (ring/border/outline/shadow) is provided.'
             : violation.diagnosis}
         </p>
       </CardHeader>

@@ -4010,6 +4010,30 @@ serve(async (req) => {
       console.log(`A1 aggregated (GitHub): ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
     }
     
+    // ========== A2 Source-Level Pre-Filter ==========
+    // Scan source files for className strings with outline-none + valid replacement
+    const a2SafeFilesGH = new Set<string>();
+    for (const [filePath, content] of allFiles) {
+      if (!/\.(tsx|jsx|html|vue|svelte)$/i.test(filePath)) continue;
+      const classStrings = content.match(/(?:className|class)\s*=\s*(?:"[^"]*"|'[^']*'|{`[^`]*`})/g) || [];
+      const cvaStrings = content.match(/(?:cva|cn|clsx)\s*\([^)]{10,}\)/g) || [];
+      for (const cls of [...classStrings, ...cvaStrings]) {
+        const lower = cls.toLowerCase();
+        const hasSuppression = /(?:focus-visible:|focus:)?outline-none|(?:focus-visible:|focus:)?ring-0/.test(lower);
+        if (!hasSuppression) continue;
+        const hasReplacement = /focus(?:-visible)?:ring-[1-9]|focus(?:-visible)?:ring-ring|focus(?:-visible)?:ring-\w/.test(lower) ||
+          /focus(?:-visible)?:border-(?!0|none)/.test(lower) ||
+          /focus(?:-visible)?:shadow-(?!none)/.test(lower) ||
+          /focus(?:-visible)?:outline-(?!none)/.test(lower) ||
+          /focus(?:-visible)?:ring-offset-[1-9]/.test(lower);
+        if (hasReplacement) {
+          a2SafeFilesGH.add(filePath);
+          a2SafeFilesGH.add(filePath.replace(/^.*\//, ''));
+          console.log(`A2 PRE-FILTER SAFE (GitHub): ${filePath}`);
+        }
+      }
+    }
+
     // ========== A2 Focus Visibility — Aggregate from AI findings ==========
     const a2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId === 'A2' || v.ruleId === 'A5');
     const nonA2AiViolations = taggedAiViolations.filter((v: any) => v.ruleId !== 'A2' && v.ruleId !== 'A3' && v.ruleId !== 'A4' && v.ruleId !== 'A5' && v.ruleId !== 'A6' && v.ruleId !== 'U1');
@@ -4028,6 +4052,19 @@ serve(async (req) => {
         const hasStrongReplacement = /focus(?:-visible)?:ring-[2-9]|ring-offset-[2-9]|focus(?:-visible)?:border(?!-0)|focus(?:-visible)?:shadow-(?!none|sm\b)|focus(?:-visible)?:outline-(?!none)/.test(combined);
         if (hasStrongReplacement) {
           console.log(`A2 PASS (has strong replacement): ${(v.evidence || '').substring(0, 80)}`);
+          return false;
+        }
+        // SOURCE-LEVEL PRE-FILTER: check if file has outline-none + replacement in same className
+        const findingFile = v.filePath || '';
+        const findingFileName = findingFile.replace(/^.*\//, '');
+        const evidenceFileMatch = (v.evidence || '').match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
+        const evidenceFileName = evidenceFileMatch?.[1] || '';
+        const isInSafeSet = a2SafeFilesGH.has(findingFile) || 
+                            a2SafeFilesGH.has(findingFileName) ||
+                            a2SafeFilesGH.has(evidenceFileName) ||
+                            [...a2SafeFilesGH].some(sf => sf.includes(findingFileName) || (evidenceFileName && sf.includes(evidenceFileName)));
+        if (isInSafeSet) {
+          console.log(`A2 PASS (source pre-filter): ${findingFile || evidenceFileName}`);
           return false;
         }
         return true;
