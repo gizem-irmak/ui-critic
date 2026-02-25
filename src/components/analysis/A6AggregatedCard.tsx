@@ -60,6 +60,13 @@ function A6ElementItem({ element, compact = false }: {
               </div>
             )}
 
+            {element.detection && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground font-medium w-20">Detection:</span>
+                <span className="font-mono text-xs">{element.detection}</span>
+              </div>
+            )}
+
             {element.evidence && (
               <div className="flex items-start gap-2">
                 <span className="text-muted-foreground font-medium w-20">Evidence:</span>
