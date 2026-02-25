@@ -66,27 +66,32 @@ Deno.test("U3.D1: whitespace-nowrap + overflow-auto does NOT trigger", () => {
 
 Deno.test("U3.D1 SUPPRESS: truncate on 'Admin' (5 chars) → NOT reported", () => {
   const staticLen = "Admin".length;
-  assert(staticLen <= 12, "Short static text should be suppressed");
+  assert(staticLen <= 18, "Short static text should be suppressed");
 });
 
 Deno.test("U3.D1 SUPPRESS: truncate on 'New' (3 chars) → NOT reported", () => {
   const staticLen = "New".length;
-  assert(staticLen <= 12);
+  assert(staticLen <= 18);
 });
 
 Deno.test("U3.D1 SUPPRESS: truncate on 'Sent' (4 chars) → NOT reported", () => {
   const staticLen = "Sent".length;
-  assert(staticLen <= 12);
+  assert(staticLen <= 18);
 });
 
 Deno.test("U3.D1 SUPPRESS: truncate on 'Home' (4 chars) → NOT reported", () => {
   const staticLen = "Home".length;
-  assert(staticLen <= 12);
+  assert(staticLen <= 18);
 });
 
 Deno.test("U3.D1 SUPPRESS: truncate on 'Login' (5 chars) → NOT reported", () => {
   const staticLen = "Login".length;
-  assert(staticLen <= 12);
+  assert(staticLen <= 18);
+});
+
+Deno.test("U3.D1 SUPPRESS: truncate on 'No messages yet' (15 chars) → NOT reported", () => {
+  const staticLen = "No messages yet".length;
+  assert(staticLen <= 18, "15-char static text should be suppressed under new ≤18 threshold");
 });
 
 Deno.test("U3.D1: truncate on dynamic {doc.bio} → REPORTED", () => {
@@ -96,7 +101,7 @@ Deno.test("U3.D1: truncate on dynamic {doc.bio} → REPORTED", () => {
 
 Deno.test("U3.D1: line-clamp-2 on 25-char static text → REPORTED", () => {
   const staticLen = "This is a longer sentence".length;
-  assert(staticLen > 12, "Longer static text should be reported");
+  assert(staticLen > 18, "Longer static text should be reported");
 });
 
 // ═══════════════════════════════════════════════════
@@ -200,9 +205,9 @@ Deno.test("U3.D3: single scroll container does NOT trigger", () => {
 // ═══════════════════════════════════════════════════
 
 Deno.test("U3.D4: hidden on meaningful text without toggle triggers", () => {
-  const code = `<div hidden><p>Important description text that users need to see for context</p></div>`;
+  const code = `<div hidden><p>Important description text that users really need to see for full context</p></div>`;
   assert(hasPattern(code, /\bhidden\b/));
-  assert(hasPattern(code, /<p\b[^>]*>[^<]{15,}/));
+  assert(hasPattern(code, /<p\b[^>]*>[^<]{20,}/));
   assert(!hasPattern(code, /toggle|setVisible|setOpen|useState/i));
 });
 
@@ -215,7 +220,7 @@ Deno.test("U3.D4: aria-hidden on SVG icon does NOT trigger", () => {
 Deno.test("U3.D4: hidden attr with toggle control does NOT trigger", () => {
   const code = `
     const [visible, setVisible] = useState(false);
-    <div hidden={!visible}><p>Hidden content description here that is long enough</p></div>
+    <div hidden={!visible}><p>Hidden content description here that is definitely long enough text</p></div>
   `;
   assert(hasPattern(code, /\bhidden\b/));
   assert(hasPattern(code, /setVisible|useState/i)); // Has toggle → should skip
@@ -258,10 +263,10 @@ Deno.test("U3.D4 SUPPRESS: aria-controls/aria-expanded nearby → NOT reported",
   assert(hasPattern(code, /aria-controls|aria-expanded/i));
 });
 
-Deno.test("U3.D4: hidden on short text (< 15 chars) → NOT reported", () => {
-  const code = `<div hidden><p>Short</p></div>`;
-  // Text "Short" is only 5 chars, below 15 threshold
-  assert(!hasPattern(code, /<p\b[^>]*>[^<]{15,}/));
+Deno.test("U3.D4: hidden on short text (< 20 chars) → NOT reported", () => {
+  const code = `<div hidden><p>Short text here</p></div>`;
+  // Text "Short text here" is 15 chars, below 20 threshold
+  assert(!hasPattern(code, /<p\b[^>]*>[^<]{20,}/));
 });
 
 // ═══════════════════════════════════════════════════
