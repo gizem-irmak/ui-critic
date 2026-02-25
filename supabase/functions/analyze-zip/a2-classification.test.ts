@@ -48,18 +48,19 @@ function classifyA2Finding(evidence: string, diagnosis: string = ''): A2Classifi
     return 'pass';
   }
 
-  // Check for ANY valid replacement (including subtle) → Potential (not Confirmed)
-  // Valid replacements: focus:ring-*, focus:border-*, focus:shadow-*, focus:bg-*, focus:text-*
+  // Check for WEAK/AMBIGUOUS focus styling → Potential (Borderline)
+  // Includes: focus:bg-*, focus:text-*, focus:underline, focus:opacity-*, focus:font-*
+  const hasWeakFocusStyle = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
+
   const hasBgToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:bg-/i.test(t));
   const hasTextToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:text-/i.test(t));
   const hasRing1 = /(?:focus(?:-visible)?:)?ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]/.test(combined);
   const hasMutedRingColor = /ring-(?:gray|slate|zinc)-(?:100|200)\b/.test(combined);
   const hasShadowSmOnly = /focus(?:-visible)?:shadow-sm\b/.test(combined);
-  const hasBgInCombined = /focus:bg-|focus-visible:bg-|focus:text-|focus-visible:text-/.test(combined);
 
-  const hasAnyReplacement = hasBgToken || hasTextToken || hasRing1 || hasMutedRingColor || hasShadowSmOnly || hasBgInCombined;
+  const hasAnyWeakReplacement = hasWeakFocusStyle || hasBgToken || hasTextToken || hasRing1 || hasMutedRingColor || hasShadowSmOnly;
 
-  if (hasAnyReplacement) {
+  if (hasAnyWeakReplacement) {
     return {
       isConfirmed: false,
       isPotential: true,
@@ -201,4 +202,54 @@ Deno.test("A2: focus-visible:outline-none + focus-visible:ring-2 + focus-visible
   const evidence = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
   const result = classifyA2Finding(evidence);
   assertEquals(result, 'pass', "Should PASS — ring-2 + ring-offset-2 is a strong replacement");
+});
+
+// ============================================================
+// ACCEPTANCE TESTS — Menu component false-positive fix
+// ============================================================
+
+Deno.test("A2: outline-none + focus:bg-accent + focus:text-accent-foreground → Potential (weak focus style, NOT confirmed)", () => {
+  const evidence = "outline-none data-[state=open]:bg-accent data-[state=open]:text-accent-foreground focus:bg-accent focus:text-accent-foreground";
+  const result = classifyA2Finding(evidence);
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isPotential, true, "Should be potential (bg/text is weak focus style)");
+    assertEquals(result.isConfirmed, false, "Should NOT be confirmed — bg/text change is a weak replacement");
+  }
+});
+
+Deno.test("A2: focus:outline-none alone → Confirmed (no replacement at all)", () => {
+  const evidence = "focus:outline-none";
+  const result = classifyA2Finding(evidence);
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, true, "Should be confirmed — no replacement");
+    assertEquals(result.isPotential, false, "Should NOT be potential");
+  }
+});
+
+Deno.test("A2: focus-visible:outline-none + focus-visible:ring-2 → Not a violation (PASS)", () => {
+  const evidence = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "Should PASS — ring-2 is a strong replacement");
+});
+
+Deno.test("A2: outline-none + focus:underline → Potential (weak focus style)", () => {
+  const evidence = "outline-none focus:underline";
+  const result = classifyA2Finding(evidence);
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isPotential, true, "Underline is a weak focus style");
+    assertEquals(result.isConfirmed, false, "Should NOT be confirmed");
+  }
+});
+
+Deno.test("A2: outline-none + focus:opacity-80 → Potential (weak focus style)", () => {
+  const evidence = "outline-none focus:opacity-80";
+  const result = classifyA2Finding(evidence);
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isPotential, true, "Opacity change is a weak focus style");
+    assertEquals(result.isConfirmed, false, "Should NOT be confirmed");
+  }
 });
