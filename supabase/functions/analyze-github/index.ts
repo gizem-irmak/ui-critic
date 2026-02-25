@@ -4048,8 +4048,11 @@ serve(async (req) => {
           console.log(`A2 SKIP (no outline removal): ${(v.evidence || '').substring(0, 80)}`);
           return false;
         }
-        // Check for STRONG visible replacement = PASS (ring-2+, border, strong shadow, outline)
-        const hasStrongReplacement = /focus(?:-visible)?:ring-[2-9]|ring-offset-[2-9]|focus(?:-visible)?:border(?!-0)|focus(?:-visible)?:shadow-(?!none|sm\b)|focus(?:-visible)?:outline-(?!none)/.test(combined);
+        // Check for STRONG visible replacement = PASS (any focus:ring-*, focus:border-*, focus:shadow-*, focus:outline-* not none)
+        const hasStrongReplacement = /focus(?:-visible)?:ring-(?!0\b)/.test(combined) ||
+                                      /focus(?:-visible)?:border-(?!0\b|none)/.test(combined) ||
+                                      /focus(?:-visible)?:shadow-(?!none)/.test(combined) ||
+                                      /focus(?:-visible)?:outline-(?!none)/.test(combined);
         if (hasStrongReplacement) {
           console.log(`A2 PASS (has strong replacement): ${(v.evidence || '').substring(0, 80)}`);
           return false;
@@ -4085,22 +4088,15 @@ serve(async (req) => {
           else if (/\blink\b|\ba\b/i.test(combined)) elementType = 'link';
           else if (/\binput\b/i.test(combined)) elementType = 'input';
           
-          // ── Borderline vs Confirmed classification (expanded patterns) ──
-          // Weak/ambiguous focus styles: bg, text, underline, opacity, font
-          const hasWeakFocusStyle = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
-          const hasSubtleFocusStyling = 
-            hasWeakFocusStyle || // bg/text/underline/opacity/font
-            (/(?:focus(?:-visible)?:)?ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]/.test(combined)) || // ring-1 only
-            /ring-(?:gray|slate|zinc)-(?:100|200)\b/.test(combined) || // muted ring color
-            (/focus(?:-visible)?:shadow-sm\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]|focus(?:-visible)?:border(?!-0)|focus(?:-visible)?:outline-(?!none)/.test(combined)) || // shadow-sm only
-            (/\bfocus:(?:ring-[^0]|border-(?!0)|shadow-(?!none)|outline-(?!none))/.test(combined) && !/focus-visible:/.test(combined)); // :focus without :focus-visible
-          
-          const isBorderline = hasSubtleFocusStyling;
+          // ── Borderline vs Confirmed classification ──
+          // Weak/ambiguous: focus:bg-*, focus:text-*, focus:underline, focus:opacity-*, focus:font-*
+          const hasWeakFocusStyling = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
+          const isBorderline = hasWeakFocusStyling;
           const isConfirmed = !isBorderline;
           // Confirmed: 90-95% deterministic; Borderline: 60-75%
           const confidence = isConfirmed ? 0.92 : 0.68;
           
-          const focusClasses = (combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/g) || []);
+          const focusClasses = (evidence.match(/(?:focus(?:-visible)?:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/gi) || []);
           
           // Build descriptive detection text
           let detection: string;
@@ -4142,13 +4138,7 @@ serve(async (req) => {
             location,
             detection,
             detectionMethod: 'deterministic' as const,
-            focusClasses: [...new Set(focusClasses)].filter((cls, _i, arr) => {
-              if (cls === 'outline-none' && arr.includes('focus:outline-none')) return false;
-              if (cls === 'outline-none' && arr.includes('focus-visible:outline-none')) return false;
-              if (cls === 'ring-0' && arr.includes('focus:ring-0')) return false;
-              if (cls === 'border-0' && arr.includes('focus:border-0')) return false;
-              return true;
-            }),
+            focusClasses: [...new Set(focusClasses)], // Report exact tokens, no deduplication
             classification: isConfirmed ? 'confirmed' as const : 'potential' as const,
             potentialSubtype: isConfirmed ? undefined : 'borderline' as const,
             potentialReason: isConfirmed ? undefined : 'Custom focus styles exist but perceptibility cannot be statically verified.',

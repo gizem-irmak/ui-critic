@@ -5665,26 +5665,21 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
         continue;
       }
       
-      // Extract actual focus-related class tokens from the evidence
-      // Include bare outline-none/ring-0 AND focus-prefixed tokens for bg/text/underline/opacity/font
-      const focusClassTokens: string[] = evidence.match(/(?:focus(?:-visible)?:)?(?:outline-none|ring-0|ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?|bg-\w+|text-\w+|underline|opacity-\w+|font-\w+)/gi) || [];
-      // Also extract focus-prefixed weak tokens specifically
+      // Extract EXACT class tokens from the evidence — do NOT normalize or fabricate prefixes
+      // We extract tokens that actually appear in the source evidence string
+      const focusClassTokens: string[] = evidence.match(/(?:focus(?:-visible)?:)?(?:outline-none|ring-0|ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?)/gi) || [];
       const weakFocusTokens: string[] = evidence.match(/focus(?:-visible)?:(?:bg-\w+|text-\w+|underline|opacity-\w+|font-\w+)/gi) || [];
+      // Also capture bare (non-focus-prefixed) weak tokens that appear in the evidence
+      const bareWeakTokens: string[] = evidence.match(/(?<!\w)(?:bg-\w+|text-\w+)(?=\s|"|'|$)/gi) || [];
       
-      // Check for STRONG visible focus replacement indicators (actual class tokens)
-      // IMPORTANT: ring-1 is NOT a strong replacement — only ring-2 or higher counts as PASS
-      const hasStrongRingToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:ring-[2-9]/i.test(t));
-      const hasBorderToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:border(?!-0)/i.test(t));
-      const hasShadowToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:shadow-(?!none|sm\b)/i.test(t));
-      const hasOutlineToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:outline-(?!none)/i.test(t));
+      // Check for STRONG visible focus replacement indicators
+      // Strong = focus:ring-* (any width), focus:border-*, focus:shadow-*, focus:outline-* (not none)
+      const hasStrongReplacement = /focus(?:-visible)?:ring-(?!0\b)/.test(combined) ||
+                                    /focus(?:-visible)?:border-(?!0\b|none)/.test(combined) ||
+                                    /focus(?:-visible)?:shadow-(?!none)/.test(combined) ||
+                                    /focus(?:-visible)?:outline-(?!none)/.test(combined);
       
-      // Also check in diagnosis for class mentions
-      const hasStrongRingInDiagnosis = /focus(?:-visible)?:ring-[2-9]|ring-offset-[2-9]/.test(combined);
-      const hasBorderInDiagnosis = /focus(?:-visible)?:border-(?!0)/.test(combined);
-      const hasShadowInDiagnosis = /focus(?:-visible)?:shadow-(?!none|sm\b)/.test(combined);
-      
-      const hasVisibleReplacement = hasStrongRingToken || hasBorderToken || hasShadowToken || hasOutlineToken ||
-                                     hasStrongRingInDiagnosis || hasBorderInDiagnosis || hasShadowInDiagnosis;
+      const hasVisibleReplacement = hasStrongReplacement;
       
       // Check if explicitly marked as pass/acceptable
       const mentionsAcceptable = /(?<!no\s)(?<!without\s)(?<!lacks?\s)(?<!missing\s)(?:acceptable|compliant|has visible|proper focus|adequate focus|valid focus)/i.test(combined);
@@ -5720,35 +5715,13 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       }
       
       // ── Borderline vs Confirmed classification ──
-      // Borderline = focus styling EXISTS but is too subtle
-      // Confirmed = focus removed with NO replacement at all (or only zeros)
-      // IMPORTANT: If outline is removed AND no replacement → always Confirmed, NEVER borderline
+      // Weak/ambiguous focus styles: focus:bg-*, focus:text-*, focus:underline, focus:opacity-*, focus:font-*
+      const hasWeakFocusStyling = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
       
-      // Weak/ambiguous focus styles: bg, text, underline, opacity, font changes
-      const hasWeakFocusStyle = 
-        /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined) ||
-        weakFocusTokens.length > 0;
-      
-      // Check for ring-1 only (too subtle — width < 2px)
-      const hasRing1Only = /(?:focus(?:-visible)?:)?ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]/.test(combined);
-      
-      // Check for muted ring colors (low-contrast ring)
-      const hasMutedRingColor = /ring-(?:gray|slate|zinc)-(?:100|200)\b/.test(combined);
-      
-      // Check for missing ring offset or ring-offset-0
-      const hasNoOffset = !/ring-offset-[1-9]/.test(combined) || /ring-offset-0\b/.test(combined);
-      
-      // Check for "shadow only" focus: focus:shadow-sm without ring/outline/border
-      const hasShadowSmOnly = /focus(?:-visible)?:shadow-sm\b/.test(combined) && 
-                               !hasStrongRingToken && !hasBorderToken && !hasOutlineToken;
-      
-      // Check for :focus only without :focus-visible (keyboard perception risk)
-      const hasFocusOnlyStyles = /\bfocus:(?:ring-[^0]|border-(?!0)|shadow-(?!none)|outline-(?!none))/.test(combined) && !/focus-visible:/.test(combined);
-      
-      // Borderline requires at least SOME visible focus styling that is merely too subtle
-      // If NO focus styling exists at all, it's Confirmed (blocking), not borderline
-      const hasAnySubtleFocusStyling = hasWeakFocusStyle || hasRing1Only || hasMutedRingColor || hasShadowSmOnly || hasFocusOnlyStyles;
-      const isBorderline = hasAnySubtleFocusStyling;
+      // Classification:
+      // - outlineRemoved AND hasWeakFocusStyling → Borderline (Potential)
+      // - outlineRemoved AND NOT hasWeakFocusStyling → Confirmed (Blocking)
+      const isBorderline = hasWeakFocusStyling;
       
       // This is a valid violation - add it
       console.log(`A2 VIOLATION: ${evidence} [borderline: ${isBorderline}]`);
@@ -5812,9 +5785,10 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       else if (/\btab\b/i.test(combined)) elementType = 'tab';
       else if (/\bmenu/i.test(combined)) elementType = 'menuitem';
       
-      // Extract focus-related classes mentioned (include bare outline-none and weak tokens)
+      // Extract EXACT focus-related class tokens from the evidence — preserve original form
       const focusClasses: string[] = [];
-      const classMatches = combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/g);
+      // Match tokens exactly as they appear: with or without focus prefix
+      const classMatches = evidence.match(/(?:focus(?:-visible)?:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/gi);
       if (classMatches) {
         focusClasses.push(...new Set(classMatches));
       }
@@ -5860,17 +5834,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
         confidence = Math.max(confidence, 0.90);
       }
       
-      // Deduplicate focus classes (avoid listing both outline-none and focus:outline-none unless both genuinely exist)
-      const classesToRemove = focusClasses.filter((cls) => {
-        if (cls === 'outline-none' && (focusClasses.includes('focus:outline-none') || focusClasses.includes('focus-visible:outline-none'))) return true;
-        if (cls === 'ring-0' && (focusClasses.includes('focus:ring-0') || focusClasses.includes('focus-visible:ring-0'))) return true;
-        if (cls === 'border-0' && focusClasses.includes('focus:border-0')) return true;
-        return false;
-      });
-      for (const cls of classesToRemove) {
-        const idx = focusClasses.indexOf(cls);
-        if (idx !== -1) focusClasses.splice(idx, 1);
-      }
+      // Do NOT deduplicate/normalize tokens — report exactly what was found in the evidence
       
       let rationale: string;
       if (!v.isBorderline) {
