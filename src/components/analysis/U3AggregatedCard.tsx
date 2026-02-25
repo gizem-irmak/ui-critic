@@ -38,16 +38,39 @@ function U3ElementItem({ element, compact = false }: {
 
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+            {/* Element section */}
+            {(element.truncationType || element.elementTag) && (
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Element:</span>
+                <span className="font-mono text-xs">
+                  {element.elementTag ? `<${element.elementTag}>` : '(unknown tag)'}
+                  {' — '}
+                  type: {element.truncationType || '(none)'}
+                  {' — '}
+                  text: {element.textLength === 'dynamic' ? 'dynamic' : element.textLength != null ? `${element.textLength} chars` : '(unknown)'}
+                  {' — '}
+                  expand: {element.expandDetected ? 'Yes' : 'No'}
+                </span>
+              </div>
+            )}
+
+            {element.triggerReason && (
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Trigger:</span>
+                <span className="font-mono text-xs">{element.triggerReason}</span>
+              </div>
+            )}
+
             {element.detection && (
               <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Detection:</span>
+                <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Detection:</span>
                 <span className="font-mono text-xs">{element.detection}</span>
               </div>
             )}
 
             {element.evidence && (
               <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Evidence:</span>
+                <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Evidence:</span>
                 <span className="font-mono text-xs">{element.evidence}</span>
               </div>
             )}
@@ -61,7 +84,7 @@ function U3ElementItem({ element, compact = false }: {
 
             {element.confidence != null && (
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Confidence:</span>
+                <span className="text-muted-foreground font-medium w-20 flex-shrink-0">Confidence:</span>
                 <span className="font-mono font-medium text-warning">
                   {Math.round(element.confidence * 100)}%
                 </span>

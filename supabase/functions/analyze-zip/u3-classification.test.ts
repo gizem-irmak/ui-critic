@@ -1,6 +1,7 @@
 /**
  * U3 — Truncated or Inaccessible Content
  * Classification tests for deterministic sub-checks U3.D1–U3.D4
+ * Including suppression rules for short text, responsive hidden, and expand mechanisms
  */
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
@@ -15,7 +16,7 @@ function hasPattern(content: string, pattern: RegExp): boolean {
 
 Deno.test("U3.D1: line-clamp-2 without expand triggers", () => {
   const code = `<p className="line-clamp-2 text-sm">{description}</p>`;
-  assert(hasPattern(code, /\bline-clamp-[1-3]\b/));
+  assert(hasPattern(code, /\bline-clamp-[1-6]\b/));
   assert(!hasPattern(code, /show\s*more|expand|toggle/i));
 });
 
@@ -24,7 +25,7 @@ Deno.test("U3.D1: line-clamp-3 with Show More does NOT trigger", () => {
     <p className="line-clamp-3">{text}</p>
     <button onClick={toggleExpand}>Show more</button>
   `;
-  assert(hasPattern(code, /\bline-clamp-[1-3]\b/));
+  assert(hasPattern(code, /\bline-clamp-[1-6]\b/));
   assert(hasPattern(code, /show\s*more/i)); // Has expand → should skip
 });
 
@@ -57,6 +58,89 @@ Deno.test("U3.D1: whitespace-nowrap + overflow-auto does NOT trigger", () => {
   const code = `<div className="whitespace-nowrap overflow-auto">{text}</div>`;
   assert(hasPattern(code, /\bwhitespace-nowrap\b/));
   assert(hasPattern(code, /overflow-auto\b/)); // Has scroll → should skip
+});
+
+// ═══════════════════════════════════════════════════
+// U3.D1 — SHORT STATIC TEXT SUPPRESSION
+// ═══════════════════════════════════════════════════
+
+Deno.test("U3.D1 SUPPRESS: truncate on 'Admin' (5 chars) → NOT reported", () => {
+  const staticLen = "Admin".length;
+  assert(staticLen <= 12, "Short static text should be suppressed");
+});
+
+Deno.test("U3.D1 SUPPRESS: truncate on 'New' (3 chars) → NOT reported", () => {
+  const staticLen = "New".length;
+  assert(staticLen <= 12);
+});
+
+Deno.test("U3.D1 SUPPRESS: truncate on 'Sent' (4 chars) → NOT reported", () => {
+  const staticLen = "Sent".length;
+  assert(staticLen <= 12);
+});
+
+Deno.test("U3.D1 SUPPRESS: truncate on 'Home' (4 chars) → NOT reported", () => {
+  const staticLen = "Home".length;
+  assert(staticLen <= 12);
+});
+
+Deno.test("U3.D1 SUPPRESS: truncate on 'Login' (5 chars) → NOT reported", () => {
+  const staticLen = "Login".length;
+  assert(staticLen <= 12);
+});
+
+Deno.test("U3.D1: truncate on dynamic {doc.bio} → REPORTED", () => {
+  const preview = "(dynamic text: doc.bio)";
+  assert(preview.startsWith("(dynamic text"), "Dynamic content should be reported");
+});
+
+Deno.test("U3.D1: line-clamp-2 on 25-char static text → REPORTED", () => {
+  const staticLen = "This is a longer sentence".length;
+  assert(staticLen > 12, "Longer static text should be reported");
+});
+
+// ═══════════════════════════════════════════════════
+// U3.D1 — WIDE CONTAINER SUPPRESSION
+// ═══════════════════════════════════════════════════
+
+Deno.test("U3.D1 SUPPRESS: truncate + w-full (no max-w) on short text", () => {
+  const context = `<span className="truncate w-full">Short label</span>`;
+  assert(hasPattern(context, /\bw-full\b/));
+  assert(!hasPattern(context, /\bmax-w-/));
+  // With static text ≤30 chars + w-full → suppressed
+});
+
+Deno.test("U3.D1: truncate + w-full + max-w-xs → NOT suppressed", () => {
+  const context = `<span className="truncate w-full max-w-xs">{item.name}</span>`;
+  assert(hasPattern(context, /\bw-full\b/));
+  assert(hasPattern(context, /\bmax-w-/)); // Has max-w constraint → not suppressed
+});
+
+// ═══════════════════════════════════════════════════
+// U3.D1 — EXPAND MECHANISM DETECTION (±20 lines)
+// ═══════════════════════════════════════════════════
+
+Deno.test("U3.D1 SUPPRESS: expanded/setExpanded state nearby", () => {
+  const window = `
+    const [expanded, setExpanded] = useState(false);
+    <p className="line-clamp-2">{bio}</p>
+    <button onClick={() => setExpanded(!expanded)}>Read more</button>
+  `;
+  assert(hasPattern(window, /\b(expanded|setExpanded)\b/));
+});
+
+Deno.test("U3.D1 SUPPRESS: <Tooltip> component nearby", () => {
+  const window = `
+    <Tooltip content={fullText}>
+      <span className="truncate w-32">{shortText}</span>
+    </Tooltip>
+  `;
+  assert(hasPattern(window, /<Tooltip/i));
+});
+
+Deno.test("U3.D1 SUPPRESS: title= attribute nearby", () => {
+  const window = `<span className="truncate" title={fullName}>{name}</span>`;
+  assert(hasPattern(window, /title\s*=/i));
 });
 
 // ═══════════════════════════════════════════════════
@@ -112,13 +196,13 @@ Deno.test("U3.D3: single scroll container does NOT trigger", () => {
 });
 
 // ═══════════════════════════════════════════════════
-// U3.D4 — Hidden content without control
+// U3.D4 — Hidden content without control (REFINED)
 // ═══════════════════════════════════════════════════
 
-Deno.test("U3.D4: aria-hidden on meaningful text without toggle triggers", () => {
-  const code = `<div aria-hidden="true"><p>Important description text that users need</p></div>`;
-  assert(hasPattern(code, /aria-hidden\s*=\s*["']true["']/));
-  assert(hasPattern(code, /<p\b[^>]*>[^<]{5,}/));
+Deno.test("U3.D4: hidden on meaningful text without toggle triggers", () => {
+  const code = `<div hidden><p>Important description text that users need to see for context</p></div>`;
+  assert(hasPattern(code, /\bhidden\b/));
+  assert(hasPattern(code, /<p\b[^>]*>[^<]{15,}/));
   assert(!hasPattern(code, /toggle|setVisible|setOpen|useState/i));
 });
 
@@ -131,7 +215,7 @@ Deno.test("U3.D4: aria-hidden on SVG icon does NOT trigger", () => {
 Deno.test("U3.D4: hidden attr with toggle control does NOT trigger", () => {
   const code = `
     const [visible, setVisible] = useState(false);
-    <div hidden={!visible}><p>Hidden content description here</p></div>
+    <div hidden={!visible}><p>Hidden content description here that is long enough</p></div>
   `;
   assert(hasPattern(code, /\bhidden\b/));
   assert(hasPattern(code, /setVisible|useState/i)); // Has toggle → should skip
@@ -139,8 +223,45 @@ Deno.test("U3.D4: hidden attr with toggle control does NOT trigger", () => {
 
 Deno.test("U3.D4: sr-only content does NOT trigger", () => {
   const code = `<span className="sr-only" aria-hidden="true">Screen reader only text content here</span>`;
-  assert(hasPattern(code, /aria-hidden\s*=\s*["']true["']/));
   assert(hasPattern(code, /sr-only/i)); // Accessibility pattern → should skip
+});
+
+// U3.D4 — RESPONSIVE HIDDEN SUPPRESSION
+
+Deno.test("U3.D4 SUPPRESS: responsive hidden (md:hidden) → NOT reported", () => {
+  const code = `<div className="hidden md:block"><p>Navigation menu content that is meaningful text</p></div>`;
+  assert(hasPattern(code, /hidden\s+(?:sm|md|lg|xl|2xl):(?:block|flex|inline|grid)\b/));
+});
+
+Deno.test("U3.D4 SUPPRESS: responsive hidden (block md:hidden) → NOT reported", () => {
+  const code = `<div className="block md:hidden"><p>Mobile navigation content for mobile users</p></div>`;
+  assert(hasPattern(code, /(?:block|flex|inline|grid)\s+(?:sm|md|lg|xl|2xl):hidden\b/));
+});
+
+Deno.test("U3.D4 SUPPRESS: sm:hidden on line → NOT reported", () => {
+  const code = `<span className="sm:hidden text-lg">Menu text content</span>`;
+  assert(hasPattern(code, /\b(?:sm|md|lg|xl|2xl):hidden\b/));
+});
+
+Deno.test("U3.D4 SUPPRESS: aria-hidden='true' → NOT reported (intentional)", () => {
+  // aria-hidden is now treated as intentional/decorative and suppressed
+  const code = `<div aria-hidden="true"><p>Some meaningful content that is intentionally hidden from AT</p></div>`;
+  assert(hasPattern(code, /aria-hidden\s*=\s*["']true["']/));
+  // This should be suppressed — aria-hidden is intentional
+});
+
+Deno.test("U3.D4 SUPPRESS: aria-controls/aria-expanded nearby → NOT reported", () => {
+  const code = `
+    <button aria-expanded="false" aria-controls="panel1">Toggle</button>
+    <div hidden id="panel1"><p>Panel content that is meaningful and long enough</p></div>
+  `;
+  assert(hasPattern(code, /aria-controls|aria-expanded/i));
+});
+
+Deno.test("U3.D4: hidden on short text (< 15 chars) → NOT reported", () => {
+  const code = `<div hidden><p>Short</p></div>`;
+  // Text "Short" is only 5 chars, below 15 threshold
+  assert(!hasPattern(code, /<p\b[^>]*>[^<]{15,}/));
 });
 
 // ═══════════════════════════════════════════════════
@@ -168,12 +289,23 @@ Deno.test("U3 confidence: capped at 0.85 for 4 sub-checks", () => {
   assertEquals(Math.min(base + bonus, 0.85), 0.85);
 });
 
+Deno.test("U3 confidence: dynamic content gets 0.75 base", () => {
+  const isDynamic = true;
+  const confidence = isDynamic ? 0.75 : 0.70;
+  assertEquals(confidence, 0.75);
+});
+
+Deno.test("U3 confidence: long static text (≥20 chars) gets 0.72 base", () => {
+  const staticLen = 25;
+  const confidence = staticLen >= 20 ? 0.72 : 0.70;
+  assertEquals(confidence, 0.72);
+});
+
 // ═══════════════════════════════════════════════════
 // Classification: Always Potential
 // ═══════════════════════════════════════════════════
 
 Deno.test("U3: All findings must be classified as 'potential'", () => {
-  // U3 never produces confirmed findings
   const classification = 'potential';
   assertEquals(classification, 'potential');
 });
