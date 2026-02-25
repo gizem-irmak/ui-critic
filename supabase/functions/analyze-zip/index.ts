@@ -178,9 +178,10 @@ interface ButtonUsage {
   variant: string | null;
   className: string;
   hasOnClick: boolean;
+  offset: number; // character offset in the source content
 }
 
-function extractButtonUsagesFromJsx(content: string, buttonLocalNames: Set<string>): ButtonUsage[] {
+function extractButtonUsagesFromJsx(content: string, buttonLocalNames: Set<string>, baseOffset = 0): ButtonUsage[] {
   const usages: ButtonUsage[] = [];
   const tagPattern = new RegExp(
     `<(${Array.from(buttonLocalNames).join('|')}|button)\\b([^>]*)(?:>([^<]*(?:<(?!\\/(${Array.from(buttonLocalNames).join('|')}|button))[^<]*)*)<\\/\\1>|\\/>)`,
@@ -211,7 +212,7 @@ function extractButtonUsagesFromJsx(content: string, buttonLocalNames: Set<strin
       label = ariaMatch ? (ariaMatch[1] || ariaMatch[2] || 'Button') : 'Button';
     }
 
-    usages.push({ label, variant, className, hasOnClick });
+    usages.push({ label, variant, className, hasOnClick, offset: baseOffset + match.index });
   }
 
   return usages;
@@ -222,6 +223,7 @@ interface ActionGroup {
   containerType: string;
   buttons: ButtonUsage[];
   lineContext: string;
+  offset: number; // character offset of the container match in the file
 }
 
 function extractActionGroups(content: string, buttonLocalNames: Set<string>): ActionGroup[] {
@@ -244,6 +246,7 @@ function extractActionGroups(content: string, buttonLocalNames: Set<string>): Ac
           containerType: type,
           buttons,
           lineContext: match[0].slice(0, 200),
+          offset: match.index,
         });
       }
     }
@@ -273,7 +276,9 @@ interface U1Finding {
 
 function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
   const findings: U1Finding[] = [];
-  const formFilesWithU1_1 = new Set<string>();
+  // Scoped suppression: track form content ranges that triggered U1.1 per file
+  // Key = filePath, Value = array of { start, end } character offsets of the <form>...</form> block
+  const u11FormScopes = new Map<string, Array<{ start: number; end: number }>>();
 
   // === U1.1: Form without submit mechanism ===
   for (const [filePathRaw, content] of allFiles.entries()) {
@@ -293,6 +298,10 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
       const hasSubmitInput = /<input\b[^>]*type\s*=\s*["']submit["'][^>]*>/i.test(formContent);
 
       if (!hasSubmitButton && !hasSubmitInput && !hasOnSubmit) {
+        const formStart = formMatch.index;
+        const formEnd = formStart + formMatch[0].length;
+        console.log(`[U1.1] fired: form scope ${filePath} chars ${formStart}-${formEnd}`);
+
         findings.push({
           subCheck: 'U1.1',
           subCheckLabel: 'No submit primary action',
@@ -307,10 +316,18 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
           advisoryGuidance: 'Add a clear submit action (e.g., "Save", "Submit") tied to the form.',
           deduplicationKey: `U1.1|${filePath}`,
         });
-        formFilesWithU1_1.add(filePath);
+        if (!u11FormScopes.has(filePath)) u11FormScopes.set(filePath, []);
+        u11FormScopes.get(filePath)!.push({ start: formStart, end: formEnd });
       }
     }
   }
+
+  // Helper: check if a character offset falls within any U1.1 form scope for a file
+  const isInsideU11Form = (filePath: string, offset: number): boolean => {
+    const scopes = u11FormScopes.get(filePath);
+    if (!scopes) return false;
+    return scopes.some(s => offset >= s.start && offset <= s.end);
+  };
 
   // === U1.2 & U1.3: Competing CTAs and generic labels ===
   const resolveKnownButtonImpl = (): { filePath: string; config: CvaVariantConfig } | null => {
@@ -337,7 +354,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     if (filePath.includes('components/ui/button')) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
-    if (formFilesWithU1_1.has(filePath)) continue;
+    // No longer skip entire file — scoped suppression handled below
 
     const buttonLocalNames = new Set<string>();
     const importRegex = /import\s*\{([^}]+)\}\s*from\s*["']([^"']*components\/ui\/button[^"']*)["']/g;
@@ -361,6 +378,12 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     const u12SuppressedLabels = new Set<string>();
     const actionGroups = extractActionGroups(content, buttonLocalNames);
     for (const group of actionGroups) {
+      // Scoped suppression: skip this group if it's inside a U1.1 form
+      if (isInsideU11Form(filePath, group.offset)) {
+        console.log(`[U1.2] suppressed: container at offset ${group.offset} is inside U1.1 form scope in ${filePath}`);
+        continue;
+      }
+
       const ctas: Array<{ label: string; emphasis: Emphasis; styleKey: string | null }> = [];
       let usedPath = '';
       for (const btn of group.buttons) {
@@ -446,8 +469,16 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     for (const btn of allButtons) {
       const labelLower = btn.label.trim().toLowerCase();
       if (GENERIC_LABELS.has(labelLower)) {
+        // Scoped suppression: skip if this button is inside a U1.1 form
+        if (isInsideU11Form(filePath, btn.offset)) {
+          console.log(`[U1.3] suppressed: "${btn.label}" at offset ${btn.offset} is inside U1.1 form scope in ${filePath}`);
+          continue;
+        }
         // Skip if this label was part of a U1.2 competing-CTAs group in this file
-        if (u12SuppressedLabels.has(labelLower)) continue;
+        if (u12SuppressedLabels.has(labelLower)) {
+          console.log(`[U1.3] suppressed: "${btn.label}" covered by U1.2 in same container`);
+          continue;
+        }
         const dedupeKey = `U1.3|${filePath}|${labelLower}`;
         if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
 

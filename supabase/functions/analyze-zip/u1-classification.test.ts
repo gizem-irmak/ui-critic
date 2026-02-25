@@ -105,9 +105,10 @@ interface ButtonUsage {
   variant: string | null;
   className: string;
   hasOnClick: boolean;
+  offset: number;
 }
 
-function extractButtonUsagesFromJsx(content: string, buttonLocalNames: Set<string>): ButtonUsage[] {
+function extractButtonUsagesFromJsx(content: string, buttonLocalNames: Set<string>, baseOffset = 0): ButtonUsage[] {
   const usages: ButtonUsage[] = [];
   const tagPattern = new RegExp(
     `<(${Array.from(buttonLocalNames).join('|')}|button)\\b([^>]*)(?:>([^<]*(?:<(?!\\/(${Array.from(buttonLocalNames).join('|')}|button))[^<]*)*)<\\/\\1>|\\/>)`,
@@ -127,7 +128,7 @@ function extractButtonUsagesFromJsx(content: string, buttonLocalNames: Set<strin
       const ariaMatch = attrs.match(/(?:aria-label|title)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       label = ariaMatch ? (ariaMatch[1] || ariaMatch[2] || 'Button') : 'Button';
     }
-    usages.push({ label, variant, className, hasOnClick });
+    usages.push({ label, variant, className, hasOnClick, offset: baseOffset + match.index });
   }
   return usages;
 }
@@ -136,6 +137,7 @@ interface ActionGroup {
   containerType: string;
   buttons: ButtonUsage[];
   lineContext: string;
+  offset: number;
 }
 
 function extractActionGroups(content: string, buttonLocalNames: Set<string>): ActionGroup[] {
@@ -150,7 +152,7 @@ function extractActionGroups(content: string, buttonLocalNames: Set<string>): Ac
       const containerContent = match[2] || '';
       const buttons = extractButtonUsagesFromJsx(containerContent, buttonLocalNames);
       if (buttons.length >= 2) {
-        groups.push({ containerType: type, buttons, lineContext: match[0].slice(0, 200) });
+        groups.push({ containerType: type, buttons, lineContext: match[0].slice(0, 200), offset: match.index });
       }
     }
   }
@@ -178,7 +180,7 @@ interface U1Finding {
 
 function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
   const findings: U1Finding[] = [];
-  const formFilesWithU1_1 = new Set<string>();
+  const u11FormScopes = new Map<string, Array<{ start: number; end: number }>>();
 
   for (const [filePathRaw, content] of allFiles.entries()) {
     const filePath = normalizePath(filePathRaw);
@@ -195,6 +197,8 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
       const hasSubmitButton = /<(?:button|Button)\b(?![^>]*type\s*=\s*["'](?:button|reset)["'])[^>]*>/i.test(formContent);
       const hasSubmitInput = /<input\b[^>]*type\s*=\s*["']submit["'][^>]*>/i.test(formContent);
       if (!hasSubmitButton && !hasSubmitInput && !hasOnSubmit) {
+        const formStart = formMatch.index;
+        const formEnd = formStart + formMatch[0].length;
         findings.push({
           subCheck: 'U1.1', subCheckLabel: 'No submit primary action', classification: 'confirmed',
           elementLabel: 'Form element', elementType: 'form', filePath,
@@ -205,10 +209,17 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
           advisoryGuidance: 'Add a clear submit action (e.g., "Save", "Submit") tied to the form.',
           deduplicationKey: `U1.1|${filePath}`,
         });
-        formFilesWithU1_1.add(filePath);
+        if (!u11FormScopes.has(filePath)) u11FormScopes.set(filePath, []);
+        u11FormScopes.get(filePath)!.push({ start: formStart, end: formEnd });
       }
     }
   }
+
+  const isInsideU11Form = (filePath: string, offset: number): boolean => {
+    const scopes = u11FormScopes.get(filePath);
+    if (!scopes) return false;
+    return scopes.some(s => offset >= s.start && offset <= s.end);
+  };
 
   const resolveKnownButtonImpl = (): { filePath: string; config: CvaVariantConfig } | null => {
     for (const p of ['src/components/ui/button.tsx', 'components/ui/button.tsx']) {
@@ -228,7 +239,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     if (!/\.(tsx|jsx)$/.test(filePath)) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
-    if (formFilesWithU1_1.has(filePath)) continue;
+    // No longer skip entire file — scoped suppression handled below
 
     const buttonLocalNames = new Set<string>();
     const importRegex = /import\s*\{([^}]+)\}\s*from\s*["']([^"']*components\/ui\/button[^"']*)["']/g;
@@ -248,6 +259,8 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     const u12SuppressedLabels = new Set<string>();
     const actionGroups = extractActionGroups(content, buttonLocalNames);
     for (const group of actionGroups) {
+      // Scoped suppression: skip if inside a U1.1 form
+      if (isInsideU11Form(filePath, group.offset)) continue;
       const ctas: Array<{ label: string; emphasis: Emphasis; styleKey: string | null }> = [];
       for (const btn of group.buttons) {
         if (buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)) {
@@ -305,6 +318,8 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     for (const btn of allButtons) {
       const labelLower = btn.label.trim().toLowerCase();
       if (GENERIC_LABELS.has(labelLower)) {
+        // Scoped suppression: skip if inside a U1.1 form
+        if (isInsideU11Form(filePath, btn.offset)) continue;
         if (u12SuppressedLabels.has(labelLower)) continue;
         const dedupeKey = `U1.3|${filePath}|${labelLower}`;
         if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
@@ -626,4 +641,73 @@ export default function TailwindDialog() {
   const u13Ok = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Ok'));
   assertEquals(u13Save, undefined, "U1.3 'Save' suppressed by U1.2");
   assertEquals(u13Ok, undefined, "U1.3 'Ok' suppressed by U1.2");
+});
+
+// ========== SCOPED SUPPRESSION TESTS ==========
+
+Deno.test("U1.1 does NOT suppress U1.3 for buttons OUTSIDE the form in same file", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/CombinedPage.tsx", `
+export default function CombinedPage() {
+  return (
+    <div>
+      <form>
+        <input type="text" name="email" />
+      </form>
+      <button onClick={handleClick}>Save</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u11 = results.find(f => f.subCheck === 'U1.1');
+  assert(u11 !== undefined, "Expected U1.1 for form without submit");
+  const u13 = results.find(f => f.subCheck === 'U1.3');
+  assert(u13 !== undefined, "Expected U1.3 for 'Save' button OUTSIDE the form");
+});
+
+Deno.test("U1.1 suppresses U1.3 for buttons INSIDE the same form", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/FormWithGeneric.tsx", `
+export default function FormWithGeneric() {
+  return (
+    <form>
+      <input type="text" />
+      <button type="button" onClick={doSomething}>Save</button>
+    </form>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u11 = results.find(f => f.subCheck === 'U1.1');
+  // The form has a <button type="button"> which does NOT count as submit
+  assert(u11 !== undefined, "Expected U1.1 for form without submit");
+  const u13 = results.find(f => f.subCheck === 'U1.3');
+  assertEquals(u13, undefined, "U1.3 should be suppressed for button INSIDE the U1.1 form");
+});
+
+Deno.test("Combined: U1.1 + U1.2 in different parts of same file", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/components/MixedPage.tsx", `
+import { Button } from "@/components/ui/button";
+export default function MixedPage() {
+  return (
+    <div>
+      <form>
+        <input type="text" />
+      </form>
+      <CardFooter>
+        <Button>Accept</Button>
+        <Button>Decline</Button>
+      </CardFooter>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u11 = results.find(f => f.subCheck === 'U1.1');
+  assert(u11 !== undefined, "Expected U1.1 for form without submit");
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for competing CTAs OUTSIDE the form");
 });
