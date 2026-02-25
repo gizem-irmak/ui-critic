@@ -380,12 +380,12 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             elementType: 'button',
             location: v.evidence || '',
             explanation: v.diagnosis || '',
-            confidence: v.confidence,
             correctivePrompt: v.correctivePrompt,
             deduplicationKey: `${v.ruleId}-${v.evidence || 'fallback'}`,
             classification: 'confirmed',
             subCheck: 'A6.1',
             subCheckLabel: 'Missing accessible name',
+            wcagCriteria: ['4.1.2'],
           } as A6ElementSubItem);
         }
       } else if (v.correctivePrompt) {

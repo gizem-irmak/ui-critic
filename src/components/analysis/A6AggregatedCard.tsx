@@ -115,7 +115,7 @@ export function A6AggregatedCard({ violation, compact = false }: A6AggregatedCar
         subCheckLabel: 'Missing accessible name',
         classification: 'confirmed',
         explanation: violation.diagnosis || '',
-        confidence: violation.confidence,
+        wcagCriteria: ['4.1.2'],
         correctivePrompt: violation.correctivePrompt,
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
