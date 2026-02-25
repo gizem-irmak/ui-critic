@@ -58,6 +58,18 @@ function looksLikeFilledClass(className: string): boolean {
   return false;
 }
 
+function classifyTailwindEmphasis(className: string): Emphasis {
+  const s = className.toLowerCase();
+  if (/\bbg-primary\b/.test(s)) return 'high';
+  if (/\bbg-\w+-[6-9]00\b/.test(s)) return 'high';
+  if (/\btext-white\b/.test(s) && /\bbg-/.test(s) && !/\bbg-transparent\b/.test(s)) return 'high';
+  if (/\bborder\b/.test(s) && !/\bbg-/.test(s)) return 'low';
+  if (/\bbg-transparent\b/.test(s)) return 'low';
+  if (/\bunderline\b/.test(s)) return 'low';
+  if (/\bbg-(secondary|muted|gray-\d+|slate-\d+)\b/.test(s)) return 'medium';
+  return 'unknown';
+}
+
 function looksLikeOutlineOrGhostClass(className: string): boolean {
   const s = className.toLowerCase();
   return /\bborder\b/.test(s) || /\bbg-transparent\b/.test(s) || /\bunderline\b/.test(s);
@@ -233,42 +245,47 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
     if (exportedFn?.[1]) componentName = exportedFn[1];
 
-    if (buttonImpl) {
-      const actionGroups = extractActionGroups(content, buttonLocalNames);
-      const u12SuppressedLabels = new Set<string>();
-      for (const group of actionGroups) {
-        const ctas: Array<{ label: string; emphasis: Emphasis; styleKey: string | null }> = [];
-        for (const btn of group.buttons) {
+    const u12SuppressedLabels = new Set<string>();
+    const actionGroups = extractActionGroups(content, buttonLocalNames);
+    for (const group of actionGroups) {
+      const ctas: Array<{ label: string; emphasis: Emphasis; styleKey: string | null }> = [];
+      for (const btn of group.buttons) {
+        if (buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)) {
           const resolvedVariant = btn.variant || buttonImpl.config.defaultVariant || 'default';
           const classified = classifyButtonEmphasis({ resolvedVariant, variantConfig: buttonImpl.config, instanceClassName: btn.className });
           ctas.push({ label: btn.label, emphasis: classified.emphasis, styleKey: classified.styleKey });
+        } else {
+          const twEmphasis = classifyTailwindEmphasis(btn.className);
+          const styleKey = twEmphasis === 'high' ? 'tw-filled' : twEmphasis === 'low' ? 'tw-outline' : twEmphasis === 'medium' ? 'tw-secondary' : null;
+          ctas.push({ label: btn.label, emphasis: twEmphasis, styleKey });
         }
-        if (ctas.some(c => c.emphasis === 'unknown' || !c.styleKey)) continue;
-        const highs = ctas.filter(c => c.emphasis === 'high');
-        if (highs.length >= 2) {
-          const highStyleKeys = new Set(highs.map(h => h.styleKey));
-          if (highStyleKeys.size === 1) {
-            const groupKey = `${filePath}|${group.containerType}`;
-            if (seenU12Groups.has(groupKey)) continue;
-            seenU12Groups.add(groupKey);
-            const labels = ctas.map(c => c.label);
-            const sharedToken = highs[0].styleKey || 'default';
-            findings.push({
-              subCheck: 'U1.2', subCheckLabel: 'Multiple equivalent CTAs', classification: 'potential',
-              elementLabel: `${componentName} — ${group.containerType}`, elementType: 'button group', filePath,
-              detection: `${highs.length} CTAs share variant="${sharedToken}"`,
-              evidence: `${labels.join(', ')} — all use same high-emphasis styling (${sharedToken})`,
-              explanation: `${highs.length} sibling CTA buttons share identical high-emphasis styling.`,
-              confidence: 0.78,
-              advisoryGuidance: 'Visually distinguish the primary action.',
-              deduplicationKey: `U1.2|${filePath}|${group.containerType}`,
-            });
-            for (const cta of ctas) {
-              u12SuppressedLabels.add(cta.label.trim().toLowerCase());
-            }
+      }
+      if (ctas.some(c => c.emphasis === 'unknown' || !c.styleKey)) continue;
+      const highs = ctas.filter(c => c.emphasis === 'high');
+      if (highs.length >= 2) {
+        const highStyleKeys = new Set(highs.map(h => h.styleKey));
+        if (highStyleKeys.size === 1) {
+          const groupKey = `${filePath}|${group.containerType}`;
+          if (seenU12Groups.has(groupKey)) continue;
+          seenU12Groups.add(groupKey);
+          const labels = ctas.map(c => c.label);
+          const sharedToken = highs[0].styleKey || 'default';
+          findings.push({
+            subCheck: 'U1.2', subCheckLabel: 'Multiple equivalent CTAs', classification: 'potential',
+            elementLabel: `${componentName} — ${group.containerType}`, elementType: 'button group', filePath,
+            detection: `${highs.length} CTAs share high-emphasis styling`,
+            evidence: `${labels.join(', ')} — all use same high-emphasis styling (${sharedToken})`,
+            explanation: `${highs.length} sibling CTA buttons share identical high-emphasis styling.`,
+            confidence: 0.75,
+            advisoryGuidance: 'Visually distinguish the primary action.',
+            deduplicationKey: `U1.2|${filePath}|${group.containerType}`,
+          });
+          for (const cta of ctas) {
+            u12SuppressedLabels.add(cta.label.trim().toLowerCase());
           }
         }
       }
+    }
 
     const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
     for (const btn of allButtons) {
@@ -288,26 +305,6 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
           deduplicationKey: dedupeKey,
         });
       }
-    }
-    } else {
-    const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
-    for (const btn of allButtons) {
-      const labelLower = btn.label.trim().toLowerCase();
-      if (GENERIC_LABELS.has(labelLower)) {
-        const dedupeKey = `U1.3|${filePath}|${labelLower}`;
-        if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
-        findings.push({
-          subCheck: 'U1.3', subCheckLabel: 'Ambiguous CTA label', classification: 'potential',
-          elementLabel: `"${btn.label}" button`, elementType: 'button', filePath,
-          detection: `Generic label: "${btn.label}"`,
-          evidence: `CTA labeled "${btn.label}" in ${componentName}`,
-          explanation: `The CTA label "${btn.label}" is generic and does not communicate the specific action.`,
-          confidence: 0.65,
-          advisoryGuidance: 'Use specific, action-oriented labels.',
-          deduplicationKey: dedupeKey,
-        });
-      }
-    }
     }
   }
   return findings;
@@ -515,4 +512,81 @@ export default function StandaloneSave() {
   assertEquals(u12, undefined, "No U1.2 for single button");
   const u13 = results.find(f => f.subCheck === 'U1.3');
   assert(u13 !== undefined, "U1.3 should fire for standalone generic label");
+});
+
+// ========== PATH 2: Tailwind-token emphasis tests ==========
+
+Deno.test("U1.2 Path 2: Plain buttons with matching Tailwind high-emphasis → Potential", () => {
+  const files = new Map<string, string>();
+  // No button.tsx (no CVA) — triggers Path 2
+  files.set("src/components/BoltPage.tsx", `
+export default function BoltPage() {
+  return (
+    <div className="flex gap-4">
+      <button className="bg-blue-600 text-white font-semibold px-4 py-2 rounded">Save</button>
+      <button className="bg-blue-600 text-white font-semibold px-4 py-2 rounded">Cancel</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for plain Tailwind buttons with matching high-emphasis");
+  assertEquals(u12!.classification, "potential");
+  assert(u12!.confidence >= 0.70 && u12!.confidence <= 0.80, `Expected confidence 70-80%, got ${u12!.confidence}`);
+});
+
+Deno.test("U1.2 Path 2: bg-primary siblings → Potential", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/Actions.tsx", `
+export default function Actions() {
+  return (
+    <div className="flex gap-2">
+      <button className="bg-primary text-white rounded px-3 py-1">Confirm</button>
+      <button className="bg-primary text-white rounded px-3 py-1">Delete</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for bg-primary siblings");
+});
+
+Deno.test("PASS Path 2: Mixed emphasis (filled + outline) → no U1.2", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/MixedButtons.tsx", `
+export default function MixedButtons() {
+  return (
+    <div className="flex gap-2">
+      <button className="bg-blue-700 text-white px-4 py-2">Save</button>
+      <button className="border border-gray-300 bg-transparent px-4 py-2">Cancel</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assertEquals(u12, undefined, "Should NOT trigger U1.2 when buttons have different emphasis");
+});
+
+Deno.test("U1.2 Path 2 suppresses U1.3 for same container", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/TailwindDialog.tsx", `
+export default function TailwindDialog() {
+  return (
+    <div className="flex gap-4">
+      <button className="bg-indigo-700 text-white px-4 py-2">Save</button>
+      <button className="bg-indigo-700 text-white px-4 py-2">Ok</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for competing Tailwind buttons");
+  const u13Save = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Save'));
+  const u13Ok = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Ok'));
+  assertEquals(u13Save, undefined, "U1.3 'Save' suppressed by U1.2");
+  assertEquals(u13Ok, undefined, "U1.3 'Ok' suppressed by U1.2");
 });
