@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { Violation, A1ElementSubItem, A3ElementSubItem, A4ElementSubItem, A5ElementSubItem, A6ElementSubItem } from '@/types/project';
+import type { Violation, A1ElementSubItem, A3ElementSubItem, A4ElementSubItem, A5ElementSubItem, A6ElementSubItem, U1ElementSubItem } from '@/types/project';
 import { CorrectivePromptItem } from './CorrectivePromptItem';
 
 const categoryColors: Record<string, string> = {
@@ -113,6 +113,16 @@ function buildA6PromptBody(el: A6ElementSubItem): { issueReason: string; recomme
   return { issueReason: el.explanation, recommendedFix: el.correctivePrompt || 'Add an accessible name to this interactive element.' };
 }
 
+function buildU1PromptBody(el: U1ElementSubItem): { issueReason: string; recommendedFix: string } {
+  if (el.subCheck === 'U1.1') {
+    return {
+      issueReason: 'Form has no submit mechanism — no submit button, input[type="submit"], or onSubmit handler was found.',
+      recommendedFix: "Add a clear submit mechanism to the form: either add <button type='submit'>Submit</button> inside the <form>, or attach an onSubmit handler to the <form> that processes submission. Ensure the submit control is discoverable and labeled specifically (e.g., 'Save', 'Submit').",
+    };
+  }
+  return { issueReason: el.explanation, recommendedFix: el.advisoryGuidance || 'Ensure the primary action is clear and discoverable.' };
+}
+
 /** Extract file name only (not full path) from a location string */
 function extractFilePath(location?: string): string {
   if (!location) return 'Unknown';
@@ -215,6 +225,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       a4Items?: A4ElementSubItem[];
       a5Items?: A5ElementSubItem[];
       a6Items?: A6ElementSubItem[];
+      u1Items?: U1ElementSubItem[];
     }>();
 
     for (const v of confirmedViolations) {
@@ -388,6 +399,23 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             wcagCriteria: ['4.1.2'],
           } as A6ElementSubItem);
         }
+      } else if (v.ruleId === 'U1' && v.isU1Aggregated && v.u1Elements && v.status === 'confirmed') {
+        // U1 confirmed only (U1.1) — potential U1.2/U1.3 do NOT get corrective prompts
+        if (!ruleGroups.has('U1')) {
+          ruleGroups.set('U1', {
+            ruleId: 'U1',
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+            u1Items: [],
+          });
+        }
+        const group = ruleGroups.get('U1')!;
+        for (const el of v.u1Elements) {
+          if (el.classification === 'confirmed' && el.subCheck === 'U1.1') {
+            group.u1Items!.push(el);
+          }
+        }
       } else if (v.correctivePrompt) {
         const key = v.ruleId;
         if (!ruleGroups.has(key)) {
@@ -409,7 +437,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       }
     }
 
-    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a1Items && g.a1Items.length > 0) || (g.a3Items && g.a3Items.length > 0) || (g.a4Items && g.a4Items.length > 0) || (g.a5Items && g.a5Items.length > 0) || (g.a6Items && g.a6Items.length > 0));
+    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a1Items && g.a1Items.length > 0) || (g.a3Items && g.a3Items.length > 0) || (g.a4Items && g.a4Items.length > 0) || (g.a5Items && g.a5Items.length > 0) || (g.a6Items && g.a6Items.length > 0) || (g.u1Items && g.u1Items.length > 0));
   })();
 
   const copyPrompt = async () => {
@@ -477,6 +505,16 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
               el.location
             );
             const { issueReason, recommendedFix } = buildA6PromptBody(el);
+            text += `\n${label} (${tag}) — ${filePath}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+          }
+        } else if (ruleGroup.ruleId === 'U1' && ruleGroup.u1Items?.length) {
+          for (const el of ruleGroup.u1Items) {
+            const { label, tag, filePath } = extractLocationParts(
+              el.elementLabel || 'Form element',
+              el.elementType || 'form',
+              el.location
+            );
+            const { issueReason, recommendedFix } = buildU1PromptBody(el);
             text += `\n${label} (${tag}) — ${filePath}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
           }
         } else {
@@ -643,6 +681,25 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
                     el.location
                   );
                   const { issueReason, recommendedFix } = buildA6PromptBody(el);
+                  return (
+                    <CorrectivePromptItem
+                      key={pIdx}
+                      elementLabel={label}
+                      roleOrTag={tag}
+                      fileName={filePath}
+                      issueReason={issueReason}
+                      recommendedFix={recommendedFix}
+                    />
+                  );
+                })
+              ) : group.ruleId === 'U1' && group.u1Items ? (
+                group.u1Items.map((el, pIdx) => {
+                  const { label, tag, filePath } = extractLocationParts(
+                    el.elementLabel || 'Form element',
+                    el.elementType || 'form',
+                    el.location
+                  );
+                  const { issueReason, recommendedFix } = buildU1PromptBody(el);
                   return (
                     <CorrectivePromptItem
                       key={pIdx}
