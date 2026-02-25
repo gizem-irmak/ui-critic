@@ -52,6 +52,13 @@ function U3ElementItem({ element, compact = false }: {
               </div>
             )}
 
+            {element.textPreview && (
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Text preview:</span>
+                <span className="font-mono text-xs text-foreground/80 truncate max-w-full">{element.textPreview}</span>
+              </div>
+            )}
+
             {element.confidence != null && (
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground font-medium w-20">Confidence:</span>

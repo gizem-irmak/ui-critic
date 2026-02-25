@@ -474,6 +474,7 @@ export interface U3ElementSubItem {
   location: string;
   detection?: string;
   evidence?: string;
+  textPreview?: string; // First 80-120 chars of truncated content, or "(dynamic text: varName)" for expressions
   subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4';
   subCheckLabel: string;
   confidence: number;

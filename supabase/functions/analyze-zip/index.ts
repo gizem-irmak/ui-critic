@@ -698,7 +698,37 @@ interface U3Finding {
   explanation: string;
   confidence: number;
   advisoryGuidance: string;
+  textPreview?: string;
   deduplicationKey: string;
+}
+
+function extractU3TextPreview(content: string, pos: number): string | undefined {
+  // Look for text content near the match position
+  const after = content.slice(pos, Math.min(content.length, pos + 600));
+
+  // 1) Try JSX text nodes: >some text< patterns
+  const jsxTextMatch = after.match(/>([^<]{5,})</);
+  if (jsxTextMatch) {
+    const raw = jsxTextMatch[1].trim();
+    if (raw.length > 0) return raw.length > 120 ? raw.slice(0, 117) + '…' : raw;
+  }
+
+  // 2) Try string literals in props: "some text" or 'some text' or {`template`}
+  const stringLitMatch = after.match(/[=:]\s*["'`]([^"'`]{10,})["'`]/);
+  if (stringLitMatch) {
+    const raw = stringLitMatch[1].trim();
+    if (raw.length > 0 && !/^[\w-]+$/.test(raw)) return raw.length > 120 ? raw.slice(0, 117) + '…' : raw;
+  }
+
+  // 3) Dynamic expressions: {description}, {item.title}, etc.
+  const dynMatch = after.match(/\{([a-zA-Z_][\w.]*)\}/);
+  if (dynMatch) return `(dynamic text: ${dynMatch[1]})`;
+
+  // 4) Broader dynamic: {someFunc()} or complex expressions
+  const dynBroad = after.match(/\{([^}]{3,30})\}/);
+  if (dynBroad && /[a-zA-Z]/.test(dynBroad[1])) return '(dynamic text)';
+
+  return undefined;
 }
 
 function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[] {
@@ -750,6 +780,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           evidence: `${m[0]} at ${fileName}:${lineNumber} — no "Show more", toggle, or title tooltip found nearby`,
           explanation: `Text is truncated using ${label} without a visible mechanism to reveal full content. Users may miss important information.`,
           confidence: 0.70,
+          textPreview: extractU3TextPreview(content, pos),
           advisoryGuidance: 'Ensure truncated content has an accessible expand mechanism (e.g., "Show more" button, expandable section, or title tooltip).',
           deduplicationKey: dedupeKey,
         });
@@ -781,6 +812,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         evidence: `whitespace-nowrap + overflow-hidden at ${fileName}:${lineNumber}`,
         explanation: 'Text is forced to a single line with overflow hidden, potentially clipping important content.',
         confidence: 0.70,
+        textPreview: extractU3TextPreview(content, pos),
         advisoryGuidance: 'Add a title attribute or expand mechanism for nowrap-truncated text.',
         deduplicationKey: dedupeKey,
       });
@@ -819,6 +851,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         evidence: `${hm[0]} with overflow-hidden at ${fileName}:${lineNumber} — content may be clipped without user access`,
         explanation: `Container has a fixed height (${hm[0]}) with overflow-hidden, which may clip text content without providing scroll or expand access.`,
         confidence: 0.72,
+        textPreview: extractU3TextPreview(content, pos),
         advisoryGuidance: 'Use overflow-auto for scrollable containers, or add an expand mechanism when content may exceed the fixed height.',
         deduplicationKey: dedupeKey,
       });
@@ -901,6 +934,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           evidence: `${label} at ${fileName}:${lineNumber} — meaningful content hidden without an associated toggle or control`,
           explanation: `Content is hidden using ${label} without a visible mechanism to reveal it. Users cannot access the hidden information.`,
           confidence: 0.68,
+          textPreview: extractU3TextPreview(content, pos),
           advisoryGuidance: 'If the hidden content is meaningful, provide a visible toggle or control to reveal it. If decorative, ensure aria-hidden is appropriate.',
           deduplicationKey: dedupeKey,
         });
@@ -5051,6 +5085,7 @@ ${codeContent}`,
         const u3Elements = u3Findings.map(f => ({
           elementLabel: f.elementLabel, elementType: f.elementType,
           location: f.filePath, detection: f.detection, evidence: f.evidence,
+          textPreview: f.textPreview,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           confidence: f.confidence,
           advisoryGuidance: f.advisoryGuidance, deduplicationKey: f.deduplicationKey,
