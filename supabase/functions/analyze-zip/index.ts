@@ -5596,6 +5596,38 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
         };
       });
 
+    // ========== A2 SOURCE-LEVEL PRE-FILTER ==========
+    // Deterministically scan source files for className strings where outline-none
+    // co-occurs with a valid focus replacement (ring-*, border-*, shadow-*, outline-*)
+    // in the SAME className/class string. These are NOT violations.
+    const a2SafeFiles = new Set<string>();
+    for (const [filePath, content] of allFiles) {
+      if (!/\.(tsx|jsx|html|vue|svelte)$/i.test(filePath)) continue;
+      // Match className="..." or class="..." strings
+      const classStrings = content.match(/(?:className|class)\s*=\s*(?:"[^"]*"|'[^']*'|{`[^`]*`})/g) || [];
+      // Also match cva/cn/clsx calls with template literals or strings
+      const cvaStrings = content.match(/(?:cva|cn|clsx)\s*\([^)]{10,}\)/g) || [];
+      const allClassStrings = [...classStrings, ...cvaStrings];
+      for (const cls of allClassStrings) {
+        const lower = cls.toLowerCase();
+        const hasSuppression = /(?:focus-visible:|focus:)?outline-none|(?:focus-visible:|focus:)?ring-0/.test(lower);
+        if (!hasSuppression) continue;
+        // Check for ANY valid focus replacement in the SAME string
+        const hasRingReplacement = /focus(?:-visible)?:ring-[1-9]|focus(?:-visible)?:ring-ring|focus(?:-visible)?:ring-\w/.test(lower);
+        const hasBorderReplacement = /focus(?:-visible)?:border-(?!0|none)/.test(lower);
+        const hasShadowReplacement = /focus(?:-visible)?:shadow-(?!none)/.test(lower);
+        const hasOutlineReplacement = /focus(?:-visible)?:outline-(?!none)/.test(lower);
+        const hasRingOffset = /focus(?:-visible)?:ring-offset-[1-9]/.test(lower);
+        if (hasRingReplacement || hasBorderReplacement || hasShadowReplacement || hasOutlineReplacement || hasRingOffset) {
+          // This file has outline-none WITH a valid replacement — not a violation
+          const normalizedPath = filePath.replace(/^.*?(?=src\/)/, '').replace(/^.*\//, '');
+          a2SafeFiles.add(filePath);
+          a2SafeFiles.add(normalizedPath); // also add filename-only for matching
+          console.log(`A2 PRE-FILTER SAFE: ${filePath} (outline-none + replacement in same class string)`);
+        }
+      }
+    }
+
     // ========== A2 AGGREGATION LOGIC (Focus Visibility — Deterministic) ==========
     // Process and aggregate A2 violations into a single result object
     // Only report A2 when: outline is removed AND no visible focus replacement exists
@@ -5658,6 +5690,24 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       // If evidence shows valid replacement or acceptable, this is a PASS - skip entirely
       if (hasVisibleReplacement) {
         console.log(`A2 PASS (has strong focus replacement): ${evidence} [tokens: ${focusClassTokens.join(', ')}]`);
+        continue;
+      }
+      
+      // SOURCE-LEVEL PRE-FILTER: Check if the file referenced in this finding is in the safe set
+      // (i.e., the actual source code has outline-none + replacement in the same className string)
+      const findingFile = v.filePath || '';
+      const findingFileName = findingFile.replace(/^.*\//, '');
+      const findingComponent = v.componentName || '';
+      const evidenceFileMatch = evidence.match(/([a-zA-Z0-9_-]+\.(?:tsx|jsx|ts|js))/i);
+      const evidenceFileName = evidenceFileMatch?.[1] || '';
+      
+      const isInSafeSet = a2SafeFiles.has(findingFile) || 
+                          a2SafeFiles.has(findingFileName) ||
+                          a2SafeFiles.has(evidenceFileName) ||
+                          [...a2SafeFiles].some(sf => sf.includes(findingFileName) || (evidenceFileName && sf.includes(evidenceFileName)));
+      
+      if (isInSafeSet) {
+        console.log(`A2 PASS (source pre-filter: file has outline-none + replacement): ${findingFile || evidenceFileName} — ${evidence.substring(0, 80)}`);
         continue;
       }
       
@@ -5931,8 +5981,8 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       ].filter(Boolean).join(' and ');
       
       const summary = `Focus visibility issues detected: ${typeBreakdown}. ` +
-        `Elements that remove the default browser outline (outline-none) without providing a visible focus replacement ` +
-        `(ring, border, or shadow) may reduce keyboard accessibility.`;
+        `Elements that remove the default focus outline. Flag as a violation only if no visible focus indicator ` +
+        `(ring, border, outline, or shadow) is provided.`;
       
       aggregatedA2 = {
         ruleId: 'A2',

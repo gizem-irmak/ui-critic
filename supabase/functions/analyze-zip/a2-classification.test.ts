@@ -186,3 +186,19 @@ Deno.test("A2: outline-none + focus-visible:border-primary → PASS (border repl
   const result = classifyA2Finding(evidence);
   assertEquals(result, 'pass', "Border replacement should PASS");
 });
+
+Deno.test("A2: focus-visible:outline-none + focus-visible:ring-1 + focus-visible:ring-ring → Potential (ring-1 is subtle but valid replacement)", () => {
+  const evidence = "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+  const result = classifyA2Finding(evidence);
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isPotential, true, "Should be potential (ring-1 is subtle)");
+    assertEquals(result.isConfirmed, false, "Should NOT be confirmed — ring-1 is a valid replacement");
+  }
+});
+
+Deno.test("A2: focus-visible:outline-none + focus-visible:ring-2 + focus-visible:ring-ring + focus-visible:ring-offset-2 → PASS (strong replacement)", () => {
+  const evidence = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "Should PASS — ring-2 + ring-offset-2 is a strong replacement");
+});
