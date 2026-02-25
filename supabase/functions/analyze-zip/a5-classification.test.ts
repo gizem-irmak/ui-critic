@@ -40,8 +40,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     const filePath = normalizePath(filePathRaw);
     if (!/\.(tsx|jsx|ts|js|html|htm)$/.test(filePath)) continue;
 
+    // Collect all id= attributes (exclude data-testid, data-id, etc.)
     const controlIds = new Set<string>();
-    const controlIdRegex = /(?:id)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
+    const controlIdRegex = /(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
     let idMatch;
     while ((idMatch = controlIdRegex.exec(content)) !== null) {
       const id = idMatch[1] || idMatch[2] || idMatch[3];
@@ -50,7 +51,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
     const idCounts = new Map<string, number>();
     for (const id of controlIds) {
-      const idRegex = new RegExp(`id\\s*=\\s*(?:"|'|\\{["'])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:"|'|["']\\})`, 'g');
+      const idRegex = new RegExp(`(?<![a-zA-Z-])id\\s*=\\s*(?:"|'|\\{["'])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:"|'|["']\\})`, 'g');
       const matches = content.match(idRegex);
       if (matches) idCounts.set(id, matches.length);
     }
@@ -61,6 +62,27 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     while ((labelForMatch = labelForRegex.exec(content)) !== null) {
       const target = labelForMatch[1] || labelForMatch[2] || labelForMatch[3];
       if (target) labelForTargets.add(target);
+    }
+
+    // Detect shadcn Form pattern: FormItem containing FormLabel + FormControl
+    const hasFormPattern = /<FormLabel\b/.test(content) && /<FormControl\b/.test(content);
+    const formControlRanges: Array<{start: number; end: number}> = [];
+    if (hasFormPattern) {
+      const formItemRegex = /<FormItem\b[^>]*>/g;
+      let fiMatch;
+      while ((fiMatch = formItemRegex.exec(content)) !== null) {
+        const fiStart = fiMatch.index;
+        const closeIdx = content.indexOf('</FormItem>', fiStart);
+        if (closeIdx === -1) continue;
+        const block = content.slice(fiStart, closeIdx);
+        if (/<FormLabel\b/.test(block) && /<FormControl\b/.test(block)) {
+          const fcStart = content.indexOf('<FormControl', fiStart);
+          const fcEnd = content.indexOf('</FormControl>', fcStart);
+          if (fcStart !== -1 && fcEnd !== -1 && fcEnd <= closeIdx) {
+            formControlRanges.push({ start: fcStart, end: fcEnd + '</FormControl>'.length });
+          }
+        }
+      }
     }
 
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
@@ -86,23 +108,25 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
       const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
-      const controlIdMatch2 = attrs.match(/(?:^|\s)id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
+      const controlIdMatch2 = attrs.match(/(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
       const controlId = controlIdMatch2?.[1] || controlIdMatch2?.[2] || controlIdMatch2?.[3];
       const hasExplicitLabel = controlId ? labelForTargets.has(controlId) : false;
 
       const beforeControl = content.slice(Math.max(0, match.index - 500), match.index);
-      const lastLabelOpen = beforeControl.lastIndexOf('<label');
-      const lastLabelClose = beforeControl.lastIndexOf('</label');
+      const lastLabelOpen = Math.max(beforeControl.lastIndexOf('<label'), beforeControl.lastIndexOf('<Label'));
+      const lastLabelClose = Math.max(beforeControl.lastIndexOf('</label'), beforeControl.lastIndexOf('</Label'));
       const isWrappedInLabel = lastLabelOpen > lastLabelClose && lastLabelOpen !== -1;
 
-      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel;
+      const isInFormControl = formControlRanges.some(r => match!.index >= r.start && match!.index <= r.end);
+
+      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl;
 
       const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2];
       const hasPlaceholder = !!placeholder && placeholder.trim().length > 0;
 
-      const nameMatch = attrs.match(/(?:name|id)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const elementName = nameMatch?.[1] || nameMatch?.[2] || '';
+      const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const elementName = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
       const label = placeholder || elementName || `<${tag}> control`;
 
       if (hasValidLabel) continue;
@@ -754,4 +778,68 @@ Deno.test("Confirmed elementKey suppresses potential for same element", () => {
   const potential = results.filter(r => r.classification === 'potential');
   assert(confirmed.length >= 1, "Should have confirmed A5.2");
   assertEquals(potential.length, 0, "Potential must be suppressed for same element with confirmed finding");
+});
+
+// ===== DATA-TESTID EXCLUSION TESTS =====
+
+Deno.test("data-testid must NOT be treated as id for label association", () => {
+  const files = new Map([["src/Form.tsx", `<input type="text" data-testid="email-input" />`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "Should flag — data-testid is not a valid id");
+  assertEquals(results[0].subCheck, "A5.1");
+});
+
+Deno.test("data-testid alongside real id — only real id counts", () => {
+  const files = new Map([["src/Form.tsx", `
+    <label htmlFor="email">Email</label>
+    <input type="text" data-testid="email-input" id="email" />
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Real id + matching label = labeled");
+});
+
+// ===== SHADCN FORM PATTERN TESTS =====
+
+Deno.test("FormLabel + FormControl suppresses A5 for Input inside", () => {
+  const files = new Map([["src/Login.tsx", `
+    <FormItem>
+      <FormLabel>Email</FormLabel>
+      <FormControl>
+        <Input type="email" placeholder="email@example.com" />
+      </FormControl>
+    </FormItem>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "FormLabel/FormControl pattern = labeled");
+});
+
+Deno.test("FormControl without FormLabel still flags", () => {
+  const files = new Map([["src/Form.tsx", `
+    <FormItem>
+      <FormControl>
+        <Input type="text" placeholder="No label" />
+      </FormControl>
+    </FormItem>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "FormControl without FormLabel = still unlabeled");
+});
+
+// ===== LABEL (UPPERCASE) HTMLFOR TESTS =====
+
+Deno.test("Label (uppercase) with htmlFor + id linkage = no violation", () => {
+  const files = new Map([["src/Doctors.tsx", `
+    <Label htmlFor="doc-specialty">Specialty</Label>
+    <select id="doc-specialty">
+      <option>Cardiology</option>
+    </select>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Label htmlFor + matching id = labeled");
+});
+
+Deno.test("Wrapped in uppercase Label = no violation", () => {
+  const files = new Map([["src/Form.tsx", `<Label>Name <input type="text" /></Label>`]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Wrapped in <Label> = valid");
 });

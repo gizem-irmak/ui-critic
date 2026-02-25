@@ -1850,6 +1850,9 @@ interface A5Finding {
   advisoryGuidance?: string;
   deduplicationKey: string;
   potentialSubtype?: 'accuracy' | 'borderline';
+  selectorHints?: string[];
+  controlId?: string;
+  labelingMethod?: string;
 }
 
 function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
@@ -1869,8 +1872,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
+    // Collect all id= attributes (exclude data-testid, data-id, etc.)
     const controlIds = new Set<string>();
-    const controlIdRegex = /(?:id)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
+    const controlIdRegex = /(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
     let idMatch;
     while ((idMatch = controlIdRegex.exec(content)) !== null) {
       const id = idMatch[1] || idMatch[2] || idMatch[3];
@@ -1879,7 +1883,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
     const idCounts = new Map<string, number>();
     for (const id of controlIds) {
-      const idRegex = new RegExp(`id\\s*=\\s*(?:"|'|\\{["'])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:"|'|["']\\})`, 'g');
+      const idRegex = new RegExp(`(?<![a-zA-Z-])id\\s*=\\s*(?:"|'|\\{["'])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:"|'|["']\\})`, 'g');
       const matches = content.match(idRegex);
       if (matches) idCounts.set(id, matches.length);
     }
@@ -1890,6 +1894,27 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     while ((labelForMatch = labelForRegex.exec(content)) !== null) {
       const target = labelForMatch[1] || labelForMatch[2] || labelForMatch[3];
       if (target) labelForTargets.add(target);
+    }
+
+    // Detect shadcn Form pattern: FormItem containing FormLabel + FormControl
+    const hasFormPattern = /<FormLabel\b/.test(content) && /<FormControl\b/.test(content);
+    const formControlRanges: Array<{start: number; end: number}> = [];
+    if (hasFormPattern) {
+      const formItemRegex = /<FormItem\b[^>]*>/g;
+      let fiMatch;
+      while ((fiMatch = formItemRegex.exec(content)) !== null) {
+        const fiStart = fiMatch.index;
+        const closeIdx = content.indexOf('</FormItem>', fiStart);
+        if (closeIdx === -1) continue;
+        const block = content.slice(fiStart, closeIdx);
+        if (/<FormLabel\b/.test(block) && /<FormControl\b/.test(block)) {
+          const fcStart = content.indexOf('<FormControl', fiStart);
+          const fcEnd = content.indexOf('</FormControl>', fcStart);
+          if (fcStart !== -1 && fcEnd !== -1 && fcEnd <= closeIdx) {
+            formControlRanges.push({ start: fcStart, end: fcEnd + '</FormControl>'.length });
+          }
+        }
+      }
     }
 
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
@@ -1914,25 +1939,41 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
       const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
-      const controlIdMatch = attrs.match(/(?:^|\s)id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
+      const controlIdMatch = attrs.match(/(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
       const controlId = controlIdMatch?.[1] || controlIdMatch?.[2] || controlIdMatch?.[3];
       const hasExplicitLabel = controlId ? labelForTargets.has(controlId) : false;
 
       const beforeControl = content.slice(Math.max(0, match.index - 500), match.index);
-      const lastLabelOpen = beforeControl.lastIndexOf('<label');
-      const lastLabelClose = beforeControl.lastIndexOf('</label');
+      const lastLabelOpen = Math.max(beforeControl.lastIndexOf('<label'), beforeControl.lastIndexOf('<Label'));
+      const lastLabelClose = Math.max(beforeControl.lastIndexOf('</label'), beforeControl.lastIndexOf('</Label'));
       const isWrappedInLabel = lastLabelOpen > lastLabelClose && lastLabelOpen !== -1;
 
-      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel;
+      const isInFormControl = formControlRanges.some(r => match!.index >= r.start && match!.index <= r.end);
+
+      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl;
 
       const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2];
       const hasPlaceholder = !!placeholder && placeholder.trim().length > 0;
 
-      const nameMatch = attrs.match(/(?:name|id)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const elementName = nameMatch?.[1] || nameMatch?.[2] || '';
+      const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const elementName = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
       const label = placeholder || elementName || `<${tag}> control`;
       const fileName = filePath.split('/').pop() || filePath;
+
+      // Build selector hints
+      const selectorHints: string[] = [];
+      if (controlId) selectorHints.push(`id="${controlId}"`);
+      if (nameMatch?.[1] || nameMatch?.[2]) selectorHints.push(`name="${nameMatch?.[1] || nameMatch?.[2]}"`);
+      const ariaLabelExtract = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      if (ariaLabelExtract?.[1] || ariaLabelExtract?.[2]) selectorHints.push(`aria-label="${ariaLabelExtract?.[1] || ariaLabelExtract?.[2]}"`);
+
+      let labelingMethod = '';
+      if (isInFormControl) labelingMethod = 'FormLabel/FormControl (shadcn)';
+      else if (hasAriaLabel) labelingMethod = 'aria-label';
+      else if (hasAriaLabelledBy) labelingMethod = 'aria-labelledby';
+      else if (hasExplicitLabel) labelingMethod = `label[htmlFor="${controlId}"]`;
+      else if (isWrappedInLabel) labelingMethod = 'wrapping <label>';
 
       if (controlId && hasExplicitLabel) {
         const idCount = idCounts.get(controlId) || 0;
@@ -1948,6 +1989,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
               confidence: 0.92,
               correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nDuplicate id="${controlId}".\n\nRecommended fix:\nAssign unique ids and update <label for> attributes.`,
               deduplicationKey: dedupeKey,
+              selectorHints, controlId, labelingMethod: 'broken (duplicate id)',
             });
           }
           continue;
@@ -1955,8 +1997,6 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       }
 
       if (hasValidLabel) continue;
-
-      // title is NOT a valid label source — title-only inputs remain A5.1 Confirmed
 
       if (hasPlaceholder && !hasValidLabel) {
         const dedupeKey = `A5.2|${filePath}|${tag}|${label}|${lineNumber}`;
@@ -1970,6 +2010,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
             confidence: 0.95,
             correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nPlaceholder-only label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
             deduplicationKey: dedupeKey,
+            selectorHints, controlId, labelingMethod: 'none (placeholder only)',
           });
         }
         continue;
@@ -1986,6 +2027,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           confidence: 0.97,
           correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nNo programmatic label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
           deduplicationKey: dedupeKey,
+          selectorHints, controlId, labelingMethod: 'none',
         });
       }
     }
@@ -4380,6 +4422,9 @@ serve(async (req) => {
           advisoryGuidance: f.advisoryGuidance,
           potentialSubtype: f.potentialSubtype,
           deduplicationKey: f.deduplicationKey,
+          selectorHints: f.selectorHints,
+          controlId: f.controlId,
+          labelingMethod: f.labelingMethod,
         }));
         const hasConfirmed = confirmedFindings.length > 0;
         aggregatedA5GitHub = {

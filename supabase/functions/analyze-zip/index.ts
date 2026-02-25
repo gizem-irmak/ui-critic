@@ -4579,6 +4579,10 @@ interface A5Finding {
   advisoryGuidance?: string;
   deduplicationKey: string;
   potentialSubtype?: 'accuracy' | 'borderline';
+  // Element metadata
+  selectorHints?: string[]; // e.g., ['id="email"', 'name="email"']
+  controlId?: string; // The actual id if present
+  labelingMethod?: string; // What labeling was found/missing
 }
 
 function makeA5ElementKey(tag: string, id: string, name: string, type: string, filePath: string, lineNumber: number): string {
@@ -4605,9 +4609,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
-    // Collect all id= attributes from controls
+    // Collect all id= attributes (exclude data-testid, data-id, etc.)
     const controlIds = new Set<string>();
-    const controlIdRegex = /(?:id)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
+    const controlIdRegex = /(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
     let idMatch;
     while ((idMatch = controlIdRegex.exec(content)) !== null) {
       const id = idMatch[1] || idMatch[2] || idMatch[3];
@@ -4617,18 +4621,39 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     // Count id occurrences for duplicate detection
     const idCounts = new Map<string, number>();
     for (const id of controlIds) {
-      const idRegex = new RegExp(`id\\s*=\\s*(?:"|'|\\{["'])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:"|'|["']\\})`, 'g');
+      const idRegex = new RegExp(`(?<![a-zA-Z-])id\\s*=\\s*(?:"|'|\\{["'])${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:"|'|["']\\})`, 'g');
       const matches = content.match(idRegex);
       if (matches) idCounts.set(id, matches.length);
     }
 
-    // Collect label[for] / htmlFor targets
+    // Collect label[for] / htmlFor targets (covers <label>, <Label>, <FormLabel>)
     const labelForTargets = new Set<string>();
     const labelForRegex = /(?:htmlFor|for)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/g;
     let labelForMatch;
     while ((labelForMatch = labelForRegex.exec(content)) !== null) {
       const target = labelForMatch[1] || labelForMatch[2] || labelForMatch[3];
       if (target) labelForTargets.add(target);
+    }
+
+    // Detect shadcn Form pattern: FormItem containing FormLabel + FormControl
+    const hasFormPattern = /<FormLabel\b/.test(content) && /<FormControl\b/.test(content);
+    const formControlRanges: Array<{start: number; end: number}> = [];
+    if (hasFormPattern) {
+      const formItemRegex = /<FormItem\b[^>]*>/g;
+      let fiMatch;
+      while ((fiMatch = formItemRegex.exec(content)) !== null) {
+        const fiStart = fiMatch.index;
+        const closeIdx = content.indexOf('</FormItem>', fiStart);
+        if (closeIdx === -1) continue;
+        const block = content.slice(fiStart, closeIdx);
+        if (/<FormLabel\b/.test(block) && /<FormControl\b/.test(block)) {
+          const fcStart = content.indexOf('<FormControl', fiStart);
+          const fcEnd = content.indexOf('</FormControl>', fcStart);
+          if (fcStart !== -1 && fcEnd !== -1 && fcEnd <= closeIdx) {
+            formControlRanges.push({ start: fcStart, end: fcEnd + '</FormControl>'.length });
+          }
+        }
+      }
     }
 
     // Find form controls: <input>, <textarea>, <select>, and ARIA input roles
@@ -4664,30 +4689,52 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       // Check for valid label sources
       const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
       const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
-      const controlIdMatch = attrs.match(/(?:^|\s)id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
+      // Use negative lookbehind to avoid matching data-testid as id
+      const controlIdMatch = attrs.match(/(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
       const controlId = controlIdMatch?.[1] || controlIdMatch?.[2] || controlIdMatch?.[3];
       const hasExplicitLabel = controlId ? labelForTargets.has(controlId) : false;
 
-      // Check if wrapped in <label>
-      // Simple heuristic: search backwards for unclosed <label> before this control
+      // Check if wrapped in <label> or <Label>
       const beforeControl = content.slice(Math.max(0, match.index - 500), match.index);
-      const lastLabelOpen = beforeControl.lastIndexOf('<label');
-      const lastLabelClose = beforeControl.lastIndexOf('</label');
+      const lastLabelOpen = Math.max(beforeControl.lastIndexOf('<label'), beforeControl.lastIndexOf('<Label'));
+      const lastLabelClose = Math.max(beforeControl.lastIndexOf('</label'), beforeControl.lastIndexOf('</Label'));
       const isWrappedInLabel = lastLabelOpen > lastLabelClose && lastLabelOpen !== -1;
 
-      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel;
+      // Check if inside FormControl with FormLabel (shadcn Form pattern)
+      const isInFormControl = formControlRanges.some(r => match!.index >= r.start && match!.index <= r.end);
+
+      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl;
 
       // Extract placeholder
       const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2];
       const hasPlaceholder = !!placeholder && placeholder.trim().length > 0;
 
-      // Build a label for the finding
-      const nameMatch = attrs.match(/(?:name|id)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const elementName = nameMatch?.[1] || nameMatch?.[2] || '';
+      // Build a label for the finding — use negative lookbehind for name/id extraction
+      const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      const elementName = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
       const ariaLabelVal = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const label = ariaLabelVal?.[1] || ariaLabelVal?.[2] || placeholder || elementName || `<${tag}> control`;
       const fileName = filePath.split('/').pop() || filePath;
+
+      // Build selector hints for element metadata
+      const selectorHints: string[] = [];
+      if (controlId) selectorHints.push(`id="${controlId}"`);
+      if (nameMatch?.[1] || nameMatch?.[2]) selectorHints.push(`name="${nameMatch?.[1] || nameMatch?.[2]}"`);
+      const ariaLabelExtract = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+      if (ariaLabelExtract?.[1] || ariaLabelExtract?.[2]) selectorHints.push(`aria-label="${ariaLabelExtract?.[1] || ariaLabelExtract?.[2]}"`);
+      if (hasAriaLabelledBy) {
+        const albVal = attrs.match(/aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+        if (albVal?.[1] || albVal?.[2]) selectorHints.push(`aria-labelledby="${albVal?.[1] || albVal?.[2]}"`);
+      }
+
+      // Determine labeling method for display
+      let labelingMethod = '';
+      if (isInFormControl) labelingMethod = 'FormLabel/FormControl (shadcn)';
+      else if (hasAriaLabel) labelingMethod = 'aria-label';
+      else if (hasAriaLabelledBy) labelingMethod = 'aria-labelledby';
+      else if (hasExplicitLabel) labelingMethod = `label[htmlFor="${controlId}"]`;
+      else if (isWrappedInLabel) labelingMethod = 'wrapping <label>';
 
       // A5.3: Broken label association — label[for] targets a non-existent or duplicate id
       if (controlId && hasExplicitLabel) {
@@ -4707,6 +4754,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
               wcagCriteria: ['1.3.1', '3.3.2'],
               correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nMultiple elements share id="${controlId}". The <label for="${controlId}"> cannot uniquely target the correct control.\n\nRecommended fix:\nAssign unique ids to each form control and update the corresponding <label for> attributes.`,
               deduplicationKey: dedupeKey,
+              selectorHints,
+              controlId,
+              labelingMethod: 'broken (duplicate id)',
             });
           }
           continue; // Don't double-report
@@ -4733,6 +4783,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
             wcagCriteria: ['1.3.1', '3.3.2'],
             correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nPlaceholder text is the only label for this control. Placeholders are not sufficient labels per WCAG 3.3.2.\n\nRecommended fix:\nAdd a persistent <label> associated with this input using for/id, or provide an accessible name via aria-label or aria-labelledby.`,
             deduplicationKey: dedupeKey,
+            selectorHints,
+            controlId,
+            labelingMethod: 'none (placeholder only)',
           });
         }
         continue; // Don't double-report as A5.1
@@ -4753,6 +4806,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           wcagCriteria: ['1.3.1', '3.3.2'],
           correctivePrompt: `[${label} (${tag})] — ${fileName}\n\nIssue reason:\nThis form control has no programmatic label (no <label>, aria-label, or aria-labelledby).\n\nRecommended fix:\nAdd a visible <label> associated with this input using for + id, or provide an accessible name via aria-label or aria-labelledby.`,
           deduplicationKey: dedupeKey,
+          selectorHints,
+          controlId,
+          labelingMethod: 'none',
         });
       }
     }
@@ -6101,6 +6157,9 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           correctivePrompt: f.correctivePrompt,
           potentialSubtype: f.potentialSubtype,
           deduplicationKey: f.deduplicationKey,
+          selectorHints: f.selectorHints,
+          controlId: f.controlId,
+          labelingMethod: f.labelingMethod,
         }));
 
         const subCheckBreakdown = [
