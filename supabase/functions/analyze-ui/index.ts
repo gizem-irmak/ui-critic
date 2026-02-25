@@ -2489,9 +2489,23 @@ Consider:
 - Visual hierarchy and primary action clarity (U1)
 - Navigation structure, wayfinding, and location indicators (U2)
 - Content truncation, overflow, and text visibility (U3)
-- Recognition vs recall: visible options, labels, contextual cues (U4)
+- Recognition vs recall: visible options, labels, contextual cues (U4) — see U4 CONSTRAINTS below
 - Interaction feedback: loading states, confirmations, error messages (U5)
 - Layout grouping, alignment, and visual coherence (U6)
+
+### U4 (Recognition-to-Recall Regression) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
+**CRITICAL ANTI-HALLUCINATION RULES:**
+- Do NOT use file names, component names, page titles, or any "test" wording (e.g., "U4 Recall Test") as evidence or reasoning.
+- Do NOT infer developer intent from naming conventions.
+- Base conclusions ONLY on user-visible UI content observed in the screenshot:
+  - Step indicators ("Step 3 of 3", "Confirm Order")
+  - Presence/absence of summary/review content
+  - CTA labels ("Continue", "Confirm") and whether they explain what happens next
+  - Missing examples/helper text where it increases recall burden
+- If visual evidence is insufficient, return NO U4 finding — do not guess.
+- U4 is ALWAYS "status": "potential" — NEVER "confirmed".
+- Confidence range: 0.60–0.80 (cap at 0.80).
+- Each U4 finding must cite specific visible UI text as evidence.
 
 ## PASS 3 — Ethics
 Reason about patterns that may undermine user autonomy or informed consent:
@@ -3350,11 +3364,18 @@ serve(async (req) => {
     const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
+        // HARD GUARDRAIL: U4 is ALWAYS Potential (non-blocking), never Confirmed
+        const isU4 = v.ruleId === 'U4';
         // Tag with evaluationMethod — all screenshot LLM violations are llm_assisted
         return {
           ...v,
           correctivePrompt: rule?.correctivePrompt || v.correctivePrompt || '',
           evaluationMethod: 'llm_assisted',
+          ...(isU4 ? {
+            status: 'potential',
+            blocksConvergence: false,
+            confidence: Math.min(v.confidence || 0.65, 0.80),
+          } : {}),
         };
       });
 
