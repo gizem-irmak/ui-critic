@@ -212,6 +212,12 @@ export interface Violation {
   // ============================================================
   isU3Aggregated?: boolean;
   u3Elements?: U3ElementSubItem[];
+  
+  // ============================================================
+  // U4 AGGREGATED ELEMENT REPORTING (Recognition-to-Recall)
+  // ============================================================
+  isU4Aggregated?: boolean;
+  u4Elements?: U4ElementSubItem[];
 }
 
 // A1 Element sub-item for aggregated reporting
@@ -479,6 +485,18 @@ export interface U3ElementSubItem {
   subCheckLabel: string;
   confidence: number;
   advisoryGuidance?: string;
+  deduplicationKey: string;
+}
+
+// U4 Element sub-item for aggregated recognition-to-recall reporting
+export interface U4ElementSubItem {
+  elementLabel: string;   // e.g., "Registration form", "Multi-step checkout"
+  elementType?: string;   // form, page, component, etc.
+  location: string;       // file path
+  detection?: string;     // Summary of what was detected
+  evidence?: string;      // Specific evidence citations from the bundle
+  recommendedFix?: string; // Actionable fix suggestion
+  confidence: number;     // Capped at 0.80
   deduplicationKey: string;
 }
 
