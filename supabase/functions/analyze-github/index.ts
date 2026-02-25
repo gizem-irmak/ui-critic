@@ -362,30 +362,76 @@ interface ActionGroup {
 
 function extractActionGroups(content: string, buttonLocalNames: Set<string>): ActionGroup[] {
   const groups: ActionGroup[] = [];
-  
-  const containerPatterns = [
-    { regex: /<CardFooter\b([^>]*)>([\s\S]*?)<\/CardFooter>/gi, type: 'CardFooter' },
-    { regex: /<(?:div|footer)\b([^>]*(?:flex|gap-|space-x-)[^>]*)>([\s\S]*?)<\/(?:div|footer)>/gi, type: 'FlexContainer' },
-  ];
 
-  for (const { regex, type } of containerPatterns) {
-    let match;
-    while ((match = regex.exec(content)) !== null) {
-      const containerContent = match[2] || '';
-      const buttons = extractButtonUsagesFromJsx(containerContent, buttonLocalNames);
-      
-      if (buttons.length >= 2) {
-        groups.push({
-          containerType: type,
-          buttons,
-          lineContext: match[0].slice(0, 200),
-          offset: match.index,
-        });
+  const openerRegex = /<(CardFooter|ButtonGroup|div|footer|section|nav)\b([^>]*)>/gi;
+  let openerMatch;
+  while ((openerMatch = openerRegex.exec(content)) !== null) {
+    const tagName = openerMatch[1];
+    const attrs = openerMatch[2] || '';
+    const isNamedContainer = /^(CardFooter|ButtonGroup)$/i.test(tagName);
+
+    if (!isNamedContainer) {
+      const hasLayoutClass = /(?:flex|grid|gap-|justify-|items-|space-x-|space-y-)/.test(attrs);
+      if (!hasLayoutClass) continue;
+    }
+
+    const containerType = isNamedContainer ? tagName : 'FlexContainer';
+    const openTagEnd = openerMatch.index + openerMatch[0].length;
+
+    const nestRegex = new RegExp(`<(/?)(${tagName})\\b`, 'gi');
+    nestRegex.lastIndex = openTagEnd;
+    let depth = 1;
+    let nestMatch;
+    let containerEnd = -1;
+    while ((nestMatch = nestRegex.exec(content)) !== null) {
+      if (nestMatch[1] === '/') {
+        depth--;
+        if (depth === 0) {
+          const closeIdx = content.indexOf('>', nestMatch.index);
+          containerEnd = closeIdx >= 0 ? closeIdx + 1 : nestMatch.index + nestMatch[0].length;
+          break;
+        }
+      } else {
+        depth++;
       }
+    }
+    if (containerEnd < 0) continue;
+
+    const containerContent = content.slice(openTagEnd, containerEnd);
+    const buttons = extractButtonUsagesFromJsx(containerContent, buttonLocalNames, openTagEnd);
+
+    console.log(`[U1.2] container candidate: <${tagName}> (offset ${openerMatch.index}), descendant CTAs = ${buttons.length}, labels = [${buttons.map(b => b.label).join(', ')}]`);
+
+    if (buttons.length >= 2) {
+      groups.push({
+        containerType,
+        buttons,
+        lineContext: content.slice(openerMatch.index, Math.min(openerMatch.index + 200, containerEnd)),
+        offset: openerMatch.index,
+      });
     }
   }
 
-  return groups;
+  const sorted = groups.sort((a, b) => a.offset - b.offset);
+  const deduped: ActionGroup[] = [];
+  for (const g of sorted) {
+    const gEnd = g.offset + g.lineContext.length;
+    const containedByExisting = deduped.some(d => {
+      const dEnd = d.offset + d.lineContext.length;
+      return d.offset <= g.offset && dEnd >= gEnd;
+    });
+    if (!containedByExisting) {
+      for (let i = deduped.length - 1; i >= 0; i--) {
+        const dEnd = deduped[i].offset + deduped[i].lineContext.length;
+        if (g.offset <= deduped[i].offset && gEnd >= dEnd) {
+          deduped.splice(i, 1);
+        }
+      }
+      deduped.push(g);
+    }
+  }
+
+  return deduped;
 }
 
 // =====================
