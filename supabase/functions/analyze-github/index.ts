@@ -3496,7 +3496,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const isDynamic = u3IsDynamic(textPreview);
         const staticLen = u3StaticTextLength(textPreview);
 
-        if (!isDynamic && staticLen >= 0 && staticLen <= 12) continue;
+        if (!isDynamic && staticLen >= 0 && staticLen <= 18) continue;
         if (!isDynamic && staticLen >= 0 && staticLen <= 30 && u3HasWideContainer(context)) continue;
         if (u3HasExpandMechanism(content, pos, 20)) continue;
 
@@ -3550,7 +3550,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       const isDynamic = u3IsDynamic(textPreview);
       const staticLen = u3StaticTextLength(textPreview);
 
-      if (!isDynamic && staticLen >= 0 && staticLen <= 12) continue;
+      if (!isDynamic && staticLen >= 0 && staticLen <= 18) continue;
       if (!isDynamic && staticLen >= 0 && staticLen <= 30 && u3HasWideContainer(context)) continue;
       if (u3HasExpandMechanism(content, pos, 20)) continue;
 
@@ -3661,7 +3661,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (/sr-only|visually-hidden/i.test(context)) continue;
 
       const contentAfter = context.slice(localOffset);
-      const hasMeaningfulText = /<(?:p|h[1-6]|span|div|li)\b[^>]*>[^<]{15,}/i.test(contentAfter);
+      const hasMeaningfulText = /<(?:p|h[1-6]|span|div|li)\b[^>]*>[^<]{20,}/i.test(contentAfter);
       const hasDynamic = />\s*\{[a-zA-Z_][\w.]*\}\s*</.test(contentAfter);
       const hasDescriptiveContent = /\b(?:description|message|content|paragraph|body|summary|bio|detail)\b/i.test(contentAfter);
       if (!hasMeaningfulText && !hasDynamic && !hasDescriptiveContent) continue;
@@ -3686,7 +3686,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         confidence: 0.68, textPreview,
         advisoryGuidance: 'Provide a visible toggle to reveal hidden content.', deduplicationKey: dedupeKey,
         truncationType: 'hidden',
-        triggerReason: hasDynamic ? 'Dynamic content hidden without toggle' : 'Meaningful text (≥15 chars) hidden without toggle',
+        triggerReason: hasDynamic ? 'Dynamic content hidden without toggle' : 'Meaningful text (≥20 chars) hidden without toggle',
         expandDetected: false,
       });
     }

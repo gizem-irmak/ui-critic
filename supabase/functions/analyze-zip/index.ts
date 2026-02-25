@@ -840,8 +840,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const isDynamic = u3IsDynamic(textPreview);
         const staticLen = u3StaticTextLength(textPreview);
 
-        // SUPPRESS: short static text (≤12 chars) — unlikely to truncate
-        if (!isDynamic && staticLen >= 0 && staticLen <= 12) continue;
+        // SUPPRESS: short static text (≤18 chars) — unlikely to truncate
+        if (!isDynamic && staticLen >= 0 && staticLen <= 18) continue;
 
         // SUPPRESS: wide container without max-w constraint
         if (!isDynamic && staticLen >= 0 && staticLen <= 30 && u3HasWideContainer(context)) continue;
@@ -908,8 +908,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       const isDynamic = u3IsDynamic(textPreview);
       const staticLen = u3StaticTextLength(textPreview);
 
-      // SUPPRESS: short static text
-      if (!isDynamic && staticLen >= 0 && staticLen <= 12) continue;
+      // SUPPRESS: short static text (≤18 chars)
+      if (!isDynamic && staticLen >= 0 && staticLen <= 18) continue;
       // SUPPRESS: wide container
       if (!isDynamic && staticLen >= 0 && staticLen <= 30 && u3HasWideContainer(context)) continue;
       // SUPPRESS: expand mechanism
@@ -1047,9 +1047,9 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       // Skip sr-only / visually-hidden
       if (/sr-only|visually-hidden/i.test(context)) continue;
 
-      // Must contain meaningful content (text ≥15 chars or dynamic)
+      // Must contain meaningful content (text ≥20 chars or dynamic)
       const contentAfter = context.slice(localOffset);
-      const hasMeaningfulText = /<(?:p|h[1-6]|span|div|li)\b[^>]*>[^<]{15,}/i.test(contentAfter);
+      const hasMeaningfulText = /<(?:p|h[1-6]|span|div|li)\b[^>]*>[^<]{20,}/i.test(contentAfter);
       const hasDynamic = />\s*\{[a-zA-Z_][\w.]*\}\s*</.test(contentAfter);
       const hasDescriptiveContent = /\b(?:description|message|content|paragraph|body|summary|bio|detail)\b/i.test(contentAfter);
       if (!hasMeaningfulText && !hasDynamic && !hasDescriptiveContent) continue;
@@ -1083,7 +1083,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         advisoryGuidance: 'If the hidden content is meaningful, provide a visible toggle or control to reveal it.',
         deduplicationKey: dedupeKey,
         truncationType: 'hidden',
-        triggerReason: hasDynamic ? 'Dynamic content hidden without toggle' : 'Meaningful text (≥15 chars) hidden without toggle',
+        triggerReason: hasDynamic ? 'Dynamic content hidden without toggle' : 'Meaningful text (≥20 chars) hidden without toggle',
         expandDetected: false,
       });
     }
