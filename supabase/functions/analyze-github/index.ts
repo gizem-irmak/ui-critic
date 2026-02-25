@@ -2249,16 +2249,15 @@ serve(async (req) => {
     const contrastViolations = selectedRulesSet.has('A1') ? analyzeContrastInCode(allFiles) : [];
     console.log(`A1 contrast analysis: ${contrastViolations.length} violations`);
     
-    // U1 - Primary action sub-checks
-    let aggregatedU1GitHub: any = null;
+    // U1 - Primary action sub-checks (split into confirmed + potential objects)
+    const aggregatedU1GitHubList: any[] = [];
     if (selectedRulesSet.has('U1')) {
       const u1Findings = detectU1PrimaryAction(allFiles);
       if (u1Findings.length > 0) {
-        const confirmedCount = u1Findings.filter((f: any) => f.classification === 'confirmed').length;
-        const potentialCount = u1Findings.filter((f: any) => f.classification === 'potential').length;
-        const hasConfirmed = confirmedCount > 0;
-        const overallConfidence = Math.max(...u1Findings.map((f: any) => f.confidence));
-        const u1Elements = u1Findings.map((f: any) => ({
+        const confirmedFindings = u1Findings.filter((f: any) => f.classification === 'confirmed');
+        const potentialFindings = u1Findings.filter((f: any) => f.classification === 'potential');
+
+        const mapElements = (list: any[]) => list.map((f: any) => ({
           elementLabel: f.elementLabel, elementType: f.elementType,
           location: f.filePath, detection: f.detection, evidence: f.evidence,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
@@ -2266,16 +2265,32 @@ serve(async (req) => {
           explanation: f.explanation, confidence: f.confidence,
           advisoryGuidance: f.advisoryGuidance, deduplicationKey: f.deduplicationKey,
         }));
-        aggregatedU1GitHub = {
-          ruleId: 'U1', ruleName: 'Unclear primary action', category: 'usability',
-          status: hasConfirmed ? 'confirmed' : 'potential',
-          blocksConvergence: false, inputType: 'github', isU1Aggregated: true, u1Elements, evaluationMethod: 'hybrid_deterministic',
-          diagnosis: `Primary action clarity issues: ${confirmedCount} confirmed, ${potentialCount} potential.`,
-          contextualHint: 'Establish a clear visual hierarchy with one primary action per group.',
-          advisoryGuidance: 'Visually distinguish the primary action (stronger color/weight/placement) and use specific labels.',
-          confidence: Math.round(overallConfidence * 100) / 100,
-        };
-        console.log(`U1 aggregated (GitHub): ${u1Findings.length} findings`);
+
+        if (confirmedFindings.length > 0) {
+          aggregatedU1GitHubList.push({
+            ruleId: 'U1', ruleName: 'Unclear primary action', category: 'usability',
+            status: 'confirmed',
+            blocksConvergence: false, inputType: 'github', isU1Aggregated: true, u1Elements: mapElements(confirmedFindings), evaluationMethod: 'hybrid_deterministic',
+            diagnosis: `Primary action clarity issues: ${confirmedFindings.length} confirmed violation(s).`,
+            contextualHint: 'Establish a clear visual hierarchy with one primary action per group.',
+            confidence: 1.0,
+          });
+        }
+
+        if (potentialFindings.length > 0) {
+          const potentialConfidence = Math.max(...potentialFindings.map((f: any) => f.confidence));
+          aggregatedU1GitHubList.push({
+            ruleId: 'U1', ruleName: 'Unclear primary action', category: 'usability',
+            status: 'potential',
+            blocksConvergence: false, inputType: 'github', isU1Aggregated: true, u1Elements: mapElements(potentialFindings), evaluationMethod: 'hybrid_deterministic',
+            diagnosis: `Primary action clarity issues: ${potentialFindings.length} potential risk(s).`,
+            contextualHint: 'Establish a clear visual hierarchy with one primary action per group.',
+            advisoryGuidance: 'Visually distinguish the primary action (stronger color/weight/placement) and use specific labels.',
+            confidence: Math.round(potentialConfidence * 100) / 100,
+          });
+        }
+
+        console.log(`U1 aggregated (GitHub): ${u1Findings.length} findings → ${aggregatedU1GitHubList.length} object(s)`);
       }
     }
     
@@ -2324,7 +2339,7 @@ serve(async (req) => {
       // Return deterministic results only
       const allViolations = [
         ...contrastViolations,
-        ...(aggregatedU1GitHub ? [aggregatedU1GitHub] : []),
+        ...aggregatedU1GitHubList,
       ];
       
       return new Response(
@@ -2371,7 +2386,7 @@ serve(async (req) => {
       // Return deterministic results
       const allViolations = [
         ...contrastViolations,
-        ...(aggregatedU1GitHub ? [aggregatedU1GitHub] : []),
+        ...aggregatedU1GitHubList,
       ];
       
       return new Response(
@@ -2768,7 +2783,7 @@ serve(async (req) => {
     const allViolations = [
       ...aggregatedA1Violations,
       ...nonA2AiViolations,
-      ...(aggregatedU1GitHub ? [aggregatedU1GitHub] : []),
+      ...aggregatedU1GitHubList,
       ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
       ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
       ...(aggregatedA4GitHub ? [aggregatedA4GitHub] : []),
@@ -2777,10 +2792,11 @@ serve(async (req) => {
     ];
     
     // Deduplicate by ruleId
-    const seenRules = new Set<string>();
+    const seenRuleStatus = new Set<string>();
     const deduplicatedViolations = allViolations.filter(v => {
-      if (seenRules.has(v.ruleId)) return false;
-      seenRules.add(v.ruleId);
+      const key = `${v.ruleId}|${v.status || 'unknown'}`;
+      if (seenRuleStatus.has(key)) return false;
+      seenRuleStatus.add(key);
       return true;
     });
     

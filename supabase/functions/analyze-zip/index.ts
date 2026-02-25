@@ -4062,16 +4062,16 @@ ${codeContent}`,
     ];
 
     // ========== Deterministic U1 (primary action sub-checks) ==========
-    let aggregatedU1: any = null;
+    // Split into up to TWO violation objects: one confirmed, one potential
+    const aggregatedU1List: any[] = [];
     if (selectedRulesSet.has('U1')) {
       const u1Findings = detectU1PrimaryAction(allFiles);
       if (u1Findings.length > 0) {
         aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'U1');
-        const confirmedCount = u1Findings.filter(f => f.classification === 'confirmed').length;
-        const potentialCount = u1Findings.filter(f => f.classification === 'potential').length;
-        const hasConfirmed = confirmedCount > 0;
-        const overallConfidence = Math.max(...u1Findings.map(f => f.confidence));
-        const u1Elements = u1Findings.map(f => ({
+        const confirmedFindings = u1Findings.filter(f => f.classification === 'confirmed');
+        const potentialFindings = u1Findings.filter(f => f.classification === 'potential');
+
+        const mapElements = (list: typeof u1Findings) => list.map(f => ({
           elementLabel: f.elementLabel, elementType: f.elementType,
           location: f.filePath, detection: f.detection, evidence: f.evidence,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
@@ -4079,17 +4079,34 @@ ${codeContent}`,
           explanation: f.explanation, confidence: f.confidence,
           advisoryGuidance: f.advisoryGuidance, deduplicationKey: f.deduplicationKey,
         }));
-        aggregatedU1 = {
-          ruleId: 'U1', ruleName: 'Unclear primary action', category: 'usability',
-          status: hasConfirmed ? 'confirmed' : 'potential',
-          blocksConvergence: false,
-          inputType: 'zip', isU1Aggregated: true, u1Elements, evaluationMethod: 'hybrid_deterministic',
-          diagnosis: `Primary action clarity issues: ${confirmedCount} confirmed, ${potentialCount} potential.`,
-          contextualHint: 'Establish a clear visual hierarchy with one primary action per group.',
-          advisoryGuidance: 'Visually distinguish the primary action (stronger color/weight/placement) and use specific labels.',
-          confidence: Math.round(overallConfidence * 100) / 100,
-        };
-        console.log(`U1 aggregated: ${u1Findings.length} findings (${confirmedCount} confirmed, ${potentialCount} potential)`);
+
+        if (confirmedFindings.length > 0) {
+          aggregatedU1List.push({
+            ruleId: 'U1', ruleName: 'Unclear primary action', category: 'usability',
+            status: 'confirmed',
+            blocksConvergence: false,
+            inputType: 'zip', isU1Aggregated: true, u1Elements: mapElements(confirmedFindings), evaluationMethod: 'hybrid_deterministic',
+            diagnosis: `Primary action clarity issues: ${confirmedFindings.length} confirmed violation(s).`,
+            contextualHint: 'Establish a clear visual hierarchy with one primary action per group.',
+            confidence: 1.0,
+          });
+        }
+
+        if (potentialFindings.length > 0) {
+          const potentialConfidence = Math.max(...potentialFindings.map(f => f.confidence));
+          aggregatedU1List.push({
+            ruleId: 'U1', ruleName: 'Unclear primary action', category: 'usability',
+            status: 'potential',
+            blocksConvergence: false,
+            inputType: 'zip', isU1Aggregated: true, u1Elements: mapElements(potentialFindings), evaluationMethod: 'hybrid_deterministic',
+            diagnosis: `Primary action clarity issues: ${potentialFindings.length} potential risk(s).`,
+            contextualHint: 'Establish a clear visual hierarchy with one primary action per group.',
+            advisoryGuidance: 'Visually distinguish the primary action (stronger color/weight/placement) and use specific labels.',
+            confidence: Math.round(potentialConfidence * 100) / 100,
+          });
+        }
+
+        console.log(`U1 aggregated: ${u1Findings.length} findings → ${aggregatedU1List.length} violation object(s) (${confirmedFindings.length} confirmed, ${potentialFindings.length} potential)`);
       }
     }
 
@@ -4363,7 +4380,7 @@ ${codeContent}`,
     }
 
     // Merge aggregated A1 with AI violations (no raw contrast violations)
-    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...(aggregatedU1 ? [aggregatedU1] : []), ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
+    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
 
     console.log(`Code analysis complete: ${allViolations.length} violations found`);
 
