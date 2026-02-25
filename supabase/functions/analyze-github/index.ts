@@ -2378,6 +2378,50 @@ ${rules.usability.filter(r => selectedRulesSet.has(r.id) && r.id !== 'U1').map(r
 \`\`\`
 - If NO U6 issues found, do NOT include U6 in the violations array.
 
+### E1 (Insufficient Transparency in High-Impact Actions) — LLM-ASSISTED EVALUATION:
+**NOTE:** E1 uses pre-extracted high-impact action evidence bundles appended as \`[E1_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted UI text/context to assess transparency.
+
+**CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
+- Do NOT use file names, component names, or test wording as evidence.
+- Do NOT infer malicious intent. Use neutral language ("may be unclear", "transparency risk").
+- Base conclusions ONLY on the extracted CTA labels, nearby UI text, and confirmation dialog presence/absence.
+- If evidence is insufficient, return NO E1 finding — do not guess.
+
+**EVALUATE:**
+- Missing consequence disclosure for destructive actions
+- Missing cost disclosure for financial actions
+- Missing confirmation step for high-impact actions
+
+**CLASSIFICATION:**
+- E1 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
+- Confidence: 0.60–0.80
+
+**OUTPUT FOR E1 — STRUCTURED e1Elements:**
+\`\`\`json
+{
+  "ruleId": "E1",
+  "ruleName": "Insufficient transparency in high-impact actions",
+  "category": "ethics",
+  "status": "potential",
+  "isE1Aggregated": true,
+  "e1Elements": [
+    {
+      "elementLabel": "\\"Delete Account\\" action",
+      "elementType": "button",
+      "location": "src/components/Settings.tsx",
+      "detection": "Destructive action without consequence disclosure or confirmation step",
+      "evidence": "CTA: 'Delete Account' | No warning text | No confirmation dialog",
+      "recommendedFix": "Add a confirmation dialog with irreversibility warning",
+      "confidence": 0.75
+    }
+  ],
+  "diagnosis": "Summary...",
+  "contextualHint": "Short guidance...",
+  "confidence": 0.75
+}
+\`\`\`
+- If NO E1 issues found, do NOT include E1 in the violations array.
+
 ## PASS 3 — Ethics
 ${rules.ethics.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name}`).join('\n')}
 
@@ -2507,6 +2551,82 @@ function formatU4EvidenceBundleForPrompt(bundles: U4EvidenceBundle[]): string {
     lines.push(`  Flags: summary=${b.hasSummaryWords}, helpers=${b.hasHelperExamples}, genericCTA=${b.hasGenericCTA}`);
   }
   lines.push('[/U4_EVIDENCE_BUNDLE]');
+  return lines.join('\n');
+}
+
+// ========== E1 EVIDENCE BUNDLE EXTRACTION (Insufficient Transparency) ==========
+interface E1EvidenceBundle {
+  filePath: string;
+  ctaLabel: string;
+  ctaType: string;
+  nearbyText: string[];
+  hasConfirmationDialog: boolean;
+  hasWarningText: boolean;
+  hasPricingText: boolean;
+}
+
+const E1_HIGH_IMPACT_KEYWORDS = /\b(delete|remove|close\s*account|reset|destroy|erase|unsubscribe|terminate|revoke|cancel\s*(?:subscription|membership|plan|account)|subscribe|buy|purchase|pay|upgrade|checkout|confirm\s*(?:order|purchase|payment)|accept|agree)\b/i;
+const E1_WARNING_WORDS = /\b(permanent|cannot\s*be\s*undone|irreversible|this\s*action|will\s*be\s*(?:deleted|removed|lost)|are\s*you\s*sure|caution|warning)\b/i;
+const E1_PRICING_WORDS = /\b(\$\d|\€\d|\£\d|USD|EUR|per\s*month|\/mo|\/year|billing|subscription\s*(?:fee|cost|price)|free\s*trial|charged)\b/i;
+const E1_CONFIRMATION_PATTERNS = /\b(AlertDialog|confirm\s*\(|useConfirm|ConfirmDialog|ConfirmModal|confirmation|modal|Dialog)\b/i;
+
+function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundle[] {
+  const bundles: E1EvidenceBundle[] = [];
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
+    if (/\.(test|spec)\./i.test(filePath)) continue;
+    if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
+
+    const btnRe = /<(?:Button|button|a)\b([^>]*)>([^<]{1,80})<\/(?:Button|button|a)>/gi;
+    let bm;
+    while ((bm = btnRe.exec(content)) !== null) {
+      const attrs = bm[1] || '';
+      const label = bm[2].replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
+      if (!label || label.length < 2) continue;
+      if (!E1_HIGH_IMPACT_KEYWORDS.test(label) && !E1_HIGH_IMPACT_KEYWORDS.test(attrs)) continue;
+
+      let ctaType = 'destructive';
+      if (/\b(subscribe|buy|purchase|pay|upgrade|checkout)\b/i.test(label)) ctaType = 'financial';
+      if (/\b(accept|agree|share|consent)\b/i.test(label)) ctaType = 'data-sharing';
+
+      const regionStart = Math.max(0, bm.index - 300);
+      const regionEnd = Math.min(content.length, bm.index + bm[0].length + 300);
+      const region = content.slice(regionStart, regionEnd);
+
+      const nearbyText: string[] = [];
+      const hRe = /<h([1-6])\b[^>]*>([^<]{2,80})<\/h\1>/gi;
+      let hm;
+      while ((hm = hRe.exec(region)) !== null) nearbyText.push(`h${hm[1]}: ${hm[2].replace(/\{[^}]*\}/g, '').trim()}`);
+      const pRe = /<(?:p|span|div)\b[^>]*>([^<]{3,120})<\/(?:p|span|div)>/gi;
+      let pm;
+      while ((pm = pRe.exec(region)) !== null) {
+        const text = pm[1].replace(/\{[^}]*\}/g, '').trim();
+        if (text.length >= 3 && text.length <= 120) nearbyText.push(text);
+      }
+
+      bundles.push({
+        filePath, ctaLabel: label, ctaType,
+        nearbyText: [...new Set(nearbyText)].slice(0, 6),
+        hasConfirmationDialog: E1_CONFIRMATION_PATTERNS.test(content),
+        hasWarningText: E1_WARNING_WORDS.test(region),
+        hasPricingText: E1_PRICING_WORDS.test(region),
+      });
+    }
+  }
+  return bundles.slice(0, 20);
+}
+
+function formatE1EvidenceBundleForPrompt(bundles: E1EvidenceBundle[]): string {
+  if (bundles.length === 0) return '';
+  const lines = ['[E1_EVIDENCE_BUNDLE]', 'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence. Evaluate ONLY the extracted CTA labels and nearby UI text.'];
+  for (const b of bundles) {
+    lines.push(`\n--- Location: ${b.filePath} ---`);
+    lines.push(`  CTA: "${b.ctaLabel}" (type: ${b.ctaType})`);
+    if (b.nearbyText.length > 0) lines.push(`  Nearby text: ${b.nearbyText.join(' | ')}`);
+    lines.push(`  Flags: confirmation=${b.hasConfirmationDialog}, warning=${b.hasWarningText}, pricing=${b.hasPricingText}`);
+  }
+  lines.push('[/E1_EVIDENCE_BUNDLE]');
   return lines.join('\n');
 }
 
@@ -3391,8 +3511,12 @@ serve(async (req) => {
     const u6LayoutBundles = selectedRulesSet.has('U6') ? extractU6LayoutEvidence(allFiles) : [];
     const u6BundleText = formatU6LayoutEvidenceForPrompt(u6LayoutBundles);
 
+    // Extract E1 evidence bundle (high-impact action transparency)
+    const e1EvidenceBundles = selectedRulesSet.has('E1') ? extractE1EvidenceBundle(allFiles) : [];
+    const e1BundleText = formatE1EvidenceBundleForPrompt(e1EvidenceBundles);
+
     const systemPrompt = buildCodeAnalysisPrompt(selectedRules || []);
-    const userPrompt = `Analyze this ${stack} codebase from GitHub repository "${owner}/${repo}":\n\n${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n' + u6BundleText : ''}`;
+    const userPrompt = `Analyze this ${stack} codebase from GitHub repository "${owner}/${repo}":\n\n${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n' + u6BundleText : ''}${e1BundleText ? '\n\n' + e1BundleText : ''}`;
     
     console.log(`Sending to AI: ${userPrompt.length} chars of code context`);
     
@@ -3971,6 +4095,54 @@ serve(async (req) => {
       }
     }
 
+    // ========== E1 POST-PROCESSING (Insufficient Transparency — LLM-assisted) ==========
+    const aggregatedE1GitHubList: any[] = [];
+    if (selectedRulesSet.has('E1')) {
+      const e1FromLLM = filteredNonA2AiViolations.filter((v: any) => v.ruleId === 'E1');
+      filteredNonA2AiViolations = filteredNonA2AiViolations.filter((v: any) => v.ruleId !== 'E1');
+
+      if (e1FromLLM.length > 0) {
+        const aggregatedOne = e1FromLLM.find((v: any) => v.isE1Aggregated && v.e1Elements?.length > 0);
+        const e1Elements = aggregatedOne
+          ? (aggregatedOne.e1Elements || []).map((el: any) => ({
+              elementLabel: el.elementLabel || 'High-impact action',
+              elementType: el.elementType || 'action',
+              location: el.location || 'Unknown',
+              detection: el.detection || '',
+              evidence: el.evidence || '',
+              recommendedFix: el.recommendedFix || '',
+              confidence: Math.min(el.confidence || 0.65, 0.80),
+              evaluationMethod: 'llm_only_code' as const,
+              deduplicationKey: el.deduplicationKey || `E1|${el.location || ''}|${el.elementLabel || ''}`,
+            }))
+          : e1FromLLM.map((v: any) => ({
+              elementLabel: v.evidence?.split('.')[0] || 'High-impact action',
+              elementType: 'action',
+              location: v.evidence || 'Unknown',
+              detection: v.diagnosis || '',
+              evidence: v.evidence || '',
+              recommendedFix: v.contextualHint || '',
+              confidence: Math.min(v.confidence || 0.65, 0.80),
+              evaluationMethod: 'llm_only_code' as const,
+              deduplicationKey: `E1|${v.evidence || 'unknown'}`,
+            }));
+
+        const overallConfidence = Math.min(Math.max(...e1Elements.map((e: any) => e.confidence)), 0.80);
+        aggregatedE1GitHubList.push({
+          ruleId: 'E1', ruleName: 'Insufficient transparency in high-impact actions', category: 'ethics',
+          status: 'potential', blocksConvergence: false,
+          inputType: 'github', isE1Aggregated: true, e1Elements, evaluationMethod: 'llm_assisted',
+          diagnosis: `Transparency issues: ${e1Elements.length} potential risk(s).`,
+          contextualHint: 'Ensure high-impact actions disclose consequences, costs, or data implications.',
+          advisoryGuidance: 'Add confirmation steps with clear consequence disclosure for irreversible or high-impact actions.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        });
+        console.log(`E1 aggregated (GitHub): ${e1FromLLM.length} LLM finding(s) → ${e1Elements.length} element(s)`);
+      } else {
+        console.log('E1: No LLM findings for transparency (GitHub)');
+      }
+    }
+
     // Combine all violations
     const allViolations = [
       ...aggregatedA1Violations,
@@ -3981,6 +4153,7 @@ serve(async (req) => {
       ...aggregatedU4GitHubList,
       ...aggregatedU5GitHubList,
       ...aggregatedU6GitHubList,
+      ...aggregatedE1GitHubList,
       ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
       ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
       ...(aggregatedA4GitHub ? [aggregatedA4GitHub] : []),
