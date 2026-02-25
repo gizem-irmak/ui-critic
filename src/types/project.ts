@@ -323,12 +323,18 @@ export interface A2ElementSubItem {
   // Element identification — unique identity block
   elementLabel: string; // Best human-readable "source label" (e.g., "More options (kebab menu)")
   elementType?: string; // button, link, input, select, etc.
+  elementTag?: string; // actual HTML tag: input, div, button, a, etc.
   role?: string; // ARIA role or HTML tag role (e.g., "button", "link", "menuitem")
   accessibleName?: string; // Computed accessible name (aria-label / button text). Empty string = "(no accessible name)"
   sourceLabel?: string; // Best human label (e.g., "3-dot menu", "Enroll Now")
   selectorHint?: string; // data-testid, id, class fragment, or component path + JSX snippet
+  selectorHints?: string[]; // e.g., ['id="email"', 'role="menuitem"']
   textSnippet?: string; // Visible text if available
   location: string; // file path (ZIP/GitHub) or "Screenshot #n — …"
+  lineRange?: string; // e.g., "42–47"
+  
+  // Focusable status
+  focusable?: 'yes' | 'no' | 'unknown';
   
   // Detection data
   detection?: string; // e.g., "Tailwind/CSS: focus:outline-none without replacement"

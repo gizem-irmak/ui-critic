@@ -60,6 +60,18 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
         <CollapsibleContent>
           {isConfirmed ? (
             <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+              {/* Element metadata */}
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-24">Element:</span>
+                <span className="font-mono text-xs">
+                  {element.elementTag || element.elementType || 'unknown'}
+                  {element.sourceLabel && element.sourceLabel !== element.elementLabel ? ` (${element.sourceLabel})` : ''}
+                  {element.selectorHints && element.selectorHints.length > 0 ? ` — ${element.selectorHints.join(' — ')}` : ''}
+                  {' — Focusable: '}
+                  {element.focusable === 'yes' ? 'Yes' : element.focusable === 'no' ? 'No' : 'Unknown'}
+                </span>
+              </div>
+
               {/* Detection — chips */}
               <div className="flex items-start gap-2">
                 <span className="text-muted-foreground font-medium w-24">Detection:</span>
@@ -92,6 +104,18 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
             </div>
           ) : (
             <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+              {/* Element metadata */}
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-20">Element:</span>
+                <span className="font-mono text-xs">
+                  {element.elementTag || element.elementType || 'unknown'}
+                  {element.sourceLabel && element.sourceLabel !== element.elementLabel ? ` (${element.sourceLabel})` : ''}
+                  {element.selectorHints && element.selectorHints.length > 0 ? ` — ${element.selectorHints.join(' — ')}` : ''}
+                  {' — Focusable: '}
+                  {element.focusable === 'yes' ? 'Yes' : element.focusable === 'no' ? 'No' : 'Unknown'}
+                </span>
+              </div>
+
               {/* Detection */}
               {element.detection && (
                 <div className="flex items-center gap-2">
