@@ -341,7 +341,20 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
           {isConfirmed
             ? 'Text contrast falls below WCAG AA minimum thresholds.'
-            : 'Static analysis detected a potential contrast issue. Background or text size could not be fully verified.'}
+            : (() => {
+                const bgUncertain = elements.some(e => e.backgroundStatus === 'uncertain' || e.backgroundStatus === 'unmeasurable');
+                const sizeUnknown = elements.some(e => !e.textType || e.textType === 'normal' && e.appliedThreshold === 4.5 && e.reasonCodes?.includes('SIZE_UNKNOWN'));
+                if (bgUncertain && sizeUnknown) {
+                  return 'Static analysis detected a potential contrast issue. Background color and text size could not be fully verified.';
+                }
+                if (bgUncertain) {
+                  return 'Static analysis detected a potential contrast issue. The background color could not be deterministically resolved.';
+                }
+                if (sizeUnknown) {
+                  return 'Static analysis detected a potential contrast issue. Text size could not be deterministically verified; the 4.5:1 normal-text threshold was applied.';
+                }
+                return 'Static analysis detected a potential contrast issue. Background or text size could not be fully verified.';
+              })()}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
