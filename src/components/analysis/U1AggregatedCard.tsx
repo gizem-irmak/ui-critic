@@ -56,7 +56,7 @@ function U1ElementItem({ element, isConfirmed, compact = false }: {
               </div>
             )}
 
-            {!isConfirmed && (
+            {!isConfirmed && element.confidence != null && (
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground font-medium w-20">Confidence:</span>
                 <span className="font-mono font-medium text-warning">

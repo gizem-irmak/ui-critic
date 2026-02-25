@@ -201,7 +201,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
           detection: 'Form without submit control',
           evidence: `<form> in ${filePath} — no submit button, input[type="submit"], or onSubmit handler`,
           explanation: 'A <form> exists but has no submit mechanism. Users cannot complete the form action.',
-          confidence: 0.95,
+          confidence: 1.0,
           advisoryGuidance: 'Add a clear submit action (e.g., "Save", "Submit") tied to the form.',
           deduplicationKey: `U1.1|${filePath}`,
         });
@@ -270,13 +270,27 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
           seenU12Groups.add(groupKey);
           const labels = ctas.map(c => c.label);
           const sharedToken = highs[0].styleKey || 'default';
+
+          // Signal-based confidence for U1.2
+          let u12Confidence = 0.60;
+          u12Confidence += 0.10; // same parent container
+          u12Confidence += 0.10; // same high-emphasis styling
+          if (group.containerType === 'CardFooter' || /flex.*row|flex-row|gap-|space-x-/.test(group.lineContext)) {
+            u12Confidence += 0.05;
+          }
+          const hasSemanticDiff = group.buttons.some(b => /aria-describedby/.test(b.className || ''));
+          if (!hasSemanticDiff) {
+            u12Confidence += 0.05;
+          }
+          u12Confidence = Math.min(u12Confidence, 0.90);
+
           findings.push({
             subCheck: 'U1.2', subCheckLabel: 'Multiple equivalent CTAs', classification: 'potential',
             elementLabel: `${componentName} — ${group.containerType}`, elementType: 'button group', filePath,
             detection: `${highs.length} CTAs share high-emphasis styling`,
             evidence: `${labels.join(', ')} — all use same high-emphasis styling (${sharedToken})`,
             explanation: `${highs.length} sibling CTA buttons share identical high-emphasis styling.`,
-            confidence: 0.75,
+            confidence: u12Confidence,
             advisoryGuidance: 'Visually distinguish the primary action.',
             deduplicationKey: `U1.2|${filePath}|${group.containerType}`,
           });
@@ -294,13 +308,36 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
         if (u12SuppressedLabels.has(labelLower)) continue;
         const dedupeKey = `U1.3|${filePath}|${labelLower}`;
         if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
+
+        // Signal-based confidence for U1.3
+        const HIGH_RISK_GENERICS = new Set(['continue', 'next', 'submit', 'save', 'confirm', 'ok']);
+        let u13Confidence = 0.55;
+        if (HIGH_RISK_GENERICS.has(labelLower)) {
+          u13Confidence += 0.10;
+        }
+        const hasNearbyHeading = /<(?:h[1-6]|label|legend)\b[^>]*>/.test(content);
+        if (!hasNearbyHeading) {
+          u13Confidence += 0.05;
+        }
+        const btnEmphasis = buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)
+          ? classifyButtonEmphasis({
+              resolvedVariant: btn.variant || buttonImpl.config.defaultVariant || 'default',
+              variantConfig: buttonImpl.config,
+              instanceClassName: btn.className,
+            }).emphasis
+          : classifyTailwindEmphasis(btn.className);
+        if (btnEmphasis === 'high') {
+          u13Confidence += 0.05;
+        }
+        u13Confidence = Math.min(u13Confidence, 0.80);
+
         findings.push({
           subCheck: 'U1.3', subCheckLabel: 'Ambiguous CTA label', classification: 'potential',
           elementLabel: `"${btn.label}" button`, elementType: 'button', filePath,
           detection: `Generic label: "${btn.label}"`,
           evidence: `CTA labeled "${btn.label}" in ${componentName}`,
           explanation: `The CTA label "${btn.label}" is generic and does not communicate the specific action.`,
-          confidence: 0.65,
+          confidence: u13Confidence,
           advisoryGuidance: 'Use specific, action-oriented labels.',
           deduplicationKey: dedupeKey,
         });
@@ -348,7 +385,7 @@ export default function ContactForm() {
   const u11 = results.find(f => f.subCheck === 'U1.1');
   assert(u11 !== undefined, "Expected U1.1 finding");
   assertEquals(u11!.classification, "confirmed");
-  assert(u11!.confidence >= 0.90, `Expected confidence >= 0.90, got ${u11!.confidence}`);
+  assert(u11!.confidence === 1.0, `Expected confidence 1.0 for confirmed, got ${u11!.confidence}`);
 });
 
 Deno.test("U1.2: Two buttons with identical primary classes → Potential", () => {
@@ -369,7 +406,7 @@ export default function ActionCard() {
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assert(u12 !== undefined, "Expected U1.2 finding");
   assertEquals(u12!.classification, "potential");
-  assert(u12!.confidence >= 0.70 && u12!.confidence <= 0.85, `Expected confidence 70-85%, got ${u12!.confidence}`);
+  assert(u12!.confidence >= 0.80 && u12!.confidence <= 0.90, `Expected confidence 80-90%, got ${u12!.confidence}`);
 });
 
 Deno.test("U1.3: Single CTA 'Continue' (generic) → Potential", () => {
@@ -383,7 +420,7 @@ export default function NextStep() {
   const u13 = results.find(f => f.subCheck === 'U1.3');
   assert(u13 !== undefined, "Expected U1.3 finding");
   assertEquals(u13!.classification, "potential");
-  assert(u13!.confidence >= 0.60 && u13!.confidence <= 0.75, `Expected confidence 60-75%, got ${u13!.confidence}`);
+  assert(u13!.confidence >= 0.55 && u13!.confidence <= 0.80, `Expected confidence 55-80%, got ${u13!.confidence}`);
 });
 
 Deno.test("PASS: Clear hierarchy (primary + outline) → no U1.2", () => {
@@ -533,7 +570,7 @@ export default function BoltPage() {
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assert(u12 !== undefined, "Expected U1.2 for plain Tailwind buttons with matching high-emphasis");
   assertEquals(u12!.classification, "potential");
-  assert(u12!.confidence >= 0.70 && u12!.confidence <= 0.80, `Expected confidence 70-80%, got ${u12!.confidence}`);
+  assert(u12!.confidence >= 0.80 && u12!.confidence <= 0.90, `Expected confidence 80-90%, got ${u12!.confidence}`);
 });
 
 Deno.test("U1.2 Path 2: bg-primary siblings → Potential", () => {

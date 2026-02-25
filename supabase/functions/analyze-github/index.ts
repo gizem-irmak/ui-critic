@@ -436,7 +436,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
           detection: 'Form without submit control',
           evidence: `<form> in ${filePath} — no submit button, input[type="submit"], or onSubmit handler`,
           explanation: 'A <form> exists but has no submit mechanism. Users cannot complete the form action.',
-          confidence: 0.95,
+          confidence: 1.0,
           advisoryGuidance: 'Add a clear submit action (e.g., "Save", "Submit") tied to the form.',
           deduplicationKey: `U1.1|${filePath}`,
         });
@@ -530,6 +530,23 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
           const labels = ctas.map(c => c.label);
           const sharedToken = highs[0].styleKey || 'default';
           console.log(`[U1.2] fired for container = ${filePath} | ${group.containerType}`);
+
+          // Signal-based confidence for U1.2
+          let u12Confidence = 0.60;
+          u12Confidence += 0.10; // same parent container (always true in ActionGroup)
+          u12Confidence += 0.10; // same high-emphasis styling (highStyleKeys.size === 1)
+          if (group.containerType === 'CardFooter' || /flex.*row|flex-row|gap-|space-x-/.test(group.lineContext)) {
+            u12Confidence += 0.05;
+          }
+          const hasSemanticDiff = group.buttons.some(b => {
+            const attrs = b.className || '';
+            return /aria-describedby/.test(attrs);
+          });
+          if (!hasSemanticDiff) {
+            u12Confidence += 0.05;
+          }
+          u12Confidence = Math.min(u12Confidence, 0.90);
+
           findings.push({
             subCheck: 'U1.2',
             subCheckLabel: 'Multiple equivalent CTAs',
@@ -540,7 +557,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
             detection: `${highs.length} CTAs share ${usedPath === 'tailwind' ? 'Tailwind high-emphasis classes' : `variant="${sharedToken}"`}`,
             evidence: `${labels.join(', ')} — all use same high-emphasis styling (${sharedToken})`,
             explanation: `${highs.length} sibling CTA buttons share identical high-emphasis styling, making the primary action unclear.`,
-            confidence: 0.75,
+            confidence: u12Confidence,
             advisoryGuidance: 'Visually distinguish the primary action and demote secondary actions to outline/ghost/link variants.',
             deduplicationKey: `U1.2|${filePath}|${group.containerType}`,
           });
@@ -560,6 +577,29 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
         if (u12SuppressedLabels.has(labelLower)) continue;
         const dedupeKey = `U1.3|${filePath}|${labelLower}`;
         if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
+
+        // Signal-based confidence for U1.3
+        const HIGH_RISK_GENERICS = new Set(['continue', 'next', 'submit', 'save', 'confirm', 'ok']);
+        let u13Confidence = 0.55;
+        if (HIGH_RISK_GENERICS.has(labelLower)) {
+          u13Confidence += 0.10;
+        }
+        const hasNearbyHeading = /<(?:h[1-6]|label|legend)\b[^>]*>/.test(content);
+        if (!hasNearbyHeading) {
+          u13Confidence += 0.05;
+        }
+        const btnEmphasis = buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)
+          ? classifyButtonEmphasis({
+              resolvedVariant: btn.variant || buttonImpl.config.defaultVariant || 'default',
+              variantConfig: buttonImpl.config,
+              instanceClassName: btn.className,
+            }).emphasis
+          : classifyTailwindEmphasis(btn.className);
+        if (btnEmphasis === 'high') {
+          u13Confidence += 0.05;
+        }
+        u13Confidence = Math.min(u13Confidence, 0.80);
+
         findings.push({
           subCheck: 'U1.3',
           subCheckLabel: 'Ambiguous CTA label',
@@ -570,7 +610,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
           detection: `Generic label: "${btn.label}"`,
           evidence: `CTA labeled "${btn.label}" in ${componentName} — generic label without context`,
           explanation: `The CTA label "${btn.label}" is generic and does not communicate the specific action.`,
-          confidence: 0.65,
+          confidence: u13Confidence,
           advisoryGuidance: 'Use specific, action-oriented labels (e.g., "Save changes" instead of "Save", "Create account" instead of "Submit").',
           deduplicationKey: dedupeKey,
         });
