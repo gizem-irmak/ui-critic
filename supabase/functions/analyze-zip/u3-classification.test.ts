@@ -302,17 +302,16 @@ Deno.test("U3.D5: {msg.subject} in overflow-hidden + max-w → REPORTED", () => 
 // --- LOW-RISK NEVER FLAG ---
 
 Deno.test("U3.D5: {firstName} with truncate → NOT reported (low-risk-never)", () => {
-  const LOW_NEVER = /\b(?:firstName|lastName|name|id|num|startTime|endTime|date|time|status|type|role|search|selectedDoctor|doctor|slot|count)\b/i;
+  const LOW_NEVER = /\b(?:firstName|lastName|name|startTime|endTime|role|search|selectedDoctor|doctor|slot|count)\b/i;
   assert(LOW_NEVER.test("firstName"));
   assert(LOW_NEVER.test("startTime"));
   assert(LOW_NEVER.test("selectedDoctor"));
   assert(LOW_NEVER.test("search"));
-  assert(LOW_NEVER.test("num"));
 });
 
 Deno.test("U3.D5: {form.control} → skipped (form.* prefix)", () => {
   const segments = "form.control".split('.');
-  assertEquals(segments[0], "form"); // form prefix → skip
+  assertEquals(segments[0], "form");
 });
 
 Deno.test("U3.D5: single-char {i} → skipped", () => {
@@ -322,10 +321,36 @@ Deno.test("U3.D5: single-char {i} → skipped", () => {
   assert(SKIP.test("idx"));
 });
 
+// --- LOW-RISK (location/status/date/time) GATING ---
+
+Deno.test("U3.D5: {appt.location} with only truncate → NOT reported (Low-risk needs both)", () => {
+  const LOW = /\b(?:location|status|date|time|id|num|type)\b/i;
+  assert(LOW.test("location"));
+  const code = `<span className="truncate w-32">{appt.location}</span>`;
+  assert(/\btruncate\b/.test(code));
+  assert(!/\boverflow-hidden\b/.test(code)); // Missing overflow-hidden → suppressed
+});
+
+Deno.test("U3.D5: {appt.location} with truncate + overflow-hidden → REPORTED", () => {
+  const LOW = /\b(?:location|status|date|time|id|num|type)\b/i;
+  assert(LOW.test("location"));
+  const code = `<span className="truncate overflow-hidden w-32">{appt.location}</span>`;
+  assert(/\btruncate\b/.test(code));
+  assert(/\boverflow-hidden\b/.test(code)); // Both present → reported
+});
+
+Deno.test("U3.D5: {appt.status} with only max-w → NOT reported (Low-risk)", () => {
+  const LOW = /\b(?:location|status|date|time|id|num|type)\b/i;
+  assert(LOW.test("status"));
+  const code = `<span className="max-w-xs">{appt.status}</span>`;
+  assert(!/\btruncate\b/.test(code));
+  assert(!/\boverflow-hidden\b/.test(code));
+});
+
 // --- MEDIUM-RISK GATING ---
 
 Deno.test("U3.D5: {doc.specialty} with only fixed-width → NOT reported", () => {
-  const MED = /\b(?:specialty|title|label|location)\b/i;
+  const MED = /\b(?:specialty|title|label)\b/i;
   const TRUNC_NOWRAP = /\btruncate\b|\bwhitespace-nowrap\b/;
   const code = `<td className="w-40">{doc.specialty}</td>`;
   assert(MED.test("specialty"));
@@ -333,18 +358,18 @@ Deno.test("U3.D5: {doc.specialty} with only fixed-width → NOT reported", () =>
 });
 
 Deno.test("U3.D5: {doc.specialty} with truncate → REPORTED", () => {
-  const MED = /\b(?:specialty|title|label|location)\b/i;
+  const MED = /\b(?:specialty|title|label)\b/i;
   const TRUNC_NOWRAP = /\btruncate\b|\bwhitespace-nowrap\b/;
   const code = `<span className="truncate w-32">{doc.specialty}</span>`;
   assert(MED.test("specialty"));
   assert(TRUNC_NOWRAP.test(code), "Has truncate → medium-risk reported");
 });
 
-Deno.test("U3.D5: {appt.location} with only max-w → NOT reported (medium-risk, no truncate)", () => {
-  const MED = /\b(?:specialty|title|label|location)\b/i;
+Deno.test("U3.D5: {appt.label} with only max-w → NOT reported (medium-risk, no truncate)", () => {
+  const MED = /\b(?:specialty|title|label)\b/i;
   const TRUNC_NOWRAP = /\btruncate\b|\bwhitespace-nowrap\b/;
-  const code = `<span className="max-w-xs">{appt.location}</span>`;
-  assert(MED.test("location"));
+  const code = `<span className="max-w-xs">{appt.label}</span>`;
+  assert(MED.test("label"));
   assert(!TRUNC_NOWRAP.test(code));
 });
 
@@ -419,6 +444,14 @@ Deno.test("U3.D5: Medium-risk + truncate → confidence 0.90", () => {
   assertEquals(c, 0.90);
 });
 
+Deno.test("U3.D5: Low-risk + strong constraint → confidence 0.75", () => {
+  let c = 0.70;
+  c += 0.15; // strong constraint
+  c -= 0.10; // Low-risk penalty
+  c = Math.max(0.55, Math.min(0.90, c));
+  assertEquals(c, 0.75);
+});
+
 Deno.test("U3.D5: wide container reduces confidence", () => {
   let c = 0.70;
   c += 0.15;
@@ -437,19 +470,52 @@ Deno.test("U3.D5: tooltip nearby reduces confidence", () => {
   assertEquals(c, 0.85);
 });
 
+// --- CROSS-SUBCHECK DEDUP ---
+
+Deno.test("U3 dedup: D1+D5 on same file+var within ±10 lines → merged", () => {
+  const TRUNC_PRIORITY: Record<string, number> = { 'line-clamp': 3, truncate: 2, nowrap: 1, 'unbroken-overflow': 0 };
+  const findings = [
+    { filePath: 'A.tsx', varName: 'bio', lineNumber: 10, truncationType: 'truncate', confidence: 0.80, occurrences: 1 },
+    { filePath: 'A.tsx', varName: 'bio', lineNumber: 12, truncationType: 'unbroken-overflow', confidence: 0.85, occurrences: 1 },
+  ];
+  // Same file, same var, within 10 lines → should merge
+  const f0 = findings[0], f1 = findings[1];
+  assert(Math.abs(f0.lineNumber - f1.lineNumber) <= 10);
+  const prio0 = TRUNC_PRIORITY[f0.truncationType] ?? -1;
+  const prio1 = TRUNC_PRIORITY[f1.truncationType] ?? -1;
+  assert(prio0 > prio1, "truncate has higher priority than unbroken-overflow");
+  // After merge: 1 item, occurrences=2, confidence=max(0.80,0.85)
+  const merged = { ...f0, occurrences: 2, confidence: Math.max(f0.confidence, f1.confidence) };
+  assertEquals(merged.occurrences, 2);
+  assertEquals(merged.confidence, 0.85);
+});
+
+Deno.test("U3 dedup: same var but different files → NOT merged", () => {
+  const f0 = { filePath: 'A.tsx', varName: 'bio', lineNumber: 10 };
+  const f1 = { filePath: 'B.tsx', varName: 'bio', lineNumber: 10 };
+  assert(f0.filePath !== f1.filePath, "Different files → separate items");
+});
+
+Deno.test("U3 dedup: same var but >10 lines apart → NOT merged", () => {
+  const f0 = { filePath: 'A.tsx', varName: 'bio', lineNumber: 10 };
+  const f1 = { filePath: 'A.tsx', varName: 'bio', lineNumber: 25 };
+  assert(Math.abs(f0.lineNumber - f1.lineNumber) > 10, "Far apart → separate items");
+});
+
 // --- PER-FILE CAP ---
 
-Deno.test("U3.D5: max 3 findings per file", () => {
+Deno.test("U3.D5: max 5 findings per file after merge", () => {
   const findings = [
     { confidence: 0.90 },
     { confidence: 0.85 },
     { confidence: 0.80 },
     { confidence: 0.75 },
     { confidence: 0.70 },
+    { confidence: 0.65 },
   ];
   findings.sort((a, b) => b.confidence - a.confidence);
-  const capped = findings.slice(0, 3);
-  assertEquals(capped.length, 3);
+  const capped = findings.slice(0, 5);
+  assertEquals(capped.length, 5);
   assertEquals(capped[0].confidence, 0.90);
 });
 

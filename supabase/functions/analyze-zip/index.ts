@@ -706,6 +706,9 @@ interface U3Finding {
   triggerReason?: string; // why it was NOT suppressed
   expandDetected?: boolean;
   elementTag?: string;
+  varName?: string; // extracted variable name for cross-subcheck dedup
+  lineNumber?: number; // line number for proximity check
+  occurrences?: number; // count of merged findings
 }
 
 function extractU3TextPreview(content: string, pos: number): string | undefined {
@@ -873,6 +876,10 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const tagMatch = context.slice(0, 200).match(/<([a-zA-Z][\w.]*)\s/);
         const elementTag = tagMatch ? tagMatch[1] : undefined;
 
+        // Extract variable name from text preview for cross-subcheck dedup
+        const d1VarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
+        const d1VarName = d1VarMatch ? d1VarMatch[1].split('.').pop() : undefined;
+
         findings.push({
           subCheck: 'U3.D1',
           subCheckLabel: 'Line clamp / ellipsis truncation',
@@ -892,6 +899,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           triggerReason,
           expandDetected: false,
           elementTag,
+          varName: d1VarName,
+          lineNumber,
         });
       }
     }
@@ -922,6 +931,9 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
       const triggerReason = isDynamic ? 'Dynamic content with nowrap + overflow-hidden' : `Text (${staticLen} chars) with nowrap + overflow-hidden`;
 
+      const nwVarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
+      const nwVarName = nwVarMatch ? nwVarMatch[1].split('.').pop() : undefined;
+
       findings.push({
         subCheck: 'U3.D1',
         subCheckLabel: 'Line clamp / ellipsis truncation',
@@ -940,6 +952,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         textLength: isDynamic ? 'dynamic' : (staticLen >= 0 ? staticLen : undefined),
         triggerReason,
         expandDetected: false,
+        varName: nwVarName,
+        lineNumber,
       });
     }
 
@@ -1101,9 +1115,11 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
     // Semantic risk tiers
     const U3_HIGH_RISK = /\b(?:reason|notes|bio|description|message|subject|comment|details|address|diagnosis|complaint|feedback|body|content|summary|remarks)\b/i;
-    const U3_MEDIUM_RISK = /\b(?:specialty|title|label|location)\b/i;
-    // Low-risk: NEVER flag these
-    const U3_LOW_RISK_NEVER = /\b(?:firstName|lastName|name|id|num|startTime|endTime|date|time|status|type|role|search|selectedDoctor|doctor|slot|count|email|phone|price|amount|code|key|slug|url|href|icon|avatar|image|src|alt|index|idx|length|size|width|height|color|variant|className|style|ref|onClick|onChange|onSubmit|disabled|checked|value|placeholder|control|register|errors|watch|reset|handleSubmit|trigger|formState|setValue|getValues)\b/i;
+    const U3_MEDIUM_RISK = /\b(?:specialty|title|label)\b/i;
+    // Low-risk: require BOTH truncate AND overflow-hidden to flag
+    const U3_LOW_RISK = /\b(?:location|status|date|time|id|num|type)\b/i;
+    // Never flag these
+    const U3_LOW_RISK_NEVER = /\b(?:firstName|lastName|name|startTime|endTime|role|search|selectedDoctor|doctor|slot|count|email|phone|price|amount|code|key|slug|url|href|icon|avatar|image|src|alt|index|idx|length|size|width|height|color|variant|className|style|ref|onClick|onChange|onSubmit|disabled|checked|value|placeholder|control|register|errors|watch|reset|handleSubmit|trigger|formState|setValue|getValues)\b/i;
     // Variables that are clearly not user-visible text
     const U3_SKIP_VAR = /^(?:i|j|k|e|_|el|ev|cb|fn|err|res|req|ctx|ref|key|idx|index|item|row|col|acc|cur|prev|next|len|num|val|tmp|obj|arr|map|set|get|put|del|add|sub|mod|div|max|min|sum|avg)$/;
 
@@ -1135,9 +1151,10 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         if (U3_LOW_RISK_NEVER.test(lastSeg)) continue;
 
         // Determine risk tier
-        let riskTier: 'High' | 'Medium' | 'None';
+        let riskTier: 'High' | 'Medium' | 'Low' | 'None';
         if (U3_HIGH_RISK.test(lastSeg)) riskTier = 'High';
         else if (U3_MEDIUM_RISK.test(lastSeg)) riskTier = 'Medium';
+        else if (U3_LOW_RISK.test(lastSeg)) riskTier = 'Low';
         else riskTier = 'None';
 
         // If variable name doesn't match any risk tier, skip
@@ -1158,6 +1175,13 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
         // Medium-risk: require truncate or whitespace-nowrap specifically
         if (riskTier === 'Medium' && !U3_TRUNCATE_OR_NOWRAP.test(context)) continue;
+
+        // Low-risk: require BOTH truncate AND overflow-hidden to flag
+        if (riskTier === 'Low') {
+          const hasTruncate = /\btruncate\b/.test(context);
+          const hasOverflowHidden = /\boverflow-hidden\b/.test(context);
+          if (!(hasTruncate && hasOverflowHidden)) continue;
+        }
 
         // Suppress if wrap-safe classes present
         if (U3_WRAP_SAFE.test(context)) continue;
@@ -1184,6 +1208,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         if (hasStrongConstraint) confidence += 0.15;
         if (riskTier === 'High') confidence += 0.10;
         else if (riskTier === 'Medium') confidence += 0.05;
+        else if (riskTier === 'Low') confidence -= 0.10;
         const hasWideContainer = U3_WIDE_CONTAINER.test(context) && !/\bmax-w-/.test(context);
         if (hasWideContainer) confidence -= 0.10;
         if (/\btitle\s*=|\btooltip\b|<Tooltip/i.test(context)) confidence -= 0.10;
@@ -1223,6 +1248,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           triggerReason: `{${varName}} [${riskTier}-risk] in container with ${matchedClasses.join(' + ')} but no wrap protection`,
           expandDetected: false,
           elementTag,
+          varName: lastSeg,
+          lineNumber,
         });
       }
     }
@@ -1235,16 +1262,58 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
     }
   }
 
-  // Aggregate: cap per file (max 3 findings per file)
-  const byFile = new Map<string, U3Finding[]>();
+  // ── Cross-subcheck deduplication ──
+  // When D1 (truncate) and D5 (overflow) fire on the same file+variable within ±10 lines,
+  // merge into a single finding with the higher-priority type and combined evidence.
+  const TRUNC_PRIORITY: Record<string, number> = { 'line-clamp': 3, truncate: 2, nowrap: 1, 'unbroken-overflow': 0, 'text-ellipsis': 2 };
+  const mergedFindings: U3Finding[] = [];
+  const mergeMap = new Map<string, U3Finding>(); // key: file|varName
+
   for (const f of findings) {
+    if (!f.varName || !f.lineNumber) {
+      mergedFindings.push(f); // D2/D3/D4 pass through unchanged
+      continue;
+    }
+    const mergeKey = `${f.filePath}|${f.varName}`;
+    const existing = mergeMap.get(mergeKey);
+    if (existing && existing.lineNumber && Math.abs(existing.lineNumber - f.lineNumber) <= 10) {
+      // Merge: keep higher-priority truncation type, combine evidence
+      const existingPrio = TRUNC_PRIORITY[existing.truncationType || ''] ?? -1;
+      const newPrio = TRUNC_PRIORITY[f.truncationType || ''] ?? -1;
+      existing.occurrences = (existing.occurrences || 1) + 1;
+      if (newPrio > existingPrio) {
+        existing.truncationType = f.truncationType;
+        existing.subCheck = f.subCheck;
+        existing.subCheckLabel = f.subCheckLabel;
+        existing.elementLabel = `Content may be cut off (${existing.truncationType}${f.truncationType !== existing.truncationType ? ' + overflow risk' : ''})`;
+        existing.detection = `${f.detection} (merged with ${existing.detection})`;
+      } else {
+        existing.elementLabel = `Content may be cut off (${existing.truncationType}${f.truncationType !== existing.truncationType ? ' + overflow risk' : ''})`;
+      }
+      existing.confidence = Math.max(existing.confidence, f.confidence);
+      existing.evidence = `${existing.evidence} | also: ${f.evidence}`;
+    } else if (!existing) {
+      f.occurrences = 1;
+      mergeMap.set(mergeKey, f);
+    } else {
+      // Same var but far apart — keep both
+      f.occurrences = 1;
+      mergedFindings.push(f);
+    }
+  }
+  mergedFindings.push(...mergeMap.values());
+
+  // Aggregate: cap per file (max 5 findings per file after merge)
+  const byFile = new Map<string, U3Finding[]>();
+  for (const f of mergedFindings) {
     const existing = byFile.get(f.filePath) || [];
     existing.push(f);
     byFile.set(f.filePath, existing);
   }
   const capped: U3Finding[] = [];
   for (const [, fileFindgs] of byFile) {
-    capped.push(...fileFindgs.slice(0, 3));
+    fileFindgs.sort((a, b) => b.confidence - a.confidence);
+    capped.push(...fileFindgs.slice(0, 5));
   }
 
   // Confidence adjustment: base + 0.05 per additional sub-check, cap 0.85
@@ -1254,7 +1323,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
     f.confidence = Math.min(f.confidence + bonus, 0.85);
   }
 
-  console.log(`[U3] Detection: ${findings.length} raw findings, ${capped.length} after capping (${subChecks.size} unique sub-checks)`);
+  console.log(`[U3] Detection: ${findings.length} raw → ${mergedFindings.length} after merge → ${capped.length} after capping (${subChecks.size} sub-checks)`);
 
   return capped;
 }
@@ -6693,6 +6762,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           truncationType: f.truncationType, textLength: f.textLength,
           triggerReason: f.triggerReason, expandDetected: f.expandDetected,
           elementTag: f.elementTag,
+          occurrences: f.occurrences,
         }));
 
         const overallConfidence = Math.max(...u3Findings.map(f => f.confidence));
