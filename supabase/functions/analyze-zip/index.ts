@@ -3418,11 +3418,18 @@ Your role is to provide contextual enrichment for navigation assessment:
   - Whether CTAs explain what happens next
 - If the extracted evidence is insufficient to demonstrate a concrete recall burden, return NO U4 finding — do not guess.
 
+**SUPPRESSION RULES (MANDATORY — do NOT flag these):**
+
+1. **Standard auth/navigation CTAs:** Do NOT flag conventional CTAs like "Sign In", "Sign Up", "Log In", "Log Out", "Register", "Create Account", "Go to Dashboard", "Go Home", "Back to Login", "Forgot Password", "Reset Password" as U4. These are standard UI patterns that do not require recalling hidden state. They have already been filtered from the evidence bundle.
+
+2. **Pagination with visible page context:** If the evidence bundle shows \`Pagination: present=true, contextFound=true\`, do NOT flag pagination as U4. The page context (e.g., "Page 2 of 5", "1–10 of 53", active page indicator) provides sufficient recognition cues. Only flag pagination when \`contextFound=false\` (no visible page position indicator).
+
 **EVALUATE (using ONLY the evidence bundle content, not file/component names):**
 - Missing summaries: Forms or multi-step flows that don't show what the user previously selected
 - Missing examples: Input fields without helper text, examples, or format hints
-- Generic CTAs without context: Buttons labeled "Continue", "Next", "Submit" without indicating what happens next
+- Generic CTAs without context: Buttons labeled "Continue", "Next", "Submit" without indicating what happens next (but NOT standard auth CTAs)
 - Multi-step flows lacking review: Step indicators without a final review/summary step
+- Pagination WITHOUT page context: Prev/Next buttons without "Page X of Y" or item count (only when contextFound=false)
 
 **CLASSIFICATION:**
 - U4 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
@@ -3457,6 +3464,7 @@ Return U4 findings using a \`u4Elements\` array so findings can be aggregated pe
 \`\`\`
 - If NO U4 issues found, do NOT include U4 in the violations array.
 - Each u4Element MUST cite evidence from the provided evidence bundle (CTA labels, headings, form fields — NOT file names).
+- For pagination findings, include in evidence: "pageContextFound: false" to document the absence of page context.
 
 ### U6 (Weak Grouping / Layout Coherence) — LLM-ASSISTED EVALUATION:
 **NOTE:** U6 uses pre-extracted layout evidence bundles appended as \`[U6_LAYOUT_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted layout cues to assess grouping/hierarchy.
@@ -3704,7 +3712,14 @@ interface U4EvidenceBundle {
   hasSummaryWords: boolean;
   hasHelperExamples: boolean;
   hasGenericCTA: boolean;
+  // Pagination context
+  hasPagination: boolean;
+  paginationContextFound: boolean;
+  paginationContextText?: string;
 }
+
+// Standard auth/navigation CTAs that should NOT trigger U4
+const U4_STANDARD_AUTH_CTAS = /^(Sign\s*In|Sign\s*Up|Log\s*In|Log\s*Out|Register|Create\s*Account|Go\s*to\s*Dashboard|Go\s*Home|Back\s*to\s*Home|Back\s*to\s*Login|Forgot\s*Password|Reset\s*Password|Verify\s*Email|Resend\s*Code|Resend\s*Email|Sign\s*Out|Logout)$/i;
 
 function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundle[] {
   const bundles: U4EvidenceBundle[] = [];
@@ -3712,6 +3727,10 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
   const STEP_RE = /\b(Step\s+\d+|step\s*[-–—]\s*\d+|Next|Back|Previous)\b/gi;
   const SUMMARY_WORDS = /\b(summary|review|confirm|overview|receipt|total|selected)\b/i;
   const HELPER_EXAMPLE_RE = /\b(e\.g\.|example|format|hint|such as|like\s+\"|must be|at least|pattern)\b/i;
+
+  // Pagination detection patterns
+  const PAGINATION_CONTROL_RE = /\b(Prev(?:ious)?|Next)\b|<Pagination|page\s*=\s*\{|currentPage|setPage|onPageChange|pageSize|perPage/i;
+  const PAGINATION_CONTEXT_RE = /Page\s+\{?\w*\}?\s*of\s*\{?\w*\}?|Page\s+\d+\s*of\s*\d+|\d+\s*[-–—]\s*\d+\s*of\s*\d+|Showing\s+\d+|totalPages|totalCount|total\s*:\s*\d+|pageCount|\{.*?total.*?\}/i;
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -3724,13 +3743,17 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
     const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
     if (exportedFn?.[1]) componentName = exportedFn[1];
 
-    // CTA labels (button text)
+    // CTA labels (button text) — filter out standard auth/nav CTAs
     const ctaLabels: string[] = [];
     const btnRe = /<(?:Button|button)\b[^>]*>([^<]{1,60})<\/(?:Button|button)>/gi;
     let bm;
     while ((bm = btnRe.exec(content)) !== null) {
       const label = bm[1].replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
-      if (label.length >= 2 && label.length <= 50) ctaLabels.push(label);
+      if (label.length >= 2 && label.length <= 50) {
+        // Skip standard auth/navigation CTAs — they don't indicate recall issues
+        if (U4_STANDARD_AUTH_CTAS.test(label)) continue;
+        ctaLabels.push(label);
+      }
     }
 
     // Headings near CTAs
@@ -3755,7 +3778,7 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
       if (label || placeholder) {
         // Look for nearby helper text
         const afterInput = content.slice(im.index, Math.min(content.length, im.index + 300));
-        const helperMatch = afterInput.match(/<(?:p|span|div)\b[^>]*(?:helper|hint|description|muted|text-sm|text-xs)[^>]*>([^<]{3,80})</i);
+        const helperMatch = afterInput.match(/<(?:p|span|div)\b[^>]*(?:helper|hint|description|muted|text-sm|text-xs)[^>]*>([^<]{3,80})/i);
         formFields.push({
           label: label || placeholder,
           placeholder: placeholder || undefined,
@@ -3771,8 +3794,30 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
       stepIndicators.push(sm[1]);
     }
 
+    // Pagination context detection
+    const hasPagination = PAGINATION_CONTROL_RE.test(content);
+    let paginationContextFound = false;
+    let paginationContextText: string | undefined;
+    if (hasPagination) {
+      // Search ±15 lines around pagination controls for page context
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (PAGINATION_CONTROL_RE.test(lines[i])) {
+          const windowStart = Math.max(0, i - 15);
+          const windowEnd = Math.min(lines.length - 1, i + 15);
+          const window = lines.slice(windowStart, windowEnd + 1).join('\n');
+          if (PAGINATION_CONTEXT_RE.test(window)) {
+            paginationContextFound = true;
+            const ctxMatch = window.match(PAGINATION_CONTEXT_RE);
+            paginationContextText = ctxMatch?.[0] || 'Page context found';
+            break;
+          }
+        }
+      }
+    }
+
     // Skip files with no relevant content
-    if (ctaLabels.length === 0 && formFields.length === 0 && stepIndicators.length === 0 && headings.length === 0) continue;
+    if (ctaLabels.length === 0 && formFields.length === 0 && stepIndicators.length === 0 && headings.length === 0 && !hasPagination) continue;
 
     const hasGenericCTA = ctaLabels.some(l => GENERIC_CTA_RE.test(l));
     const hasSummaryWords = SUMMARY_WORDS.test(content);
@@ -3788,6 +3833,9 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
       hasSummaryWords,
       hasHelperExamples,
       hasGenericCTA,
+      hasPagination,
+      paginationContextFound,
+      paginationContextText,
     });
   }
 
@@ -3814,6 +3862,9 @@ function formatU4EvidenceBundleForPrompt(bundles: U4EvidenceBundle[]): string {
     }
     if (b.stepIndicators.length > 0) lines.push(`  Steps: ${b.stepIndicators.join(', ')}`);
     lines.push(`  Flags: summary=${b.hasSummaryWords}, helpers=${b.hasHelperExamples}, genericCTA=${b.hasGenericCTA}`);
+    if (b.hasPagination) {
+      lines.push(`  Pagination: present=${b.hasPagination}, contextFound=${b.paginationContextFound}${b.paginationContextText ? `, contextText="${b.paginationContextText}"` : ''}`);
+    }
   }
   lines.push('[/U4_EVIDENCE_BUNDLE]');
   return lines.join('\n');
