@@ -142,21 +142,74 @@ interface ActionGroup {
 
 function extractActionGroups(content: string, buttonLocalNames: Set<string>): ActionGroup[] {
   const groups: ActionGroup[] = [];
-  const containerPatterns = [
-    { regex: /<CardFooter\b([^>]*)>([\s\S]*?)<\/CardFooter>/gi, type: 'CardFooter' },
-    { regex: /<(?:div|footer)\b([^>]*(?:flex|gap-|space-x-)[^>]*)>([\s\S]*?)<\/(?:div|footer)>/gi, type: 'FlexContainer' },
-  ];
-  for (const { regex, type } of containerPatterns) {
-    let match;
-    while ((match = regex.exec(content)) !== null) {
-      const containerContent = match[2] || '';
-      const buttons = extractButtonUsagesFromJsx(containerContent, buttonLocalNames);
-      if (buttons.length >= 2) {
-        groups.push({ containerType: type, buttons, lineContext: match[0].slice(0, 200), offset: match.index });
+
+  const openerRegex = /<(CardFooter|ButtonGroup|div|footer|section|nav)\b([^>]*)>/gi;
+  let openerMatch;
+  while ((openerMatch = openerRegex.exec(content)) !== null) {
+    const tagName = openerMatch[1];
+    const attrs = openerMatch[2] || '';
+    const isNamedContainer = /^(CardFooter|ButtonGroup)$/i.test(tagName);
+
+    if (!isNamedContainer) {
+      const hasLayoutClass = /(?:flex|grid|gap-|justify-|items-|space-x-|space-y-)/.test(attrs);
+      if (!hasLayoutClass) continue;
+    }
+
+    const containerType = isNamedContainer ? tagName : 'FlexContainer';
+    const openTagEnd = openerMatch.index + openerMatch[0].length;
+
+    const nestRegex = new RegExp(`<(/?)(${tagName})\\b`, 'gi');
+    nestRegex.lastIndex = openTagEnd;
+    let depth = 1;
+    let nestMatch;
+    let containerEnd = -1;
+    while ((nestMatch = nestRegex.exec(content)) !== null) {
+      if (nestMatch[1] === '/') {
+        depth--;
+        if (depth === 0) {
+          const closeIdx = content.indexOf('>', nestMatch.index);
+          containerEnd = closeIdx >= 0 ? closeIdx + 1 : nestMatch.index + nestMatch[0].length;
+          break;
+        }
+      } else {
+        depth++;
       }
     }
+    if (containerEnd < 0) continue;
+
+    const containerContent = content.slice(openTagEnd, containerEnd);
+    const buttons = extractButtonUsagesFromJsx(containerContent, buttonLocalNames, openTagEnd);
+
+    if (buttons.length >= 2) {
+      groups.push({
+        containerType,
+        buttons,
+        lineContext: content.slice(openerMatch.index, Math.min(openerMatch.index + 200, containerEnd)),
+        offset: openerMatch.index,
+      });
+    }
   }
-  return groups;
+
+  const sorted = groups.sort((a, b) => a.offset - b.offset);
+  const deduped: ActionGroup[] = [];
+  for (const g of sorted) {
+    const gEnd = g.offset + g.lineContext.length;
+    const containedByExisting = deduped.some(d => {
+      const dEnd = d.offset + d.lineContext.length;
+      return d.offset <= g.offset && dEnd >= gEnd;
+    });
+    if (!containedByExisting) {
+      for (let i = deduped.length - 1; i >= 0; i--) {
+        const dEnd = deduped[i].offset + deduped[i].lineContext.length;
+        if (g.offset <= deduped[i].offset && gEnd >= dEnd) {
+          deduped.splice(i, 1);
+        }
+      }
+      deduped.push(g);
+    }
+  }
+
+  return deduped;
 }
 
 // =====================
@@ -710,4 +763,46 @@ export default function MixedPage() {
   assert(u11 !== undefined, "Expected U1.1 for form without submit");
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assert(u12 !== undefined, "Expected U1.2 for competing CTAs OUTSIDE the form");
+});
+
+// ========== NESTED / GRID WRAPPER TESTS ==========
+
+Deno.test("U1.2: Buttons nested inside grid wrapper divs → fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/OptionPicker.tsx", `
+export default function OptionPicker() {
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <div>
+        <button className="bg-blue-600 text-white font-semibold px-4 py-2">Option A</button>
+      </div>
+      <div>
+        <button className="bg-blue-600 text-white font-semibold px-4 py-2">Option B</button>
+      </div>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for nested grid buttons with same high-emphasis");
+  assert(u12!.evidence.includes("Option A"), "Evidence should mention Option A");
+  assert(u12!.evidence.includes("Option B"), "Evidence should mention Option B");
+});
+
+Deno.test("U1.2: Buttons inside justify-between flex container → fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/Actions.tsx", `
+export default function Actions() {
+  return (
+    <div className="flex justify-between items-center">
+      <button className="bg-primary text-white rounded px-4">Accept</button>
+      <button className="bg-primary text-white rounded px-4">Reject</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for bg-primary siblings in flex container");
 });
