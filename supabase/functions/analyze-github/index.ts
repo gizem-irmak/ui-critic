@@ -3360,7 +3360,7 @@ function formatU6LayoutEvidenceForPrompt(bundles: U6LayoutEvidence[]): string {
 // =====================
 
 interface U3Finding {
-  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4';
+  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4' | 'U3.D5';
   subCheckLabel: string;
   classification: 'potential';
   elementLabel: string;
@@ -3688,6 +3688,82 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         truncationType: 'hidden',
         triggerReason: hasDynamic ? 'Dynamic content hidden without toggle' : 'Meaningful text (≥20 chars) hidden without toggle',
         expandDetected: false,
+      });
+    }
+
+    // --- U3.D5: Unbroken text overflow risk ---
+    const U3_FREEFORM_KEYS = /\b(?:reason|notes|description|message|subject|bio|comment|address|details|feedback|body|content|summary|remarks)\b/i;
+    const U3_DYNAMIC_VAR = /\{(?:[a-zA-Z_][\w]*\.)?(?:reason|notes|description|message|subject|bio|comment|address|details|feedback|body|content|summary|remarks|label|value|text|name|title)\b[^}]*\}/;
+    const U3_WRAP_SAFE = /\bbreak-words\b|\bbreak-all\b|\boverflow-wrap[:\s]*anywhere\b|\boverflowWrap\s*:\s*["']?anywhere/;
+    const U3_OVERFLOW_RISK = /\bwhitespace-nowrap\b|\btruncate\b|\btext-ellipsis\b|\boverflow-hidden\b|\bw-\d|\bmax-w-|\bmin-w-/;
+    const U3_TABLE_CELL = /<(?:td|th|TableCell)\b/i;
+    const U3_GRID_NARROW = /\bgrid\b.*\bcol(?:s|-span)/;
+
+    const dynamicExprRe = /\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}/g;
+    let dxm;
+    while ((dxm = dynamicExprRe.exec(content)) !== null) {
+      const varName = dxm[1];
+      const pos = dxm.index;
+
+      const isFreeformVar = U3_FREEFORM_KEYS.test(varName);
+      if (!isFreeformVar) {
+        const nearby = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 200));
+        if (!U3_FREEFORM_KEYS.test(nearby)) continue;
+      }
+
+      const ctxStart = Math.max(0, pos - 300);
+      const ctxEnd = Math.min(content.length, pos + 300);
+      const context = content.slice(ctxStart, ctxEnd);
+
+      if (U3_WRAP_SAFE.test(context)) continue;
+      if (/\bfont-mono\b|\bmonospace\b|<code\b|<pre\b/i.test(context) && /overflow-x-auto\b/.test(context)) continue;
+
+      const hasOverflowRisk = U3_OVERFLOW_RISK.test(context);
+      const isTableCell = U3_TABLE_CELL.test(context);
+      const isGridNarrow = U3_GRID_NARROW.test(context);
+
+      if (!hasOverflowRisk && !isTableCell && !isGridNarrow) continue;
+
+      const lineNumber = content.slice(0, pos).split('\n').length;
+      const dedupeKey = `U3.D5|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      const hasNowrapOrTruncate = /\bwhitespace-nowrap\b|\btruncate\b|\boverflow-hidden\b/.test(context);
+      const confidence = hasNowrapOrTruncate ? 0.80 : 0.65;
+
+      const matchedClasses: string[] = [];
+      if (/\bwhitespace-nowrap\b/.test(context)) matchedClasses.push('whitespace-nowrap');
+      if (/\btruncate\b/.test(context)) matchedClasses.push('truncate');
+      if (/\boverflow-hidden\b/.test(context)) matchedClasses.push('overflow-hidden');
+      if (/\btext-ellipsis\b/.test(context)) matchedClasses.push('text-ellipsis');
+      if (isTableCell) matchedClasses.push('table-cell');
+      if (isGridNarrow) matchedClasses.push('grid-narrow');
+      if (/\bw-\d/.test(context)) matchedClasses.push('fixed-width');
+      if (/\bmax-w-/.test(context)) matchedClasses.push('max-width');
+
+      const tagMatch = context.match(/<([a-zA-Z][\w.]*)\s/);
+      const elementTag = tagMatch ? tagMatch[1] : undefined;
+
+      findings.push({
+        subCheck: 'U3.D5',
+        subCheckLabel: 'Unbroken text overflow risk',
+        classification: 'potential',
+        elementLabel: `Unbroken text overflow (${varName})`,
+        elementType: 'text',
+        filePath,
+        detection: 'Long unbroken text may overflow (no wrap protection)',
+        evidence: `{${varName}} at ${fileName}:${lineNumber} — classes: ${matchedClasses.join(', ')} — no break-words/overflow-wrap`,
+        explanation: 'User-generated text without spaces can overflow the container or break layout when word-break protection is missing.',
+        confidence,
+        textPreview: `(dynamic text: ${varName})`,
+        advisoryGuidance: 'Add break-words / overflow-wrap:anywhere and allow multi-line display, or clamp with "Show more".',
+        deduplicationKey: dedupeKey,
+        truncationType: 'unbroken-overflow',
+        textLength: 'dynamic',
+        triggerReason: `Dynamic variable {${varName}} in container with ${matchedClasses.join(' + ')} but no wrap protection`,
+        expandDetected: false,
+        elementTag,
       });
     }
   }
