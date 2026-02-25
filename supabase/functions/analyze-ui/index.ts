@@ -2507,6 +2507,15 @@ Consider:
 - Confidence range: 0.60–0.80 (cap at 0.80).
 - Each U4 finding must cite specific visible UI text as evidence.
 
+### U5 (Insufficient Interaction Feedback) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
+- Look for interactive elements (buttons, forms, toggles) that appear to lack feedback mechanisms:
+  - No loading/spinner indicator near submit buttons
+  - No visible success/error confirmation areas
+  - No disabled state cues during actions
+- U5 is ALWAYS "status": "potential" — NEVER "confirmed".
+- Confidence range: 0.60–0.75 (cap at 0.75).
+- Each U5 finding must reference specific visible UI elements as evidence.
+
 ## PASS 3 — Ethics
 Reason about patterns that may undermine user autonomy or informed consent:
 - High-impact actions without confirmation or consequence disclosure (E1)
@@ -3364,8 +3373,9 @@ serve(async (req) => {
     const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
-        // HARD GUARDRAIL: U4 is ALWAYS Potential (non-blocking), never Confirmed
+        // HARD GUARDRAIL: U4 and U5 are ALWAYS Potential (non-blocking), never Confirmed
         const isU4 = v.ruleId === 'U4';
+        const isU5 = v.ruleId === 'U5';
         // Tag with evaluationMethod — all screenshot LLM violations are llm_assisted
         return {
           ...v,
@@ -3375,6 +3385,11 @@ serve(async (req) => {
             status: 'potential',
             blocksConvergence: false,
             confidence: Math.min(v.confidence || 0.65, 0.80),
+          } : {}),
+          ...(isU5 ? {
+            status: 'potential',
+            blocksConvergence: false,
+            confidence: Math.min(v.confidence || 0.60, 0.75),
           } : {}),
         };
       });
