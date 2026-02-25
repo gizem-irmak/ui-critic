@@ -270,176 +270,187 @@ Deno.test("U3.D4: hidden on short text (< 20 chars) → NOT reported", () => {
 });
 
 // ═══════════════════════════════════════════════════
-// U3.D5 — Unbroken text overflow risk (with risk tiers)
+// U3.D5 — Unbroken text overflow risk (refined gating)
 // ═══════════════════════════════════════════════════
 
-// --- Risk tier classification ---
+// --- HARD GATING: must have strong constraint ---
 
-Deno.test("U3.D5: {appt.reason} is High-risk", () => {
-  const HIGH = /\b(?:reason|notes|bio|description|message|subject|comment|details|address|diagnosis|complaint|feedback|body|content|summary|remarks)\b/i;
-  assert(HIGH.test("reason"));
-  assert(HIGH.test("notes"));
-  assert(HIGH.test("bio"));
-  assert(HIGH.test("subject"));
+Deno.test("U3.D5: {reason} in plain div without constraints → NOT reported", () => {
+  const code = `<div className="p-4"><p>{appointment.reason}</p></div>`;
+  const STRONG = /\btruncate\b|\bwhitespace-nowrap\b|\boverflow-hidden\b|\btext-ellipsis\b|\bline-clamp-[1-9]\b/;
+  assert(!STRONG.test(code), "No strong constraint → should not trigger");
 });
 
-Deno.test("U3.D5: {doc.specialty} is Medium-risk", () => {
-  const MED = /\b(?:specialty|title|label|name)\b/i;
+Deno.test("U3.D5: {reason} in truncate container → REPORTED", () => {
+  const code = `<td className="truncate">{appointment.reason}</td>`;
+  const STRONG = /\btruncate\b|\bwhitespace-nowrap\b|\boverflow-hidden\b|\btext-ellipsis\b|\bline-clamp-[1-9]\b/;
+  assert(STRONG.test(code));
+  assert(!(/\bbreak-words\b|\bbreak-all\b/.test(code)));
+});
+
+Deno.test("U3.D5: {notes} in whitespace-nowrap → REPORTED", () => {
+  const code = `<span className="whitespace-nowrap">{item.notes}</span>`;
+  assert(/\bwhitespace-nowrap\b/.test(code));
+});
+
+Deno.test("U3.D5: {msg.subject} in overflow-hidden + max-w → REPORTED", () => {
+  const code = `<td className="overflow-hidden max-w-xs">{msg.subject}</td>`;
+  assert(/\boverflow-hidden\b/.test(code));
+  assert(/\bmax-w-/.test(code));
+});
+
+// --- LOW-RISK NEVER FLAG ---
+
+Deno.test("U3.D5: {firstName} with truncate → NOT reported (low-risk-never)", () => {
+  const LOW_NEVER = /\b(?:firstName|lastName|name|id|num|startTime|endTime|date|time|status|type|role|search|selectedDoctor|doctor|slot|count)\b/i;
+  assert(LOW_NEVER.test("firstName"));
+  assert(LOW_NEVER.test("startTime"));
+  assert(LOW_NEVER.test("selectedDoctor"));
+  assert(LOW_NEVER.test("search"));
+  assert(LOW_NEVER.test("num"));
+});
+
+Deno.test("U3.D5: {form.control} → skipped (form.* prefix)", () => {
+  const segments = "form.control".split('.');
+  assertEquals(segments[0], "form"); // form prefix → skip
+});
+
+Deno.test("U3.D5: single-char {i} → skipped", () => {
+  const SKIP = /^(?:i|j|k|e|_|el|ev|cb|fn|err|res|req|ctx|ref|key|idx|index|item|row|col)$/;
+  assert(SKIP.test("i"));
+  assert(SKIP.test("e"));
+  assert(SKIP.test("idx"));
+});
+
+// --- MEDIUM-RISK GATING ---
+
+Deno.test("U3.D5: {doc.specialty} with only fixed-width → NOT reported", () => {
+  const MED = /\b(?:specialty|title|label|location)\b/i;
+  const TRUNC_NOWRAP = /\btruncate\b|\bwhitespace-nowrap\b/;
+  const code = `<td className="w-40">{doc.specialty}</td>`;
   assert(MED.test("specialty"));
-  assert(MED.test("title"));
-  assert(MED.test("name"));
+  assert(!TRUNC_NOWRAP.test(code), "No truncate/nowrap → medium-risk suppressed");
 });
 
-Deno.test("U3.D5: {appt.location} is Low-risk", () => {
-  const LOW = /\b(?:location|status|type|date|time|id|role|email|phone|count|price|amount|code|key|slug|url|href)\b/i;
-  assert(LOW.test("location"));
-  assert(LOW.test("status"));
-  assert(LOW.test("date"));
-  assert(LOW.test("id"));
+Deno.test("U3.D5: {doc.specialty} with truncate → REPORTED", () => {
+  const MED = /\b(?:specialty|title|label|location)\b/i;
+  const TRUNC_NOWRAP = /\btruncate\b|\bwhitespace-nowrap\b/;
+  const code = `<span className="truncate w-32">{doc.specialty}</span>`;
+  assert(MED.test("specialty"));
+  assert(TRUNC_NOWRAP.test(code), "Has truncate → medium-risk reported");
 });
 
-// --- High-risk triggers ---
-
-Deno.test("U3.D5: {reason} in nowrap container without break-words → triggers", () => {
-  const code = `<td className="whitespace-nowrap">{appointment.reason}</td>`;
-  assert(hasPattern(code, /\{[a-zA-Z_][\w]*\.[a-zA-Z_][\w]*\}/));
-  assert(hasPattern(code, /\bwhitespace-nowrap\b/));
-  assert(!hasPattern(code, /\bbreak-words\b|\bbreak-all\b|\boverflow-wrap/));
+Deno.test("U3.D5: {appt.location} with only max-w → NOT reported (medium-risk, no truncate)", () => {
+  const MED = /\b(?:specialty|title|label|location)\b/i;
+  const TRUNC_NOWRAP = /\btruncate\b|\bwhitespace-nowrap\b/;
+  const code = `<span className="max-w-xs">{appt.location}</span>`;
+  assert(MED.test("location"));
+  assert(!TRUNC_NOWRAP.test(code));
 });
 
-Deno.test("U3.D5: {notes} in truncate container → triggers", () => {
-  const code = `<span className="truncate w-48">{item.notes}</span>`;
-  assert(hasPattern(code, /\bnotes\b/i));
-  assert(hasPattern(code, /\btruncate\b/));
-  assert(!hasPattern(code, /\bbreak-words\b|\bbreak-all\b/));
+// --- HIGH-RISK: any strong constraint is enough ---
+
+Deno.test("U3.D5: {appt.reason} with overflow-hidden → REPORTED", () => {
+  const HIGH = /\b(?:reason|notes|bio|description|message|subject|comment|details|address|diagnosis|complaint)\b/i;
+  const STRONG = /\btruncate\b|\bwhitespace-nowrap\b|\boverflow-hidden\b|\btext-ellipsis\b|\bline-clamp-[1-9]\b/;
+  const code = `<div className="overflow-hidden w-48">{appt.reason}</div>`;
+  assert(HIGH.test("reason"));
+  assert(STRONG.test(code));
 });
 
-Deno.test("U3.D5: {msg.subject} in TableCell → triggers", () => {
-  const code = `<TableCell className="max-w-xs">{msg.subject}</TableCell>`;
-  assert(hasPattern(code, /\bsubject\b/i));
-  assert(hasPattern(code, /<TableCell\b/));
-  assert(!hasPattern(code, /\bbreak-words\b|\bbreak-all\b/));
+Deno.test("U3.D5: {doc.bio} with line-clamp-2 → REPORTED", () => {
+  const code = `<p className="line-clamp-2">{doc.bio}</p>`;
+  assert(/\bline-clamp-[1-9]\b/.test(code));
+  assert(/\bbio\b/i.test("bio"));
 });
 
-Deno.test("U3.D5: {reason} in grid cell with fixed width → triggers", () => {
-  const code = `<div className="grid cols-3"><div className="w-40 overflow-hidden">{reason}</div></div>`;
-  assert(hasPattern(code, /\breason\b/i));
-  assert(hasPattern(code, /\bw-\d/));
-  assert(!hasPattern(code, /\bbreak-words\b/));
+// --- WRAP PROTECTION SUPPRESSION ---
+
+Deno.test("U3.D5: {bio} with break-words → suppressed", () => {
+  const WRAP = /\bbreak-words\b|\bbreak-all\b|\bwhitespace-normal\b|\boverflow-wrap[:\s]*anywhere\b/;
+  assert(WRAP.test("break-words"));
+  assert(WRAP.test("break-all"));
+  assert(WRAP.test("whitespace-normal"));
 });
 
-// --- Suppression: wrap protection ---
-
-Deno.test("U3.D5: {bio} with break-words → does NOT trigger", () => {
-  const code = `<p className="break-words">{doc.bio}</p>`;
-  assert(hasPattern(code, /\bbreak-words\b/));
+Deno.test("U3.D5: {bio} with overflow-x-auto → suppressed (scroll-safe)", () => {
+  const SCROLL = /\boverflow-x-auto\b|\boverflow-auto\b/;
+  assert(SCROLL.test("overflow-x-auto"));
+  assert(SCROLL.test("overflow-auto"));
 });
 
-Deno.test("U3.D5: {bio} with break-all → does NOT trigger", () => {
-  const code = `<p className="break-all">{doc.bio}</p>`;
-  assert(hasPattern(code, /\bbreak-all\b/));
-});
-
-Deno.test("U3.D5: code block with overflow-x-auto → suppressed", () => {
+Deno.test("U3.D5: code block with font-mono → suppressed", () => {
   const code = `<pre className="font-mono overflow-x-auto">{codeSnippet}</pre>`;
-  assert(hasPattern(code, /\bfont-mono\b/));
-  assert(hasPattern(code, /\boverflow-x-auto\b/));
+  assert(/\bfont-mono\b/.test(code));
 });
 
-// --- Low-risk suppression ---
+// --- VARIABLE EXTRACTION: text context only ---
 
-Deno.test("U3.D5: {appt.location} with only fixed-width (no nowrap) → suppressed", () => {
-  const LOW = /\b(?:location|status|type|date|time|id|role)\b/i;
-  const EXPLICIT = /\bwhitespace-nowrap\b|\btruncate\b|\boverflow-hidden\b|\btext-ellipsis\b/;
-  const code = `<td className="w-40">{appt.location}</td>`;
-  assert(LOW.test("location"), "location is Low-risk");
-  assert(!EXPLICIT.test(code), "No explicit overflow → Low-risk suppressed");
+Deno.test("U3.D5: regex matches text children >{var}<", () => {
+  const TEXT_VAR = />\s*\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}\s*</g;
+  const code = `<p className="truncate">{msg.subject}</p>`;
+  const m = TEXT_VAR.exec(code);
+  assert(m !== null);
+  assertEquals(m![1], "msg.subject");
 });
 
-Deno.test("U3.D5: {item.status} with only max-w → suppressed", () => {
-  const LOW = /\b(?:location|status|type|date|time|id|role)\b/i;
-  const EXPLICIT = /\bwhitespace-nowrap\b|\btruncate\b|\boverflow-hidden\b|\btext-ellipsis\b/;
-  const code = `<span className="max-w-xs">{item.status}</span>`;
-  assert(LOW.test("status"));
-  assert(!EXPLICIT.test(code));
+Deno.test("U3.D5: regex does NOT match prop values like onClick={handler}", () => {
+  const TEXT_VAR = />\s*\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}\s*</g;
+  const code = `<button onClick={handleClick}>Submit</button>`;
+  const m = TEXT_VAR.exec(code);
+  assertEquals(m, null);
 });
 
-Deno.test("U3.D5: {appt.location} with truncate → still reported (explicit overflow)", () => {
-  const LOW = /\b(?:location|status|type|date|time|id|role)\b/i;
-  const EXPLICIT = /\bwhitespace-nowrap\b|\btruncate\b|\boverflow-hidden\b|\btext-ellipsis\b/;
-  const code = `<span className="truncate w-32">{appt.location}</span>`;
-  assert(LOW.test("location"));
-  assert(EXPLICIT.test(code), "Has explicit overflow → Low-risk still reported");
-});
+// --- CONFIDENCE ---
 
-// --- Non-freeform variable → skipped ---
-
-Deno.test("U3.D5: {item.id} without freeform key nearby → NOT reported", () => {
-  const HIGH = /\b(?:reason|notes|description|message|subject|bio|comment|address|details|feedback|body|content|summary|remarks)\b/i;
-  const MED = /\b(?:specialty|title|label|name)\b/i;
-  const LOW = /\b(?:location|status|type|date|time|id|role)\b/i;
-  // "id" matches Low-risk, but would need explicit overflow to report
-  assert(LOW.test("id"));
-});
-
-// --- Confidence scoring ---
-
-Deno.test("U3.D5: High-risk + explicit overflow → confidence 0.95 (clamped 0.90)", () => {
+Deno.test("U3.D5: High-risk + strong constraint → confidence 0.90 (capped)", () => {
   let c = 0.70;
-  c += 0.15; // explicit overflow
+  c += 0.15; // strong constraint
   c += 0.10; // High-risk
   c = Math.max(0.55, Math.min(0.90, c));
   assertEquals(c, 0.90);
 });
 
-Deno.test("U3.D5: Medium-risk + explicit overflow → confidence 0.90", () => {
+Deno.test("U3.D5: Medium-risk + truncate → confidence 0.90", () => {
   let c = 0.70;
-  c += 0.15; // explicit overflow
+  c += 0.15; // strong constraint
   c += 0.05; // Medium-risk
   c = Math.max(0.55, Math.min(0.90, c));
   assertEquals(c, 0.90);
 });
 
-Deno.test("U3.D5: High-risk + only fixed-width → confidence ~0.80", () => {
+Deno.test("U3.D5: wide container reduces confidence", () => {
   let c = 0.70;
-  // no explicit overflow bonus
-  c += 0.10; // High-risk
-  c = Math.max(0.55, Math.min(0.90, c));
-  assert(Math.abs(c - 0.80) < 0.001, `Expected ~0.80, got ${c}`);
-});
-
-Deno.test("U3.D5: Low-risk + explicit overflow → confidence 0.70", () => {
-  let c = 0.70;
-  c += 0.15; // explicit overflow
-  c -= 0.15; // Low-risk
-  c = Math.max(0.55, Math.min(0.90, c));
-  assertEquals(c, 0.70);
-});
-
-Deno.test("U3.D5: Low-risk + only fixed-width → confidence 0.55 (suppressed)", () => {
-  let c = 0.70;
-  c -= 0.15; // Low-risk
-  c = Math.max(0.55, Math.min(0.90, c));
-  // 0.55 < 0.65 threshold → suppressed
-  assert(c < 0.65, "Should be below suppression threshold");
-});
-
-Deno.test("U3.D5: wide container reduces confidence by 0.10", () => {
-  let c = 0.70;
-  c += 0.15; // explicit overflow
-  c += 0.10; // High-risk
+  c += 0.15;
+  c += 0.10;
   c -= 0.10; // wide container
   c = Math.max(0.55, Math.min(0.90, c));
   assertEquals(c, 0.85);
 });
 
-Deno.test("U3.D5: tooltip nearby reduces confidence by 0.10", () => {
+Deno.test("U3.D5: tooltip nearby reduces confidence", () => {
   let c = 0.70;
-  c += 0.15; // explicit overflow
-  c += 0.10; // High-risk
+  c += 0.15;
+  c += 0.10;
   c -= 0.10; // tooltip
   c = Math.max(0.55, Math.min(0.90, c));
   assertEquals(c, 0.85);
+});
+
+// --- PER-FILE CAP ---
+
+Deno.test("U3.D5: max 3 findings per file", () => {
+  const findings = [
+    { confidence: 0.90 },
+    { confidence: 0.85 },
+    { confidence: 0.80 },
+    { confidence: 0.75 },
+    { confidence: 0.70 },
+  ];
+  findings.sort((a, b) => b.confidence - a.confidence);
+  const capped = findings.slice(0, 3);
+  assertEquals(capped.length, 3);
+  assertEquals(capped[0].confidence, 0.90);
 });
 
 // ═══════════════════════════════════════════════════

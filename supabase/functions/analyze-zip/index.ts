@@ -1088,124 +1088,150 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       });
     }
 
-    // --- U3.D5: Unbroken text overflow risk (with semantic risk tiers) ---
-    const U3_WRAP_SAFE = /\bbreak-words\b|\bbreak-all\b|\boverflow-wrap[:\s]*anywhere\b|\boverflowWrap\s*:\s*["']?anywhere/;
+    // --- U3.D5: Unbroken text overflow risk (refined gating) ---
+    const U3_WRAP_SAFE = /\bbreak-words\b|\bbreak-all\b|\bwhitespace-normal\b|\boverflow-wrap[:\s]*anywhere\b|\boverflowWrap\s*:\s*["']?anywhere|\bword-break\s*:\s*break-word/;
+    const U3_SCROLL_SAFE = /\boverflow-x-auto\b|\boverflow-auto\b/;
     const U3_TABLE_CELL = /<(?:td|th|TableCell)\b/i;
     const U3_GRID_NARROW = /\bgrid\b.*\bcol(?:s|-span)/;
-    const U3_EXPLICIT_OVERFLOW = /\bwhitespace-nowrap\b|\btruncate\b|\boverflow-hidden\b|\btext-ellipsis\b/;
-    const U3_FIXED_WIDTH = /\bw-\d|\bmax-w-|\bmin-w-/;
-    const U3_WIDE_CONTAINER = /\bw-full\b|\bflex-1\b|\bmin-w-0\b/;
+    // Strong constraint signals — at least one MUST exist to even consider U3.D5
+    const U3_STRONG_CONSTRAINT = /\btruncate\b|\bwhitespace-nowrap\b|\boverflow-hidden\b|\btext-ellipsis\b|\bline-clamp-[1-9]\b/;
+    const U3_TRUNCATE_OR_NOWRAP = /\btruncate\b|\bwhitespace-nowrap\b/;
+    const U3_FIXED_WIDTH = /\bw-\d|\bmax-w-/;
+    const U3_WIDE_CONTAINER = /\bw-full\b|\bflex-1\b/;
 
-    // Semantic risk tiers for variable names
+    // Semantic risk tiers
     const U3_HIGH_RISK = /\b(?:reason|notes|bio|description|message|subject|comment|details|address|diagnosis|complaint|feedback|body|content|summary|remarks)\b/i;
-    const U3_MEDIUM_RISK = /\b(?:specialty|title|label|name)\b/i;
-    const U3_LOW_RISK = /\b(?:location|status|type|date|time|id|role|email|phone|count|price|amount|code|key|slug|url|href)\b/i;
+    const U3_MEDIUM_RISK = /\b(?:specialty|title|label|location)\b/i;
+    // Low-risk: NEVER flag these
+    const U3_LOW_RISK_NEVER = /\b(?:firstName|lastName|name|id|num|startTime|endTime|date|time|status|type|role|search|selectedDoctor|doctor|slot|count|email|phone|price|amount|code|key|slug|url|href|icon|avatar|image|src|alt|index|idx|length|size|width|height|color|variant|className|style|ref|onClick|onChange|onSubmit|disabled|checked|value|placeholder|control|register|errors|watch|reset|handleSubmit|trigger|formState|setValue|getValues)\b/i;
+    // Variables that are clearly not user-visible text
+    const U3_SKIP_VAR = /^(?:i|j|k|e|_|el|ev|cb|fn|err|res|req|ctx|ref|key|idx|index|item|row|col|acc|cur|prev|next|len|num|val|tmp|obj|arr|map|set|get|put|del|add|sub|mod|div|max|min|sum|avg)$/;
 
-    // All variable names we scan for (union of all tiers)
-    const U3_ALL_VARS = /\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}/g;
+    // Only match variables rendered as text children (inside JSX text context)
+    const U3_TEXT_VAR = />\s*\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}\s*</g;
+    // Also match {var} at end of JSX children (no closing tag immediately after)
+    const U3_TEXT_VAR2 = />\s*[^<]*\{([a-zA-Z_][\w]*(?:\.[a-zA-Z_][\w]*)*)\}/g;
 
-    let dxm;
-    while ((dxm = U3_ALL_VARS.exec(content)) !== null) {
-      const varName = dxm[1];
-      const pos = dxm.index;
+    const d5SeenVars = new Map<string, number>(); // filePath|varName -> count
+    const d5Findings: U3Finding[] = [];
 
-      // Extract the last segment of the variable for risk classification
-      const segments = varName.split('.');
-      const lastSeg = segments[segments.length - 1];
+    for (const varRegex of [U3_TEXT_VAR, U3_TEXT_VAR2]) {
+      varRegex.lastIndex = 0;
+      let dxm;
+      while ((dxm = varRegex.exec(content)) !== null) {
+        const varName = dxm[1];
+        const pos = dxm.index;
 
-      // Determine risk tier
-      let riskTier: 'High' | 'Medium' | 'Low' | 'None';
-      if (U3_HIGH_RISK.test(lastSeg)) riskTier = 'High';
-      else if (U3_MEDIUM_RISK.test(lastSeg)) riskTier = 'Medium';
-      else if (U3_LOW_RISK.test(lastSeg)) riskTier = 'Low';
-      else {
-        // Check nearby context for high/medium risk key names
-        const nearby = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 200));
-        if (U3_HIGH_RISK.test(nearby)) riskTier = 'High';
-        else if (U3_MEDIUM_RISK.test(nearby)) riskTier = 'Medium';
+        // Skip single-char, iterator, and non-text variables
+        if (U3_SKIP_VAR.test(varName)) continue;
+        // Skip form.* / control-like props
+        const segments = varName.split('.');
+        if (segments[0] === 'form' || segments[0] === 'controller') continue;
+        if (segments.length === 1 && segments[0].length <= 2) continue;
+
+        const lastSeg = segments[segments.length - 1];
+
+        // Skip if last segment is a low-risk-never variable
+        if (U3_LOW_RISK_NEVER.test(lastSeg)) continue;
+
+        // Determine risk tier
+        let riskTier: 'High' | 'Medium' | 'None';
+        if (U3_HIGH_RISK.test(lastSeg)) riskTier = 'High';
+        else if (U3_MEDIUM_RISK.test(lastSeg)) riskTier = 'Medium';
         else riskTier = 'None';
+
+        // If variable name doesn't match any risk tier, skip
+        if (riskTier === 'None') continue;
+
+        // Get context window (element + parent)
+        const ctxStart = Math.max(0, pos - 300);
+        const ctxEnd = Math.min(content.length, pos + 300);
+        const context = content.slice(ctxStart, ctxEnd);
+
+        // HARD GATE: Must have at least one strong constraint signal
+        const hasStrongConstraint = U3_STRONG_CONSTRAINT.test(context);
+        const hasFixedWidthWithOverflow = U3_FIXED_WIDTH.test(context) && /\boverflow-hidden\b/.test(context);
+        const isTableCellConstrained = U3_TABLE_CELL.test(context) && (U3_STRONG_CONSTRAINT.test(context) || U3_FIXED_WIDTH.test(context));
+        const isGridConstrained = U3_GRID_NARROW.test(context) && (/\bmax-w-/.test(context) || /\boverflow-hidden\b/.test(context));
+
+        if (!hasStrongConstraint && !hasFixedWidthWithOverflow && !isTableCellConstrained && !isGridConstrained) continue;
+
+        // Medium-risk: require truncate or whitespace-nowrap specifically
+        if (riskTier === 'Medium' && !U3_TRUNCATE_OR_NOWRAP.test(context)) continue;
+
+        // Suppress if wrap-safe classes present
+        if (U3_WRAP_SAFE.test(context)) continue;
+
+        // Suppress if intentionally scrollable
+        if (U3_SCROLL_SAFE.test(context)) continue;
+
+        // Suppress if code/monospace block
+        if (/\bfont-mono\b|\bmonospace\b|<code\b|<pre\b/i.test(context)) continue;
+
+        // Per-file per-variable dedup
+        const varKey = `${filePath}|${lastSeg}`;
+        const prevCount = d5SeenVars.get(varKey) || 0;
+        if (prevCount >= 1) continue; // only 1 per variable per file
+        d5SeenVars.set(varKey, prevCount + 1);
+
+        const lineNumber = content.slice(0, pos).split('\n').length;
+        const dedupeKey = `U3.D5|${filePath}|${lineNumber}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        // Confidence scoring
+        let confidence = 0.70;
+        if (hasStrongConstraint) confidence += 0.15;
+        if (riskTier === 'High') confidence += 0.10;
+        else if (riskTier === 'Medium') confidence += 0.05;
+        const hasWideContainer = U3_WIDE_CONTAINER.test(context) && !/\bmax-w-/.test(context);
+        if (hasWideContainer) confidence -= 0.10;
+        if (/\btitle\s*=|\btooltip\b|<Tooltip/i.test(context)) confidence -= 0.10;
+        confidence = Math.max(0.55, Math.min(0.90, confidence));
+        if (confidence < 0.65) continue;
+
+        const matchedClasses: string[] = [];
+        if (/\bwhitespace-nowrap\b/.test(context)) matchedClasses.push('whitespace-nowrap');
+        if (/\btruncate\b/.test(context)) matchedClasses.push('truncate');
+        if (/\boverflow-hidden\b/.test(context)) matchedClasses.push('overflow-hidden');
+        if (/\btext-ellipsis\b/.test(context)) matchedClasses.push('text-ellipsis');
+        if (/\bline-clamp-[1-9]\b/.test(context)) matchedClasses.push('line-clamp');
+        if (isTableCellConstrained) matchedClasses.push('table-cell');
+        if (isGridConstrained) matchedClasses.push('grid-narrow');
+        if (/\bw-\d/.test(context)) matchedClasses.push('fixed-width');
+        if (/\bmax-w-/.test(context)) matchedClasses.push('max-width');
+
+        const tagMatch = context.match(/<([a-zA-Z][\w.]*)\s/);
+        const elementTag = tagMatch ? tagMatch[1] : undefined;
+
+        d5Findings.push({
+          subCheck: 'U3.D5',
+          subCheckLabel: 'Unbroken text overflow risk',
+          classification: 'potential',
+          elementLabel: `Unbroken text overflow (${varName})`,
+          elementType: 'text',
+          filePath,
+          detection: 'Long unbroken text may overflow (no wrap protection)',
+          evidence: `{${varName}} [${riskTier}] at ${fileName}:${lineNumber} — signals: ${matchedClasses.join(', ')} — no wrap protection`,
+          explanation: 'User-generated text without spaces (e.g., long URLs, codes) can overflow the container or break layout when word-break protection is missing.',
+          confidence,
+          textPreview: `(dynamic text: ${varName})`,
+          advisoryGuidance: 'Add break-words / overflow-wrap:anywhere and allow multi-line display, or clamp with "Show more".',
+          deduplicationKey: dedupeKey,
+          truncationType: 'unbroken-overflow',
+          textLength: 'dynamic',
+          triggerReason: `{${varName}} [${riskTier}-risk] in container with ${matchedClasses.join(' + ')} but no wrap protection`,
+          expandDetected: false,
+          elementTag,
+        });
       }
-
-      // Skip variables with no risk association at all
-      if (riskTier === 'None') continue;
-
-      // Get context window
-      const ctxStart = Math.max(0, pos - 300);
-      const ctxEnd = Math.min(content.length, pos + 300);
-      const context = content.slice(ctxStart, ctxEnd);
-
-      // (B) Suppress if wrap-safe classes are present
-      if (U3_WRAP_SAFE.test(context)) continue;
-
-      // Suppress if code/monospace block with horizontal scroll
-      if (/\bfont-mono\b|\bmonospace\b|<code\b|<pre\b/i.test(context) && /overflow-x-auto\b/.test(context)) continue;
-
-      // (C) Check overflow conditions
-      const hasExplicitOverflow = U3_EXPLICIT_OVERFLOW.test(context);
-      const hasFixedWidth = U3_FIXED_WIDTH.test(context);
-      const isTableCell = U3_TABLE_CELL.test(context);
-      const isGridNarrow = U3_GRID_NARROW.test(context);
-
-      if (!hasExplicitOverflow && !hasFixedWidth && !isTableCell && !isGridNarrow) continue;
-
-      // Low-risk variables: only report if explicit overflow classes present
-      if (riskTier === 'Low' && !hasExplicitOverflow) continue;
-
-      const lineNumber = content.slice(0, pos).split('\n').length;
-      const dedupeKey = `U3.D5|${filePath}|${lineNumber}`;
-      if (seenKeys.has(dedupeKey)) continue;
-      seenKeys.add(dedupeKey);
-
-      // --- Confidence scoring ---
-      let confidence = 0.70;
-      // Additions
-      if (hasExplicitOverflow) confidence += 0.15;
-      if (riskTier === 'High') confidence += 0.10;
-      else if (riskTier === 'Medium') confidence += 0.05;
-      // Reductions
-      if (riskTier === 'Low') confidence -= 0.15;
-      const hasWideContainer = U3_WIDE_CONTAINER.test(context) && !/\bmax-w-/.test(context);
-      if (hasWideContainer) confidence -= 0.10;
-      if (/\btitle\s*=|\btooltip\b|<Tooltip/i.test(context)) confidence -= 0.10;
-      // Clamp
-      confidence = Math.max(0.55, Math.min(0.90, confidence));
-
-      // Suppress if confidence too low
-      if (confidence < 0.65) continue;
-
-      const matchedClasses: string[] = [];
-      if (/\bwhitespace-nowrap\b/.test(context)) matchedClasses.push('whitespace-nowrap');
-      if (/\btruncate\b/.test(context)) matchedClasses.push('truncate');
-      if (/\boverflow-hidden\b/.test(context)) matchedClasses.push('overflow-hidden');
-      if (/\btext-ellipsis\b/.test(context)) matchedClasses.push('text-ellipsis');
-      if (isTableCell) matchedClasses.push('table-cell');
-      if (isGridNarrow) matchedClasses.push('grid-narrow');
-      if (/\bw-\d/.test(context)) matchedClasses.push('fixed-width');
-      if (/\bmax-w-/.test(context)) matchedClasses.push('max-width');
-
-      const tagMatch = context.match(/<([a-zA-Z][\w.]*)\s/);
-      const elementTag = tagMatch ? tagMatch[1] : undefined;
-
-      findings.push({
-        subCheck: 'U3.D5',
-        subCheckLabel: 'Unbroken text overflow risk',
-        classification: 'potential',
-        elementLabel: `Unbroken text overflow (${varName})`,
-        elementType: 'text',
-        filePath,
-        detection: 'Long unbroken text may overflow (no wrap protection)',
-        evidence: `{${varName}} [${riskTier}] at ${fileName}:${lineNumber} — signals: ${matchedClasses.join(', ')} — no wrap protection`,
-        explanation: 'User-generated text without spaces (e.g., long URLs, codes) can overflow the container or break layout when word-break protection is missing.',
-        confidence,
-        textPreview: `(dynamic text: ${varName})`,
-        advisoryGuidance: 'Add break-words / overflow-wrap:anywhere and allow multi-line display, or clamp with "Show more".',
-        deduplicationKey: dedupeKey,
-        truncationType: 'unbroken-overflow',
-        textLength: 'dynamic',
-        triggerReason: `{${varName}} [${riskTier}-risk] in container with ${matchedClasses.join(' + ')} but no wrap protection`,
-        expandDetected: false,
-        elementTag,
-      });
+    }
+    // Cap U3.D5 to max 3 per file
+    const d5ByFile = new Map<string, U3Finding[]>();
+    for (const f of d5Findings) { const ex = d5ByFile.get(f.filePath) || []; ex.push(f); d5ByFile.set(f.filePath, ex); }
+    for (const [, ff] of d5ByFile) {
+      ff.sort((a, b) => b.confidence - a.confidence);
+      findings.push(...ff.slice(0, 3));
     }
   }
 
