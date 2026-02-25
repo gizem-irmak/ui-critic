@@ -119,7 +119,9 @@ export function U1AggregatedCard({ violation, compact = false }: U1AggregatedCar
           </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          Primary action clarity issue detected in code (deterministic).
+          {hasConfirmed
+            ? 'Static analysis identified a structural primary-action issue that prevents clear or functional completion.'
+            : 'Static analysis flagged a potential primary-action clarity risk based on CTA structure, emphasis, or labeling; verify in context.'}
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
