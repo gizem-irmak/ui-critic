@@ -11,44 +11,37 @@ interface A6AggregatedCardProps {
   compact?: boolean;
 }
 
-const SUB_CHECK_LABELS: Record<string, string> = {
-  'A6.1': 'Missing accessible name',
-  'A6.2': 'Broken aria-labelledby reference',
-};
+function extractFileName(location: string): string {
+  if (!location) return '';
+  const parts = location.replace(/\\/g, '/').split('/');
+  return parts[parts.length - 1] || location;
+}
 
-function A6ElementItem({ element, compact = false, cardDiagnosis }: {
+function A6ElementItem({ element, compact = false }: {
   element: A6ElementSubItem;
   compact?: boolean;
-  cardDiagnosis?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const displayLabel = element.sourceLabel || element.elementLabel;
+  const fileName = extractFileName(element.location);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <div className={cn(
-        'rounded-lg border space-y-2 bg-destructive/5 border-destructive/20',
+        'rounded-lg border space-y-0 bg-destructive/5 border-destructive/20',
         compact ? 'p-2' : 'p-3'
       )}>
         <CollapsibleTrigger className="w-full">
-          <div className="flex items-start justify-between gap-2 cursor-pointer">
-            <div className="flex items-center gap-2 flex-wrap text-left">
-              <span className={cn('font-medium', compact ? 'text-sm' : '')}>
-                {displayLabel}
-              </span>
-              {element.elementType && (
-                <span className={cn(
-                  'text-muted-foreground italic truncate max-w-48',
-                  compact ? 'text-xs' : 'text-sm'
-                )}>
-                  {element.elementType}{element.role ? ` [${element.role}]` : ''}
+          <div className="flex items-center justify-between gap-2 cursor-pointer">
+            <span className={cn('font-medium text-left', compact ? 'text-sm' : '')}>
+              {displayLabel}
+            </span>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {fileName && (
+                <span className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
+                  📍 {fileName}
                 </span>
               )}
-              <Badge variant="outline" className="text-xs border-muted-foreground/30 text-muted-foreground">
-                {element.subCheck}
-              </Badge>
-            </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
@@ -58,22 +51,12 @@ function A6ElementItem({ element, compact = false, cardDiagnosis }: {
           </div>
         </CollapsibleTrigger>
 
-        <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-          <span className="font-medium">📍 </span>
-          {element.location}
-        </div>
-
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Sub-check:</span>
-              <span>{element.subCheckLabel || SUB_CHECK_LABELS[element.subCheck] || element.subCheck}</span>
-            </div>
-
-            {element.detection && (
+          <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+            {element.elementType && (
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Detection:</span>
-                <span className="font-mono">{element.detection}</span>
+                <span className="text-muted-foreground font-medium w-20">Element:</span>
+                <code className="font-mono text-xs">&lt;{element.elementType.replace(/^<|>$/g, '')}&gt;</code>
               </div>
             )}
 
@@ -84,17 +67,10 @@ function A6ElementItem({ element, compact = false, cardDiagnosis }: {
               </div>
             )}
 
-
             <div className="flex items-start gap-2">
               <span className="text-muted-foreground font-medium w-20">Requirement:</span>
               <span>WCAG 2.1 — 4.1.2 Name, Role, Value (Level A)</span>
             </div>
-
-            {element.explanation && element.explanation !== cardDiagnosis && (
-              <div className="pt-1">
-                <p className="text-foreground leading-relaxed">{element.explanation}</p>
-              </div>
-            )}
           </div>
         </CollapsibleContent>
       </div>
@@ -143,7 +119,7 @@ export function A6AggregatedCard({ violation, compact = false }: A6AggregatedCar
           </Badge>
         </CardTitle>
         <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
-          {violation.diagnosis}
+          Interactive elements must have programmatic accessible names (WCAG 4.1.2).
         </p>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -152,7 +128,6 @@ export function A6AggregatedCard({ violation, compact = false }: A6AggregatedCar
             key={element.deduplicationKey || idx}
             element={element}
             compact={compact}
-            cardDiagnosis={violation.diagnosis}
           />
         ))}
       </CardContent>
