@@ -1025,6 +1025,63 @@ function detectU5InteractionFeedback(allFiles: Map<string, string>): U5Finding[]
   const findings: U5Finding[] = [];
   const seenKeys = new Set<string>();
 
+  // Broadened async signal patterns
+  const ASYNC_SIGNALS = [
+    /\basync\b/, /\bawait\b/, /\bfetch\s*\(/, /\baxios[.\(]/,
+    /\.then\s*\(/, /\bnew\s+Promise\b/, /\bsetTimeout\s*\(/,
+    /\bsetInterval\s*\(/, /\bmutate\s*\(/, /\bmutateAsync\s*\(/,
+    /\bmutation\b/, /\buseMutation\b/, /\bonSubmit\s*=\s*\{\s*handleSubmit/,
+  ];
+
+  // Feedback signals — must be checked in context
+  function hasFeedbackInContext(content: string, handlerName?: string): { has: boolean; details: string[] } {
+    const found: string[] = [];
+    // Loading/submitting state variables
+    if (/\b(?:isLoading|isSubmitting|isPending|loading|submitting)\s*[,;=)}\]]/i.test(content)) found.push('loading-state-var');
+    // Disabled binding with loading
+    if (/disabled\s*=\s*\{[^}]*(?:isLoading|isSubmitting|isPending|loading|submitting|pending)/i.test(content)) found.push('disabled-binding');
+    // aria-busy
+    if (/aria-busy/i.test(content)) found.push('aria-busy');
+    // Spinner/loader components
+    if (/(?:Spinner|Loader|LoadingIndicator|CircularProgress|<Oval|<Rings|<TailSpin)\b/i.test(content)) found.push('spinner-component');
+    // Label swap ("Saving...", "Loading...")
+    if (/(?:Saving|Loading|Submitting|Processing|Please wait)\.\.\./i.test(content)) found.push('label-swap');
+    // Toast/notification
+    if (/\btoast\s*\(|\btoast\.\w+\s*\(|useToast|Sonner|Snackbar|notification\s*\./i.test(content)) found.push('toast');
+    // Success/error conditional rendering
+    if (/\b(?:isSuccess|isError|error|success|message|status)\b\s*&&/i.test(content) ||
+        /\{(?:isSuccess|isError|error|success|message)\s*&&/i.test(content) ||
+        /(?:isSuccess|isError|error|success)\s*\?\s*/i.test(content)) found.push('success-error-render');
+    // Alert/FormMessage
+    if (/\bAlert\b|FormMessage|ErrorMessage|SuccessMessage/i.test(content)) found.push('alert-component');
+
+    return { has: found.length > 0, details: found };
+  }
+
+  // Extract function body by name from file content
+  function extractHandlerBody(content: string, handlerName: string): string | null {
+    // Match: const handlerName = ... OR function handlerName(...)
+    const patterns = [
+      new RegExp(`(?:const|let|var)\\s+${handlerName}\\s*=\\s*(?:async\\s*)?(?:\\([^)]*\\)|\\w+)\\s*=>\\s*\\{`, 'g'),
+      new RegExp(`(?:const|let|var)\\s+${handlerName}\\s*=\\s*(?:async\\s*)?function\\s*\\([^)]*\\)\\s*\\{`, 'g'),
+      new RegExp(`(?:async\\s+)?function\\s+${handlerName}\\s*\\([^)]*\\)\\s*\\{`, 'g'),
+    ];
+    for (const pat of patterns) {
+      const m = pat.exec(content);
+      if (m) {
+        const start = m.index + m[0].length - 1; // at opening {
+        let depth = 1, i = start + 1;
+        while (depth > 0 && i < content.length) {
+          if (content[i] === '{') depth++;
+          else if (content[i] === '}') depth--;
+          i++;
+        }
+        return content.slice(m.index, i);
+      }
+    }
+    return null;
+  }
+
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
     if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
@@ -1032,51 +1089,130 @@ function detectU5InteractionFeedback(allFiles: Map<string, string>): U5Finding[]
     if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
 
     const fileName = filePath.split('/').pop() || filePath;
+    console.log(`[U5] scanning ${filePath}`);
 
-    // --- U5.D1: Async action without loading/disabled feedback ---
-    // Look for onClick/onSubmit handlers containing async patterns
-    const asyncHandlerRe = /(?:onClick|onSubmit)\s*=\s*\{[^}]*(?:async\s|await\s|fetch\s*\(|axios[.\(]|\.then\s*\(|setTimeout\s*\(|useMutation|mutateAsync|mutate\s*\()/gi;
-    let ahm;
-    while ((ahm = asyncHandlerRe.exec(content)) !== null) {
-      const pos = ahm.index;
-      const lineNumber = content.slice(0, pos).split('\n').length;
+    // ========== U5.D1: Async action without loading/disabled feedback ==========
+    // Strategy: find ALL onClick/onSubmit attributes, resolve their handler bodies, check for async signals
 
-      // Check broader component context for loading indicators
-      const componentContext = content; // check whole file for state
-      const hasLoadingState = /\b(?:isLoading|isSubmitting|isPending|loading|submitting)\b/i.test(componentContext);
-      const hasDisabledBinding = /disabled\s*=\s*\{[^}]*(?:isLoading|isSubmitting|isPending|loading|submitting)/i.test(componentContext);
-      const hasAriaBusy = /aria-busy/i.test(componentContext);
-      const hasSpinner = /(?:Spinner|Loader|Loading|CircularProgress|<Oval|<Rings|<TailSpin)\b/i.test(componentContext);
-      const hasLabelSwap = /(?:Saving|Loading|Submitting|Processing|Please wait)\.\.\./i.test(componentContext);
+    // Pattern 1: Inline handlers — onClick={() => { ... }} or onClick={async () => { ... }}
+    const inlineHandlerRe = /(?:onClick|onSubmit)\s*=\s*\{\s*(?:async\s*)?\(?[^)]*\)?\s*=>\s*/gi;
+    // Pattern 2: Function reference handlers — onClick={handleSave} or onSubmit={handleSubmit}
+    const refHandlerRe = /(?:onClick|onSubmit)\s*=\s*\{\s*(\w+)\s*\}/gi;
+    // Pattern 3: react-hook-form — onSubmit={handleSubmit(onSubmit)} or handleSubmit(submitHandler)
+    const rhfHandlerRe = /onSubmit\s*=\s*\{\s*handleSubmit\s*\(\s*(\w+)\s*\)/gi;
 
-      // If ANY feedback mechanism exists, skip
-      if (hasLoadingState || hasDisabledBinding || hasAriaBusy || hasSpinner || hasLabelSwap) continue;
+    interface HandlerCandidate {
+      pos: number;
+      type: 'onClick' | 'onSubmit';
+      handlerName?: string;
+      handlerBody: string;
+      label: string;
+    }
 
-      // Extract handler label from nearby context
-      const beforeHandler = content.slice(Math.max(0, pos - 200), pos);
-      const afterHandler = content.slice(pos, Math.min(content.length, pos + 300));
-      const btnTextMatch = afterHandler.match(/>([^<]{2,30})</);
-      const ariaLabelMatch = beforeHandler.match(/aria-label\s*=\s*["']([^"']+)["']/i) || afterHandler.match(/aria-label\s*=\s*["']([^"']+)["']/i);
-      const elementLabel = ariaLabelMatch?.[1] || btnTextMatch?.[1]?.replace(/\{[^}]*\}/g, '').trim() || 'Async action button';
+    const candidates: HandlerCandidate[] = [];
+
+    // Collect inline handlers
+    let m: RegExpExecArray | null;
+    const inlineRe2 = /(?:onClick|onSubmit)\s*=\s*\{\s*(?:async\s*)?\(?[^)]*\)?\s*=>\s*\{?/gi;
+    while ((m = inlineRe2.exec(content)) !== null) {
+      const handlerType = m[0].includes('onSubmit') ? 'onSubmit' : 'onClick';
+      // Extract inline body: from match to end of handler block
+      const startPos = m.index;
+      const afterMatch = content.slice(startPos);
+      // Find the opening { of the handler body
+      const braceIdx = afterMatch.indexOf('{', m[0].length - 1);
+      let handlerBody = afterMatch.slice(0, Math.min(500, afterMatch.length));
+      if (braceIdx !== -1) {
+        let depth = 0, i = braceIdx;
+        while (i < afterMatch.length && i < braceIdx + 2000) {
+          if (afterMatch[i] === '{') depth++;
+          else if (afterMatch[i] === '}') { depth--; if (depth === 0) break; }
+          i++;
+        }
+        handlerBody = afterMatch.slice(0, i + 1);
+      }
+
+      // Extract label from surrounding JSX
+      const before = content.slice(Math.max(0, startPos - 200), startPos);
+      const after = content.slice(startPos, Math.min(content.length, startPos + 400));
+      const btnText = after.match(/>([^<]{2,40})</);
+      const ariaLabel = (before.match(/aria-label\s*=\s*["']([^"']+)["']/i) || after.match(/aria-label\s*=\s*["']([^"']+)["']/i));
+      const label = ariaLabel?.[1] || btnText?.[1]?.replace(/\{[^}]*\}/g, '').trim() || 'Action button';
+
+      candidates.push({ pos: startPos, type: handlerType as any, handlerBody, label });
+    }
+
+    // Collect function-reference handlers
+    const refRe2 = /(?:onClick|onSubmit)\s*=\s*\{\s*(\w+)\s*\}/gi;
+    while ((m = refRe2.exec(content)) !== null) {
+      const handlerType = m[0].includes('onSubmit') ? 'onSubmit' : 'onClick';
+      const handlerName = m[1];
+      // Don't match if already captured as inline
+      if (candidates.some(c => Math.abs(c.pos - m!.index) < 5)) continue;
+
+      const body = extractHandlerBody(content, handlerName);
+      if (!body) {
+        console.log(`[U5]   handler ref ${handlerName} — could not extract body, skipping`);
+        continue;
+      }
+
+      const before = content.slice(Math.max(0, m.index - 200), m.index);
+      const after = content.slice(m.index, Math.min(content.length, m.index + 400));
+      const btnText = after.match(/>([^<]{2,40})</);
+      const ariaLabel = (before.match(/aria-label\s*=\s*["']([^"']+)["']/i) || after.match(/aria-label\s*=\s*["']([^"']+)["']/i));
+      const label = ariaLabel?.[1] || btnText?.[1]?.replace(/\{[^}]*\}/g, '').trim() || handlerName;
+
+      candidates.push({ pos: m.index, type: handlerType as any, handlerName, handlerBody: body, label });
+    }
+
+    // Collect react-hook-form onSubmit={handleSubmit(onSubmitFn)}
+    const rhfRe2 = /onSubmit\s*=\s*\{\s*handleSubmit\s*\(\s*(\w+)\s*\)/gi;
+    while ((m = rhfRe2.exec(content)) !== null) {
+      const handlerName = m[1];
+      if (candidates.some(c => Math.abs(c.pos - m!.index) < 10)) continue;
+      const body = extractHandlerBody(content, handlerName) || '';
+      candidates.push({ pos: m.index, type: 'onSubmit', handlerName, handlerBody: body || 'handleSubmit wrapper', label: 'Form submit' });
+    }
+
+    console.log(`[U5]   found ${candidates.length} handler candidate(s) in ${fileName}`);
+
+    for (const cand of candidates) {
+      const lineNumber = content.slice(0, cand.pos).split('\n').length;
+
+      // Check if handler body has async signals
+      const hasAsyncSignal = ASYNC_SIGNALS.some(re => re.test(cand.handlerBody));
+      // Also check if the handler function declaration is async
+      const isAsyncDecl = /\basync\b/.test(cand.handlerBody.slice(0, 80));
+      const isAsync = hasAsyncSignal || isAsyncDecl;
+
+      console.log(`[U5]   candidate: ${cand.type} "${cand.label}" at L${lineNumber} | async=${isAsync} (signals: ${ASYNC_SIGNALS.filter(re => re.test(cand.handlerBody)).map((_, i) => ['async','await','fetch','axios','.then','new Promise','setTimeout','setInterval','mutate','mutateAsync','mutation','useMutation','handleSubmit'][i]).join(',')})`);
+
+      if (!isAsync) continue; // Only flag async handlers
+
+      // Check feedback — scoped to file but must relate to actual patterns
+      const feedback = hasFeedbackInContext(content, cand.handlerName);
+      console.log(`[U5]   feedback signals: ${feedback.has ? feedback.details.join(', ') : 'NONE'}`);
+
+      if (feedback.has) continue; // Feedback exists, skip
 
       const dedupeKey = `U5.D1|${filePath}|${lineNumber}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
-      // Confidence: base 0.65 + bonuses
       let conf = 0.65;
-      conf += 0.10; // D1 trigger (strong async)
-      if (!hasDisabledBinding) conf += 0.05;
-      if (!hasSpinner && !hasLabelSwap) conf += 0.05;
+      conf += 0.10; // D1 strong async
+      if (!feedback.details.includes('disabled-binding')) conf += 0.05;
+      if (!feedback.details.includes('spinner-component') && !feedback.details.includes('label-swap')) conf += 0.05;
+      if (!feedback.details.includes('toast') && !feedback.details.includes('success-error-render')) conf += 0.05;
 
       findings.push({
         subCheck: 'U5.D1',
         subCheckLabel: 'Async action without loading/disabled feedback',
-        elementLabel: `"${elementLabel}" button`,
-        elementType: 'button',
+        elementLabel: `"${cand.label}" button`,
+        elementType: cand.type === 'onSubmit' ? 'form' : 'button',
         filePath,
         detection: `Async handler without loading state, disabled binding, or spinner`,
-        evidence: `onClick/onSubmit with async pattern at ${fileName}:${lineNumber} — no isLoading, disabled, aria-busy, or spinner detected in component`,
+        evidence: `${cand.type}=${cand.handlerName || '(inline)'} at ${fileName}:${lineNumber} — no isLoading, disabled, aria-busy, spinner, or toast detected`,
         confidence: Math.min(conf, 0.85),
         deduplicationKey: dedupeKey,
       });
@@ -1089,14 +1225,8 @@ function detectU5InteractionFeedback(allFiles: Map<string, string>): U5Finding[]
       const pos = fm.index;
       const lineNumber = content.slice(0, pos).split('\n').length;
 
-      // Check component for feedback patterns
-      const hasToast = /\btoast\s*\(|useToast|Sonner|Snackbar|notification\s*\./i.test(content);
-      const hasSuccessError = /\b(?:success|error|message|status)\b\s*&&/i.test(content) ||
-        /\{(?:success|error|message)\s*&&\s*/i.test(content) ||
-        /(?:success|error)\s*\?\s*/i.test(content);
-      const hasAlertOrMessage = /\balert\s*\(|Alert|FormMessage|ErrorMessage|SuccessMessage/i.test(content);
-
-      if (hasToast || hasSuccessError || hasAlertOrMessage) continue;
+      const feedback = hasFeedbackInContext(content);
+      if (feedback.has) continue;
 
       // Already flagged as D1? Skip to avoid noise
       const d1Key = `U5.D1|${filePath}|${lineNumber}`;
@@ -1107,7 +1237,7 @@ function detectU5InteractionFeedback(allFiles: Map<string, string>): U5Finding[]
       seenKeys.add(dedupeKey);
 
       let conf = 0.65;
-      if (!hasToast && !hasSuccessError) conf += 0.05;
+      if (!feedback.details.includes('toast') && !feedback.details.includes('success-error-render')) conf += 0.05;
 
       findings.push({
         subCheck: 'U5.D2',
@@ -1130,7 +1260,6 @@ function detectU5InteractionFeedback(allFiles: Map<string, string>): U5Finding[]
       const lineNumber = content.slice(0, pos).split('\n').length;
       const context = content.slice(Math.max(0, pos - 300), Math.min(content.length, pos + 300));
 
-      // Check for ARIA state or className conditional
       const hasAriaState = /aria-pressed|aria-checked|role\s*=\s*["']switch["']/i.test(context);
       const hasClassConditional = /className\s*=\s*\{[^}]*\?\s*/i.test(context) || /\?\s*["'][^"']*["']\s*:\s*["']/i.test(context);
       const hasTextSwap = /\?\s*["'](?:On|Off|Active|Inactive|Enabled|Disabled|Show|Hide|Open|Close)["']/i.test(context);
