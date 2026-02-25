@@ -4086,8 +4086,10 @@ serve(async (req) => {
           else if (/\binput\b/i.test(combined)) elementType = 'input';
           
           // ── Borderline vs Confirmed classification (expanded patterns) ──
+          // Weak/ambiguous focus styles: bg, text, underline, opacity, font
+          const hasWeakFocusStyle = /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined);
           const hasSubtleFocusStyling = 
-            /focus(?:-visible)?:bg-|focus(?:-visible)?:text-/.test(combined) || // bg/text only
+            hasWeakFocusStyle || // bg/text/underline/opacity/font
             (/(?:focus(?:-visible)?:)?ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]/.test(combined)) || // ring-1 only
             /ring-(?:gray|slate|zinc)-(?:100|200)\b/.test(combined) || // muted ring color
             (/focus(?:-visible)?:shadow-sm\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]|focus(?:-visible)?:border(?!-0)|focus(?:-visible)?:outline-(?!none)/.test(combined)) || // shadow-sm only
@@ -4098,7 +4100,7 @@ serve(async (req) => {
           // Confirmed: 90-95% deterministic; Borderline: 60-75%
           const confidence = isConfirmed ? 0.92 : 0.68;
           
-          const focusClasses = (combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+)/g) || []);
+          const focusClasses = (combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/g) || []);
           
           // Build descriptive detection text
           let detection: string;

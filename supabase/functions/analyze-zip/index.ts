@@ -5666,7 +5666,10 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       }
       
       // Extract actual focus-related class tokens from the evidence
-      const focusClassTokens: string[] = evidence.match(/focus(?:-visible)?:(?:ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?|bg-\w+|text-\w+)/gi) || [];
+      // Include bare outline-none/ring-0 AND focus-prefixed tokens for bg/text/underline/opacity/font
+      const focusClassTokens: string[] = evidence.match(/(?:focus(?:-visible)?:)?(?:outline-none|ring-0|ring(?:-\w+)?|border(?:-\w+)?|shadow(?:-\w+)?|outline(?:-\w+)?|bg-\w+|text-\w+|underline|opacity-\w+|font-\w+)/gi) || [];
+      // Also extract focus-prefixed weak tokens specifically
+      const weakFocusTokens: string[] = evidence.match(/focus(?:-visible)?:(?:bg-\w+|text-\w+|underline|opacity-\w+|font-\w+)/gi) || [];
       
       // Check for STRONG visible focus replacement indicators (actual class tokens)
       // IMPORTANT: ring-1 is NOT a strong replacement — only ring-2 or higher counts as PASS
@@ -5721,10 +5724,10 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       // Confirmed = focus removed with NO replacement at all (or only zeros)
       // IMPORTANT: If outline is removed AND no replacement → always Confirmed, NEVER borderline
       
-      const hasBgToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:bg-/i.test(t));
-      const hasTextToken = focusClassTokens.some((t: string) => /focus(?:-visible)?:text-/i.test(t));
-      const hasBackgroundOnlyFocus = (hasBgToken || hasTextToken || /focus:bg-|focus-visible:bg-|focus:text-|focus-visible:text-/.test(combined)) && 
-                                      !hasStrongRingToken && !hasBorderToken && !hasShadowToken && !hasOutlineToken;
+      // Weak/ambiguous focus styles: bg, text, underline, opacity, font changes
+      const hasWeakFocusStyle = 
+        /focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/.test(combined) ||
+        weakFocusTokens.length > 0;
       
       // Check for ring-1 only (too subtle — width < 2px)
       const hasRing1Only = /(?:focus(?:-visible)?:)?ring-1\b/.test(combined) && !/focus(?:-visible)?:ring-[2-9]/.test(combined);
@@ -5744,7 +5747,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       
       // Borderline requires at least SOME visible focus styling that is merely too subtle
       // If NO focus styling exists at all, it's Confirmed (blocking), not borderline
-      const hasAnySubtleFocusStyling = hasBackgroundOnlyFocus || hasRing1Only || hasMutedRingColor || hasShadowSmOnly || hasFocusOnlyStyles;
+      const hasAnySubtleFocusStyling = hasWeakFocusStyle || hasRing1Only || hasMutedRingColor || hasShadowSmOnly || hasFocusOnlyStyles;
       const isBorderline = hasAnySubtleFocusStyling;
       
       // This is a valid violation - add it
@@ -5809,9 +5812,9 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       else if (/\btab\b/i.test(combined)) elementType = 'tab';
       else if (/\bmenu/i.test(combined)) elementType = 'menuitem';
       
-      // Extract focus-related classes mentioned
+      // Extract focus-related classes mentioned (include bare outline-none and weak tokens)
       const focusClasses: string[] = [];
-      const classMatches = combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+)/g);
+      const classMatches = combined.match(/(?:focus:|focus-visible:)?(?:outline-none|ring-0|border-0|bg-[\w-]+|ring-[\w-]+|border-[\w-]+|text-[\w-]+|shadow-[\w-]+|ring-offset-[\w-]+|underline|opacity-[\w-]+|font-[\w-]+)/g);
       if (classMatches) {
         focusClasses.push(...new Set(classMatches));
       }
