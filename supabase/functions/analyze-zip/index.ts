@@ -541,14 +541,94 @@ function getContrastRatio(hex1: string, hex2: string): number | null {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
-// ========== A1 TAILWIND-TOKEN CONTRAST COMPUTATION ==========
-// Extracts text-* and bg-* Tailwind tokens, traverses parent elements for
-// background resolution, computes actual WCAG contrast ratio when both fg
-// and bg are resolvable. Epistemic flags track source reliability.
+// ========== A1 TAILWIND-TOKEN + INLINE-STYLE CONTRAST COMPUTATION ==========
+// Extracts text-*/bg-* Tailwind tokens AND inline style colors, traverses
+// parent elements for background resolution, computes actual WCAG contrast
+// ratio when both fg and bg are resolvable. Epistemic flags track source reliability.
 
-type A1FgSource = 'tailwind_token';
-type A1BgSource = 'tailwind_token' | 'assumed_default' | 'unresolved';
+type A1FgSource = 'tailwind_token' | 'inline_style';
+type A1BgSource = 'tailwind_token' | 'inline_style' | 'assumed_default' | 'unresolved';
 type A1EvidenceLevel = 'structural_deterministic' | 'structural_estimated';
+
+// ===== INLINE STYLE COLOR HELPERS =====
+
+/** Normalize shorthand hex (#fff → #ffffff) */
+function normalizeHex(hex: string): string {
+  hex = hex.trim().toLowerCase();
+  if (/^#[0-9a-f]{3}$/i.test(hex)) {
+    return '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+  }
+  return hex;
+}
+
+/** Convert rgb(r, g, b) to hex */
+function rgbStringToHex(rgb: string): string | null {
+  const m = rgb.match(/rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/);
+  if (!m) return null;
+  const r = Math.min(255, parseInt(m[1]));
+  const g = Math.min(255, parseInt(m[2]));
+  const b = Math.min(255, parseInt(m[3]));
+  return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+}
+
+/** Parse a CSS color value (hex, rgb, named) → normalized hex or null */
+function parseCssColor(value: string): string | null {
+  const v = value.trim().toLowerCase();
+  if (/^#[0-9a-f]{3,6}$/i.test(v)) return normalizeHex(v);
+  if (v.startsWith('rgb')) return rgbStringToHex(v);
+  // Small set of common named colors
+  const named: Record<string, string> = {
+    white: '#ffffff', black: '#000000', red: '#ff0000', green: '#008000',
+    blue: '#0000ff', yellow: '#ffff00', transparent: '', inherit: '',
+  };
+  if (named[v] !== undefined) return named[v] || null;
+  return null;
+}
+
+interface InlineStyleColors {
+  fg: string | null;  // hex
+  bg: string | null;  // hex
+}
+
+/**
+ * Extract color/backgroundColor from a JSX style object:
+ *   style={{ color: "#fff", backgroundColor: "rgb(22,163,106)" }}
+ * or an HTML style string:
+ *   style="color:#fff; background-color:#16a34a;"
+ */
+function extractInlineStyleColors(tagContent: string): InlineStyleColors {
+  let fg: string | null = null;
+  let bg: string | null = null;
+
+  // --- JSX style object: style={{ ... }} ---
+  const jsxStyleMatch = tagContent.match(/style\s*=\s*\{\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}\s*\}/);
+  if (jsxStyleMatch) {
+    const inner = jsxStyleMatch[1];
+    // color: "..." or color: '...'
+    const colorM = inner.match(/\bcolor\s*:\s*["']([^"']+)["']/);
+    if (colorM) fg = parseCssColor(colorM[1]);
+    // backgroundColor: "..." or backgroundColor: '...'
+    const bgColorM = inner.match(/backgroundColor\s*:\s*["']([^"']+)["']/);
+    if (bgColorM) bg = parseCssColor(bgColorM[1]);
+  }
+
+  // --- HTML style string: style="..." ---
+  if (!fg && !bg) {
+    const htmlStyleMatch = tagContent.match(/style\s*=\s*"([^"]+)"/);
+    if (htmlStyleMatch) {
+      const styleStr = htmlStyleMatch[1];
+      // color: ...;
+      const colorM = styleStr.match(/(?:^|;)\s*color\s*:\s*([^;]+)/);
+      if (colorM) fg = parseCssColor(colorM[1]);
+      // background-color: ...;
+      const bgColorM = styleStr.match(/background-color\s*:\s*([^;]+)/);
+      if (bgColorM) bg = parseCssColor(bgColorM[1]);
+    }
+  }
+
+  console.log("[A1] extracted fg:", fg, "bg:", bg, "from inline style");
+  return { fg, bg };
+}
 type A1SizeStatus = 'normal' | 'large' | 'unknown';
 
 interface A1TokenFinding {
@@ -659,7 +739,7 @@ function extractTextColorTokens(code: string): Array<{ colorClass: string; color
 }
 
 // Find the opening tag that contains the text-* class at textMatchIndex
-function findContainingTagClasses(code: string, textMatchIndex: number): { tagStart: number; tagEnd: number; classes: string; tagName: string } | null {
+function findContainingTagClasses(code: string, textMatchIndex: number): { tagStart: number; tagEnd: number; classes: string; tagName: string; tagContent: string } | null {
   let i = textMatchIndex;
   while (i >= 0 && code[i] !== '<') i--;
   if (i < 0) return null;
@@ -685,11 +765,35 @@ function findContainingTagClasses(code: string, textMatchIndex: number): { tagSt
         const tagContent = code.slice(tagStart, tagEnd);
         const classMatch = tagContent.match(/className\s*=\s*(?:"([^"]+)"|'([^']+)'|{`([^`]+)`})/);
         const classes = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
-        return { tagStart, tagEnd, classes, tagName };
+        return { tagStart, tagEnd, classes, tagName, tagContent };
       }
       else if (ch === '"' || ch === "'" || ch === '`') inString = ch;
     }
     j++;
+  }
+  return null;
+}
+
+/** Extract the full tag content string for a tag starting at pos */
+function extractTagContent(code: string, pos: number): string | null {
+  let end = pos + 1;
+  let bd = 0;
+  let inStr: string | null = null;
+  while (end < code.length) {
+    const ch = code[end];
+    if (inStr) { if (ch === inStr && code[end - 1] !== '\\') inStr = null; }
+    else if (bd > 0) {
+      if (ch === '{') bd++;
+      else if (ch === '}') bd--;
+      else if (ch === '"' || ch === "'" || ch === '`') inStr = ch;
+    } else {
+      if (ch === '{') bd++;
+      else if (ch === '>' || (ch === '/' && end + 1 < code.length && code[end + 1] === '>')) {
+        return code.slice(pos, end + (ch === '/' ? 2 : 1));
+      }
+      else if (ch === '"' || ch === "'" || ch === '`') inStr = ch;
+    }
+    end++;
   }
   return null;
 }
@@ -763,17 +867,57 @@ function findAncestorBg(code: string, tagStart: number): { bgClass: string; bgNa
 }
 
 // Resolve background for a text element: self → ancestor → assumed default
-function resolveBackground(code: string, textMatchIndex: number): { bgClass: string | null; bgName: string | null; bgSourceType: 'self' | 'ancestor' | 'assumed_default' } {
+// Now also checks inline style colors on self and ancestors.
+function resolveBackground(code: string, textMatchIndex: number): { bgClass: string | null; bgName: string | null; bgSourceType: 'self' | 'ancestor' | 'assumed_default'; inlineBgHex?: string } {
   const containingTag = findContainingTagClasses(code, textMatchIndex);
   if (containingTag) {
+    // Check Tailwind bg-* on self
     const selfBg = extractBgFromClasses(containingTag.classes);
     if (selfBg) return { bgClass: selfBg.bgClass, bgName: selfBg.bgName, bgSourceType: 'self' };
     
+    // Check inline style backgroundColor on self
+    const selfInline = extractInlineStyleColors(containingTag.tagContent);
+    if (selfInline.bg) return { bgClass: null, bgName: null, bgSourceType: 'self', inlineBgHex: selfInline.bg };
+    
+    // Check Tailwind bg-* on ancestors
     const ancestorBg = findAncestorBg(code, containingTag.tagStart);
     if (ancestorBg) return { bgClass: ancestorBg.bgClass, bgName: ancestorBg.bgName, bgSourceType: ancestorBg.bgSourceType };
+    
+    // Check inline style backgroundColor on ancestors
+    const ancestorInlineBg = findAncestorInlineBg(code, containingTag.tagStart);
+    if (ancestorInlineBg) return { bgClass: null, bgName: null, bgSourceType: 'ancestor', inlineBgHex: ancestorInlineBg };
   }
   
   return { bgClass: null, bgName: null, bgSourceType: 'assumed_default' };
+}
+
+/** Walk up ancestor JSX elements to find the nearest inline style backgroundColor */
+function findAncestorInlineBg(code: string, tagStart: number): string | null {
+  let pos = tagStart - 1;
+  let depth = 0;
+  while (pos >= 0) {
+    if (code[pos] === '>') {
+      let closeScan = pos - 1;
+      while (closeScan >= 0 && code[closeScan] !== '<') closeScan--;
+      if (closeScan >= 0 && closeScan + 1 < code.length && code[closeScan + 1] === '/') {
+        depth++;
+        pos = closeScan - 1;
+        continue;
+      }
+    }
+    if (code[pos] === '<' && pos + 1 < code.length && code[pos + 1] !== '/' && code[pos + 1] !== '!') {
+      if (depth > 0) { depth--; pos--; continue; }
+      const tc = extractTagContent(code, pos);
+      if (tc) {
+        const inlineColors = extractInlineStyleColors(tc);
+        if (inlineColors.bg) return inlineColors.bg;
+      }
+      pos--;
+      continue;
+    }
+    pos--;
+  }
+  return null;
 }
 
 // Best-effort text size inference from surrounding code context
@@ -857,7 +1001,12 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       let bgSource: A1BgSource;
       
       const resolved = resolveBackground(content, matchIndex);
-      if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
+      if (resolved.inlineBgHex) {
+        bgHex = resolved.inlineBgHex;
+        bgClass = null;
+        bgSource = 'inline_style';
+        console.log("[A1] Tailwind fg + inline bg:", fgHex, bgHex, "in", filepath);
+      } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
         bgHex = TAILWIND_COLORS[resolved.bgName];
         bgClass = resolved.bgClass;
         bgSource = 'tailwind_token';
@@ -874,7 +1023,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
       const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
       
-      const evidenceLevel: A1EvidenceLevel = bgSource === 'tailwind_token'
+      const evidenceLevel: A1EvidenceLevel = bgSource === 'tailwind_token' || bgSource === 'inline_style'
         ? 'structural_deterministic'
         : 'structural_estimated';
       
@@ -905,11 +1054,98 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         wcagCriterion: '1.4.3',
       });
     }
+
+    // ===== PASS 2: Inline JSX style objects =====
+    const styleRegex = /style\s*=\s*\{\s*\{/g;
+    let styleMatch;
+    while ((styleMatch = styleRegex.exec(content)) !== null) {
+      const containingTag = findContainingTagClasses(content, styleMatch.index);
+      if (!containingTag) continue;
+      const jsxTag = containingTag.tagName;
+      if (!isTextElement(jsxTag, lucideIcons)) continue;
+      const inlineColors = extractInlineStyleColors(containingTag.tagContent);
+      if (!inlineColors.fg) continue;
+      const fgHex = inlineColors.fg;
+      let bgHex: string;
+      let bgSource: A1BgSource;
+      if (inlineColors.bg) {
+        bgHex = inlineColors.bg;
+        bgSource = 'inline_style';
+      } else {
+        const resolved = resolveBackground(content, styleMatch.index);
+        if (resolved.inlineBgHex) { bgHex = resolved.inlineBgHex; bgSource = 'inline_style'; }
+        else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) { bgHex = TAILWIND_COLORS[resolved.bgName]; bgSource = 'tailwind_token'; }
+        else { bgHex = '#ffffff'; bgSource = 'assumed_default'; }
+      }
+      console.log("[A1] inline style fg:", fgHex, "bg:", bgHex, "tag:", jsxTag, "in", filepath);
+      const ratio = getContrastRatio(fgHex, bgHex);
+      const ctxStart = Math.max(0, styleMatch.index - 100);
+      const ctxEnd = Math.min(content.length, styleMatch.index + 200);
+      const context = content.slice(ctxStart, ctxEnd).replace(/\n/g, ' ').trim();
+      const sizeStatus = inferTextSize(context);
+      const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
+      const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
+      if (ratio !== null && ratio >= threshold) continue;
+      a1Findings.push({
+        fgHex, fgClass: `style:color(${fgHex})`, fgSource: 'inline_style',
+        bgHex, bgClass: null, bgSource, ratio, threshold, sizeStatus,
+        evidenceLevel: bgSource === 'assumed_default' ? 'structural_estimated' : 'structural_deterministic',
+        filePath: filepath, componentName: componentName || undefined,
+        elementContext: inferElementContext(context) || undefined,
+        jsxTag, context, occurrence_count: 1, textType,
+        appliedThreshold: threshold, wcagCriterion: '1.4.3',
+      });
+    }
+
+    // ===== PASS 3: HTML style strings =====
+    const htmlStyleRegex = /style\s*=\s*"([^"]+)"/g;
+    let htmlMatch;
+    while ((htmlMatch = htmlStyleRegex.exec(content)) !== null) {
+      const styleStr = htmlMatch[1];
+      const colorM = styleStr.match(/(?:^|;)\s*color\s*:\s*([^;]+)/);
+      if (!colorM) continue;
+      const fgHex = parseCssColor(colorM[1]);
+      if (!fgHex) continue;
+      const containingTag = findContainingTagClasses(content, htmlMatch.index);
+      if (!containingTag) continue;
+      const jsxTag = containingTag.tagName;
+      if (!isTextElement(jsxTag, lucideIcons)) continue;
+      let bgHex: string;
+      let bgSource: A1BgSource;
+      const bgColorM = styleStr.match(/background-color\s*:\s*([^;]+)/);
+      if (bgColorM) {
+        const parsed = parseCssColor(bgColorM[1]);
+        if (parsed) { bgHex = parsed; bgSource = 'inline_style'; }
+        else { bgHex = '#ffffff'; bgSource = 'assumed_default'; }
+      } else {
+        const resolved = resolveBackground(content, htmlMatch.index);
+        if (resolved.inlineBgHex) { bgHex = resolved.inlineBgHex; bgSource = 'inline_style'; }
+        else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) { bgHex = TAILWIND_COLORS[resolved.bgName]; bgSource = 'tailwind_token'; }
+        else { bgHex = '#ffffff'; bgSource = 'assumed_default'; }
+      }
+      console.log("[A1] HTML style fg:", fgHex, "bg:", bgHex, "tag:", jsxTag, "in", filepath);
+      const ratio = getContrastRatio(fgHex, bgHex);
+      const ctxStart = Math.max(0, htmlMatch.index - 100);
+      const ctxEnd = Math.min(content.length, htmlMatch.index + 200);
+      const context = content.slice(ctxStart, ctxEnd).replace(/\n/g, ' ').trim();
+      const sizeStatus = inferTextSize(context);
+      const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
+      const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
+      if (ratio !== null && ratio >= threshold) continue;
+      a1Findings.push({
+        fgHex, fgClass: `style:color(${fgHex})`, fgSource: 'inline_style',
+        bgHex, bgClass: null, bgSource, ratio, threshold, sizeStatus,
+        evidenceLevel: bgSource === 'assumed_default' ? 'structural_estimated' : 'structural_deterministic',
+        filePath: filepath, componentName: componentName || undefined,
+        elementContext: inferElementContext(context) || undefined,
+        jsxTag, context, occurrence_count: 1, textType,
+        appliedThreshold: threshold, wcagCriterion: '1.4.3',
+      });
+    }
   }
   
   if (a1Findings.length === 0) return [];
   
-  // Deduplicate by fg+bg+file
   const dedupeMap = new Map<string, A1TokenFinding>();
   for (const finding of a1Findings) {
     const key = `${finding.fgClass}:${finding.bgSource}:${finding.bgHex}:${finding.filePath}`;
@@ -948,10 +1184,12 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     
     const ratioStr = finding.ratio !== null ? `${finding.ratio.toFixed(2)}:1` : 'not computable';
     const bgNote = finding.bgSource === 'assumed_default'
-      ? ' (background assumed #FFFFFF — no bg-* token found)'
-      : finding.bgSource === 'unresolved'
-        ? ' (background unresolved)'
-        : ` (background from ${finding.bgClass})`;
+      ? ' (background assumed #FFFFFF — no bg token found)'
+      : finding.bgSource === 'inline_style'
+        ? ` (background from inline style ${finding.bgHex})`
+        : finding.bgSource === 'unresolved'
+          ? ' (background unresolved)'
+          : ` (background from ${finding.bgClass})`;
     
     const diagnosis = `Text ${finding.fgClass} (${finding.fgHex}) on ${finding.bgHex}${bgNote} — ` +
       `contrast ratio ${ratioStr} vs ${finding.threshold}:1 required (${finding.sizeStatus === 'large' ? 'large' : 'normal'} text).`;
