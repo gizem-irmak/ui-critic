@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import type { Violation, A5ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { LocationBadge } from './LocationBadge';
 
 interface A5AggregatedCardProps {
   violation: Violation;
@@ -22,20 +23,19 @@ function A5ElementItem({ element, isConfirmed, compact = false }: {
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <div className={cn(
-        'rounded-lg border space-y-2',
+        'rounded-lg border space-y-0',
         isConfirmed
           ? 'bg-destructive/5 border-destructive/20'
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
         <CollapsibleTrigger className="w-full">
-          <div className="flex items-start justify-between gap-2 cursor-pointer">
-            <div className="flex items-center gap-2 flex-wrap text-left">
-              <span className={cn('font-medium', compact ? 'text-sm' : '')}>
-                {displayLabel}
-              </span>
-            </div>
+          <div className="flex items-center justify-between gap-2 cursor-pointer">
+            <span className={cn('font-medium text-left', compact ? 'text-sm' : '')}>
+              {displayLabel}
+            </span>
             <div className="flex items-center gap-2 flex-shrink-0">
+              <LocationBadge filePath={element.filePath || element.location} compact={compact} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
@@ -45,13 +45,8 @@ function A5ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
 
-        <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-          <span className="font-medium">📍 </span>
-          {element.filePath || element.location}
-        </div>
-
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+          <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
 
             {/* Detection */}
             {element.detection && (

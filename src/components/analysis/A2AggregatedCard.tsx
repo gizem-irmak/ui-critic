@@ -6,6 +6,7 @@ import type { Violation, A2ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { PotentialSubtypeBadge, SubtypeAdvisoryGuidance } from './PotentialSubtypeUI';
+import { LocationBadge } from './LocationBadge';
 
 interface A2AggregatedCardProps {
   violation: Violation;
@@ -18,22 +19,20 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-
   const displayLabel = element.sourceLabel || element.elementLabel;
   const isBorderline = element.potentialSubtype === 'borderline';
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <div className={cn(
-        'rounded-lg border space-y-2',
+        'rounded-lg border space-y-0',
         isConfirmed
           ? 'bg-destructive/5 border-destructive/20'
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
-        {/* Header row — matches A1 typography */}
         <CollapsibleTrigger className="w-full">
-          <div className="flex items-start justify-between gap-2 cursor-pointer">
+          <div className="flex items-center justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
               <span className={cn('font-medium', compact ? 'text-sm' : '')}>
                 {displayLabel}
@@ -48,6 +47,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
+              <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
@@ -57,32 +57,14 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
 
-        {/* Location (always visible) */}
-        <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-          <span className="font-medium">📍 </span>
-          {element.location}
-        </div>
-
-        {/* Expandable details */}
         <CollapsibleContent>
           {isConfirmed ? (
-            /* ── Confirmed layout: Element → Detection → Requirement → Confidence ── */
-            <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-              {/* Element */}
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-24">Element:</span>
-                <span className="font-mono">&lt;{element.elementType || 'element'}&gt;</span>
-                {displayLabel && displayLabel !== element.elementType && (
-                  <span className="text-muted-foreground">— {displayLabel}</span>
-                )}
-              </div>
-
-              {/* Detection — chips only (matches A3 style) */}
+            <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+              {/* Detection — chips */}
               <div className="flex items-start gap-2">
                 <span className="text-muted-foreground font-medium w-24">Detection:</span>
                 <div className="flex flex-wrap gap-1">
                   {(() => {
-                    // Prefer explicit token list from detector
                     if (element.focusClasses && element.focusClasses.length > 0) {
                       return element.focusClasses.map((cls, i) => (
                         <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
@@ -90,7 +72,6 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                         </span>
                       ));
                     }
-                    // Fallback: extract token from detection string
                     const det = element.detection || '';
                     const match = det.match(/\(([^)]+)\)/);
                     const chip = match ? match[1] : (det || 'outline suppressed');
@@ -108,11 +89,9 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 <span className="text-muted-foreground font-medium w-24">Requirement:</span>
                 <span>WCAG 2.4.7 Focus Visible</span>
               </div>
-
             </div>
           ) : (
-            /* ── Potential layout: keep full detail for debugging ── */
-            <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+            <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
               {/* Detection */}
               {element.detection && (
                 <div className="flex items-center gap-2">
@@ -121,7 +100,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 </div>
               )}
 
-              {/* Reason line for borderline findings */}
+              {/* Borderline reason */}
               {isBorderline && element.focusClasses && element.focusClasses.length > 0 && (() => {
                 const classes = element.focusClasses.join(' ');
                 const hasOutlineRemoval = /outline-none|ring-0|border-0/.test(classes);
@@ -146,7 +125,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 return null;
               })()}
 
-              {/* Focus classes found */}
+              {/* Focus classes */}
               {element.focusClasses && element.focusClasses.length > 0 && (
                 <div className="flex items-start gap-2">
                   <span className="text-muted-foreground font-medium w-20">Classes:</span>
@@ -168,7 +147,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 </span>
               </div>
 
-              {/* Detection method */}
+              {/* Method */}
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground font-medium w-20">Method:</span>
                 <Badge variant="outline" className={cn(
@@ -270,7 +249,6 @@ export function A2AggregatedCard({ violation, compact = false }: A2AggregatedCar
           />
         ))}
 
-        {/* Advisory guidance for potential findings */}
         {!isConfirmed && (
           <SubtypeAdvisoryGuidance
             ruleId="A2"

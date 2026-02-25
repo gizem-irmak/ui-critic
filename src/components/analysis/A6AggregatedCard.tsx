@@ -5,16 +5,11 @@ import { cn } from '@/lib/utils';
 import type { Violation, A6ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { LocationBadge } from './LocationBadge';
 
 interface A6AggregatedCardProps {
   violation: Violation;
   compact?: boolean;
-}
-
-function extractFileName(location: string): string {
-  if (!location) return '';
-  const parts = location.replace(/\\/g, '/').split('/');
-  return parts[parts.length - 1] || location;
 }
 
 function A6ElementItem({ element, compact = false }: {
@@ -23,7 +18,6 @@ function A6ElementItem({ element, compact = false }: {
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const displayLabel = element.sourceLabel || element.elementLabel;
-  const fileName = extractFileName(element.location);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -37,11 +31,7 @@ function A6ElementItem({ element, compact = false }: {
               {displayLabel}
             </span>
             <div className="flex items-center gap-2 flex-shrink-0">
-              {fileName && (
-                <span className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-                  📍 {fileName}
-                </span>
-              )}
+              <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (

@@ -6,6 +6,7 @@ import type { Violation, A3ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { PotentialSubtypeBadge, SubtypeAdvisoryGuidance } from './PotentialSubtypeUI';
+import { LocationBadge } from './LocationBadge';
 
 interface A3AggregatedCardProps {
   violation: Violation;
@@ -16,11 +17,9 @@ interface A3AggregatedCardProps {
 function getEvidenceChips(evidence?: string, explanation?: string): string[] {
   const chips: string[] = [];
   const src = (evidence || '') + ' ' + (explanation || '');
-  // Trigger handlers present
   if (/onClick/i.test(src)) chips.push('onClick');
   if (/onPointerDown/i.test(src)) chips.push('onPointerDown');
   if (/onMouseDown/i.test(src)) chips.push('onMouseDown');
-  // Missing requirements
   if (/missing\s+role|lacks?\s+role/i.test(src)) chips.push('missing role');
   if (/missing.*tabIndex|lacks?.*tabIndex|no\s+tabIndex|not\s+focusable/i.test(src)) chips.push('missing tabIndex');
   if (/missing.*onKeyDown|no\s+onKeyDown|missing.*key\s*handler/i.test(src)) chips.push('missing onKeyDown');
@@ -33,50 +32,27 @@ function getEvidenceChips(evidence?: string, explanation?: string): string[] {
   return chips;
 }
 
-/** Extract a short detection reason */
-function getDetection(element: A3ElementSubItem): string {
-  if (element.detection) return element.detection;
-  const tag = element.elementType || 'element';
-  return `Clickable non-semantic <${tag}> without keyboard support`;
-}
-
-/** Extract a short 1–2 sentence explanation */
-function getShortExplanation(element: A3ElementSubItem): string {
-  if (element.explanation.includes('Issue reason:')) {
-    const match = element.explanation.match(/Issue reason:\s*(.+?)(?:\n|$)/);
-    if (match) return match[1].trim();
-  }
-  return 'Element is mouse-operable but cannot be reached or activated via Tab, Enter, or Space.';
-}
-
-/**
- * Per-element expandable card — identical layout to A2ElementItem.
- */
 function A3ElementItem({ element, isConfirmed, compact = false }: {
   element: A3ElementSubItem;
   isConfirmed: boolean;
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-
   const displayLabel = element.sourceLabel || element.elementLabel;
   const evidenceChips = getEvidenceChips(element.evidence, element.explanation);
-  const detection = getDetection(element);
-  const impact = getShortExplanation(element);
   const needsNameRole = evidenceChips.some(c => c === 'missing role');
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <div className={cn(
-        'rounded-lg border space-y-2',
+        'rounded-lg border space-y-0',
         isConfirmed
           ? 'bg-destructive/5 border-destructive/20'
           : 'bg-warning/5 border-warning/20',
         compact ? 'p-2' : 'p-3'
       )}>
-        {/* Header row — matches A2 */}
         <CollapsibleTrigger className="w-full">
-          <div className="flex items-start justify-between gap-2 cursor-pointer">
+          <div className="flex items-center justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
               <span className={cn('font-medium', compact ? 'text-sm' : '')}>
                 {displayLabel}
@@ -91,6 +67,7 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
+              <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
@@ -100,21 +77,8 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
 
-        {/* Location (always visible) — matches A2 */}
-        <div className={cn('text-muted-foreground', compact ? 'text-xs' : 'text-sm')}>
-          <span className="font-medium">📍 </span>
-          {element.location}
-        </div>
-
-        {/* Expandable details */}
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Element */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Element:</span>
-              <span className="font-mono">&lt;{element.elementType || 'element'}&gt;</span>
-            </div>
-
+          <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
             {/* Detection — chips */}
             <div className="flex items-start gap-2">
               <span className="text-muted-foreground font-medium w-20">Detection:</span>
@@ -155,9 +119,6 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
 export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCardProps) {
   const isConfirmed = violation.status !== 'potential';
 
-  // If aggregated with a3Elements, use them directly.
-  // Otherwise, synthesize a single element from the top-level violation fields
-  // so non-aggregated A3 violations still render with the per-element card layout.
   const elements: A3ElementSubItem[] = (violation.isA3Aggregated && violation.a3Elements)
     ? violation.a3Elements
     : [{
