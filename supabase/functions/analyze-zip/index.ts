@@ -683,6 +683,256 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
 }
 
 // =====================
+// U3 Content Accessibility Detection (sub-checks U3.D1, U3.D2, U3.D3, U3.D4)
+// =====================
+
+interface U3Finding {
+  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4';
+  subCheckLabel: string;
+  classification: 'potential';
+  elementLabel: string;
+  elementType: string;
+  filePath: string;
+  detection: string;
+  evidence: string;
+  explanation: string;
+  confidence: number;
+  advisoryGuidance: string;
+  deduplicationKey: string;
+}
+
+function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[] {
+  const findings: U3Finding[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx|ts|js|html|htm)$/.test(filePath)) continue;
+    if (filePath.includes('node_modules/')) continue;
+    if (filePath.includes('components/ui/')) continue;
+    if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+
+    const fileName = filePath.split('/').pop() || filePath;
+
+    // --- U3.D1: Line clamp / ellipsis truncation without expand ---
+    const truncationPatterns = [
+      { re: /\bline-clamp-[1-3]\b/g, label: 'line-clamp' },
+      { re: /\btruncate\b/g, label: 'truncate' },
+      { re: /\btext-ellipsis\b/g, label: 'text-ellipsis' },
+    ];
+
+    for (const { re, label } of truncationPatterns) {
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        const pos = m.index;
+        const lineNumber = content.slice(0, pos).split('\n').length;
+
+        // Check surrounding context (~500 chars) for expand mechanism
+        const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300)).toLowerCase();
+        const hasExpand = /show\s*more|expand|read\s*more|see\s*all|view\s*more|toggle|title\s*=|tooltip/i.test(context);
+        if (hasExpand) continue;
+
+        // Skip if in a scroll container or has overflow-auto
+        if (/overflow-(?:auto|y-auto|x-auto|scroll)\b/.test(context)) continue;
+
+        const dedupeKey = `U3.D1|${filePath}|${lineNumber}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        findings.push({
+          subCheck: 'U3.D1',
+          subCheckLabel: 'Line clamp / ellipsis truncation',
+          classification: 'potential',
+          elementLabel: `Truncated text (${label})`,
+          elementType: 'text',
+          filePath,
+          detection: `${m[0]} without expand mechanism`,
+          evidence: `${m[0]} at ${fileName}:${lineNumber} — no "Show more", toggle, or title tooltip found nearby`,
+          explanation: `Text is truncated using ${label} without a visible mechanism to reveal full content. Users may miss important information.`,
+          confidence: 0.70,
+          advisoryGuidance: 'Ensure truncated content has an accessible expand mechanism (e.g., "Show more" button, expandable section, or title tooltip).',
+          deduplicationKey: dedupeKey,
+        });
+      }
+    }
+
+    // Also detect whitespace-nowrap + overflow-hidden combo (inline truncation)
+    const nowrapRe = /\bwhitespace-nowrap\b/g;
+    let nwm;
+    while ((nwm = nowrapRe.exec(content)) !== null) {
+      const pos = nwm.index;
+      const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
+      if (!/overflow-hidden\b/.test(context)) continue;
+      const hasExpand = /show\s*more|expand|read\s*more|title\s*=|tooltip/i.test(context);
+      if (hasExpand) continue;
+      const lineNumber = content.slice(0, pos).split('\n').length;
+      const dedupeKey = `U3.D1|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      findings.push({
+        subCheck: 'U3.D1',
+        subCheckLabel: 'Line clamp / ellipsis truncation',
+        classification: 'potential',
+        elementLabel: 'Truncated text (nowrap + overflow)',
+        elementType: 'text',
+        filePath,
+        detection: 'whitespace-nowrap + overflow-hidden without expand mechanism',
+        evidence: `whitespace-nowrap + overflow-hidden at ${fileName}:${lineNumber}`,
+        explanation: 'Text is forced to a single line with overflow hidden, potentially clipping important content.',
+        confidence: 0.70,
+        advisoryGuidance: 'Add a title attribute or expand mechanism for nowrap-truncated text.',
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // --- U3.D2: Overflow clipping with fixed height ---
+    const heightPatterns = /\b(?:max-h-\d+|h-\d+)\b/g;
+    let hm;
+    while ((hm = heightPatterns.exec(content)) !== null) {
+      const pos = hm.index;
+      const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
+      // Must have overflow-hidden
+      if (!/overflow-hidden\b|overflow-y-hidden\b/.test(context)) continue;
+      // Must NOT have scroll
+      if (/overflow-(?:auto|scroll|y-auto|y-scroll)\b/.test(context)) continue;
+      // Should contain text-like content indicators
+      const hasTextContent = /<p\b|<span\b|<div\b[^>]*>[^<]{20,}|children|text|description|content|message/i.test(context);
+      if (!hasTextContent) continue;
+      // Skip if expand mechanism
+      const hasExpand = /show\s*more|expand|read\s*more|see\s*all|toggle/i.test(context);
+      if (hasExpand) continue;
+
+      const lineNumber = content.slice(0, pos).split('\n').length;
+      const dedupeKey = `U3.D2|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      findings.push({
+        subCheck: 'U3.D2',
+        subCheckLabel: 'Overflow clipping',
+        classification: 'potential',
+        elementLabel: 'Fixed-height overflow container',
+        elementType: 'container',
+        filePath,
+        detection: `${hm[0]} + overflow-hidden without scroll or expand`,
+        evidence: `${hm[0]} with overflow-hidden at ${fileName}:${lineNumber} — content may be clipped without user access`,
+        explanation: `Container has a fixed height (${hm[0]}) with overflow-hidden, which may clip text content without providing scroll or expand access.`,
+        confidence: 0.72,
+        advisoryGuidance: 'Use overflow-auto for scrollable containers, or add an expand mechanism when content may exceed the fixed height.',
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // --- U3.D3: Scroll trap risk ---
+    // Nested overflow-y-scroll/auto inside fixed height
+    const scrollRe = /\boverflow-y-(?:scroll|auto)\b/g;
+    let sm;
+    while ((sm = scrollRe.exec(content)) !== null) {
+      const pos = sm.index;
+      const context = content.slice(Math.max(0, pos - 300), Math.min(content.length, pos + 300));
+      // Look for nested scroll indicator: another overflow-y-scroll/auto nearby
+      const scrollMatches = context.match(/overflow-y-(?:scroll|auto)/g);
+      if (!scrollMatches || scrollMatches.length < 2) continue;
+      // Must have fixed height
+      if (!/\b(?:max-h-|h-\d+)\b/.test(context)) continue;
+
+      const lineNumber = content.slice(0, pos).split('\n').length;
+      const dedupeKey = `U3.D3|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      findings.push({
+        subCheck: 'U3.D3',
+        subCheckLabel: 'Scroll trap risk',
+        classification: 'potential',
+        elementLabel: 'Nested scroll container',
+        elementType: 'container',
+        filePath,
+        detection: 'Nested scroll containers with fixed height',
+        evidence: `Multiple overflow-y-scroll/auto within fixed-height region at ${fileName}:${lineNumber}`,
+        explanation: 'Nested scrollable containers within a fixed-height parent may create a scroll trap where users cannot easily scroll the outer page.',
+        confidence: 0.68,
+        advisoryGuidance: 'Avoid nesting scrollable containers. If necessary, ensure the inner container has clear scroll affordances and does not trap scroll events.',
+        deduplicationKey: dedupeKey,
+      });
+    }
+
+    // --- U3.D4: Hidden content without control ---
+    // Check for aria-hidden, hidden attr, display:none on meaningful content
+    const hiddenPatterns = [
+      { re: /aria-hidden\s*=\s*["']true["']/gi, label: 'aria-hidden="true"' },
+      { re: /\bhidden\b(?!\s*=\s*["']false)/g, label: 'hidden attribute' },
+    ];
+
+    for (const { re, label } of hiddenPatterns) {
+      let hm2;
+      while ((hm2 = re.exec(content)) !== null) {
+        const pos = hm2.index;
+        const context = content.slice(Math.max(0, pos - 100), Math.min(content.length, pos + 400));
+
+        // Skip decorative elements (icons, svgs, separators)
+        if (/\bsvg\b|icon|separator|divider|decorat/i.test(context.slice(0, 150))) continue;
+        // Skip sr-only / visually-hidden (accessibility patterns)
+        if (/sr-only|visually-hidden/i.test(context)) continue;
+
+        // Must contain meaningful content (text, form, interactive elements)
+        const hasMeaningful = /<(?:p|h[1-6]|span|div|form|input|button|a)\b[^>]*>[^<]{5,}/i.test(context.slice(100)) ||
+          /\b(?:description|message|content|paragraph|text|label)\b/i.test(context);
+        if (!hasMeaningful) continue;
+
+        // Check for toggle/control nearby
+        const hasToggle = /toggle|show|expand|open|visible|setVisible|setOpen|setShow|useState/i.test(context);
+        if (hasToggle) continue;
+
+        const lineNumber = content.slice(0, pos).split('\n').length;
+        const dedupeKey = `U3.D4|${filePath}|${lineNumber}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        findings.push({
+          subCheck: 'U3.D4',
+          subCheckLabel: 'Hidden content without control',
+          classification: 'potential',
+          elementLabel: `Hidden content (${label})`,
+          elementType: 'content',
+          filePath,
+          detection: `${label} on content element without visible toggle`,
+          evidence: `${label} at ${fileName}:${lineNumber} — meaningful content hidden without an associated toggle or control`,
+          explanation: `Content is hidden using ${label} without a visible mechanism to reveal it. Users cannot access the hidden information.`,
+          confidence: 0.68,
+          advisoryGuidance: 'If the hidden content is meaningful, provide a visible toggle or control to reveal it. If decorative, ensure aria-hidden is appropriate.',
+          deduplicationKey: dedupeKey,
+        });
+      }
+    }
+  }
+
+  // Aggregate: cap per file to avoid noise (max 3 findings per file)
+  const byFile = new Map<string, U3Finding[]>();
+  for (const f of findings) {
+    const existing = byFile.get(f.filePath) || [];
+    existing.push(f);
+    byFile.set(f.filePath, existing);
+  }
+  const capped: U3Finding[] = [];
+  for (const [, fileFindgs] of byFile) {
+    capped.push(...fileFindgs.slice(0, 3));
+  }
+
+  // Confidence adjustment: base 0.70 + 0.05 per additional sub-check, cap 0.85
+  const subChecks = new Set(capped.map(f => f.subCheck));
+  const bonus = Math.min((subChecks.size - 1) * 0.05, 0.15);
+  for (const f of capped) {
+    f.confidence = Math.min(f.confidence + bonus, 0.85);
+  }
+
+  console.log(`[U3] Detection: ${findings.length} raw findings, ${capped.length} after capping (${subChecks.size} unique sub-checks)`);
+
+  return capped;
+}
+
+// =====================
 // U2 Navigation Detection (sub-checks U2.D1, U2.D2, U2.D3)
 // =====================
 
@@ -4790,7 +5040,54 @@ ${codeContent}`,
       }
     }
 
-    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
+    // ========== Deterministic U3 (content accessibility sub-checks) ==========
+    const aggregatedU3List: any[] = [];
+    if (selectedRulesSet.has('U3')) {
+      const u3Findings = detectU3ContentAccessibility(allFiles);
+      if (u3Findings.length > 0) {
+        // Remove any LLM-generated U3 findings — deterministic takes precedence
+        aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'U3');
+
+        const u3Elements = u3Findings.map(f => ({
+          elementLabel: f.elementLabel, elementType: f.elementType,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
+          confidence: f.confidence,
+          advisoryGuidance: f.advisoryGuidance, deduplicationKey: f.deduplicationKey,
+        }));
+
+        const overallConfidence = Math.max(...u3Findings.map(f => f.confidence));
+        aggregatedU3List.push({
+          ruleId: 'U3', ruleName: 'Truncated or inaccessible content', category: 'usability',
+          status: 'potential',
+          blocksConvergence: false,
+          inputType: 'zip', isU3Aggregated: true, u3Elements, evaluationMethod: 'deterministic_structural',
+          diagnosis: `Content accessibility issues: ${u3Findings.length} potential risk(s) detected via structural analysis.`,
+          contextualHint: 'Ensure all meaningful text is fully visible or has an accessible expand mechanism.',
+          advisoryGuidance: 'Ensure important content is fully visible or provide an accessible expand mechanism.',
+          confidence: Math.round(overallConfidence * 100) / 100,
+        });
+
+        console.log(`U3 aggregated: ${u3Findings.length} findings → 1 potential violation object`);
+      } else {
+        // Ensure any LLM U3 findings are Potential
+        aiViolations = aiViolations.map((v: any) => {
+          if (v.ruleId === 'U3') {
+            return {
+              ...v,
+              status: 'potential',
+              blocksConvergence: false,
+              evaluationMethod: 'hybrid_llm_fallback',
+              confidence: Math.min(v.confidence || 0.65, 0.75),
+            };
+          }
+          return v;
+        });
+        console.log('U3: No deterministic signals found, LLM findings (if any) preserved as Potential');
+      }
+    }
+
+    const allViolations = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
 
     console.log(`Code analysis complete: ${allViolations.length} violations found`);
 
