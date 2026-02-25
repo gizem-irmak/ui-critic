@@ -2333,7 +2333,27 @@ interface U3Finding {
   explanation: string;
   confidence: number;
   advisoryGuidance: string;
+  textPreview?: string;
   deduplicationKey: string;
+}
+
+function extractU3TextPreview(content: string, pos: number): string | undefined {
+  const after = content.slice(pos, Math.min(content.length, pos + 600));
+  const jsxTextMatch = after.match(/>([^<]{5,})</);
+  if (jsxTextMatch) {
+    const raw = jsxTextMatch[1].trim();
+    if (raw.length > 0) return raw.length > 120 ? raw.slice(0, 117) + '…' : raw;
+  }
+  const stringLitMatch = after.match(/[=:]\s*["'`]([^"'`]{10,})["'`]/);
+  if (stringLitMatch) {
+    const raw = stringLitMatch[1].trim();
+    if (raw.length > 0 && !/^[\w-]+$/.test(raw)) return raw.length > 120 ? raw.slice(0, 117) + '…' : raw;
+  }
+  const dynMatch = after.match(/\{([a-zA-Z_][\w.]*)\}/);
+  if (dynMatch) return `(dynamic text: ${dynMatch[1]})`;
+  const dynBroad = after.match(/\{([^}]{3,30})\}/);
+  if (dynBroad && /[a-zA-Z]/.test(dynBroad[1])) return '(dynamic text)';
+  return undefined;
 }
 
 function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[] {
@@ -2376,7 +2396,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           detection: `${m[0]} without expand mechanism`,
           evidence: `${m[0]} at ${fileName}:${lineNumber} — no "Show more", toggle, or title tooltip found nearby`,
           explanation: `Text is truncated using ${label} without a visible mechanism to reveal full content.`,
-          confidence: 0.70,
+          confidence: 0.70, textPreview: extractU3TextPreview(content, pos),
           advisoryGuidance: 'Ensure truncated content has an accessible expand mechanism.',
           deduplicationKey: dedupeKey,
         });
@@ -2401,7 +2421,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         detection: 'whitespace-nowrap + overflow-hidden without expand mechanism',
         evidence: `whitespace-nowrap + overflow-hidden at ${fileName}:${lineNumber}`,
         explanation: 'Text is forced to a single line with overflow hidden, potentially clipping important content.',
-        confidence: 0.70, advisoryGuidance: 'Add a title attribute or expand mechanism.', deduplicationKey: dedupeKey,
+        confidence: 0.70, textPreview: extractU3TextPreview(content, pos),
+        advisoryGuidance: 'Add a title attribute or expand mechanism.', deduplicationKey: dedupeKey,
       });
     }
 
@@ -2427,7 +2448,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         detection: `${hm[0]} + overflow-hidden without scroll or expand`,
         evidence: `${hm[0]} with overflow-hidden at ${fileName}:${lineNumber}`,
         explanation: `Container has a fixed height (${hm[0]}) with overflow-hidden, which may clip text content.`,
-        confidence: 0.72, advisoryGuidance: 'Use overflow-auto or add an expand mechanism.', deduplicationKey: dedupeKey,
+        confidence: 0.72, textPreview: extractU3TextPreview(content, pos),
+        advisoryGuidance: 'Use overflow-auto or add an expand mechanism.', deduplicationKey: dedupeKey,
       });
     }
 
@@ -2482,7 +2504,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           detection: `${label} on content element without visible toggle`,
           evidence: `${label} at ${fileName}:${lineNumber} — meaningful content hidden without toggle`,
           explanation: `Content is hidden using ${label} without a visible mechanism to reveal it.`,
-          confidence: 0.68, advisoryGuidance: 'Provide a visible toggle to reveal hidden content.', deduplicationKey: dedupeKey,
+          confidence: 0.68, textPreview: extractU3TextPreview(content, pos),
+          advisoryGuidance: 'Provide a visible toggle to reveal hidden content.', deduplicationKey: dedupeKey,
         });
       }
     }
@@ -2826,6 +2849,7 @@ serve(async (req) => {
         const u3Elements = u3Findings.map((f: any) => ({
           elementLabel: f.elementLabel, elementType: f.elementType,
           location: f.filePath, detection: f.detection, evidence: f.evidence,
+          textPreview: f.textPreview,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           confidence: f.confidence,
           advisoryGuidance: f.advisoryGuidance, deduplicationKey: f.deduplicationKey,
