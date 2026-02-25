@@ -432,6 +432,9 @@ export interface A5ElementSubItem {
   accessibleName?: string;
   sourceLabel?: string;
   selectorHint?: string;
+  selectorHints?: string[]; // e.g., ['id="email"', 'name="email"', 'aria-label="Search"']
+  controlId?: string; // The actual id prop if present
+  labelingMethod?: string; // What labeling was found/missing: 'aria-label', 'FormLabel/FormControl (shadcn)', 'none', etc.
   textSnippet?: string;
   location: string;
   filePath?: string;

@@ -48,24 +48,54 @@ function A5ElementItem({ element, isConfirmed, compact = false }: {
         <CollapsibleContent>
           <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
 
+            {/* Element */}
+            <div className="flex items-start gap-2">
+              <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Element:</span>
+              <span className="font-mono text-xs">
+                {element.elementType || 'unknown'}
+                {element.inputSubtype ? ` [${element.inputSubtype}]` : ''}
+                {element.controlId ? ` — id="${element.controlId}"` : ' — id: (none)'}
+                {(element.selectorHints || []).filter(h => !h.startsWith('id=')).map((hint, i) => (
+                  <span key={i}> — {hint}</span>
+                ))}
+              </span>
+            </div>
+
+            {/* Labeling method */}
+            {element.labelingMethod && (
+              <div className="flex items-start gap-2">
+                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Labeling:</span>
+                <span className={cn(
+                  'font-mono text-xs',
+                  element.labelingMethod === 'none' || element.labelingMethod?.startsWith('none')
+                    ? 'text-destructive'
+                    : element.labelingMethod?.startsWith('broken')
+                      ? 'text-destructive'
+                      : 'text-muted-foreground'
+                )}>
+                  {element.labelingMethod}
+                </span>
+              </div>
+            )}
+
             {/* Detection */}
             {element.detection && (
               <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-24">Detection:</span>
+                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Detection:</span>
                 <span className="font-mono text-xs">{element.detection}</span>
               </div>
             )}
 
             {/* Requirement */}
             <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-24">Requirement:</span>
+              <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Requirement:</span>
               <span>WCAG 2.1 — {(element.wcagCriteria || ['1.3.1', '3.3.2']).join(' / ')} (Level A)</span>
             </div>
 
             {/* Confidence — only for potential findings */}
             {!isConfirmed && element.confidence != null && (
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-24">Confidence:</span>
+                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Confidence:</span>
                 <span className="font-mono font-medium text-warning">
                   {Math.round(element.confidence * 100)}%
                 </span>
