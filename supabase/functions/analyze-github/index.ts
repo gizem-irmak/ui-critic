@@ -4178,17 +4178,15 @@ serve(async (req) => {
     }
     
     // ========== A2 Focus Visibility — Fully Deterministic ==========
-    let aggregatedA2GitHub: any = null;
+    // Split into up to TWO violation objects: one confirmed, one potential
+    const aggregatedA2GitHubList: any[] = [];
     if (selectedRulesSet.has('A2')) {
       const a2Findings = detectA2FocusVisibility(allFiles);
       if (a2Findings.length > 0) {
-        const confirmedCount = a2Findings.filter(f => f.classification === 'confirmed').length;
-        const heuristicCount = a2Findings.filter(f => f.classification === 'potential').length;
-        const hasConfirmedItems = confirmedCount > 0;
-        const overallConfidence = Math.max(...a2Findings.map(f => f.confidence));
-        const a2Status = hasConfirmedItems ? 'confirmed' : 'potential';
-        
-        const a2Elements = a2Findings.map(f => ({
+        const confirmedFindings = a2Findings.filter(f => f.classification === 'confirmed');
+        const potentialFindings = a2Findings.filter(f => f.classification === 'potential');
+
+        const mapA2Elements = (list: typeof a2Findings) => list.map(f => ({
           elementLabel: f.sourceLabel,
           elementType: f.elementType,
           role: f.elementType,
@@ -4208,28 +4206,45 @@ serve(async (req) => {
           deduplicationKey: f.deduplicationKey,
           _a2Debug: f._a2Debug,
         }));
-        
-        aggregatedA2GitHub = {
-          ruleId: 'A2',
-          ruleName: 'Poor focus visibility',
-          category: 'accessibility',
-          status: a2Status,
-          potentialSubtype: hasConfirmedItems ? undefined : 'borderline',
-          blocksConvergence: a2Status === 'confirmed',
-          inputType: 'github',
-          isA2Aggregated: true,
-          a2Elements,
-          evaluationMethod: 'deterministic',
-          diagnosis: `Focus visibility issues detected: ${confirmedCount} confirmed, ${heuristicCount} borderline.`,
-          contextualHint: 'Add visible focus-visible indicators for keyboard accessibility.',
-          correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline.',
-          confidence: Math.round(overallConfidence * 100) / 100,
-          ...(a2Status === 'potential' ? {
+
+        if (confirmedFindings.length > 0) {
+          aggregatedA2GitHubList.push({
+            ruleId: 'A2',
+            ruleName: 'Poor focus visibility',
+            category: 'accessibility',
+            status: 'confirmed',
+            blocksConvergence: true,
+            inputType: 'github',
+            isA2Aggregated: true,
+            a2Elements: mapA2Elements(confirmedFindings),
+            evaluationMethod: 'deterministic',
+            diagnosis: `Focus visibility issues: ${confirmedFindings.length} confirmed violation(s).`,
+            contextualHint: 'Add visible focus-visible indicators for keyboard accessibility.',
+            correctivePrompt: 'Add a visible focus indicator for interactive elements that remove the default outline.',
+            confidence: Math.max(...confirmedFindings.map(f => f.confidence)),
+          });
+        }
+
+        if (potentialFindings.length > 0) {
+          aggregatedA2GitHubList.push({
+            ruleId: 'A2',
+            ruleName: 'Poor focus visibility',
+            category: 'accessibility',
+            status: 'potential',
+            potentialSubtype: 'borderline',
+            blocksConvergence: false,
+            inputType: 'github',
+            isA2Aggregated: true,
+            a2Elements: mapA2Elements(potentialFindings),
+            evaluationMethod: 'deterministic',
+            diagnosis: `Focus visibility issues: ${potentialFindings.length} borderline risk(s).`,
+            contextualHint: 'Interactive elements have subtle focus indicators — verify visibility manually.',
             advisoryGuidance: 'Focus styling exists but may be too subtle. Consider using a clearer focus-visible indicator.',
-          } : {}),
-        };
-        
-        console.log(`A2 deterministic (GitHub): ${a2Findings.length} findings (${confirmedCount} confirmed, ${heuristicCount} borderline)`);
+            confidence: Math.max(...potentialFindings.map(f => f.confidence)),
+          });
+        }
+
+        console.log(`A2 deterministic (GitHub): ${a2Findings.length} findings → ${aggregatedA2GitHubList.length} object(s) (${confirmedFindings.length} confirmed, ${potentialFindings.length} borderline)`);
       } else {
         console.log('A2 deterministic (GitHub): No violations found');
       }
@@ -4667,7 +4682,7 @@ serve(async (req) => {
       ...aggregatedE1GitHubList,
       ...aggregatedE2GitHubList,
       ...aggregatedE3GitHubList,
-      ...(aggregatedA2GitHub ? [aggregatedA2GitHub] : []),
+      ...aggregatedA2GitHubList,
       ...(aggregatedA3GitHub ? [aggregatedA3GitHub] : []),
       ...(aggregatedA4GitHub ? [aggregatedA4GitHub] : []),
       ...(aggregatedA5GitHub ? [aggregatedA5GitHub] : []),
