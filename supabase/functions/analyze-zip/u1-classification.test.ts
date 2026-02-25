@@ -235,6 +235,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
 
     if (buttonImpl) {
       const actionGroups = extractActionGroups(content, buttonLocalNames);
+      const u12SuppressedLabels = new Set<string>();
       for (const group of actionGroups) {
         const ctas: Array<{ label: string; emphasis: Emphasis; styleKey: string | null }> = [];
         for (const btn of group.buttons) {
@@ -262,11 +263,33 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
               advisoryGuidance: 'Visually distinguish the primary action.',
               deduplicationKey: `U1.2|${filePath}|${group.containerType}`,
             });
+            for (const cta of ctas) {
+              u12SuppressedLabels.add(cta.label.trim().toLowerCase());
+            }
           }
         }
       }
-    }
 
+    const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
+    for (const btn of allButtons) {
+      const labelLower = btn.label.trim().toLowerCase();
+      if (GENERIC_LABELS.has(labelLower)) {
+        if (u12SuppressedLabels.has(labelLower)) continue;
+        const dedupeKey = `U1.3|${filePath}|${labelLower}`;
+        if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
+        findings.push({
+          subCheck: 'U1.3', subCheckLabel: 'Ambiguous CTA label', classification: 'potential',
+          elementLabel: `"${btn.label}" button`, elementType: 'button', filePath,
+          detection: `Generic label: "${btn.label}"`,
+          evidence: `CTA labeled "${btn.label}" in ${componentName}`,
+          explanation: `The CTA label "${btn.label}" is generic and does not communicate the specific action.`,
+          confidence: 0.65,
+          advisoryGuidance: 'Use specific, action-oriented labels.',
+          deduplicationKey: dedupeKey,
+        });
+      }
+    }
+    } else {
     const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
     for (const btn of allButtons) {
       const labelLower = btn.label.trim().toLowerCase();
@@ -284,6 +307,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
           deduplicationKey: dedupeKey,
         });
       }
+    }
     }
   }
   return findings;
@@ -454,4 +478,41 @@ export default function BrokenForm() {
   const u11 = results.find(f => f.subCheck === 'U1.1');
   // The form HAS a <Button> (which counts as submit), so U1.1 should NOT fire
   assertEquals(u11, undefined, "Form with <Button> should not trigger U1.1");
+});
+
+Deno.test("U1.2 suppresses U1.3 for labels in same container", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/components/SaveDialog.tsx", `
+import { Button } from "@/components/ui/button";
+export default function SaveDialog() {
+  return (
+    <CardFooter>
+      <Button>Save</Button>
+      <Button>Cancel</Button>
+    </CardFooter>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 finding for competing CTAs");
+  const u13Save = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Save'));
+  assertEquals(u13Save, undefined, "U1.3 for 'Save' should be suppressed when U1.2 fires for same container");
+});
+
+Deno.test("U1.3 still fires for generic label outside U1.2 container", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/components/StandaloneSave.tsx", `
+import { Button } from "@/components/ui/button";
+export default function StandaloneSave() {
+  return <Button>Save</Button>;
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assertEquals(u12, undefined, "No U1.2 for single button");
+  const u13 = results.find(f => f.subCheck === 'U1.3');
+  assert(u13 !== undefined, "U1.3 should fire for standalone generic label");
 });
