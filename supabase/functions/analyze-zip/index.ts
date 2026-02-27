@@ -2771,6 +2771,8 @@ interface A2Finding {
   elementLabel: string;
   elementType: string;
   elementTag: string; // actual HTML tag: input, div, button, a, etc.
+  elementName: string; // Human-readable element name (e.g., "SelectItem", "CommandPrimitive.Item")
+  elementSource: 'jsx_tag' | 'wrapper_component' | 'html_tag_fallback' | 'unknown';
   sourceLabel: string;
   filePath: string;
   lineNumber: number;
@@ -2797,6 +2799,90 @@ interface A2Finding {
   };
 }
 
+// Build a lightweight symbol table of wrapper component definitions in a file
+function buildComponentSymbolTable(content: string): Array<{ name: string; startLine: number; endLine: number }> {
+  const symbols: Array<{ name: string; startLine: number; endLine: number }> = [];
+  const lines = content.split('\n');
+  // Match: const X = React.forwardRef(...) / const X = forwardRef(...)
+  // Match: const X = (...) => { / const X = (...) => (
+  // Match: function X(...)
+  // Match: export const X = ...
+  const defRegex = /^(?:export\s+)?(?:const|let|var)\s+([A-Z][A-Za-z0-9_.]*)\s*=\s*(?:React\.)?(?:forwardRef|memo)?\s*[(<]/;
+  const fnDefRegex = /^(?:export\s+)?(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)\s*[(<]/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    let name: string | null = null;
+    const m1 = trimmed.match(defRegex);
+    if (m1) name = m1[1];
+    if (!name) {
+      const m2 = trimmed.match(fnDefRegex);
+      if (m2) name = m2[1];
+    }
+    if (name) {
+      // Find the end: scan forward for balanced braces/parens until we hit the next top-level definition or EOF
+      let depth = 0;
+      let endLine = i;
+      for (let j = i; j < lines.length; j++) {
+        for (const ch of lines[j]) {
+          if (ch === '{' || ch === '(') depth++;
+          else if (ch === '}' || ch === ')') depth--;
+        }
+        endLine = j;
+        if (depth <= 0 && j > i) break;
+      }
+      symbols.push({ name, startLine: i + 1, endLine: endLine + 1 }); // 1-indexed
+    }
+  }
+  return symbols;
+}
+
+// Resolve the best human-readable element name for an A2 finding
+function resolveA2ElementName(
+  content: string,
+  classStrPos: number,
+  line: number,
+  tagMatch: RegExpMatchArray | null,
+  elementTag: string,
+  symbolTable: Array<{ name: string; startLine: number; endLine: number }>,
+  fileComponentName: string,
+): { elementName: string; elementSource: 'jsx_tag' | 'wrapper_component' | 'html_tag_fallback' | 'unknown' } {
+  // Strategy 1: JSX tag name (if capitalized or dotted — e.g., SelectItem, CommandPrimitive.Item)
+  if (tagMatch) {
+    const rawTag = tagMatch[1];
+    // Check for dotted names: <CommandPrimitive.Item className=...>
+    // Re-match from the context to get the full dotted name
+    const contextStart = Math.max(0, classStrPos - 500);
+    const contextBefore = content.slice(contextStart, classStrPos);
+    const dottedMatch = contextBefore.match(/<([A-Z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*)(?:\s|$)[^>]*$/);
+    if (dottedMatch) {
+      return { elementName: dottedMatch[1], elementSource: 'jsx_tag' };
+    }
+    if (/^[A-Z]/.test(rawTag)) {
+      return { elementName: rawTag, elementSource: 'jsx_tag' };
+    }
+  }
+
+  // Strategy 2: Which wrapper component definition contains this line?
+  for (const sym of symbolTable) {
+    if (line >= sym.startLine && line <= sym.endLine) {
+      return { elementName: sym.name, elementSource: 'wrapper_component' };
+    }
+  }
+
+  // Strategy 3: HTML tag fallback with role/data-state annotation
+  if (elementTag && elementTag !== 'unknown') {
+    return { elementName: elementTag, elementSource: 'html_tag_fallback' };
+  }
+
+  // Strategy 4: File-level component name
+  if (fileComponentName) {
+    return { elementName: fileComponentName, elementSource: 'wrapper_component' };
+  }
+
+  return { elementName: 'unknown', elementSource: 'unknown' };
+}
+
 function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
   const findings: A2Finding[] = [];
   const seenKeys = new Set<string>();
@@ -2814,6 +2900,9 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
     const fileName = filePath.split('/').pop() || filePath;
+
+    // Build symbol table for wrapper component resolution
+    const symbolTable = buildComponentSymbolTable(content);
 
     // Find all className attributes in the file
     const classNameRegex = /className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[^}]*(?:`([^`]+)`|["']([^"']+)["'])[^}]*\})/g;
@@ -2891,7 +2980,10 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       const contextBefore = content.slice(contextStart, classStrPos);
       // Find the nearest opening tag
       const tagMatch = contextBefore.match(/<(\w+)(?:\s|$)[^>]*$/);
-      const elementTag = tagMatch ? tagMatch[1].toLowerCase() : 'unknown';
+      const rawTagName = tagMatch ? tagMatch[1] : '';
+      const elementTag = rawTagName ? rawTagName.toLowerCase() : 'unknown';
+      // Resolve human-readable element name
+      const { elementName, elementSource } = resolveA2ElementName(content, classStrPos, line, tagMatch, elementTag, symbolTable, componentName);
       // Get the full tag opening (up to 1000 chars after < to find >)
       const tagOpenStart = contextBefore.lastIndexOf('<');
       const fullTagRegion = content.slice(contextStart + (tagOpenStart >= 0 ? tagOpenStart : 0), classStrPos + classStr.length + 200);
@@ -2987,14 +3079,16 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
         : 'Element removes the default browser outline without providing a visible focus replacement.';
 
       const confidence = isBorderline ? 0.68 : (focusable === 'yes' ? 0.92 : 0.75);
-      const sourceLabel = componentName || fileName.replace(/\.\w+$/, '');
+      const sourceLabel = elementName !== 'unknown' ? elementName : (componentName || fileName.replace(/\.\w+$/, ''));
 
-      console.log(`A2 ${classification.toUpperCase()} (deterministic): ${filePath}:${line} tag=${elementTag} focusable=${focusable} tokens=[${allMatchedTokens.join(',')}]`);
+      console.log(`A2 ${classification.toUpperCase()} (deterministic): ${filePath}:${line} tag=${elementTag} name=${elementName} focusable=${focusable} tokens=[${allMatchedTokens.join(',')}]`);
 
       findings.push({
         elementLabel: sourceLabel,
         elementType,
         elementTag,
+        elementName,
+        elementSource,
         sourceLabel,
         filePath,
         lineNumber: line,
@@ -6335,6 +6429,8 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           elementLabel: g.representative.sourceLabel,
           elementType: g.representative.elementType,
           elementTag: g.representative.elementTag,
+          elementName: g.representative.elementName,
+          elementSource: g.representative.elementSource,
           role: g.representative.elementType,
           accessibleName: '',
           sourceLabel: g.representative.sourceLabel,

@@ -324,6 +324,8 @@ export interface A2ElementSubItem {
   elementLabel: string; // Best human-readable "source label" (e.g., "More options (kebab menu)")
   elementType?: string; // button, link, input, select, etc.
   elementTag?: string; // actual HTML tag: input, div, button, a, etc.
+  elementName?: string; // Human-readable element name (e.g., "SelectItem", "CommandPrimitive.Item")
+  elementSource?: 'jsx_tag' | 'wrapper_component' | 'html_tag_fallback' | 'unknown'; // How elementName was resolved
   role?: string; // ARIA role or HTML tag role (e.g., "button", "link", "menuitem")
   accessibleName?: string; // Computed accessible name (aria-label / button text). Empty string = "(no accessible name)"
   sourceLabel?: string; // Best human label (e.g., "3-dot menu", "Enroll Now")
