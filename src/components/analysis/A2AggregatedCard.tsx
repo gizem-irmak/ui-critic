@@ -37,6 +37,11 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <span className={cn('font-medium', compact ? 'text-sm' : '')}>
                 {displayLabel}
               </span>
+              {(element.occurrences ?? 1) > 1 && (
+                <Badge variant="outline" className="text-xs border-muted-foreground/40 text-muted-foreground">
+                  {element.occurrences} occurrences
+                </Badge>
+              )}
               {isBorderline && (
                 <Badge variant="outline" className="text-xs border-warning/50 text-warning">
                   Borderline
@@ -72,7 +77,13 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 </span>
               </div>
 
-              {/* Detection — chips */}
+              {/* Affected components (when grouped) */}
+              {element.affectedComponents && element.affectedComponents.length > 1 && (
+                <div className="flex items-start gap-2">
+                  <span className="text-muted-foreground font-medium w-24">Components:</span>
+                  <span className="font-mono text-xs">{element.affectedComponents.join(', ')}</span>
+                </div>
+              )}
               <div className="flex items-start gap-2">
                 <span className="text-muted-foreground font-medium w-24">Detection:</span>
                 <div className="flex flex-wrap gap-1">
