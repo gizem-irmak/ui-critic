@@ -19,7 +19,9 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const displayLabel = element.sourceLabel || element.elementLabel;
+  const displayLabel = element.elementName && element.elementName !== 'unknown'
+    ? element.elementName
+    : (element.sourceLabel || element.elementLabel);
   const isBorderline = element.potentialSubtype === 'borderline';
 
   return (
@@ -69,8 +71,11 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <div className="flex items-start gap-2">
                 <span className="text-muted-foreground font-medium w-24">Element:</span>
                 <span className="font-mono text-xs">
-                  {element.elementTag || element.elementType || 'unknown'}
-                  {element.sourceLabel && element.sourceLabel !== element.elementLabel ? ` (${element.sourceLabel})` : ''}
+                  {element.elementName && element.elementName !== 'unknown'
+                    ? element.elementName
+                    : (element.elementTag || element.elementType || 'unknown')}
+                  {element.elementSource === 'html_tag_fallback' && ' (fallback)'}
+                  {element.sourceLabel && element.sourceLabel !== element.elementLabel && element.sourceLabel !== element.elementName ? ` (${element.sourceLabel})` : ''}
                   {element.selectorHints && element.selectorHints.length > 0 ? ` — ${element.selectorHints.join(' — ')}` : ''}
                   {' — Focusable: '}
                   {element.focusable === 'yes' ? 'Yes' : element.focusable === 'no' ? 'No' : 'Unknown'}
@@ -119,8 +124,11 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               <div className="flex items-start gap-2">
                 <span className="text-muted-foreground font-medium w-20">Element:</span>
                 <span className="font-mono text-xs">
-                  {element.elementTag || element.elementType || 'unknown'}
-                  {element.sourceLabel && element.sourceLabel !== element.elementLabel ? ` (${element.sourceLabel})` : ''}
+                  {element.elementName && element.elementName !== 'unknown'
+                    ? element.elementName
+                    : (element.elementTag || element.elementType || 'unknown')}
+                  {element.elementSource === 'html_tag_fallback' && ' (fallback)'}
+                  {element.sourceLabel && element.sourceLabel !== element.elementLabel && element.sourceLabel !== element.elementName ? ` (${element.sourceLabel})` : ''}
                   {element.selectorHints && element.selectorHints.length > 0 ? ` — ${element.selectorHints.join(' — ')}` : ''}
                   {' — Focusable: '}
                   {element.focusable === 'yes' ? 'Yes' : element.focusable === 'no' ? 'No' : 'Unknown'}

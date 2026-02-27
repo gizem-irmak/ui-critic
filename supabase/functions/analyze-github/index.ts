@@ -1132,6 +1132,8 @@ interface A2Finding {
   elementLabel: string;
   elementType: string;
   elementTag: string;
+  elementName: string;
+  elementSource: 'jsx_tag' | 'wrapper_component' | 'html_tag_fallback' | 'unknown';
   sourceLabel: string;
   filePath: string;
   lineNumber: number;
@@ -1157,6 +1159,77 @@ interface A2Finding {
   };
 }
 
+function buildComponentSymbolTable(content: string): Array<{ name: string; startLine: number; endLine: number }> {
+  const symbols: Array<{ name: string; startLine: number; endLine: number }> = [];
+  const lines = content.split('\n');
+  const defRegex = /^(?:export\s+)?(?:const|let|var)\s+([A-Z][A-Za-z0-9_.]*)\s*=\s*(?:React\.)?(?:forwardRef|memo)?\s*[(<]/;
+  const fnDefRegex = /^(?:export\s+)?(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)\s*[(<]/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trimStart();
+    let name: string | null = null;
+    const m1 = trimmed.match(defRegex);
+    if (m1) name = m1[1];
+    if (!name) {
+      const m2 = trimmed.match(fnDefRegex);
+      if (m2) name = m2[1];
+    }
+    if (name) {
+      let depth = 0;
+      let endLine = i;
+      for (let j = i; j < lines.length; j++) {
+        for (const ch of lines[j]) {
+          if (ch === '{' || ch === '(') depth++;
+          else if (ch === '}' || ch === ')') depth--;
+        }
+        endLine = j;
+        if (depth <= 0 && j > i) break;
+      }
+      symbols.push({ name, startLine: i + 1, endLine: endLine + 1 });
+    }
+  }
+  return symbols;
+}
+
+function resolveA2ElementName(
+  content: string,
+  classStrPos: number,
+  line: number,
+  tagMatch: RegExpMatchArray | null,
+  elementTag: string,
+  symbolTable: Array<{ name: string; startLine: number; endLine: number }>,
+  fileComponentName: string,
+): { elementName: string; elementSource: 'jsx_tag' | 'wrapper_component' | 'html_tag_fallback' | 'unknown' } {
+  if (tagMatch) {
+    const rawTag = tagMatch[1];
+    const contextStart = Math.max(0, classStrPos - 500);
+    const contextBefore = content.slice(contextStart, classStrPos);
+    const dottedMatch = contextBefore.match(/<([A-Z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*)(?:\s|$)[^>]*$/);
+    if (dottedMatch) {
+      return { elementName: dottedMatch[1], elementSource: 'jsx_tag' };
+    }
+    if (/^[A-Z]/.test(rawTag)) {
+      return { elementName: rawTag, elementSource: 'jsx_tag' };
+    }
+  }
+
+  for (const sym of symbolTable) {
+    if (line >= sym.startLine && line <= sym.endLine) {
+      return { elementName: sym.name, elementSource: 'wrapper_component' };
+    }
+  }
+
+  if (elementTag && elementTag !== 'unknown') {
+    return { elementName: elementTag, elementSource: 'html_tag_fallback' };
+  }
+
+  if (fileComponentName) {
+    return { elementName: fileComponentName, elementSource: 'wrapper_component' };
+  }
+
+  return { elementName: 'unknown', elementSource: 'unknown' };
+}
+
 function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
   const findings: A2Finding[] = [];
   const seenKeys = new Set<string>();
@@ -1174,6 +1247,7 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
     const fileName = filePath.split('/').pop() || filePath;
+    const symbolTable = buildComponentSymbolTable(content);
 
     const classNameRegex = /className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[^}]*(?:`([^`]+)`|["']([^"']+)["'])[^}]*\})/g;
     const classRegex = /\bclass\s*=\s*(?:"([^"]+)"|'([^']+)')/g;
@@ -1239,7 +1313,9 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       const contextStart = Math.max(0, classStrPos - 500);
       const contextBefore = content.slice(contextStart, classStrPos);
       const tagMatch = contextBefore.match(/<(\w+)(?:\s|$)[^>]*$/);
-      const elementTag = tagMatch ? tagMatch[1].toLowerCase() : 'unknown';
+      const rawTagName = tagMatch ? tagMatch[1] : '';
+      const elementTag = rawTagName ? rawTagName.toLowerCase() : 'unknown';
+      const { elementName, elementSource } = resolveA2ElementName(content, classStrPos, line, tagMatch, elementTag, symbolTable, componentName);
       const tagOpenStart = contextBefore.lastIndexOf('<');
       const fullTagRegion = content.slice(contextStart + (tagOpenStart >= 0 ? tagOpenStart : 0), classStrPos + classStr.length + 200);
       
@@ -1327,14 +1403,16 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
         : 'Element removes the default browser outline without providing a visible focus replacement.';
 
       const confidence = isBorderline ? 0.68 : (focusable === 'yes' ? 0.92 : 0.75);
-      const sourceLabel = componentName || fileName.replace(/\.\w+$/, '');
+      const sourceLabel = elementName !== 'unknown' ? elementName : (componentName || fileName.replace(/\.\w+$/, ''));
 
-      console.log(`A2 ${classification.toUpperCase()} (deterministic): ${filePath}:${line} tag=${elementTag} focusable=${focusable} tokens=[${allMatchedTokens.join(',')}]`);
+      console.log(`A2 ${classification.toUpperCase()} (deterministic): ${filePath}:${line} tag=${elementTag} name=${elementName} focusable=${focusable} tokens=[${allMatchedTokens.join(',')}]`);
 
       findings.push({
         elementLabel: sourceLabel,
         elementType,
         elementTag,
+        elementName,
+        elementSource,
         sourceLabel,
         filePath,
         lineNumber: line,
@@ -4670,6 +4748,8 @@ serve(async (req) => {
           elementLabel: g.representative.sourceLabel,
           elementType: g.representative.elementType,
           elementTag: g.representative.elementTag,
+          elementName: g.representative.elementName,
+          elementSource: g.representative.elementSource,
           role: g.representative.elementType,
           accessibleName: '',
           sourceLabel: g.representative.sourceLabel,
