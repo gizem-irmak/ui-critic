@@ -19,7 +19,9 @@ interface A2ClassificationResult {
   potentialReason?: string;
 }
 
-function classifyA2Finding(evidence: string, diagnosis: string = ''): A2ClassificationResult | 'skip' | 'pass' {
+type Focusable = 'yes' | 'no' | 'unknown';
+
+function classifyA2Finding(evidence: string, diagnosis: string = '', focusable: Focusable = 'yes'): A2ClassificationResult | 'skip' | 'pass' | 'not_applicable' {
   const combined = (evidence + ' ' + diagnosis).toLowerCase();
 
   // STEP 1: outlineRemoved — must mention outline suppression
@@ -30,7 +32,6 @@ function classifyA2Finding(evidence: string, diagnosis: string = ''): A2Classifi
   }
 
   // STEP 2: hasStrongReplacement — ONLY focus-scoped tokens count
-  // Bare ring-*, border-*, shadow-* do NOT count as replacement
   const hasStrongReplacement = /(?:^|\s|"|')focus(?:-visible)?:ring-(?!0\b)/i.test(combined) ||
                                 /(?:^|\s|"|')focus(?:-visible)?:border-(?!0\b|none)/i.test(combined) ||
                                 /(?:^|\s|"|')focus(?:-visible)?:shadow-(?!none)/i.test(combined) ||
@@ -52,11 +53,25 @@ function classifyA2Finding(evidence: string, diagnosis: string = ''): A2Classifi
     };
   }
 
-  // No replacement at all → Confirmed
+  // STEP 4: Focusability gate
+  if (focusable === 'no') {
+    return 'not_applicable';
+  }
+
+  if (focusable === 'yes') {
+    return {
+      isConfirmed: true,
+      isPotential: false,
+      confidenceRange: [0.90, 0.95],
+    };
+  }
+
+  // focusable === 'unknown' → Potential
   return {
-    isConfirmed: true,
-    isPotential: false,
-    confidenceRange: [0.90, 0.95],
+    isConfirmed: false,
+    isPotential: true,
+    confidenceRange: [0.70, 0.80],
+    potentialReason: 'Element focusability could not be deterministically confirmed.',
   };
 }
 
@@ -245,9 +260,50 @@ Deno.test("A2: outline-none + bare bg-accent + bare text-accent-foreground → C
 
 Deno.test("A2: outline-none + data-[state=open]:bg-accent → Confirmed (data-state is not focus-scoped)", () => {
   const evidence = "outline-none data-[state=open]:bg-accent data-[state=open]:text-accent-foreground";
-  const result = classifyA2Finding(evidence);
+  const result = classifyA2Finding(evidence, '', 'yes');
   assertEquals(typeof result, 'object');
   if (typeof result === 'object') {
     assertEquals(result.isConfirmed, true, "data-state styles are not focus indicators");
   }
+});
+
+// ============================================================
+// FOCUSABILITY GATING TESTS
+// ============================================================
+
+Deno.test("A2: outline-none + focusable=yes → Confirmed", () => {
+  const result = classifyA2Finding("outline-none", '', 'yes');
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, true, "Focusable=yes → Confirmed");
+    assertEquals(result.isPotential, false);
+  }
+});
+
+Deno.test("A2: outline-none + focusable=unknown → Potential (not Confirmed)", () => {
+  const result = classifyA2Finding("outline-none", '', 'unknown');
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, false, "Focusable=unknown must NOT be Confirmed");
+    assertEquals(result.isPotential, true, "Focusable=unknown → Potential");
+  }
+});
+
+Deno.test("A2: outline-none + focusable=no → not_applicable", () => {
+  const result = classifyA2Finding("outline-none", '', 'no');
+  assertEquals(result, 'not_applicable', "Non-focusable elements should be not_applicable");
+});
+
+Deno.test("A2: outline-none + focus:bg-accent + focusable=unknown → Potential (weak styling takes priority)", () => {
+  const result = classifyA2Finding("outline-none focus:bg-accent", '', 'unknown');
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isPotential, true);
+    assertEquals(result.isConfirmed, false);
+  }
+});
+
+Deno.test("A2: outline-none + focus-visible:ring-2 + focusable=unknown → PASS (strong replacement always passes)", () => {
+  const result = classifyA2Finding("focus:outline-none focus-visible:ring-2", '', 'unknown');
+  assertEquals(result, 'pass', "Strong replacement → PASS regardless of focusability");
 });
