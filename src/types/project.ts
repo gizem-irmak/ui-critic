@@ -355,6 +355,10 @@ export interface A2ElementSubItem {
   
   // Deduplication key
   deduplicationKey: string;
+  
+  // Grouping metadata (pattern-signature grouping)
+  occurrences?: number; // How many raw findings this group represents
+  affectedComponents?: string[]; // Component names sharing this pattern
 }
 
 // A3 Element sub-item for aggregated keyboard operability reporting
