@@ -1301,8 +1301,11 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       } else if (focusable === 'no') {
         classification = 'not_applicable';
         console.log(`A2 NOT_APPLICABLE (deterministic): ${filePath}:${line} — non-focusable ${elementTag}`);
-      } else {
+      } else if (focusable === 'yes') {
         classification = 'confirmed';
+      } else {
+        // focusable === 'unknown' → Potential (component wrappers, unresolved tags)
+        classification = 'potential';
       }
 
       const dedupeKey = `${filePath}|${componentName}|${line}`;
@@ -1323,10 +1326,10 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
         ? 'Issue reason: Outline removed; focus relies only on bg/text change; contrast can\'t be verified statically.\n\nRecommended fix: Add a clear focus-visible indicator (e.g., focus-visible:ring-2 + focus-visible:ring-offset-2) or restore outline.'
         : 'Element removes the default browser outline without providing a visible focus replacement.';
 
-      const confidence = isBorderline ? 0.68 : 0.92;
+      const confidence = isBorderline ? 0.68 : (focusable === 'yes' ? 0.92 : 0.75);
       const sourceLabel = componentName || fileName.replace(/\.\w+$/, '');
 
-      console.log(`A2 ${isBorderline ? 'BORDERLINE' : 'CONFIRMED'} (deterministic): ${filePath}:${line} tag=${elementTag} focusable=${focusable} tokens=[${allMatchedTokens.join(',')}]`);
+      console.log(`A2 ${classification.toUpperCase()} (deterministic): ${filePath}:${line} tag=${elementTag} focusable=${focusable} tokens=[${allMatchedTokens.join(',')}]`);
 
       findings.push({
         elementLabel: sourceLabel,
@@ -1342,9 +1345,9 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
         explanation,
         confidence,
         focusClasses: allMatchedTokens,
-        correctivePrompt: isBorderline ? undefined : `[${sourceLabel} ${elementType}] — ${filePath}\n\nIssue reason:\nFocus indicator is removed (${outlineRemovalTokens.join(', ')}) without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2).`,
-        potentialSubtype: isBorderline ? 'borderline' : undefined,
-        potentialReason: isBorderline ? 'Custom focus styles exist but perceptibility cannot be statically verified.' : undefined,
+        correctivePrompt: classification === 'confirmed' ? `[${sourceLabel} ${elementType}] — ${filePath}\n\nIssue reason:\nFocus indicator is removed (${outlineRemovalTokens.join(', ')}) without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2).` : undefined,
+        potentialSubtype: classification === 'potential' ? 'borderline' : undefined,
+        potentialReason: classification === 'potential' ? (isBorderline ? 'Custom focus styles exist but perceptibility cannot be statically verified.' : 'Element focusability could not be deterministically confirmed (component wrapper or unknown tag).') : undefined,
         deduplicationKey: dedupeKey,
         focusable,
         selectorHints,
