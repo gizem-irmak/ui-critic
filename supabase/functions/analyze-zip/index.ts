@@ -2929,14 +2929,7 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       const parsedRole = roleMatch ? roleMatch[1].toLowerCase() : '';
       const parsedTabIndex = tabIndexMatch ? parseInt(tabIndexMatch[1], 10) : null;
 
-      // Radix/shadcn primitives that render focusable elements
-      const RADIX_FOCUSABLE_PRIMITIVES = /(?:DropdownMenu|ContextMenu|Menubar)(?:Item|CheckboxItem|RadioItem|SubTrigger)|NavigationMenu(?:Link|Trigger)|SelectItem|TabsTrigger|ToggleGroupItem|AccordionTrigger|AlertDialogAction|AlertDialogCancel|DialogClose/i;
-      // Radix/shadcn wrappers that are NOT focusable containers
-      const RADIX_NON_FOCUSABLE_WRAPPERS = /PopoverContent|HoverCardContent|TooltipContent|DropdownMenuContent|ContextMenuContent|MenubarContent|SelectContent|NavigationMenuContent|DialogContent|AlertDialogContent|SheetContent|DrawerContent|AccordionContent|CollapsibleContent/i;
-
       let focusable: 'yes' | 'no' | 'unknown' = 'unknown';
-      const actualTagName = tagMatch?.[1] || '';
-
       if (INHERENTLY_FOCUSABLE.test(elementTag)) {
         focusable = 'yes';
       } else if (parsedTabIndex !== null && parsedTabIndex >= 0) {
@@ -2948,19 +2941,11 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       } else if (/^(div|span|p|section|article|header|footer|aside|nav|figure|main)$/.test(elementTag)) {
         focusable = parsedTabIndex !== null && parsedTabIndex < 0 ? 'no' : (parsedTabIndex === null ? 'no' : 'yes');
       }
-
-      // Radix/shadcn component inference (capitalized tags or from contextBefore)
-      if (focusable === 'unknown') {
-        const radixContext = actualTagName + ' ' + contextBefore.slice(-200);
-        if (RADIX_FOCUSABLE_PRIMITIVES.test(radixContext)) {
-          focusable = 'yes';
-        } else if (RADIX_NON_FOCUSABLE_WRAPPERS.test(radixContext)) {
-          focusable = parsedTabIndex !== null && parsedTabIndex >= 0 ? 'yes' : 'no';
-        } else if (/^[A-Z]/.test(actualTagName)) {
-          // Generic component wrapper heuristic
-          if (/input|button|select|textarea|command/i.test(componentName)) focusable = 'yes';
-          else if (/content|wrapper|container|card|popover|hover/i.test(componentName)) focusable = parsedTabIndex !== null && parsedTabIndex >= 0 ? 'yes' : 'no';
-        }
+      // Component wrappers (capitalized tag) → unknown unless we found hints
+      if (elementTag === 'unknown' || /^[A-Z]/.test(tagMatch?.[1] || '')) {
+        // If component name maps to known focusable type
+        if (/input|button|select|textarea|command/i.test(componentName)) focusable = 'yes';
+        else if (/content|wrapper|container|card|popover|hover/i.test(componentName)) focusable = parsedTabIndex !== null && parsedTabIndex >= 0 ? 'yes' : 'unknown';
       }
 
       // ── Estimate line range ──

@@ -21,22 +21,8 @@ interface A2ClassificationResult {
 
 type Focusable = 'yes' | 'no' | 'unknown';
 
-// Radix/shadcn primitives that render focusable elements
-const RADIX_FOCUSABLE_PRIMITIVES = /(?:DropdownMenu|ContextMenu|Menubar)(?:Item|CheckboxItem|RadioItem|SubTrigger)|NavigationMenu(?:Link|Trigger)|SelectItem|TabsTrigger|ToggleGroupItem|AccordionTrigger|AlertDialogAction|AlertDialogCancel|DialogClose/i;
-// Radix/shadcn wrappers that are NOT focusable containers
-const RADIX_NON_FOCUSABLE_WRAPPERS = /PopoverContent|HoverCardContent|TooltipContent|DropdownMenuContent|ContextMenuContent|MenubarContent|SelectContent|NavigationMenuContent|DialogContent|AlertDialogContent|SheetContent|DrawerContent|AccordionContent|CollapsibleContent/i;
-
-function classifyA2Finding(evidence: string, diagnosis: string = '', focusable: Focusable = 'yes', componentContext: string = ''): A2ClassificationResult | 'skip' | 'pass' | 'not_applicable' {
+function classifyA2Finding(evidence: string, diagnosis: string = '', focusable: Focusable = 'yes'): A2ClassificationResult | 'skip' | 'pass' | 'not_applicable' {
   const combined = (evidence + ' ' + diagnosis).toLowerCase();
-
-  // STEP 0: Radix component inference (override focusable if still unknown)
-  if (focusable === 'unknown' && componentContext) {
-    if (RADIX_FOCUSABLE_PRIMITIVES.test(componentContext)) {
-      focusable = 'yes';
-    } else if (RADIX_NON_FOCUSABLE_WRAPPERS.test(componentContext)) {
-      focusable = 'no';
-    }
-  }
 
   // STEP 1: outlineRemoved — must mention outline suppression
   const outlineRemoved = /(?:^|\s|"|')outline-none|focus:outline-none|focus-visible:outline-none/i.test(combined) ||
@@ -320,75 +306,4 @@ Deno.test("A2: outline-none + focus:bg-accent + focusable=unknown → Potential 
 Deno.test("A2: outline-none + focus-visible:ring-2 + focusable=unknown → PASS (strong replacement always passes)", () => {
   const result = classifyA2Finding("focus:outline-none focus-visible:ring-2", '', 'unknown');
   assertEquals(result, 'pass', "Strong replacement → PASS regardless of focusability");
-});
-
-// ============================================================
-// RADIX/SHADCN COMPONENT INFERENCE TESTS
-// ============================================================
-
-Deno.test("A2: DropdownMenuItem + outline-none + focus:bg-accent → Potential (Radix focusable item, weak style)", () => {
-  const result = classifyA2Finding("outline-none focus:bg-accent focus:text-accent-foreground", '', 'unknown', 'DropdownMenuItem');
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isPotential, true, "DropdownMenuItem with weak focus → Potential");
-    assertEquals(result.isConfirmed, false, "Should NOT be Confirmed — bg/text is weak");
-  }
-});
-
-Deno.test("A2: ContextMenuItem + outline-none + no replacement → Confirmed (Radix focusable item, no indicator)", () => {
-  const result = classifyA2Finding("outline-none", '', 'unknown', 'ContextMenuItem');
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isConfirmed, true, "ContextMenuItem with no replacement → Confirmed");
-  }
-});
-
-Deno.test("A2: SelectItem + outline-none + focus:bg-accent → Potential (focusable Radix item)", () => {
-  const result = classifyA2Finding("outline-none focus:bg-accent focus:text-accent-foreground", '', 'unknown', 'SelectItem');
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isPotential, true);
-    assertEquals(result.isConfirmed, false);
-  }
-});
-
-Deno.test("A2: MenubarItem + outline-none + no replacement → Confirmed (Radix focusable)", () => {
-  const result = classifyA2Finding("outline-none", '', 'unknown', 'MenubarItem');
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isConfirmed, true);
-  }
-});
-
-Deno.test("A2: PopoverContent + outline-none → not_applicable (non-focusable wrapper)", () => {
-  const result = classifyA2Finding("outline-none", '', 'unknown', 'PopoverContent');
-  assertEquals(result, 'not_applicable', "PopoverContent should be suppressed as non-focusable");
-});
-
-Deno.test("A2: HoverCardContent + outline-none → not_applicable (non-focusable wrapper)", () => {
-  const result = classifyA2Finding("outline-none", '', 'unknown', 'HoverCardContent');
-  assertEquals(result, 'not_applicable', "HoverCardContent should be suppressed as non-focusable");
-});
-
-Deno.test("A2: DialogContent + outline-none → not_applicable (non-focusable wrapper)", () => {
-  const result = classifyA2Finding("outline-none", '', 'unknown', 'DialogContent');
-  assertEquals(result, 'not_applicable', "DialogContent should be suppressed as non-focusable");
-});
-
-Deno.test("A2: DropdownMenuContent + outline-none → not_applicable (non-focusable wrapper)", () => {
-  const result = classifyA2Finding("outline-none", '', 'unknown', 'DropdownMenuContent');
-  assertEquals(result, 'not_applicable', "DropdownMenuContent should be suppressed as non-focusable");
-});
-
-Deno.test("A2: AccordionTrigger + outline-none + focus-visible:ring-2 → PASS (strong replacement)", () => {
-  const result = classifyA2Finding("outline-none focus-visible:ring-2", '', 'unknown', 'AccordionTrigger');
-  assertEquals(result, 'pass', "Strong replacement always passes regardless of component type");
-});
-
-Deno.test("A2: NavigationMenuLink + outline-none + no replacement → Confirmed (focusable Radix)", () => {
-  const result = classifyA2Finding("outline-none", '', 'unknown', 'NavigationMenuLink');
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isConfirmed, true);
-  }
 });
