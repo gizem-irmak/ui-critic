@@ -8,8 +8,13 @@ Rule A2 (Poor Focus Visibility) evaluates WCAG 2.4.7 — fully deterministic (no
   - `<button>`, `<a href>`, `<input>`, `<select>`, `<textarea>`
   - OR `tabIndex >= 0`
   - OR `role="button"/"link"/etc.` with keyboard handlers
-- **focusable === 'unknown'** (component wrappers, unresolved tags) → **Potential** (confidence 0.75)
-- **focusable === 'no'** (plain div/span without tabIndex) → **not_applicable** (suppressed)
+  - OR Radix focusable primitives: DropdownMenuItem, ContextMenuItem, MenubarItem, SelectItem, TabsTrigger, AccordionTrigger, NavigationMenuLink/Trigger, etc.
+- **focusable === 'unknown'** (unresolved component wrappers) → **Potential** (confidence 0.75)
+- **focusable === 'no'** (plain div/span without tabIndex, OR Radix non-focusable wrappers) → **not_applicable** (suppressed)
+
+## Radix/shadcn Component Inference
+- **Focusable primitives** (→ yes): DropdownMenu/ContextMenu/Menubar + Item/CheckboxItem/RadioItem/SubTrigger, NavigationMenuLink/Trigger, SelectItem, TabsTrigger, ToggleGroupItem, AccordionTrigger, AlertDialogAction/Cancel, DialogClose
+- **Non-focusable wrappers** (→ no): PopoverContent, HoverCardContent, TooltipContent, DropdownMenuContent, ContextMenuContent, MenubarContent, SelectContent, NavigationMenuContent, DialogContent, AlertDialogContent, SheetContent, DrawerContent, AccordionContent, CollapsibleContent
 
 ## Classification Logic
 
@@ -27,6 +32,11 @@ Rule A2 (Poor Focus Visibility) evaluates WCAG 2.4.7 — fully deterministic (no
 
 **Confirmed (Blocking):**
 - Outline removed + NO focus-scoped replacement + focusable=yes — confidence 0.92
+
+## Pattern Grouping
+- Findings grouped by `filePath + sorted focusClasses` pattern signature
+- Multiple occurrences collapsed into single item with occurrences count
+- Max 1 grouped item per file per pattern
 
 ## CRITICAL: Focus-Scoped Only
 - Only tokens starting with `focus:` or `focus-visible:` count as replacements
