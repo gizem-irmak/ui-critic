@@ -7,13 +7,17 @@ import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { PotentialSubtypeBadge, SubtypeAdvisoryGuidance } from './PotentialSubtypeUI';
 import { LocationBadge } from './LocationBadge';
+import {
+  RuleIdBadge, RuleHeader, ElementCountBadge, CardDescription,
+  ComponentTitle, ElementItemWrapper, DetailContainer,
+  FieldRow, FieldLabel, FieldValue, CodeTag, ConfidenceValue,
+} from './CardTypography';
 
 interface A3AggregatedCardProps {
   violation: Violation;
   compact?: boolean;
 }
 
-/** Derive missing-requirement chips from evidence/explanation */
 function getEvidenceChips(evidence?: string, explanation?: string): string[] {
   const chips: string[] = [];
   const src = (evidence || '') + ' ' + (explanation || '');
@@ -44,21 +48,13 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className={cn(
-        'rounded-lg border space-y-0',
-        isConfirmed
-          ? 'bg-destructive/5 border-destructive/20'
-          : 'bg-warning/5 border-warning/20',
-        compact ? 'p-2' : 'p-3'
-      )}>
+      <ElementItemWrapper isConfirmed={isConfirmed} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
-              <span className={cn('font-medium', compact ? 'text-sm' : '')}>
-                {displayLabel}
-              </span>
+              <ComponentTitle>{displayLabel}</ComponentTitle>
               {element.potentialSubtype === 'borderline' && (
-                <Badge variant="outline" className="text-xs border-warning/50 text-warning">
+                <Badge variant="outline" className="text-xs font-medium border-warning/50 text-warning">
                   Borderline
                 </Badge>
               )}
@@ -78,40 +74,33 @@ function A3ElementItem({ element, isConfirmed, compact = false }: {
         </CollapsibleTrigger>
 
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            {/* Detection — chips */}
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20">Detection:</span>
+          <DetailContainer>
+            <FieldRow>
+              <FieldLabel>Detection:</FieldLabel>
               <div className="flex flex-wrap gap-1">
                 {evidenceChips.map((chip, i) => (
-                  <span key={i} className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded">
-                    {chip}
-                  </span>
+                  <CodeTag key={i}>{chip}</CodeTag>
                 ))}
               </div>
-            </div>
+            </FieldRow>
 
-            {/* Requirement */}
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground font-medium w-20">Requirement:</span>
-              <span>
+            <FieldRow>
+              <FieldLabel>Requirement:</FieldLabel>
+              <FieldValue>
                 WCAG 2.1.1 Keyboard
                 {needsNameRole && ', WCAG 4.1.2 Name, Role, Value'}
-              </span>
-            </div>
+              </FieldValue>
+            </FieldRow>
 
-            {/* Confidence — only for potential findings */}
             {!isConfirmed && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Confidence:</span>
-                <span className="font-mono font-medium text-warning">
-                  {Math.round(element.confidence * 100)}%
-                </span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Confidence:</FieldLabel>
+                <ConfidenceValue value={element.confidence} />
+              </FieldRow>
             )}
-          </div>
+          </DetailContainer>
         </CollapsibleContent>
-      </div>
+      </ElementItemWrapper>
     </Collapsible>
   );
 }
@@ -140,28 +129,16 @@ export function A3AggregatedCard({ violation, compact = false }: A3AggregatedCar
       isConfirmed ? 'border-destructive/30' : 'border-warning/30'
     )}>
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
-        <CardTitle className="flex items-center gap-2 flex-wrap text-base">
-          <span className={cn(
-            'category-badge flex-shrink-0 text-xs',
-            isConfirmed ? 'category-accessibility' : 'bg-warning/10 text-warning border border-warning/20'
-          )}>
-            A3
-          </span>
-          <span className="font-bold text-base">Incomplete Keyboard Operability</span>
-          <Badge className={cn(
-            "gap-1 text-xs",
-            isConfirmed
-              ? "bg-destructive/10 text-destructive border-destructive/30"
-              : "bg-warning/10 text-warning border-warning/30"
-          )}>
-            {elements.length} element{elements.length !== 1 ? 's' : ''}
-          </Badge>
+        <CardTitle className="flex items-center gap-2 flex-wrap">
+          <RuleIdBadge ruleId="A3" isConfirmed={isConfirmed} categoryClass="category-accessibility" />
+          <RuleHeader ruleId="A3" title="Incomplete Keyboard Operability" />
+          <ElementCountBadge count={elements.length} isConfirmed={isConfirmed} />
         </CardTitle>
-        <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
+        <CardDescription compact={compact}>
           {isConfirmed
             ? 'Interactive elements lack required keyboard semantics and cannot be accessed via keyboard.'
             : violation.diagnosis}
-        </p>
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
         {elements.map((element, idx) => (

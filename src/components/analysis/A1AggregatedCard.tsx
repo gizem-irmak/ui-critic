@@ -7,6 +7,11 @@ import { cn } from '@/lib/utils';
 import type { Violation, A1ElementSubItem, A1ReasonCode } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import {
+  RuleIdBadge, RuleHeader, ElementCountBadge, CardDescription,
+  ComponentTitle, ElementItemWrapper, DetailContainer,
+  FieldRow, FieldLabel, FieldValue,
+} from './CardTypography';
 
 interface A1AggregatedCardProps {
   violation: Violation;
@@ -40,27 +45,15 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
   const isHybridPixel = element.a1Method === 'LLM→Pixel';
   const isLLMOnly = element.a1Method === 'LLM-only (measurement failed)';
 
-  // Clean element label: remove parenthesized filename suffix like "A1Contrast (A1Contrast.tsx)"
   const cleanLabel = element.elementLabel.replace(/\s*\([^)]*\.tsx?\)/, '');
-
-  // Clean location: extract just the file path portion
   const cleanLocation = element.location.replace(/^.*?([\w/-]+\.\w+).*$/, '$1');
   
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-       <div className={cn(
-        'rounded-lg border space-y-0',
-        isConfirmed 
-          ? 'bg-destructive/5 border-destructive/20' 
-          : 'bg-warning/5 border-warning/20',
-        compact ? 'p-2' : 'p-3'
-      )}>
-        {/* Header row */}
+      <ElementItemWrapper isConfirmed={isConfirmed} compact={compact}>
         <CollapsibleTrigger className="w-full">
-            <div className="flex items-center justify-between gap-2 cursor-pointer">
-              <span className={cn('font-medium text-left', compact ? 'text-sm' : '')}>
-                {cleanLabel}
-              </span>
+          <div className="flex items-center justify-between gap-2 cursor-pointer">
+            <ComponentTitle>{cleanLabel}</ComponentTitle>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={cleanLocation} compact={compact} />
               {isOpen ? (
@@ -72,68 +65,64 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
           </div>
         </CollapsibleTrigger>
         
-        {/* Expandable details */}
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-            
-            {/* PERCEPTUAL MODE (LLM-only, no pixel data): Show perceptual assessment */}
+          <DetailContainer>
+            {/* PERCEPTUAL MODE */}
             {(isPerceptual || isLLMOnly) && !isHybridPixel ? (
               <>
                 {element.screenshotTextSize && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground font-medium w-20">Text size:</span>
-                    <Badge variant="outline" className="text-xs">
-                      {element.screenshotTextSize === 'large' ? 'Large text' : element.screenshotTextSize === 'unknown' ? 'Unknown (assumed normal)' : 'Normal text'}
-                    </Badge>
-                    {element.appliedThreshold && (
-                      <span className="text-muted-foreground text-xs">
-                        Threshold: {element.appliedThreshold}:1
-                      </span>
-                    )}
-                  </div>
+                  <FieldRow>
+                    <FieldLabel>Text size:</FieldLabel>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-xs font-medium">
+                        {element.screenshotTextSize === 'large' ? 'Large text' : element.screenshotTextSize === 'unknown' ? 'Unknown (assumed normal)' : 'Normal text'}
+                      </Badge>
+                      {element.appliedThreshold && (
+                        <span className="text-sm text-muted-foreground">
+                          Threshold: {element.appliedThreshold}:1
+                        </span>
+                      )}
+                    </div>
+                  </FieldRow>
                 )}
 
-                {/* Perceived Contrast */}
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-20">Contrast:</span>
-                  <Badge variant="outline" className={cn('text-xs',
+                <FieldRow>
+                  <FieldLabel>Contrast:</FieldLabel>
+                  <Badge variant="outline" className={cn('text-xs font-medium',
                     element.perceivedContrast === 'low' ? 'border-warning/50 text-warning' : 'border-muted-foreground/50'
                   )}>
                     {element.perceivedContrast === 'low' ? 'Low (perceptual)' : element.perceivedContrast}
                   </Badge>
-                </div>
+                </FieldRow>
                 
                 {element.perceptualRationale && (
-                  <div className="pt-1">
-                    <span className="text-muted-foreground font-medium">Rationale: </span>
-                    <span className="text-foreground">{element.perceptualRationale}</span>
-                  </div>
+                  <FieldRow>
+                    <FieldLabel>Rationale:</FieldLabel>
+                    <FieldValue>{element.perceptualRationale}</FieldValue>
+                  </FieldRow>
                 )}
                 
                 {element.suggestedFix && (
-                  <div className="pt-1">
-                    <span className="text-muted-foreground font-medium">Suggestion: </span>
-                    <span className="text-foreground">{element.suggestedFix}</span>
-                  </div>
+                  <FieldRow>
+                    <FieldLabel>Suggestion:</FieldLabel>
+                    <FieldValue>{element.suggestedFix}</FieldValue>
+                  </FieldRow>
                 )}
               </>
             ) : isConfirmed ? (
               <>
-                {/* CONFIRMED STRUCTURAL MODE — Element → FG → BG → Detection → Requirement → Confidence */}
-                
-                {/* 1) Element */}
+                {/* CONFIRMED STRUCTURAL MODE */}
                 {element.jsxTag && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground font-medium w-20">Element:</span>
-                    <code className="text-foreground font-mono">&lt;{element.jsxTag}&gt;</code>
-                  </div>
+                  <FieldRow>
+                    <FieldLabel>Element:</FieldLabel>
+                    <FieldValue mono>&lt;{element.jsxTag}&gt;</FieldValue>
+                  </FieldRow>
                 )}
 
-                {/* 2) Foreground */}
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-20">Foreground:</span>
+                <FieldRow>
+                  <FieldLabel>Foreground:</FieldLabel>
                   {element.foregroundHex ? (
-                    <span className="flex items-center gap-1">
+                    <span className="flex items-center gap-1 text-sm">
                       <span className="font-mono">{element.foregroundHex}</span>
                       <span 
                         className="w-3 h-3 rounded border border-border" 
@@ -141,15 +130,14 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                       />
                     </span>
                   ) : (
-                    <span className="text-muted-foreground italic">not measured</span>
+                    <span className="text-sm text-muted-foreground italic">not measured</span>
                   )}
-                </div>
+                </FieldRow>
 
-                {/* 3) Background */}
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-20">Background:</span>
+                <FieldRow>
+                  <FieldLabel>Background:</FieldLabel>
                   {element.backgroundHex ? (
-                    <span className="flex items-center gap-1">
+                    <span className="flex items-center gap-1 text-sm">
                       <span className="font-mono">{element.backgroundHex}</span>
                       <span 
                         className="w-3 h-3 rounded border border-border" 
@@ -157,15 +145,14 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                       />
                     </span>
                   ) : (
-                    <span className="text-muted-foreground italic">unmeasurable</span>
+                    <span className="text-sm text-muted-foreground italic">unmeasurable</span>
                   )}
-                </div>
+                </FieldRow>
 
-                {/* 4) Detection — ratio vs threshold */}
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-20">Detection:</span>
+                <FieldRow>
+                  <FieldLabel>Detection:</FieldLabel>
                   {element.contrastRatio !== undefined ? (
-                    <span>
+                    <span className="text-sm">
                       <span className="font-mono font-medium text-destructive">
                         Contrast: {element.contrastRatio.toFixed(1)}:1
                       </span>
@@ -174,7 +161,7 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                       </span>
                     </span>
                   ) : element.contrastRange ? (
-                    <span>
+                    <span className="text-sm">
                       <span className="font-mono font-medium text-destructive">
                         Contrast: {element.contrastRange.min.toFixed(1)}:1 – {element.contrastRange.max.toFixed(1)}:1
                       </span>
@@ -183,35 +170,31 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                       </span>
                     </span>
                   ) : (
-                    <span className="text-muted-foreground italic">not computed</span>
+                    <span className="text-sm text-muted-foreground italic">not computed</span>
                   )}
-                </div>
+                </FieldRow>
 
-                {/* 5) Requirement */}
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-20">Requirement:</span>
-                  <span>
+                <FieldRow>
+                  <FieldLabel>Requirement:</FieldLabel>
+                  <FieldValue>
                     WCAG 1.4.3 — {element.textType === 'large' ? 'Large text' : 'Normal text'} — {element.appliedThreshold || element.thresholdUsed}:1
-                  </span>
-                </div>
+                  </FieldValue>
+                </FieldRow>
               </>
             ) : (
               <>
-                {/* POTENTIAL STRUCTURAL MODE — mirrors confirmed layout */}
-
-                {/* 1) Element */}
+                {/* POTENTIAL STRUCTURAL MODE */}
                 {element.jsxTag && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-muted-foreground font-medium w-20">Element:</span>
-                    <code className="text-foreground font-mono">&lt;{element.jsxTag}&gt;</code>
-                  </div>
+                  <FieldRow>
+                    <FieldLabel>Element:</FieldLabel>
+                    <FieldValue mono>&lt;{element.jsxTag}&gt;</FieldValue>
+                  </FieldRow>
                 )}
 
-                {/* 2) Foreground */}
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-20">Foreground:</span>
+                <FieldRow>
+                  <FieldLabel>Foreground:</FieldLabel>
                   {element.foregroundHex ? (
-                    <span className="flex items-center gap-1">
+                    <span className="flex items-center gap-1 text-sm">
                       <span className="font-mono">{element.foregroundHex}</span>
                       <span 
                         className="w-3 h-3 rounded border border-border" 
@@ -219,38 +202,36 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                       />
                     </span>
                   ) : (
-                    <span className="text-muted-foreground italic">not measured</span>
+                    <span className="text-sm text-muted-foreground italic">not measured</span>
                   )}
-                </div>
+                </FieldRow>
 
-                {/* 3) Background */}
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-20">Background:</span>
+                <FieldRow>
+                  <FieldLabel>Background:</FieldLabel>
                   {element.backgroundHex ? (
-                    <span className="flex items-center gap-1">
+                    <span className="flex items-center gap-1 text-sm">
                       <span className="font-mono">{element.backgroundHex}</span>
                       <span 
                         className="w-3 h-3 rounded border border-border" 
                         style={{ backgroundColor: element.backgroundHex }} 
                       />
                       {element.backgroundStatus === 'uncertain' && (
-                        <Badge variant="outline" className="text-xs border-warning/50 text-warning">
+                        <Badge variant="outline" className="text-xs font-medium border-warning/50 text-warning">
                           uncertain
                         </Badge>
                       )}
                     </span>
                   ) : (
-                    <span className="text-muted-foreground italic">unmeasurable</span>
+                    <span className="text-sm text-muted-foreground italic">unmeasurable</span>
                   )}
-                </div>
+                </FieldRow>
 
-                {/* 4) Contrast */}
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-20">Contrast:</span>
+                <FieldRow>
+                  <FieldLabel>Contrast:</FieldLabel>
                   {element.contrastNotMeasurable ? (
-                    <span className="text-muted-foreground italic">not measurable</span>
+                    <span className="text-sm text-muted-foreground italic">not measurable</span>
                   ) : element.contrastRange ? (
-                    <span>
+                    <span className="text-sm">
                       <span className="font-mono font-medium text-warning">
                         {element.contrastRange.min.toFixed(1)}:1 – {element.contrastRange.max.toFixed(1)}:1
                       </span>
@@ -259,7 +240,7 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                       </span>
                     </span>
                   ) : element.contrastRatio !== undefined ? (
-                    <span>
+                    <span className="text-sm">
                       <span className="font-mono font-medium text-warning">
                         {element.contrastRatio.toFixed(1)}:1
                       </span>
@@ -268,23 +249,21 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                       </span>
                     </span>
                   ) : (
-                    <span className="text-muted-foreground italic">not computed</span>
+                    <span className="text-sm text-muted-foreground italic">not computed</span>
                   )}
-                </div>
+                </FieldRow>
 
-                {/* 5) Requirement */}
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-medium w-20">Requirement:</span>
-                  <span>
+                <FieldRow>
+                  <FieldLabel>Requirement:</FieldLabel>
+                  <FieldValue>
                     WCAG 1.4.3 — {element.textType === 'large' ? 'Large text' : 'Normal text'} — {element.appliedThreshold || element.thresholdUsed}:1
-                  </span>
-                </div>
-
+                  </FieldValue>
+                </FieldRow>
               </>
             )}
-          </div>
+          </DetailContainer>
         </CollapsibleContent>
-      </div>
+      </ElementItemWrapper>
     </Collapsible>
   );
 }
@@ -305,23 +284,10 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
       isConfirmed ? 'border-destructive/30' : 'border-warning/30'
     )}>
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
-        <CardTitle className="flex items-center gap-2 flex-wrap text-base">
-          <span className={cn(
-            'category-badge flex-shrink-0 text-xs',
-            isConfirmed ? 'category-accessibility' : 'bg-warning/10 text-warning border border-warning/20'
-          )}>
-            A1
-          </span>
-          <span className="font-bold text-base">Insufficient Text Contrast</span>
-          <Badge className={cn(
-            "gap-1 text-xs",
-            isConfirmed 
-              ? "bg-destructive/10 text-destructive border-destructive/30" 
-              : "bg-warning/10 text-warning border-warning/30"
-          )}>
-            {elements.length} element{elements.length !== 1 ? 's' : ''}
-          </Badge>
-          {/* Modality label — only for screenshot modes */}
+        <CardTitle className="flex items-center gap-2 flex-wrap">
+          <RuleIdBadge ruleId="A1" isConfirmed={isConfirmed} categoryClass="category-accessibility" />
+          <RuleHeader ruleId="A1" title="Insufficient Text Contrast" />
+          <ElementCountBadge count={elements.length} isConfirmed={isConfirmed} />
           {isHybrid ? (
             <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
               LLM→Pixel Hybrid (Screenshot)
@@ -332,7 +298,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
             </span>
           ) : null}
         </CardTitle>
-        <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
+        <CardDescription compact={compact}>
           {isConfirmed
             ? 'Text contrast falls below WCAG AA minimum thresholds.'
             : (() => {
@@ -349,7 +315,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
                 }
                 return 'Static analysis detected a potential contrast issue. Background or text size could not be fully verified.';
               })()}
-        </p>
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
         {elements.map((element, idx) => (
@@ -361,13 +327,12 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           />
         ))}
         
-        {/* Hybrid/Perceptual disclaimer for screenshot mode */}
         {isHybrid && (
           <div className={cn(
             'rounded-lg bg-emerald-500/5 border border-emerald-500/20 mt-3',
             compact ? 'p-2' : 'p-3'
           )}>
-            <p className={cn('text-emerald-600 italic', compact ? 'text-xs' : 'text-sm')}>
+            <p className={cn('text-sm text-emerald-600 italic')}>
               🔬 Two-stage hybrid: LLM identified candidate regions → pixel engine measured contrast ratios. Ratios are screenshot estimates — verify with browser DevTools for WCAG compliance.
             </p>
           </div>
@@ -377,7 +342,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
             'rounded-lg bg-violet-500/5 border border-violet-500/20 mt-3',
             compact ? 'p-2' : 'p-3'
           )}>
-            <p className={cn('text-violet-600 italic', compact ? 'text-xs' : 'text-sm')}>
+            <p className="text-sm text-violet-600 italic">
               ⚠️ Screenshot-based contrast assessment is perceptual and requires manual verification using developer tools for WCAG compliance.
             </p>
           </div>
