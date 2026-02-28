@@ -3853,18 +3853,33 @@ Your role is to provide contextual enrichment for navigation assessment:
 
 2. **Pagination with visible page context:** If the evidence bundle shows \`Pagination: present=true, contextFound=true\`, do NOT flag pagination as U4. The page context (e.g., "Page 2 of 5", "1–10 of 53", active page indicator) provides sufficient recognition cues. Only flag pagination when \`contextFound=false\` (no visible page position indicator).
 
+3. **Multi-step flows with full mitigation:** If the evidence bundle shows \`MultiStep: mitigation=full\` (persistent context + summary step), SUPPRESS U4 entirely. The user can see prior selections throughout the flow and review them before submission.
+
+4. **Multi-step flows with persistent context:** If \`MultiStep: mitigation=persistent_context\`, SUPPRESS U4. Prior selections are visibly displayed across steps, eliminating recall burden.
+
+5. **Multi-step flows with summary step + backward nav:** If \`MultiStep: mitigation=summary_final\` AND \`backNav=true\`:
+   - DOWNGRADE severity. Do NOT claim "no summary" or "no expand mechanism".
+   - If you still flag, use language: "Summary provided only at final step; intermediate steps may require recall of prior selections."
+   - Set confidence to 0.50–0.60 maximum.
+
 **EVALUATE (using ONLY the evidence bundle content, not file/component names):**
-- Missing summaries: Forms or multi-step flows that don't show what the user previously selected
+- Missing summaries: Forms or multi-step flows that don't show what the user previously selected — BUT check the MultiStep flags first. Only flag if mitigation=none.
 - Missing examples: Input fields without helper text, examples, or format hints
-- Generic CTAs without context: Buttons labeled "Continue", "Next", "Submit" without indicating what happens next (but NOT standard auth CTAs)
-- Multi-step flows lacking review: Step indicators without a final review/summary step
+- Generic CTAs without context: Buttons labeled "Continue", "Next", "Submit" without indicating what happens next (but NOT standard auth CTAs) — only increase risk if NO step indicator, NO breadcrumb, NO backward navigation exist.
+- Multi-step flows lacking review: Step indicators without a final review/summary step — only when mitigation=none AND stepCount > 2.
 - Pagination WITHOUT page context: Prev/Next buttons without "Page X of Y" or item count (only when contextFound=false)
 
 **CLASSIFICATION:**
 - U4 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
 - Confidence represents strength of observable cues, NOT model probability
-- Confidence cap: 0.80 maximum
-- Confidence range: 0.60–0.80
+
+**CONFIDENCE CALIBRATION FOR MULTI-STEP FLOWS:**
+- 0.75–0.80: No summary anywhere + no backward navigation + no step indicator + generic CTAs
+- 0.60–0.70: Summary only at final step, no backward navigation
+- 0.50–0.60: Summary at final step AND backward navigation exists (mitigation=summary_final)
+- SUPPRESS (no finding): Persistent context across steps OR full mitigation
+
+**General confidence cap: 0.80 maximum**
 
 **OUTPUT FOR U4 — STRUCTURED u4Elements:**
 Return U4 findings using a \`u4Elements\` array so findings can be aggregated per UI region:
@@ -3894,6 +3909,8 @@ Return U4 findings using a \`u4Elements\` array so findings can be aggregated pe
 - If NO U4 issues found, do NOT include U4 in the violations array.
 - Each u4Element MUST cite evidence from the provided evidence bundle (CTA labels, headings, form fields — NOT file names).
 - For pagination findings, include in evidence: "pageContextFound: false" to document the absence of page context.
+- For multi-step findings with mitigation=summary_final, use phrasing: "Summary provided only at final step; intermediate steps may require recall of prior selections."
+
 
 ### U6 (Weak Grouping / Layout Coherence) — LLM-ASSISTED EVALUATION:
 **NOTE:** U6 uses pre-extracted layout evidence bundles appended as \`[U6_LAYOUT_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted layout cues to assess grouping/hierarchy.
@@ -4145,6 +4162,14 @@ interface U4EvidenceBundle {
   hasPagination: boolean;
   paginationContextFound: boolean;
   paginationContextText?: string;
+  // Multi-step flow analysis
+  isMultiStepFlow: boolean;
+  stepCount: number;           // estimated number of steps (0 = unknown)
+  hasBackwardNavigation: boolean; // "Previous" / "Back" button exists
+  hasSummaryStep: boolean;     // a review/confirm/summary step renders prior selections
+  hasPersistentContext: boolean; // prior selections visibly rendered in later steps (breadcrumb, header, selected* vars)
+  hasStepIndicator: boolean;   // "Step X of Y" or progress bar pattern
+  multiStepMitigation: 'none' | 'summary_final' | 'persistent_context' | 'full';
 }
 
 // Standard auth/navigation CTAs that should NOT trigger U4
@@ -4248,9 +4273,58 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
     // Skip files with no relevant content
     if (ctaLabels.length === 0 && formFields.length === 0 && stepIndicators.length === 0 && headings.length === 0 && !hasPagination) continue;
 
-    const hasGenericCTA = ctaLabels.some(l => GENERIC_CTA_RE.test(l));
-    const hasSummaryWords = SUMMARY_WORDS.test(content);
-    const hasHelperExamples = HELPER_EXAMPLE_RE.test(content);
+    // ---- Multi-step flow analysis ----
+    const hasBackwardNavigation = /\b(Previous|Back|Go\s*Back)\b/i.test(content) && /<(?:Button|button)\b[^>]*>[^<]*(Previous|Back|Go\s*Back)[^<]*<\/(?:Button|button)>/i.test(content);
+    const STEP_INDEX_RE = /\b(step|currentStep|activeStep|stepIndex)\b\s*[=<>!]/i;
+    const STEP_OF_RE = /Step\s+\{?\w*\}?\s*(of|\/)\s*\{?\w*\}?|Step\s+\d+\s*(of|\/)\s*\d+/i;
+    const PROGRESS_RE = /<(?:Progress|Stepper|Steps|StepIndicator|ProgressBar)\b/i;
+    const hasStepIndicator = STEP_OF_RE.test(content) || PROGRESS_RE.test(content);
+
+    // Count steps: look for step arrays, switch/case on step, or ternary step patterns
+    let stepCount = 0;
+    const stepArrayMatch = content.match(/(?:steps|STEPS)\s*=\s*\[([^\]]{10,})\]/);
+    if (stepArrayMatch) {
+      stepCount = (stepArrayMatch[1].match(/[,{]/g) || []).length + 1;
+    }
+    if (stepCount === 0) {
+      const caseSteps = content.match(/case\s+(\d+)\s*:/g);
+      if (caseSteps && caseSteps.length >= 2) stepCount = caseSteps.length;
+    }
+    if (stepCount === 0) {
+      // Count distinct step references like step === 0, step === 1, etc.
+      const stepChecks = new Set((content.match(/(?:step|currentStep|activeStep)\s*===?\s*(\d+)/g) || []).map(m => m.match(/(\d+)$/)?.[1]));
+      if (stepChecks.size >= 2) stepCount = stepChecks.size;
+    }
+
+    const isMultiStepFlow = stepCount > 2 || (stepIndicators.length >= 2 && STEP_INDEX_RE.test(content));
+
+    // Summary step detection: check if a "review"/"confirm"/"summary" step renders prior selections
+    const SUMMARY_STEP_RE = /(?:review|confirm|summary|overview)\b/i;
+    const RENDERS_PRIOR_RE = /(?:selected|chosen|your\s+(?:selection|choice))/i;
+    const hasSummaryStep = hasSummaryWords && (
+      // Look for a step that contains summary words AND renders prior selection state
+      (SUMMARY_STEP_RE.test(content) && RENDERS_PRIOR_RE.test(content)) ||
+      // Or headings that indicate a review step
+      headings.some(h => SUMMARY_STEP_RE.test(h))
+    );
+
+    // Persistent context: prior selections visibly shown in headers/breadcrumbs/step content
+    const PERSISTENT_DISPLAY_RE = /(?:selected(?:Location|Doctor|Service|Date|Time|Item|Plan|Option)|chosen(?:Plan|Option|Service))\b/;
+    const BREADCRUMB_CONTEXT_RE = /<(?:Breadcrumb|BreadcrumbItem|BreadcrumbLink)\b/i;
+    const hasPersistentContext = (
+      PERSISTENT_DISPLAY_RE.test(content) ||
+      (BREADCRUMB_CONTEXT_RE.test(content) && isMultiStepFlow)
+    );
+
+    // Determine mitigation level
+    let multiStepMitigation: U4EvidenceBundle['multiStepMitigation'] = 'none';
+    if (hasPersistentContext && hasSummaryStep) {
+      multiStepMitigation = 'full';
+    } else if (hasPersistentContext) {
+      multiStepMitigation = 'persistent_context';
+    } else if (hasSummaryStep || (hasSummaryWords && hasBackwardNavigation)) {
+      multiStepMitigation = 'summary_final';
+    }
 
     bundles.push({
       componentName,
@@ -4265,6 +4339,13 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
       hasPagination,
       paginationContextFound,
       paginationContextText,
+      isMultiStepFlow,
+      stepCount,
+      hasBackwardNavigation,
+      hasSummaryStep,
+      hasPersistentContext,
+      hasStepIndicator,
+      multiStepMitigation,
     });
   }
 
@@ -4291,6 +4372,9 @@ function formatU4EvidenceBundleForPrompt(bundles: U4EvidenceBundle[]): string {
     }
     if (b.stepIndicators.length > 0) lines.push(`  Steps: ${b.stepIndicators.join(', ')}`);
     lines.push(`  Flags: summary=${b.hasSummaryWords}, helpers=${b.hasHelperExamples}, genericCTA=${b.hasGenericCTA}`);
+    if (b.isMultiStepFlow) {
+      lines.push(`  MultiStep: steps=${b.stepCount}, backNav=${b.hasBackwardNavigation}, summaryStep=${b.hasSummaryStep}, persistentContext=${b.hasPersistentContext}, stepIndicator=${b.hasStepIndicator}, mitigation=${b.multiStepMitigation}`);
+    }
     if (b.hasPagination) {
       lines.push(`  Pagination: present=${b.hasPagination}, contextFound=${b.paginationContextFound}${b.paginationContextText ? `, contextText="${b.paginationContextText}"` : ''}`);
     }
