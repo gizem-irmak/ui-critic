@@ -48,42 +48,172 @@ function extractImportSources(content: string): Map<string, string> {
   return importMap;
 }
 
-function isUiControl(componentName: string, importMap: Map<string, string>, attrs: string): boolean {
+const A5_FORM_CONTROL_ROLES = new Set([
+  'switch',
+  'combobox',
+  'checkbox',
+  'radio',
+  'slider',
+  'textbox',
+  'searchbox',
+  'spinbutton',
+  'listbox',
+]);
+
+interface ParsedA5Attribute {
+  present: boolean;
+  value: string | null;
+  isNonEmpty: boolean;
+  isDynamic: boolean;
+  evidence: string | null;
+}
+
+function compactA5EvidenceValue(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > 120 ? `${compact.slice(0, 117)}...` : compact;
+}
+
+function parseA5AttributeFromTag(openingTag: string, attributeName: string): ParsedA5Attribute {
+  const escapedName = attributeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const attrRegex = new RegExp(`\\b${escapedName}\\s*=\\s*`, 'i');
+  const attrMatch = attrRegex.exec(openingTag);
+
+  if (!attrMatch) {
+    return { present: false, value: null, isNonEmpty: false, isDynamic: false, evidence: null };
+  }
+
+  let cursor = attrMatch.index + attrMatch[0].length;
+  while (cursor < openingTag.length && /\s/.test(openingTag[cursor])) cursor++;
+
+  if (cursor >= openingTag.length) {
+    return { present: true, value: null, isNonEmpty: false, isDynamic: false, evidence: `${attributeName}=` };
+  }
+
+  const firstChar = openingTag[cursor];
+
+  if (firstChar === '"' || firstChar === "'") {
+    const quote = firstChar;
+    let end = cursor + 1;
+    while (end < openingTag.length) {
+      if (openingTag[end] === quote && openingTag[end - 1] !== '\\') break;
+      end++;
+    }
+    const rawValue = openingTag.slice(cursor + 1, end);
+    return {
+      present: true,
+      value: rawValue,
+      isNonEmpty: rawValue.trim().length > 0,
+      isDynamic: false,
+      evidence: `${attributeName}=${quote}${rawValue}${quote}`,
+    };
+  }
+
+  if (firstChar === '{') {
+    let end = cursor;
+    let depth = 0;
+    let inString: string | null = null;
+    let inTemplateLiteral = false;
+
+    while (end < openingTag.length) {
+      const ch = openingTag[end];
+
+      if (inString) {
+        if (ch === inString && openingTag[end - 1] !== '\\') inString = null;
+        end++;
+        continue;
+      }
+
+      if (inTemplateLiteral) {
+        if (ch === '`' && openingTag[end - 1] !== '\\') inTemplateLiteral = false;
+        end++;
+        continue;
+      }
+
+      if (ch === '"' || ch === "'") {
+        inString = ch;
+        end++;
+        continue;
+      }
+
+      if (ch === '`') {
+        inTemplateLiteral = true;
+        end++;
+        continue;
+      }
+
+      if (ch === '{') {
+        depth++;
+        end++;
+        continue;
+      }
+
+      if (ch === '}') {
+        depth--;
+        end++;
+        if (depth === 0) break;
+        continue;
+      }
+
+      end++;
+    }
+
+    const expressionRaw = openingTag.slice(cursor + 1, Math.max(cursor + 1, end - 1)).trim();
+    const literalExpressionMatch = expressionRaw.match(/^(["'])([\s\S]*)\1$/);
+
+    if (literalExpressionMatch) {
+      const literalValue = literalExpressionMatch[2];
+      return {
+        present: true,
+        value: literalValue,
+        isNonEmpty: literalValue.trim().length > 0,
+        isDynamic: false,
+        evidence: `${attributeName}={${literalExpressionMatch[1]}${literalValue}${literalExpressionMatch[1]}}`,
+      };
+    }
+
+    return {
+      present: true,
+      value: expressionRaw,
+      isNonEmpty: expressionRaw.length > 0,
+      isDynamic: true,
+      evidence: `${attributeName}={${compactA5EvidenceValue(expressionRaw)}}`,
+    };
+  }
+
+  let end = cursor;
+  while (end < openingTag.length && !/[\s/>]/.test(openingTag[end])) end++;
+  const bareValue = openingTag.slice(cursor, end);
+
+  return {
+    present: true,
+    value: bareValue,
+    isNonEmpty: bareValue.trim().length > 0,
+    isDynamic: false,
+    evidence: `${attributeName}=${bareValue}`,
+  };
+}
+
+function isUiControl(componentName: string, importMap: Map<string, string>, openingTag: string): boolean {
   const importPath = importMap.get(componentName);
   if (importPath) {
     if (A5_NON_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return false;
     if (A5_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return true;
   }
-  const FORM_CONTROL_ROLES = /role\s*=\s*["'](?:switch|combobox|checkbox|radio|slider|textbox|searchbox|spinbutton|listbox)["']/i;
-  if (FORM_CONTROL_ROLES.test(attrs)) return true;
-  if (!importPath) return true;
+
+  const parsedRole = parseA5AttributeFromTag(openingTag, 'role');
+  if (parsedRole.isNonEmpty && parsedRole.value) {
+    return A5_FORM_CONTROL_ROLES.has(parsedRole.value.toLowerCase());
+  }
+
   return false;
 }
 
-function parseAriaLabelValue(attrs: string): string | null {
-  const staticMatch = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-  if (staticMatch) {
-    const val = staticMatch[1] || staticMatch[2];
-    if (val && val.trim().length > 0) return val;
-  }
-  const exprMatch = attrs.match(/aria-label\s*=\s*\{\s*(?:"([^"]+)"|'([^']+)')\s*\}/);
-  if (exprMatch) {
-    const val = exprMatch[1] || exprMatch[2];
-    if (val && val.trim().length > 0) return val;
-  }
-  return null;
+function parseAriaLabelValue(openingTag: string): ParsedA5Attribute {
+  return parseA5AttributeFromTag(openingTag, 'aria-label');
 }
 
-function hasAriaLabelPresent(attrs: string): boolean {
-  return parseAriaLabelValue(attrs) !== null;
-}
-
-function parseAriaLabelledByValue(attrs: string): string | null {
-  const staticMatch = attrs.match(/aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-  if (staticMatch) return staticMatch[1] || staticMatch[2] || null;
-  const exprMatch = attrs.match(/aria-labelledby\s*=\s*\{\s*(?:"([^"]+)"|'([^']+)')\s*\}/);
-  if (exprMatch) return exprMatch[1] || exprMatch[2] || null;
-  return null;
+function parseAriaLabelledByValue(openingTag: string): ParsedA5Attribute {
+  return parseA5AttributeFromTag(openingTag, 'aria-labelledby');
 }
 
 interface A5Finding {
@@ -117,6 +247,74 @@ function normalizePath(p: string): string {
 
 function makeA5ElementKey(tag: string, id: string, name: string, type: string, filePath: string, lineNumber: number): string {
   return `a5:${tag}|${id}|${name}|${type}|${filePath}|${lineNumber}`;
+}
+
+function extractJsxOpeningTags(content: string, tagPattern: string): Array<{tag: string; attrs: string; index: number; fullMatch: string}> {
+  const results: Array<{tag: string; attrs: string; index: number; fullMatch: string}> = [];
+  const openRegex = new RegExp(`<(${tagPattern})\\b`, 'gi');
+  let m: RegExpExecArray | null;
+
+  while ((m = openRegex.exec(content)) !== null) {
+    const startIdx = m.index;
+    let i = startIdx + m[0].length;
+    let depth = 0;
+    let inString: string | null = null;
+    let inTemplateLiteral = false;
+    let found = false;
+
+    while (i < content.length) {
+      const ch = content[i];
+      if (inString) {
+        if (ch === inString && content[i - 1] !== '\\') inString = null;
+        i++;
+        continue;
+      }
+      if (inTemplateLiteral) {
+        if (ch === '`' && content[i - 1] !== '\\') inTemplateLiteral = false;
+        i++;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        inString = ch;
+        i++;
+        continue;
+      }
+      if (ch === '`') {
+        inTemplateLiteral = true;
+        i++;
+        continue;
+      }
+      if (ch === '{') {
+        depth++;
+        i++;
+        continue;
+      }
+      if (ch === '}') {
+        depth--;
+        i++;
+        continue;
+      }
+      if (depth === 0 && ch === '>') {
+        const fullMatch = content.slice(startIdx, i + 1);
+        const attrs = content.slice(startIdx + m[0].length, i);
+        results.push({ tag: m[1], attrs, index: startIdx, fullMatch });
+        found = true;
+        break;
+      }
+      if (depth === 0 && ch === '/' && i + 1 < content.length && content[i + 1] === '>') {
+        const fullMatch = content.slice(startIdx, i + 2);
+        const attrs = content.slice(startIdx + m[0].length, i);
+        results.push({ tag: m[1], attrs, index: startIdx, fullMatch });
+        found = true;
+        break;
+      }
+      i++;
+    }
+
+    if (!found) continue;
+  }
+
+  return results;
 }
 
 function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
@@ -177,19 +375,16 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
     // Native tags + React wrapper components
-    const controlRegex = new RegExp(`(<(?:input|textarea|select)\\b([^>]*)(?:>|\\/>))|(<(?:${A5_WRAPPER_NAMES})\\b([^>]*)(?:>|\\/>))`, 'g');
-    let match;
-    while ((match = controlRegex.exec(content)) !== null) {
-      const fullMatch = match[1] || match[3];
-      const rawTag = fullMatch.match(/^<(\w+)/)?.[1] || '';
-      const attrs = match[2] || match[4] || '';
+    const controlNodes = extractJsxOpeningTags(content, `input|textarea|select|${A5_WRAPPER_NAMES}`);
+    for (const controlNode of controlNodes) {
+      const { tag: rawTag, attrs, index, fullMatch } = controlNode;
       const isReactComponent = /^[A-Z]/.test(rawTag);
       const tag = isReactComponent ? rawTag : rawTag.toLowerCase();
       if (tag === 'Select') continue;
 
       // Import-aware control identification
       if (isReactComponent && A5_WRAPPER_COMPONENT_MAP[tag]) {
-        if (!isUiControl(tag, importMap, attrs)) continue;
+        if (!isUiControl(tag, importMap, fullMatch)) continue;
       }
 
       const tagLower = tag.toLowerCase();
@@ -208,26 +403,29 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       if (/\bdisabled\b/.test(attrs)) continue;
       if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
 
-      const linesBefore = content.slice(0, match.index).split('\n');
+      const linesBefore = content.slice(0, index).split('\n');
       const lineNumber = linesBefore.length;
 
       const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
       const inputSubtype = (controlTypeVal === 'input') ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
 
-      const ariaLabelParsed = parseAriaLabelValue(attrs);
-      const hasAriaLabel = ariaLabelParsed !== null;
-      const ariaLabelledByParsed = parseAriaLabelledByValue(attrs);
-      const hasAriaLabelledBy = ariaLabelledByParsed !== null;
-      const controlIdMatch2 = attrs.match(/(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
-      const controlId = controlIdMatch2?.[1] || controlIdMatch2?.[2] || controlIdMatch2?.[3];
-      const hasExplicitLabel = controlId ? labelForTargets.has(controlId) : false;
+      const ariaLabelParsed = parseAriaLabelValue(fullMatch);
+      const hasAriaLabel = ariaLabelParsed.present && ariaLabelParsed.isNonEmpty;
+      const ariaLabelledByParsed = parseAriaLabelledByValue(fullMatch);
+      const hasAriaLabelledBy = ariaLabelledByParsed.present && ariaLabelledByParsed.isNonEmpty;
 
-      const beforeControl = content.slice(Math.max(0, match.index - 500), match.index);
+      const controlIdParsed = parseA5AttributeFromTag(fullMatch, 'id');
+      const controlId = (controlIdParsed.isNonEmpty && !controlIdParsed.isDynamic && controlIdParsed.value)
+        ? controlIdParsed.value
+        : null;
+      const hasExplicitLabel = !!controlId && labelForTargets.has(controlId);
+
+      const beforeControl = content.slice(Math.max(0, index - 500), index);
       const lastLabelOpen = Math.max(beforeControl.lastIndexOf('<label'), beforeControl.lastIndexOf('<Label'));
       const lastLabelClose = Math.max(beforeControl.lastIndexOf('</label'), beforeControl.lastIndexOf('</Label'));
       const isWrappedInLabel = lastLabelOpen > lastLabelClose && lastLabelOpen !== -1;
 
-      const isInFormControl = formControlRanges.some(r => match!.index >= r.start && match!.index <= r.end);
+      const isInFormControl = formControlRanges.some(r => index >= r.start && index <= r.end);
 
       const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl;
 
@@ -235,9 +433,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2];
       const hasPlaceholder = !!placeholder && placeholder.trim().length > 0;
 
-      const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const elementName = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
-      const label = ariaLabelParsed || placeholder || elementName || `<${displayTag}> control`;
+      const nameParsed = parseA5AttributeFromTag(fullMatch, 'name');
+      const elementName = (nameParsed.isNonEmpty && nameParsed.value ? nameParsed.value : '') || controlId || '';
+      const label = placeholder || elementName || `<${displayTag}> control`;
 
       if (hasValidLabel) continue;
 
@@ -272,6 +470,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         });
       }
     }
+
+    let match: RegExpExecArray | null;
 
     // ARIA input roles (including listbox)
     const ariaInputRegex = new RegExp(`<(div|span|p|section)\\b([^>]*role\\s*=\\s*["'](?:textbox|combobox|searchbox|spinbutton|listbox)["'][^>]*)>`, 'gi');
@@ -975,6 +1175,7 @@ Deno.test("SelectTrigger with Label htmlFor + id linkage = no violation", () => 
 
 Deno.test("SelectTrigger without any label = flagged", () => {
   const files = new Map([["src/Filter.tsx", `
+    import { SelectTrigger } from "@/components/ui/select";
     <Select>
       <SelectTrigger>
         <SelectValue placeholder="Filter..." />
@@ -1057,7 +1258,10 @@ Deno.test("Label htmlFor + SelectTrigger id = no violation", () => {
 });
 
 Deno.test("Switch without label = flagged", () => {
-  const files = new Map([["src/Settings.tsx", `<Switch />`]]);
+  const files = new Map([["src/Settings.tsx", `
+    import { Switch } from "@/components/ui/switch";
+    <Switch />
+  `]]);
   const results = detectA5FormLabels(files);
   assert(results.length >= 1, "Switch without label should be flagged");
   assert(results[0].elementType.includes("Switch"), "Should report as Switch");
@@ -1070,7 +1274,10 @@ Deno.test("Switch with aria-label = no violation", () => {
 });
 
 Deno.test("Checkbox without label = flagged", () => {
-  const files = new Map([["src/Form.tsx", `<Checkbox />`]]);
+  const files = new Map([["src/Form.tsx", `
+    import { Checkbox } from "@/components/ui/checkbox";
+    <Checkbox />
+  `]]);
   const results = detectA5FormLabels(files);
   assert(results.length >= 1, "Checkbox without label should be flagged");
 });
@@ -1082,13 +1289,19 @@ Deno.test("Checkbox with aria-label = no violation", () => {
 });
 
 Deno.test("RadioGroupItem without label = flagged", () => {
-  const files = new Map([["src/Form.tsx", `<RadioGroupItem value="a" />`]]);
+  const files = new Map([["src/Form.tsx", `
+    import { RadioGroupItem } from "@/components/ui/radio-group";
+    <RadioGroupItem value="a" />
+  `]]);
   const results = detectA5FormLabels(files);
   assert(results.length >= 1, "RadioGroupItem without label should be flagged");
 });
 
 Deno.test("Slider without label = flagged", () => {
-  const files = new Map([["src/Form.tsx", `<Slider />`]]);
+  const files = new Map([["src/Form.tsx", `
+    import { Slider } from "@/components/ui/slider";
+    <Slider />
+  `]]);
   const results = detectA5FormLabels(files);
   assert(results.length >= 1, "Slider without label should be flagged");
 });

@@ -5091,55 +5091,175 @@ function extractImportSources(content: string): Map<string, string> {
 
 /**
  * Check if a wrapper component name should be treated as a UI control
- * based on its import source. If no import found, check for explicit
- * ARIA role on the element.
+ * based on its import source or explicit ARIA role.
  */
-function isUiControl(componentName: string, importMap: Map<string, string>, attrs: string): boolean {
-  const importPath = importMap.get(componentName);
-  if (importPath) {
-    // If imported from a known non-UI source, NOT a control
-    if (A5_NON_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return false;
-    // If imported from a known UI source, IS a control
-    if (A5_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return true;
-    // Unknown import — fall through to ARIA role check
+const A5_FORM_CONTROL_ROLES = new Set([
+  'switch',
+  'combobox',
+  'checkbox',
+  'radio',
+  'slider',
+  'textbox',
+  'searchbox',
+  'spinbutton',
+  'listbox',
+]);
+
+interface ParsedA5Attribute {
+  present: boolean;
+  value: string | null;
+  isNonEmpty: boolean;
+  isDynamic: boolean;
+  evidence: string | null;
+}
+
+function compactA5EvidenceValue(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > 120 ? `${compact.slice(0, 117)}...` : compact;
+}
+
+function parseA5AttributeFromTag(openingTag: string, attributeName: string): ParsedA5Attribute {
+  const escapedName = attributeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const attrRegex = new RegExp(`\\b${escapedName}\\s*=\\s*`, 'i');
+  const attrMatch = attrRegex.exec(openingTag);
+
+  if (!attrMatch) {
+    return { present: false, value: null, isNonEmpty: false, isDynamic: false, evidence: null };
   }
-  // No import or unknown import — check for explicit ARIA role indicating form control
-  const FORM_CONTROL_ROLES = /role\s*=\s*["'](?:switch|combobox|checkbox|radio|slider|textbox|searchbox|spinbutton|listbox)["']/i;
-  if (FORM_CONTROL_ROLES.test(attrs)) return true;
-  // If no import info at all (e.g. HTML file or inline), assume UI control for known names
-  if (!importPath) return true;
-  // Unknown import, no ARIA role — skip
+
+  let cursor = attrMatch.index + attrMatch[0].length;
+  while (cursor < openingTag.length && /\s/.test(openingTag[cursor])) cursor++;
+
+  if (cursor >= openingTag.length) {
+    return { present: true, value: null, isNonEmpty: false, isDynamic: false, evidence: `${attributeName}=` };
+  }
+
+  const firstChar = openingTag[cursor];
+
+  if (firstChar === '"' || firstChar === "'") {
+    const quote = firstChar;
+    let end = cursor + 1;
+    while (end < openingTag.length) {
+      if (openingTag[end] === quote && openingTag[end - 1] !== '\\') break;
+      end++;
+    }
+    const rawValue = openingTag.slice(cursor + 1, end);
+    return {
+      present: true,
+      value: rawValue,
+      isNonEmpty: rawValue.trim().length > 0,
+      isDynamic: false,
+      evidence: `${attributeName}=${quote}${rawValue}${quote}`,
+    };
+  }
+
+  if (firstChar === '{') {
+    let end = cursor;
+    let depth = 0;
+    let inString: string | null = null;
+    let inTemplateLiteral = false;
+
+    while (end < openingTag.length) {
+      const ch = openingTag[end];
+
+      if (inString) {
+        if (ch === inString && openingTag[end - 1] !== '\\') inString = null;
+        end++;
+        continue;
+      }
+
+      if (inTemplateLiteral) {
+        if (ch === '`' && openingTag[end - 1] !== '\\') inTemplateLiteral = false;
+        end++;
+        continue;
+      }
+
+      if (ch === '"' || ch === "'") {
+        inString = ch;
+        end++;
+        continue;
+      }
+
+      if (ch === '`') {
+        inTemplateLiteral = true;
+        end++;
+        continue;
+      }
+
+      if (ch === '{') {
+        depth++;
+        end++;
+        continue;
+      }
+
+      if (ch === '}') {
+        depth--;
+        end++;
+        if (depth === 0) break;
+        continue;
+      }
+
+      end++;
+    }
+
+    const expressionRaw = openingTag.slice(cursor + 1, Math.max(cursor + 1, end - 1)).trim();
+    const literalExpressionMatch = expressionRaw.match(/^(["'])([\s\S]*)\1$/);
+
+    if (literalExpressionMatch) {
+      const literalValue = literalExpressionMatch[2];
+      return {
+        present: true,
+        value: literalValue,
+        isNonEmpty: literalValue.trim().length > 0,
+        isDynamic: false,
+        evidence: `${attributeName}={${literalExpressionMatch[1]}${literalValue}${literalExpressionMatch[1]}}`,
+      };
+    }
+
+    return {
+      present: true,
+      value: expressionRaw,
+      isNonEmpty: expressionRaw.length > 0,
+      isDynamic: true,
+      evidence: `${attributeName}={${compactA5EvidenceValue(expressionRaw)}}`,
+    };
+  }
+
+  let end = cursor;
+  while (end < openingTag.length && !/[\s/>]/.test(openingTag[end])) end++;
+  const bareValue = openingTag.slice(cursor, end);
+
+  return {
+    present: true,
+    value: bareValue,
+    isNonEmpty: bareValue.trim().length > 0,
+    isDynamic: false,
+    evidence: `${attributeName}=${bareValue}`,
+  };
+}
+
+function isUiControl(componentName: string, importMap: Map<string, string>, openingTag: string): boolean {
+  const importPath = importMap.get(componentName);
+
+  if (importPath) {
+    if (A5_NON_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return false;
+    if (A5_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return true;
+  }
+
+  const parsedRole = parseA5AttributeFromTag(openingTag, 'role');
+  if (parsedRole.isNonEmpty && parsedRole.value) {
+    return A5_FORM_CONTROL_ROLES.has(parsedRole.value.toLowerCase());
+  }
+
   return false;
 }
 
-// Helper: parse aria-label value from attrs, supporting both static and JSX expression syntax
-function parseAriaLabelValue(attrs: string): string | null {
-  // Static: aria-label="value" or aria-label='value'
-  const staticMatch = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-  if (staticMatch) {
-    const val = staticMatch[1] || staticMatch[2];
-    if (val && val.trim().length > 0) return val;
-  }
-  // JSX expression: aria-label={"value"} or aria-label={'value'}
-  const exprMatch = attrs.match(/aria-label\s*=\s*\{\s*(?:"([^"]+)"|'([^']+)')\s*\}/);
-  if (exprMatch) {
-    const val = exprMatch[1] || exprMatch[2];
-    if (val && val.trim().length > 0) return val;
-  }
-  return null;
+function parseAriaLabelValue(openingTag: string): ParsedA5Attribute {
+  return parseA5AttributeFromTag(openingTag, 'aria-label');
 }
 
-function hasAriaLabelPresent(attrs: string): boolean {
-  return parseAriaLabelValue(attrs) !== null;
-}
-
-// Helper: parse aria-labelledby value from attrs
-function parseAriaLabelledByValue(attrs: string): string | null {
-  const staticMatch = attrs.match(/aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-  if (staticMatch) return staticMatch[1] || staticMatch[2] || null;
-  const exprMatch = attrs.match(/aria-labelledby\s*=\s*\{\s*(?:"([^"]+)"|'([^']+)')\s*\}/);
-  if (exprMatch) return exprMatch[1] || exprMatch[2] || null;
-  return null;
+function parseAriaLabelledByValue(openingTag: string): ParsedA5Attribute {
+  return parseA5AttributeFromTag(openingTag, 'aria-labelledby');
 }
 
 interface A5Finding {
@@ -5249,23 +5369,19 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     // AND React wrapper components from A5_WRAPPER_COMPONENT_MAP
     // Do NOT match <Select> (Radix wrapper — not the actual interactive element)
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
+    const controlNodes = extractJsxOpeningTags(content, `input|textarea|select|${A5_WRAPPER_NAMES}`);
 
-    // Native tags (case-sensitive, lowercase only) + React component controls
-    const controlRegex = new RegExp(`(<(?:input|textarea|select)\\b([^>]*)(?:>|\\/>))|(<(?:${A5_WRAPPER_NAMES})\\b([^>]*)(?:>|\\/>))`, 'g');
-    let match;
-    while ((match = controlRegex.exec(content)) !== null) {
-      const fullMatch = match[1] || match[3];
-      const rawTag = fullMatch.match(/^<(\w+)/)?.[1] || '';
-      const attrs = match[2] || match[4] || '';
+    for (const controlNode of controlNodes) {
+      const { tag: rawTag, attrs, index, fullMatch } = controlNode;
       // Normalize: native tags stay lowercase; React components get descriptive names
       const isReactComponent = /^[A-Z]/.test(rawTag);
       const tag = isReactComponent ? rawTag : rawTag.toLowerCase();
-      // Skip <Select> wrapper if it somehow matches (shouldn't with current regex)
+      // Skip <Select> wrapper if it somehow matches through case-insensitive extraction
       if (tag === 'Select') continue;
 
       // Import-aware control identification: skip wrapper components from non-UI sources
       if (isReactComponent && A5_WRAPPER_COMPONENT_MAP[tag]) {
-        if (!isUiControl(tag, importMap, attrs)) continue;
+        if (!isUiControl(tag, importMap, fullMatch)) continue;
       }
 
       // Exclude hidden, submit, reset, button types
@@ -5281,7 +5397,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       // Exclude aria-hidden="true"
       if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
 
-      const linesBefore = content.slice(0, match.index).split('\n');
+      const linesBefore = content.slice(0, index).split('\n');
       const lineNumber = linesBefore.length;
 
       // Determine display tag and element name for wrapper components
@@ -5297,24 +5413,26 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
       const inputSubtype = (controlTypeVal === 'input') ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
 
-      // Check for valid label sources (supports JSX expression syntax: aria-label={"..."})
-      const ariaLabelParsed = parseAriaLabelValue(attrs);
-      const hasAriaLabel = ariaLabelParsed !== null;
-      const ariaLabelledByParsed = parseAriaLabelledByValue(attrs);
-      const hasAriaLabelledBy = ariaLabelledByParsed !== null;
-      // Use negative lookbehind to avoid matching data-testid as id
-      const controlIdMatch = attrs.match(/(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
-      const controlId = controlIdMatch?.[1] || controlIdMatch?.[2] || controlIdMatch?.[3];
-      const hasExplicitLabel = controlId ? labelForTargets.has(controlId) : false;
+      // Check for valid label sources from the full opening tag (multiline + dashed props)
+      const ariaLabelParsed = parseAriaLabelValue(fullMatch);
+      const hasAriaLabel = ariaLabelParsed.present && ariaLabelParsed.isNonEmpty;
+      const ariaLabelledByParsed = parseAriaLabelledByValue(fullMatch);
+      const hasAriaLabelledBy = ariaLabelledByParsed.present && ariaLabelledByParsed.isNonEmpty;
+
+      const controlIdParsed = parseA5AttributeFromTag(fullMatch, 'id');
+      const controlId = (controlIdParsed.isNonEmpty && !controlIdParsed.isDynamic && controlIdParsed.value)
+        ? controlIdParsed.value
+        : null;
+      const hasExplicitLabel = !!controlId && labelForTargets.has(controlId);
 
       // Check if wrapped in <label> or <Label>
-      const beforeControl = content.slice(Math.max(0, match.index - 500), match.index);
+      const beforeControl = content.slice(Math.max(0, index - 500), index);
       const lastLabelOpen = Math.max(beforeControl.lastIndexOf('<label'), beforeControl.lastIndexOf('<Label'));
       const lastLabelClose = Math.max(beforeControl.lastIndexOf('</label'), beforeControl.lastIndexOf('</Label'));
       const isWrappedInLabel = lastLabelOpen > lastLabelClose && lastLabelOpen !== -1;
 
       // Check if inside FormControl with FormLabel (shadcn Form pattern)
-      const isInFormControl = formControlRanges.some(r => match!.index >= r.start && match!.index <= r.end);
+      const isInFormControl = formControlRanges.some(r => index >= r.start && index <= r.end);
 
       const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl;
 
@@ -5323,28 +5441,24 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2];
       const hasPlaceholder = !!placeholder && placeholder.trim().length > 0;
 
-      // Build a label for the finding — use negative lookbehind for name/id extraction
-      const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const elementNameAttr = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
-      const label = ariaLabelParsed || placeholder || elementNameAttr || `<${displayTag}> control`;
+      // Build a label for the finding
+      const nameParsed = parseA5AttributeFromTag(fullMatch, 'name');
+      const elementNameAttr = (nameParsed.isNonEmpty && nameParsed.value ? nameParsed.value : '') || controlId || '';
+      const label = placeholder || elementNameAttr || `<${displayTag}> control`;
       const fileName = filePath.split('/').pop() || filePath;
 
       // Build selector hints for element metadata
       const selectorHints: string[] = [];
       if (controlId) selectorHints.push(`id="${controlId}"`);
-      if (nameMatch?.[1] || nameMatch?.[2]) selectorHints.push(`name="${nameMatch?.[1] || nameMatch?.[2]}"`);
-      if (ariaLabelParsed) selectorHints.push(`aria-label="${ariaLabelParsed}"`);
-      if (ariaLabelledByParsed) selectorHints.push(`aria-labelledby="${ariaLabelledByParsed}"`);
+      if (nameParsed.isNonEmpty && nameParsed.value) selectorHints.push(`name="${nameParsed.value}"`);
+      if (hasAriaLabel && ariaLabelParsed.evidence) selectorHints.push(ariaLabelParsed.evidence);
+      if (hasAriaLabelledBy && ariaLabelledByParsed.evidence) selectorHints.push(ariaLabelledByParsed.evidence);
 
       // Determine labeling method for display (include evidence)
       let labelingMethod = '';
       if (isInFormControl) labelingMethod = 'FormLabel/FormControl (shadcn)';
-      else if (hasAriaLabel) {
-        labelingMethod = ariaLabelParsed ? `aria-label="${ariaLabelParsed}"` : 'aria-label';
-      }
-      else if (hasAriaLabelledBy) {
-        labelingMethod = ariaLabelledByParsed ? `aria-labelledby="${ariaLabelledByParsed}"` : 'aria-labelledby';
-      }
+      else if (hasAriaLabel) labelingMethod = ariaLabelParsed.evidence || 'aria-label';
+      else if (hasAriaLabelledBy) labelingMethod = ariaLabelledByParsed.evidence || 'aria-labelledby';
       else if (hasExplicitLabel) labelingMethod = `label[htmlFor="${controlId}"]`;
       else if (isWrappedInLabel) labelingMethod = 'wrapping <label>';
 
@@ -5427,6 +5541,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         });
       }
     }
+
+    let match: RegExpExecArray | null;
 
     // Also detect ARIA input roles on non-form elements
     const ariaInputRegex = new RegExp(`<(div|span|p|section)\\b([^>]*role\\s*=\\s*["'](?:textbox|combobox|searchbox|spinbutton|listbox)["'][^>]*)>`, 'gi');
