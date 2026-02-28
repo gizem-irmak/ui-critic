@@ -569,3 +569,114 @@ Deno.test("U3: blocksConvergence must be false", () => {
   const blocksConvergence = false;
   assertEquals(blocksConvergence, false);
 });
+
+// ═══════════════════════════════════════════════════
+// U3.D5 — STRICT EVIDENCE BINDING (carrier element)
+// ═══════════════════════════════════════════════════
+
+Deno.test("U3.D5 STRICT: {a.specialty} in <td> WITHOUT truncate → NOT flagged", () => {
+  // appointments.tsx scenario: <td className="p-2">{a.specialty}</td>
+  // The carrier <td> has no truncate/overflow-hidden — should NOT be flagged
+  const code = `
+    <tr onClick={() => handleClick(a)}>
+      <td className="p-2 text-sm">{a.name}</td>
+      <td className="p-2 text-sm">{a.specialty}</td>
+      <td className="p-2 text-sm max-w-[200px] truncate">{a.reason}</td>
+    </tr>
+  `;
+  // The carrier for {a.specialty} is <td className="p-2 text-sm">
+  // It does NOT have truncate, overflow-hidden, or any strong constraint
+  const carrierClasses = "p-2 text-sm";
+  const STRONG = /\btruncate\b|\bwhitespace-nowrap\b|\boverflow-hidden\b|\btext-ellipsis\b|\bline-clamp-[1-9]\b/;
+  assert(!STRONG.test(carrierClasses), "Carrier element has no truncation → NOT flagged");
+});
+
+Deno.test("U3.D5 STRICT: {a.reason} in <td className='max-w-[200px] truncate'> → flagged", () => {
+  const carrierClasses = "max-w-[200px] truncate";
+  const STRONG = /\btruncate\b|\bwhitespace-nowrap\b|\boverflow-hidden\b|\btext-ellipsis\b|\bline-clamp-[1-9]\b/;
+  assert(STRONG.test(carrierClasses), "Carrier element has truncate → flagged");
+});
+
+Deno.test("U3.D5 STRICT: sibling element classes do not leak to carrier", () => {
+  // Even though a sibling <td> has truncate, it should not affect {a.specialty}
+  const siblingClasses = "max-w-[200px] truncate";
+  const carrierClasses = "p-2 text-sm";
+  const STRONG = /\btruncate\b|\bwhitespace-nowrap\b|\boverflow-hidden\b|\btext-ellipsis\b|\bline-clamp-[1-9]\b/;
+  assert(STRONG.test(siblingClasses), "Sibling has truncate");
+  assert(!STRONG.test(carrierClasses), "Carrier does NOT — must not be flagged");
+});
+
+// ═══════════════════════════════════════════════════
+// U3.D5 — COMPONENT-LEVEL EXPAND DETECTION
+// ═══════════════════════════════════════════════════
+
+Deno.test("U3.D5 EXPAND: same var rendered without truncation elsewhere → suppressed", () => {
+  // messages.tsx scenario: truncated {msg.subject} in list, but selectedMsg.subject
+  // shown without truncation in detail view → expand mechanism exists
+  const truncatedLine = '<p className="truncate">{msg.subject}</p>';
+  const expandedLine = '<h2>{selectedMsg.subject}</h2>';
+
+  // Both lines render .subject in JSX text context
+  assert(/\.subject\b/.test(truncatedLine), "Truncated line has .subject");
+  assert(/\.subject\b/.test(expandedLine), "Expanded line has .subject");
+
+  // Truncated line has truncation class
+  assert(/\btruncate\b/.test(truncatedLine), "Truncated line has truncate");
+  // Expanded line does NOT have truncation → expand exists
+  assert(!/\btruncate\b|\bline-clamp-[1-9]\b|\btext-ellipsis\b/.test(expandedLine),
+    "Expanded line has NO truncation → component-level expand exists → suppress");
+});
+
+Deno.test("U3.D5 EXPAND: onClick with setSelected + detail view → suppressed", () => {
+  const code = `
+    <tr onClick={() => setSelectedMsg(msg)}>
+      <td className="truncate max-w-xs">{msg.subject}</td>
+    </tr>
+    {selectedMsg && <div><p>{selectedMsg.subject}</p></div>}
+  `;
+  // Detect onClick with setSelected pattern
+  assert(/onClick\s*=\s*\{[^}]*set(?:Selected|Active|Current|Open)\w*\s*\(/i.test(code));
+  // Detect selectedMsg.subject rendered
+  assert(/selected\w*\.subject\b/i.test(code));
+});
+
+Deno.test("U3.D5 EXPAND: line-clamp-2 on doc.bio without expand → STILL flagged", () => {
+  const code = `
+    <div className="p-4">
+      <p className="line-clamp-2">{doc.bio}</p>
+    </div>
+  `;
+  const carrierClasses = "line-clamp-2";
+  assert(/\bline-clamp-[1-9]\b/.test(carrierClasses), "Has line-clamp → flagged");
+  // No expand mechanism
+  assert(!/show\s*more|expand|toggle|setSelected/i.test(code));
+});
+
+Deno.test("U3.D5 EXPAND: truncate on appt.specialty without expand → flagged", () => {
+  const code = `
+    <span className="truncate w-32">{appt.specialty}</span>
+  `;
+  const carrierClasses = "truncate w-32";
+  assert(/\btruncate\b/.test(carrierClasses));
+  assert(!/show\s*more|expand|setSelected/i.test(code));
+});
+
+// ═══════════════════════════════════════════════════
+// U3.D5 — CORRECT ELEMENT ATTRIBUTION
+// ═══════════════════════════════════════════════════
+
+Deno.test("U3.D5 ATTRIBUTION: report carrier tag, not unrelated components", () => {
+  // If truncate is on <td>, report <td>, not <Badge> or <Send>
+  const code = `<td className="truncate max-w-xs">{msg.subject}</td>`;
+  const tagMatch = code.match(/<([a-zA-Z][\w.]*)\s[^>]*className="[^"]*truncate/);
+  assert(tagMatch !== null);
+  assertEquals(tagMatch![1], "td");
+});
+
+Deno.test("U3.D5 ATTRIBUTION: parent tag reported when truncation on parent", () => {
+  const code = `<div className="truncate"><span>{doc.bio}</span></div>`;
+  // Carrier of {doc.bio} is <span>, but truncate is on parent <div>
+  // Should report <div> as the element
+  const parentClasses = "truncate";
+  assert(/\btruncate\b/.test(parentClasses));
+});

@@ -3796,6 +3796,95 @@ function u3HasExpandMechanism(content: string, pos: number, windowLines: number)
     /title\s*=|<Tooltip|data-tooltip|aria-describedby/i.test(window);
 }
 
+function u3FindCarrierElement(content: string, pos: number): { tag: string; className: string; tagStart: number; fullTag: string } | null {
+  const before = content.slice(Math.max(0, pos - 600), pos);
+  const tagRe = /<([a-zA-Z][\w.]*)\s([^>]*)>/g;
+  let best: { tag: string; className: string; tagStart: number; fullTag: string } | null = null;
+  let tm;
+  while ((tm = tagRe.exec(before)) !== null) {
+    const tag = tm[1];
+    const attrs = tm[2];
+    const absStart = Math.max(0, pos - 600) + tm.index;
+    if (attrs.endsWith('/')) continue;
+    const tagEnd = absStart + tm[0].length;
+    const between = content.slice(tagEnd, pos);
+    const closeRe = new RegExp(`</${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*>`, 'i');
+    if (closeRe.test(between)) continue;
+    const classMatch = attrs.match(/className\s*=\s*(?:"([^"]*)"|'([^']*)'|\{[^}]*["']([^"']*)["'][^}]*\})/);
+    const className = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
+    best = { tag, className, tagStart: absStart, fullTag: tm[0] };
+  }
+  return best;
+}
+
+function u3FindParentElement(content: string, carrierTagStart: number): { tag: string; className: string } | null {
+  const before = content.slice(Math.max(0, carrierTagStart - 500), carrierTagStart);
+  const tagRe = /<([a-zA-Z][\w.]*)\s([^>]*)>/g;
+  let best: { tag: string; className: string } | null = null;
+  let tm;
+  while ((tm = tagRe.exec(before)) !== null) {
+    const tag = tm[1];
+    const attrs = tm[2];
+    if (attrs.endsWith('/')) continue;
+    const absStart = Math.max(0, carrierTagStart - 500) + tm.index;
+    const tagEnd = absStart + tm[0].length;
+    const between = content.slice(tagEnd, carrierTagStart);
+    const closeRe = new RegExp(`</${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*>`, 'i');
+    if (closeRe.test(between)) continue;
+    const classMatch = attrs.match(/className\s*=\s*(?:"([^"]*)"|'([^']*)'|\{[^}]*["']([^"']*)["'][^}]*\})/);
+    const className = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
+    best = { tag, className };
+  }
+  return best;
+}
+
+function u3HasComponentExpandForVar(content: string, varName: string, pos: number): { hasExpand: boolean; mechanism?: string } {
+  const lastSeg = varName.split('.').pop() || varName;
+  const objPrefix = varName.includes('.') ? varName.split('.')[0] : null;
+
+  const varRe = new RegExp(`>\\s*\\{[^}]*\\.${lastSeg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b[^}]*\\}\\s*<`, 'g');
+  let vm;
+  let otherOccurrences = 0;
+  while ((vm = varRe.exec(content)) !== null) {
+    if (Math.abs(vm.index - pos) < 50) continue;
+    const localCtx = content.slice(Math.max(0, vm.index - 150), Math.min(content.length, vm.index + 150));
+    if (!/\btruncate\b|\bline-clamp-[1-9]\b|\btext-ellipsis\b/.test(localCtx)) {
+      otherOccurrences++;
+    }
+  }
+  if (otherOccurrences > 0) {
+    return { hasExpand: true, mechanism: `same variable rendered without truncation elsewhere in component` };
+  }
+
+  const nearbyBefore = content.slice(Math.max(0, pos - 800), pos);
+  const selectedPatterns = [
+    /onClick\s*=\s*\{[^}]*set(?:Selected|Active|Current|Open)\w*\s*\(/i,
+    /onClick\s*=\s*\{[^}]*(?:handleSelect|handleClick|openDetail|viewDetail|showDetail)\b/i,
+  ];
+  for (const sp of selectedPatterns) {
+    if (sp.test(nearbyBefore)) {
+      if (objPrefix && new RegExp(`selected\\w*\\.${lastSeg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(content)) {
+        return { hasExpand: true, mechanism: `click-to-select detail view (selected*.${lastSeg})` };
+      }
+      if (/\bselected\w*\b.*\bsubject\b|\bselected\w*\b.*\bbody\b|\bdetail\b/i.test(content)) {
+        return { hasExpand: true, mechanism: 'click-to-select detail view' };
+      }
+    }
+  }
+
+  if (/<(?:Dialog|Drawer|Sheet|Modal)\b/i.test(content)) {
+    const dialogContent = content.match(/<(?:Dialog|Drawer|Sheet|Modal)(?:Content|Body)?\b[\s\S]{0,2000}/i);
+    if (dialogContent) {
+      const varInDialog = new RegExp(`\\.${lastSeg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+      if (varInDialog.test(dialogContent[0])) {
+        return { hasExpand: true, mechanism: 'Dialog/Drawer/Modal shows full content' };
+      }
+    }
+  }
+
+  return { hasExpand: false };
+}
+
 function u3HasWideContainer(context: string): boolean {
   if (/\bw-full\b/.test(context) && !/\bmax-w-/.test(context)) return true;
   if (/\bflex-1\b/.test(context) && !/\bmax-w-/.test(context) && !/\bw-\d+\b/.test(context)) return true;
@@ -4045,8 +4134,6 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
     // --- U3.D5: Unbroken text overflow risk (refined gating) ---
     const U3_WRAP_SAFE = /\bbreak-words\b|\bbreak-all\b|\bwhitespace-normal\b|\boverflow-wrap[:\s]*anywhere\b|\boverflowWrap\s*:\s*["']?anywhere|\bword-break\s*:\s*break-word/;
     const U3_SCROLL_SAFE = /\boverflow-x-auto\b|\boverflow-auto\b/;
-    const U3_TABLE_CELL = /<(?:td|th|TableCell)\b/i;
-    const U3_GRID_NARROW = /\bgrid\b.*\bcol(?:s|-span)/;
     const U3_STRONG_CONSTRAINT = /\btruncate\b|\bwhitespace-nowrap\b|\boverflow-hidden\b|\btext-ellipsis\b|\bline-clamp-[1-9]\b/;
     const U3_TRUNCATE_OR_NOWRAP = /\btruncate\b|\bwhitespace-nowrap\b/;
     const U3_FIXED_WIDTH = /\bw-\d|\bmax-w-/;
@@ -4087,29 +4174,31 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
         if (riskTier === 'None') continue;
 
-        const ctxStart = Math.max(0, pos - 300);
-        const ctxEnd = Math.min(content.length, pos + 300);
-        const context = content.slice(ctxStart, ctxEnd);
+        // ── STRICT EVIDENCE BINDING ──
+        const carrier = u3FindCarrierElement(content, pos);
+        const carrierClasses = carrier ? carrier.className : '';
+        const parent = carrier ? u3FindParentElement(content, carrier.tagStart) : null;
+        const parentClasses = parent ? parent.className : '';
+        const boundClasses = carrierClasses + ' ' + parentClasses;
 
-        const hasStrongConstraint = U3_STRONG_CONSTRAINT.test(context);
-        const hasFixedWidthWithOverflow = U3_FIXED_WIDTH.test(context) && /\boverflow-hidden\b/.test(context);
-        const isTableCellConstrained = U3_TABLE_CELL.test(context) && (U3_STRONG_CONSTRAINT.test(context) || U3_FIXED_WIDTH.test(context));
-        const isGridConstrained = U3_GRID_NARROW.test(context) && (/\bmax-w-/.test(context) || /\boverflow-hidden\b/.test(context));
+        const hasStrongConstraint = U3_STRONG_CONSTRAINT.test(boundClasses);
+        const hasFixedWidthWithOverflow = U3_FIXED_WIDTH.test(boundClasses) && /\boverflow-hidden\b/.test(boundClasses);
+        const carrierTag = carrier?.tag || parent?.tag || '';
+        const isTableCell = /^(td|th|TableCell)$/i.test(carrierTag) || /^(td|th|TableCell)$/i.test(parent?.tag || '');
+        const isTableCellConstrained = isTableCell && (U3_STRONG_CONSTRAINT.test(boundClasses) || U3_FIXED_WIDTH.test(boundClasses));
+        const isGridConstrained = /\bgrid\b/.test(boundClasses) && /\bcol(?:s|-span)/.test(boundClasses) && (/\bmax-w-/.test(boundClasses) || /\boverflow-hidden\b/.test(boundClasses));
 
         if (!hasStrongConstraint && !hasFixedWidthWithOverflow && !isTableCellConstrained && !isGridConstrained) continue;
 
-        if (riskTier === 'Medium' && !U3_TRUNCATE_OR_NOWRAP.test(context)) continue;
+        if (riskTier === 'Medium' && !U3_TRUNCATE_OR_NOWRAP.test(boundClasses)) continue;
 
-        // Low-risk: require BOTH truncate AND overflow-hidden
         if (riskTier === 'Low') {
-          const hasTruncate = /\btruncate\b/.test(context);
-          const hasOverflowHidden = /\boverflow-hidden\b/.test(context);
-          if (!(hasTruncate && hasOverflowHidden)) continue;
+          if (!(/\btruncate\b/.test(boundClasses) && /\boverflow-hidden\b/.test(boundClasses))) continue;
         }
 
-        if (U3_WRAP_SAFE.test(context)) continue;
-        if (U3_SCROLL_SAFE.test(context)) continue;
-        if (/\bfont-mono\b|\bmonospace\b|<code\b|<pre\b/i.test(context)) continue;
+        if (U3_WRAP_SAFE.test(boundClasses)) continue;
+        if (U3_SCROLL_SAFE.test(boundClasses)) continue;
+        if (/\bfont-mono\b|\bmonospace\b/i.test(boundClasses)) continue;
 
         const varKey = `${filePath}|${lastSeg}`;
         const prevCount = d5SeenVars.get(varKey) || 0;
@@ -4121,30 +4210,37 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         if (seenKeys.has(dedupeKey)) continue;
         seenKeys.add(dedupeKey);
 
+        // ── COMPONENT-LEVEL EXPAND DETECTION ──
+        const expandCheck = u3HasComponentExpandForVar(content, varName, pos);
+        const hasLocalExpand = u3HasExpandMechanism(content, pos, 20);
+
+        if (expandCheck.hasExpand || hasLocalExpand) continue;
+
         let confidence = 0.70;
         if (hasStrongConstraint) confidence += 0.15;
         if (riskTier === 'High') confidence += 0.10;
         else if (riskTier === 'Medium') confidence += 0.05;
         else if (riskTier === 'Low') confidence -= 0.10;
-        const hasWideContainer = U3_WIDE_CONTAINER.test(context) && !/\bmax-w-/.test(context);
+        const hasWideContainer = U3_WIDE_CONTAINER.test(boundClasses) && !/\bmax-w-/.test(boundClasses);
         if (hasWideContainer) confidence -= 0.10;
-        if (/\btitle\s*=|\btooltip\b|<Tooltip/i.test(context)) confidence -= 0.10;
+        if (/\btitle\s*=|\btooltip\b|<Tooltip/i.test(boundClasses)) confidence -= 0.10;
         confidence = Math.max(0.55, Math.min(0.90, confidence));
         if (confidence < 0.65) continue;
 
         const matchedClasses: string[] = [];
-        if (/\bwhitespace-nowrap\b/.test(context)) matchedClasses.push('whitespace-nowrap');
-        if (/\btruncate\b/.test(context)) matchedClasses.push('truncate');
-        if (/\boverflow-hidden\b/.test(context)) matchedClasses.push('overflow-hidden');
-        if (/\btext-ellipsis\b/.test(context)) matchedClasses.push('text-ellipsis');
-        if (/\bline-clamp-[1-9]\b/.test(context)) matchedClasses.push('line-clamp');
+        if (/\bwhitespace-nowrap\b/.test(boundClasses)) matchedClasses.push('whitespace-nowrap');
+        if (/\btruncate\b/.test(boundClasses)) matchedClasses.push('truncate');
+        if (/\boverflow-hidden\b/.test(boundClasses)) matchedClasses.push('overflow-hidden');
+        if (/\btext-ellipsis\b/.test(boundClasses)) matchedClasses.push('text-ellipsis');
+        if (/\bline-clamp-[1-9]\b/.test(boundClasses)) matchedClasses.push('line-clamp');
         if (isTableCellConstrained) matchedClasses.push('table-cell');
         if (isGridConstrained) matchedClasses.push('grid-narrow');
-        if (/\bw-\d/.test(context)) matchedClasses.push('fixed-width');
-        if (/\bmax-w-/.test(context)) matchedClasses.push('max-width');
+        if (/\bw-\d/.test(boundClasses)) matchedClasses.push('fixed-width');
+        if (/\bmax-w-/.test(boundClasses)) matchedClasses.push('max-width');
 
-        const tagMatch = context.match(/<([a-zA-Z][\w.]*)\s/);
-        const elementTag = tagMatch ? tagMatch[1] : undefined;
+        const reportTag = U3_STRONG_CONSTRAINT.test(carrierClasses) ? (carrier?.tag || undefined) :
+                          U3_STRONG_CONSTRAINT.test(parentClasses) ? (parent?.tag || undefined) :
+                          (carrier?.tag || undefined);
 
         d5Findings.push({
           subCheck: 'U3.D5',
@@ -4154,17 +4250,17 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           elementType: 'text',
           filePath,
           detection: 'Long unbroken text may overflow (no wrap protection)',
-          evidence: `{${varName}} [${riskTier}] at ${fileName}:${lineNumber} — signals: ${matchedClasses.join(', ')} — no wrap protection`,
-          explanation: 'User-generated text without spaces (e.g., long URLs, codes) can overflow the container or break layout when word-break protection is missing.',
+          evidence: `{${varName}} [${riskTier}] at ${fileName}:${lineNumber} — carrier <${reportTag || '?'}> className="${U3_STRONG_CONSTRAINT.test(carrierClasses) ? carrierClasses.trim() : parentClasses.trim()}" — no wrap protection`,
+          explanation: 'User-generated text without spaces can overflow the container when word-break protection is missing.',
           confidence,
           textPreview: `(dynamic text: ${varName})`,
           advisoryGuidance: 'Add break-words / overflow-wrap:anywhere and allow multi-line display, or clamp with "Show more".',
           deduplicationKey: dedupeKey,
           truncationType: 'unbroken-overflow',
           textLength: 'dynamic',
-          triggerReason: `{${varName}} [${riskTier}-risk] in container with ${matchedClasses.join(' + ')} but no wrap protection`,
+          triggerReason: `{${varName}} [${riskTier}-risk] in <${reportTag || '?'}> with ${matchedClasses.join(' + ')} but no wrap protection`,
           expandDetected: false,
-          elementTag,
+          elementTag: reportTag,
           varName: lastSeg,
           lineNumber,
         });
