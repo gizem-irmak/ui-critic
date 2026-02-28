@@ -5030,10 +5030,27 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
 }
 
 // ========== A5 DETERMINISTIC DETECTION (Missing Form Labels) ==========
+
+// Wrapper component → implied control type mapping
+const A5_WRAPPER_COMPONENT_MAP: Record<string, { controlType: string; impliedRole?: string }> = {
+  'Input': { controlType: 'input' },
+  'Textarea': { controlType: 'textarea' },
+  'SelectTrigger': { controlType: 'select', impliedRole: 'combobox' },
+  'Switch': { controlType: 'checkbox', impliedRole: 'switch' },
+  'Checkbox': { controlType: 'checkbox' },
+  'RadioGroupItem': { controlType: 'radio' },
+  'Slider': { controlType: 'slider', impliedRole: 'slider' },
+};
+
+// Build regex alternation from the map keys
+const A5_WRAPPER_NAMES = Object.keys(A5_WRAPPER_COMPONENT_MAP).join('|');
+
 interface A5Finding {
   elementKey: string; // Stable identity: hash of tag + id + name + type + filePath + lineNumber
   elementLabel: string;
   elementType: string;
+  elementName?: string; // React component name (e.g., "Input", "SelectTrigger")
+  controlType?: string; // Implied native type (e.g., "input", "select", "checkbox")
   inputSubtype?: string;
   role?: string;
   sourceLabel: string;
@@ -5129,12 +5146,12 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     }
 
     // Find form controls: native <input>, <textarea>, <select> (lowercase only)
-    // AND React components: <Input>, <Textarea>, <SelectTrigger>
+    // AND React wrapper components from A5_WRAPPER_COMPONENT_MAP
     // Do NOT match <Select> (Radix wrapper — not the actual interactive element)
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
 
     // Native tags (case-sensitive, lowercase only) + React component controls
-    const controlRegex = /(<(?:input|textarea|select)\b([^>]*)(?:>|\/>))|(<(?:Input|Textarea|SelectTrigger)\b([^>]*)(?:>|\/>))/g;
+    const controlRegex = new RegExp(`(<(?:input|textarea|select)\\b([^>]*)(?:>|\\/>))|(<(?:${A5_WRAPPER_NAMES})\\b([^>]*)(?:>|\\/>))`, 'g');
     let match;
     while ((match = controlRegex.exec(content)) !== null) {
       const fullMatch = match[1] || match[3];
@@ -5162,12 +5179,18 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const linesBefore = content.slice(0, match.index).split('\n');
       const lineNumber = linesBefore.length;
 
-      // Determine display tag: SelectTrigger → "SelectTrigger (role=combobox)", Input → "input", etc.
-      const displayTag = tag === 'SelectTrigger' ? 'SelectTrigger (role=combobox)' : tagLower;
+      // Determine display tag and element name for wrapper components
+      const wrapperInfo = isReactComponent ? A5_WRAPPER_COMPONENT_MAP[tag] : undefined;
+      const elementNameVal = isReactComponent ? tag : undefined; // e.g., "Input", "SelectTrigger"
+      const controlTypeVal = wrapperInfo?.controlType || tagLower; // e.g., "input", "select", "checkbox"
+      const impliedRole = wrapperInfo?.impliedRole;
+      const displayTag = isReactComponent && impliedRole
+        ? `${tag} (role=${impliedRole})`
+        : isReactComponent ? tag : tagLower;
 
       // Extract input type for display
       const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
-      const inputSubtype = tagLower === 'input' ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
+      const inputSubtype = (controlTypeVal === 'input') ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
 
       // Check for valid label sources
       const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
@@ -5195,9 +5218,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       // Build a label for the finding — use negative lookbehind for name/id extraction
       const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const elementName = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
+      const elementNameAttr = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
       const ariaLabelVal = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const label = ariaLabelVal?.[1] || ariaLabelVal?.[2] || placeholder || elementName || `<${displayTag}> control`;
+      const label = ariaLabelVal?.[1] || ariaLabelVal?.[2] || placeholder || elementNameAttr || `<${displayTag}> control`;
       const fileName = filePath.split('/').pop() || filePath;
 
       // Build selector hints for element metadata
@@ -5211,11 +5234,17 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         if (albVal?.[1] || albVal?.[2]) selectorHints.push(`aria-labelledby="${albVal?.[1] || albVal?.[2]}"`);
       }
 
-      // Determine labeling method for display
+      // Determine labeling method for display (include evidence)
       let labelingMethod = '';
       if (isInFormControl) labelingMethod = 'FormLabel/FormControl (shadcn)';
-      else if (hasAriaLabel) labelingMethod = 'aria-label';
-      else if (hasAriaLabelledBy) labelingMethod = 'aria-labelledby';
+      else if (hasAriaLabel) {
+        const alv = ariaLabelVal?.[1] || ariaLabelVal?.[2] || '';
+        labelingMethod = alv ? `aria-label="${alv}"` : 'aria-label';
+      }
+      else if (hasAriaLabelledBy) {
+        const albv = attrs.match(/aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+        labelingMethod = albv ? `aria-labelledby="${albv[1] || albv[2]}"` : 'aria-labelledby';
+      }
       else if (hasExplicitLabel) labelingMethod = `label[htmlFor="${controlId}"]`;
       else if (isWrappedInLabel) labelingMethod = 'wrapping <label>';
 
@@ -5227,8 +5256,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           if (!seenKeys.has(dedupeKey)) {
             seenKeys.add(dedupeKey);
             findings.push({
-              elementKey: makeA5ElementKey(tag, controlId, elementName, inputSubtype || tag, filePath, lineNumber),
-              elementLabel: label, elementType: displayTag, inputSubtype, sourceLabel: label, filePath, componentName,
+              elementKey: makeA5ElementKey(tag, controlId, elementNameAttr, inputSubtype || tag, filePath, lineNumber),
+              elementLabel: label, elementType: displayTag, elementName: elementNameVal, controlType: controlTypeVal,
+              inputSubtype, sourceLabel: label, filePath, componentName,
               subCheck: 'A5.3', subCheckLabel: 'Broken label association',
               classification: 'confirmed',
               detection: `Duplicate id="${controlId}" — ambiguous label association`,
@@ -5256,8 +5286,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         if (!seenKeys.has(dedupeKey)) {
           seenKeys.add(dedupeKey);
           findings.push({
-            elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
-            elementLabel: label, elementType: displayTag, inputSubtype, sourceLabel: label, filePath, componentName,
+            elementKey: makeA5ElementKey(tag, controlId || '', elementNameAttr, inputSubtype || tag, filePath, lineNumber),
+            elementLabel: label, elementType: displayTag, elementName: elementNameVal, controlType: controlTypeVal,
+            inputSubtype, sourceLabel: label, filePath, componentName,
             subCheck: 'A5.2', subCheckLabel: 'Placeholder used as label',
             classification: 'confirmed',
             detection: `<${displayTag}> has placeholder="${placeholder}" but no label/aria-label/aria-labelledby`,
@@ -5279,8 +5310,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       if (!seenKeys.has(dedupeKey)) {
         seenKeys.add(dedupeKey);
         findings.push({
-          elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
-          elementLabel: label, elementType: displayTag, inputSubtype, sourceLabel: label, filePath, componentName,
+          elementKey: makeA5ElementKey(tag, controlId || '', elementNameAttr, inputSubtype || tag, filePath, lineNumber),
+          elementLabel: label, elementType: displayTag, elementName: elementNameVal, controlType: controlTypeVal,
+          inputSubtype, sourceLabel: label, filePath, componentName,
           subCheck: 'A5.1', subCheckLabel: 'Missing label association',
           classification: 'confirmed',
           detection: `<${displayTag}> has no label, aria-label, or aria-labelledby`,
@@ -6664,8 +6696,8 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
         const potentialFindings = a5Findings.filter(f => f.classification === 'potential');
         const a5Elements = a5Findings.map(f => ({
           elementKey: f.elementKey,
-          elementLabel: f.sourceLabel, elementType: f.elementType, inputSubtype: f.inputSubtype,
-          role: f.role, sourceLabel: f.sourceLabel,
+          elementLabel: f.sourceLabel, elementType: f.elementType, elementName: f.elementName, controlType: f.controlType,
+          inputSubtype: f.inputSubtype, role: f.role, sourceLabel: f.sourceLabel,
           location: f.filePath, filePath: f.filePath, detection: f.detection, evidence: f.evidence,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           classification: f.classification,

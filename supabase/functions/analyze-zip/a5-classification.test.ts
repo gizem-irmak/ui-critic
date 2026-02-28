@@ -1,10 +1,26 @@
 import { assertEquals, assert } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 
 // Inline the detection function for testing
+
+// Wrapper component → implied control type mapping
+const A5_WRAPPER_COMPONENT_MAP: Record<string, { controlType: string; impliedRole?: string }> = {
+  'Input': { controlType: 'input' },
+  'Textarea': { controlType: 'textarea' },
+  'SelectTrigger': { controlType: 'select', impliedRole: 'combobox' },
+  'Switch': { controlType: 'checkbox', impliedRole: 'switch' },
+  'Checkbox': { controlType: 'checkbox' },
+  'RadioGroupItem': { controlType: 'radio' },
+  'Slider': { controlType: 'slider', impliedRole: 'slider' },
+};
+
+const A5_WRAPPER_NAMES = Object.keys(A5_WRAPPER_COMPONENT_MAP).join('|');
+
 interface A5Finding {
   elementKey: string;
   elementLabel: string;
   elementType: string;
+  elementName?: string;
+  controlType?: string;
   inputSubtype?: string;
   role?: string;
   sourceLabel: string;
@@ -86,8 +102,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
     }
 
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
-    // Native tags (case-sensitive, lowercase only) + React component controls
-    const controlRegex = /(<(?:input|textarea|select)\b([^>]*)(?:>|\/>))|(<(?:Input|Textarea|SelectTrigger)\b([^>]*)(?:>|\/>))/g;
+    // Native tags + React wrapper components
+    const controlRegex = new RegExp(`(<(?:input|textarea|select)\\b([^>]*)(?:>|\\/>))|(<(?:${A5_WRAPPER_NAMES})\\b([^>]*)(?:>|\\/>))`, 'g');
     let match;
     while ((match = controlRegex.exec(content)) !== null) {
       const fullMatch = match[1] || match[3];
@@ -97,7 +113,12 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const tag = isReactComponent ? rawTag : rawTag.toLowerCase();
       if (tag === 'Select') continue;
       const tagLower = tag.toLowerCase();
-      const displayTag = tag === 'SelectTrigger' ? 'SelectTrigger (role=combobox)' : tagLower;
+      const wrapperInfo = isReactComponent ? A5_WRAPPER_COMPONENT_MAP[tag] : undefined;
+      const controlTypeVal = wrapperInfo?.controlType || tagLower;
+      const impliedRole = wrapperInfo?.impliedRole;
+      const displayTag = isReactComponent && impliedRole
+        ? `${tag} (role=${impliedRole})`
+        : isReactComponent ? tag : tagLower;
 
       if (tagLower === 'input') {
         const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
@@ -111,7 +132,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const lineNumber = linesBefore.length;
 
       const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
-      const inputSubtype = tagLower === 'input' ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
+      const inputSubtype = (controlTypeVal === 'input') ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
 
       const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
       const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
@@ -912,4 +933,86 @@ Deno.test("Input with aria-label = no violation", () => {
   `]]);
   const results = detectA5FormLabels(files);
   assertEquals(results.length, 0, "aria-label on Input = labeled");
+});
+
+// ===== WRAPPER COMPONENT TESTS =====
+
+Deno.test("Input with aria-labelledby = no violation", () => {
+  const files = new Map([["src/Search.tsx", `
+    <span id="lbl1">Search</span>
+    <Input aria-labelledby="lbl1" placeholder="Search..." />
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "aria-labelledby on Input = labeled");
+});
+
+Deno.test("Label htmlFor + Input id = no violation", () => {
+  const files = new Map([["src/Form.tsx", `
+    <Label htmlFor="foo">Name</Label>
+    <Input id="foo" placeholder="Enter name" />
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Label htmlFor + Input id = labeled");
+});
+
+Deno.test("SelectTrigger with aria-label = no violation", () => {
+  const files = new Map([["src/Filter.tsx", `
+    <SelectTrigger aria-label="Status filter">
+      <SelectValue placeholder="Status" />
+    </SelectTrigger>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "aria-label on SelectTrigger = labeled");
+});
+
+Deno.test("Label htmlFor + SelectTrigger id = no violation", () => {
+  const files = new Map([["src/Filter.tsx", `
+    <Label htmlFor="s">Status</Label>
+    <SelectTrigger id="s"><SelectValue /></SelectTrigger>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Label htmlFor + SelectTrigger id = labeled");
+});
+
+Deno.test("Switch without label = flagged", () => {
+  const files = new Map([["src/Settings.tsx", `<Switch />`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "Switch without label should be flagged");
+  assert(results[0].elementType.includes("Switch"), "Should report as Switch");
+});
+
+Deno.test("Switch with aria-label = no violation", () => {
+  const files = new Map([["src/Settings.tsx", `<Switch aria-label="Dark mode" />`]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "aria-label on Switch = labeled");
+});
+
+Deno.test("Checkbox without label = flagged", () => {
+  const files = new Map([["src/Form.tsx", `<Checkbox />`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "Checkbox without label should be flagged");
+});
+
+Deno.test("Checkbox with aria-label = no violation", () => {
+  const files = new Map([["src/Form.tsx", `<Checkbox aria-label="Agree to terms" />`]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "aria-label on Checkbox = labeled");
+});
+
+Deno.test("RadioGroupItem without label = flagged", () => {
+  const files = new Map([["src/Form.tsx", `<RadioGroupItem value="a" />`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "RadioGroupItem without label should be flagged");
+});
+
+Deno.test("Slider without label = flagged", () => {
+  const files = new Map([["src/Form.tsx", `<Slider />`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "Slider without label should be flagged");
+});
+
+Deno.test("Slider with aria-label = no violation", () => {
+  const files = new Map([["src/Form.tsx", `<Slider aria-label="Volume" />`]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "aria-label on Slider = labeled");
 });
