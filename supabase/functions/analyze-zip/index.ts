@@ -5969,9 +5969,26 @@ function detectA6AccessibleNames(allFiles: Map<string, string>): A6Finding[] {
       const closingMatch = afterTag.match(closingTagRegex);
       const innerContent = closingMatch ? afterTag.slice(0, closingMatch.index) : afterTag.slice(0, 200);
 
-      // Check for visible text (excluding nested tags)
-      const visibleText = innerContent.replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
-      if (visibleText.length > 0) return; // Has text content
+      // Check for visible text (excluding nested tags but preserving expressions)
+      const strippedOfTags = innerContent.replace(/<[^>]*>/g, '');
+      const visibleText = strippedOfTags.replace(/\{[^}]*\}/g, '').trim();
+      if (visibleText.length > 0) return; // Has literal text content
+
+      // Check for JSX expression children that likely render text
+      // e.g., {item.label}, {label}, {title}, {t("...")}, {`${name}`}
+      const exprMatches = strippedOfTags.match(/\{([^}]+)\}/g);
+      if (exprMatches) {
+        const TEXT_EXPR_RE = /^\{\s*(?:[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)*|`[^`]*`|t\s*\(|i18n\.t\s*\(|formatMessage\s*\(|intl\.formatMessage\s*\()/;
+        const TEXT_PROP_SUFFIXES = /\.(label|name|title|text|caption|heading|description|content|displayName|value)\s*\}$/;
+        const SINGLE_IDENT = /^\{\s*[a-zA-Z_$][\w$]*\s*\}$/;
+        const TEMPLATE_LITERAL = /^\{\s*`[^`]*`\s*\}$/;
+        const I18N_CALL = /^\{\s*(?:t|i18n\.t|formatMessage|intl\.formatMessage)\s*\(/;
+        for (const expr of exprMatches) {
+          if (TEXT_PROP_SUFFIXES.test(expr) || SINGLE_IDENT.test(expr) || TEMPLATE_LITERAL.test(expr) || I18N_CALL.test(expr)) {
+            return; // Expression likely renders visible text — has accessible name
+          }
+        }
+      }
 
       // Check for img[alt] inside the element
       const imgAltMatch = innerContent.match(/<img\b[^>]*alt\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>/i);
