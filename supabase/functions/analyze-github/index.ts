@@ -3996,16 +3996,14 @@ function u3HasExpandMechanism(content: string, pos: number, windowLines: number)
 
 function u3FindCarrierElement(content: string, pos: number): { tag: string; className: string; tagStart: number; fullTag: string } | null {
   const U3_TRUNC_CLASS_RE = /\b(truncate|line-clamp-\d+|text-ellipsis)\b/;
-  const U3_TABLE_STRUCTURAL_TAGS = /^(tr|tbody|thead|tfoot|table|colgroup)$/i;
-  // ── Step A: scan backward for unclosed ancestor tags ──
-  const before = content.slice(Math.max(0, pos - 800), pos);
+  const before = content.slice(Math.max(0, pos - 600), pos);
   const tagRe = /<([a-zA-Z][\w.]*)\s([^>]*)>/g;
   const ancestors: { tag: string; className: string; tagStart: number; fullTag: string }[] = [];
   let tm;
   while ((tm = tagRe.exec(before)) !== null) {
     const tag = tm[1];
     const attrs = tm[2];
-    const absStart = Math.max(0, pos - 800) + tm.index;
+    const absStart = Math.max(0, pos - 600) + tm.index;
     if (attrs.endsWith('/')) continue;
     const tagEnd = absStart + tm[0].length;
     const between = content.slice(tagEnd, pos);
@@ -4015,32 +4013,11 @@ function u3FindCarrierElement(content: string, pos: number): { tag: string; clas
     const className = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
     ancestors.push({ tag, className, tagStart: absStart, fullTag: tm[0] });
   }
-  // ── Step B: prefer the CLOSEST ancestor with truncation class, skip table-structural tags ──
+  if (ancestors.length === 0) return null;
   for (let i = ancestors.length - 1; i >= 0; i--) {
-    const a = ancestors[i];
-    if (U3_TRUNC_CLASS_RE.test(a.className)) {
-      if (U3_TABLE_STRUCTURAL_TAGS.test(a.tag)) continue;
-      return a;
-    }
+    if (U3_TRUNC_CLASS_RE.test(ancestors[i].className)) return ancestors[i];
   }
-  // ── Step C: forward scan — look for child elements with truncation class after pos ──
-  const after = content.slice(pos, pos + 500);
-  const fwdRe = /<([a-zA-Z][\w.]*)\s([^>]*)>/g;
-  let fm;
-  while ((fm = fwdRe.exec(after)) !== null) {
-    const tag = fm[1];
-    const attrs = fm[2];
-    if (attrs.endsWith('/') && !U3_TRUNC_CLASS_RE.test(attrs)) continue;
-    if (U3_TABLE_STRUCTURAL_TAGS.test(tag)) continue;
-    const classMatch = attrs.match(/className\s*=\s*(?:"([^"]*)"|'([^']*)'|\{[^}]*["']([^"']*)["'][^}]*\})/);
-    const className = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
-    if (U3_TRUNC_CLASS_RE.test(className)) {
-      const absStart = pos + fm.index;
-      return { tag, className, tagStart: absStart, fullTag: fm[0] };
-    }
-  }
-  // ── Step D: NO fallback — return null to suppress misattribution ──
-  return null;
+  return ancestors[ancestors.length - 1];
 }
 
 function u3FindParentElement(content: string, carrierTagStart: number): { tag: string; className: string } | null {
