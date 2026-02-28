@@ -433,6 +433,8 @@ export interface A5ElementSubItem {
   elementKey: string; // Stable identity: hash of tag + id + name + type + filePath + lineNumber
   elementLabel: string;
   elementType?: string; // input, select, textarea, etc.
+  elementName?: string; // React component name: Input, SelectTrigger, Switch, etc.
+  controlType?: string; // Implied native type: input, select, checkbox, slider, etc.
   inputSubtype?: string; // text, email, password, etc.
   role?: string;
   accessibleName?: string;

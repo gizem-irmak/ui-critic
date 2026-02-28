@@ -4,7 +4,19 @@ Updated: now
 Rule A5 (Missing Form Labels) enforces WCAG 1.3.1, 3.3.2, and optionally 4.1.2 (for ARIA roles). It requires DOM/HTML analysis (ZIP/GitHub) and is marked 'Not Evaluated' (informational) for screenshot-only inputs.
 
 ## Detection (deterministic static analysis)
-Targets: `<input>`, `<textarea>`, `<select>`, elements with `role="textbox|combobox|searchbox|spinbutton|listbox"`, and `contenteditable="true"` elements.
+Targets: `<input>`, `<textarea>`, `<select>`, elements with `role="textbox|combobox|searchbox|spinbutton|listbox"`, `contenteditable="true"` elements, AND React wrapper components via A5_WRAPPER_COMPONENT_MAP.
+
+### Wrapper Component Map
+Maps React component names to implied control types:
+- Input → input
+- Textarea → textarea
+- SelectTrigger → select (role=combobox)
+- Switch → checkbox (role=switch)
+- Checkbox → checkbox
+- RadioGroupItem → radio
+- Slider → slider (role=slider)
+
+Props (aria-label, aria-labelledby, id, name, placeholder) on wrapper components are parsed identically to native elements. A `<Input aria-label="X" />` is treated as labeled.
 
 ### Confirmed sub-checks (no confidence score)
 - **A5.1**: Missing accessible label (no `<label>`, `aria-label`, or `aria-labelledby`). Title-only inputs remain A5.1.
@@ -18,18 +30,21 @@ Targets: `<input>`, `<textarea>`, `<select>`, elements with `role="textbox|combo
 
 ## Labeling Recognition (false-positive suppression)
 - **`<label htmlFor>` / `<Label htmlFor>`**: Both lowercase and uppercase Label components with `htmlFor`/`for` props are recognized.
-- **shadcn FormLabel/FormControl**: Controls inside `<FormControl>` within a `<FormItem>` that also contains `<FormLabel>` are treated as labeled. This covers react-hook-form patterns where `FormLabel` sets `htmlFor` and `FormControl` injects `id` via Slot at runtime.
+- **shadcn FormLabel/FormControl**: Controls inside `<FormControl>` within a `<FormItem>` that also contains `<FormLabel>` are treated as labeled.
 - **Wrapped in label/Label**: Controls wrapped in `<label>` or `<Label>` are recognized.
-- **`data-testid` exclusion**: The `id` attribute regex uses negative lookbehind `(?<![a-zA-Z-])id\s*=` to prevent `data-testid`, `data-id`, etc. from being matched as `id`.
+- **`data-testid` exclusion**: The `id` attribute regex uses negative lookbehind to prevent `data-testid`, `data-id`, etc. from being matched as `id`.
+- **aria-describedby**: Does NOT count as a label (supporting evidence only).
 
 ## Data Model
 - `isA5Aggregated: true` with `a5Elements: A5ElementSubItem[]`
 - Each element has a stable `elementKey` (hash of tag+id+name+type+filePath+lineNumber) used for deduplication and suppression
+- `elementName?: string` — React component name (e.g., "Input", "SelectTrigger", "Switch")
+- `controlType?: string` — Implied native type (e.g., "input", "select", "checkbox", "slider")
 - `wcagCriteria: string[]` — always includes `["1.3.1", "3.3.2"]`, ARIA roles add `"4.1.2"`
 - `confidence` is ONLY present on potential findings — confirmed items must NOT include it
 - `selectorHints: string[]` — e.g., `['id="email"', 'name="email"', 'aria-label="Search"']`
 - `controlId?: string` — the actual `id` prop if present
-- `labelingMethod?: string` — what labeling was found or missing (e.g., 'aria-label', 'FormLabel/FormControl (shadcn)', 'none')
+- `labelingMethod?: string` — includes evidence, e.g., `aria-label="Search patients"`, `label[htmlFor="foo"]`, `none`
 
 ## Suppression
 - A5.3 (broken label) suppresses A5.1 (missing label) in the same file
@@ -39,5 +54,4 @@ Targets: `<input>`, `<textarea>`, `<select>`, elements with `role="textbox|combo
 Renders in standardized aggregated card matching A1-A3 layout:
 - Header: "A5 — Missing Form Labels" with element count badge
 - Single-sentence description below title
-- Collapsible element items showing: Element (type, id, name, aria-label), Labeling (method found/missing), Detection, Requirement (WCAG ref), Confidence (potential only)
-- No internal sub-check badges, evidence blocks, or advisory guidance sections
+- Collapsible element items showing: Element (type, id, name, aria-label), Labeling (method found/missing with evidence), Detection, Requirement (WCAG ref), Confidence (potential only)
