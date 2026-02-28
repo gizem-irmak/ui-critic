@@ -15,6 +15,77 @@ const A5_WRAPPER_COMPONENT_MAP: Record<string, { controlType: string; impliedRol
 
 const A5_WRAPPER_NAMES = Object.keys(A5_WRAPPER_COMPONENT_MAP).join('|');
 
+const A5_UI_IMPORT_PATTERNS = [
+  /['"]@\/components\/ui\//,
+  /['"]\.\.?\/components\/ui\//,
+  /['"]@radix-ui\//,
+  /['"]shadcn/,
+  /['"]@headlessui\//,
+];
+
+const A5_NON_UI_IMPORT_PATTERNS = [
+  /['"]react-router/,
+  /['"]@remix-run/,
+  /['"]next\/navigation/,
+  /['"]wouter/,
+];
+
+function extractImportSources(content: string): Map<string, string> {
+  const importMap = new Map<string, string>();
+  const importRegex = /import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+(['"][^'"]+['"])/g;
+  let m;
+  while ((m = importRegex.exec(content)) !== null) {
+    const path = m[3];
+    if (m[1]) {
+      const names = m[1].split(',').map(n => {
+        const parts = n.trim().split(/\s+as\s+/);
+        return parts.length > 1 ? parts[1].trim() : parts[0].trim();
+      }).filter(Boolean);
+      for (const name of names) importMap.set(name, path);
+    }
+    if (m[2]) importMap.set(m[2], path);
+  }
+  return importMap;
+}
+
+function isUiControl(componentName: string, importMap: Map<string, string>, attrs: string): boolean {
+  const importPath = importMap.get(componentName);
+  if (importPath) {
+    if (A5_NON_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return false;
+    if (A5_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return true;
+  }
+  const FORM_CONTROL_ROLES = /role\s*=\s*["'](?:switch|combobox|checkbox|radio|slider|textbox|searchbox|spinbutton|listbox)["']/i;
+  if (FORM_CONTROL_ROLES.test(attrs)) return true;
+  if (!importPath) return true;
+  return false;
+}
+
+function parseAriaLabelValue(attrs: string): string | null {
+  const staticMatch = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+  if (staticMatch) {
+    const val = staticMatch[1] || staticMatch[2];
+    if (val && val.trim().length > 0) return val;
+  }
+  const exprMatch = attrs.match(/aria-label\s*=\s*\{\s*(?:"([^"]+)"|'([^']+)')\s*\}/);
+  if (exprMatch) {
+    const val = exprMatch[1] || exprMatch[2];
+    if (val && val.trim().length > 0) return val;
+  }
+  return null;
+}
+
+function hasAriaLabelPresent(attrs: string): boolean {
+  return parseAriaLabelValue(attrs) !== null;
+}
+
+function parseAriaLabelledByValue(attrs: string): string | null {
+  const staticMatch = attrs.match(/aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+  if (staticMatch) return staticMatch[1] || staticMatch[2] || null;
+  const exprMatch = attrs.match(/aria-labelledby\s*=\s*\{\s*(?:"([^"]+)"|'([^']+)')\s*\}/);
+  if (exprMatch) return exprMatch[1] || exprMatch[2] || null;
+  return null;
+}
+
 interface A5Finding {
   elementKey: string;
   elementLabel: string;
@@ -101,6 +172,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       }
     }
 
+    // Extract imports for this file to determine component sources
+    const importMap = extractImportSources(content);
+
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
     // Native tags + React wrapper components
     const controlRegex = new RegExp(`(<(?:input|textarea|select)\\b([^>]*)(?:>|\\/>))|(<(?:${A5_WRAPPER_NAMES})\\b([^>]*)(?:>|\\/>))`, 'g');
@@ -112,6 +186,12 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const isReactComponent = /^[A-Z]/.test(rawTag);
       const tag = isReactComponent ? rawTag : rawTag.toLowerCase();
       if (tag === 'Select') continue;
+
+      // Import-aware control identification
+      if (isReactComponent && A5_WRAPPER_COMPONENT_MAP[tag]) {
+        if (!isUiControl(tag, importMap, attrs)) continue;
+      }
+
       const tagLower = tag.toLowerCase();
       const wrapperInfo = isReactComponent ? A5_WRAPPER_COMPONENT_MAP[tag] : undefined;
       const controlTypeVal = wrapperInfo?.controlType || tagLower;
@@ -134,8 +214,10 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
       const inputSubtype = (controlTypeVal === 'input') ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
 
-      const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
-      const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
+      const ariaLabelParsed = parseAriaLabelValue(attrs);
+      const hasAriaLabel = ariaLabelParsed !== null;
+      const ariaLabelledByParsed = parseAriaLabelledByValue(attrs);
+      const hasAriaLabelledBy = ariaLabelledByParsed !== null;
       const controlIdMatch2 = attrs.match(/(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
       const controlId = controlIdMatch2?.[1] || controlIdMatch2?.[2] || controlIdMatch2?.[3];
       const hasExplicitLabel = controlId ? labelForTargets.has(controlId) : false;
@@ -155,7 +237,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const elementName = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
-      const label = placeholder || elementName || `<${displayTag}> control`;
+      const label = ariaLabelParsed || placeholder || elementName || `<${displayTag}> control`;
 
       if (hasValidLabel) continue;
 
@@ -1015,4 +1097,96 @@ Deno.test("Slider with aria-label = no violation", () => {
   const files = new Map([["src/Form.tsx", `<Slider aria-label="Volume" />`]]);
   const results = detectA5FormLabels(files);
   assertEquals(results.length, 0, "aria-label on Slider = labeled");
+});
+
+// ===== IMPORT-AWARE CONTROL IDENTIFICATION TESTS =====
+
+Deno.test("Switch from react-router-dom is NOT treated as a form control", () => {
+  const files = new Map([["src/App.tsx", `
+    import { Switch, Route } from "react-router-dom";
+    function App() {
+      return <Switch><Route path="/" /><Route path="/about" /></Switch>;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Routing Switch should not be flagged");
+});
+
+Deno.test("Switch from @/components/ui/switch IS treated as a form control", () => {
+  const files = new Map([["src/Settings.tsx", `
+    import { Switch } from "@/components/ui/switch";
+    function Settings() {
+      return <Switch />;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "UI Switch without label should be flagged");
+});
+
+Deno.test("Switch from @/components/ui/switch with aria-label = no violation", () => {
+  const files = new Map([["src/Settings.tsx", `
+    import { Switch } from "@/components/ui/switch";
+    function Settings() {
+      return <Switch aria-label="Dark mode" />;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "UI Switch with aria-label = labeled");
+});
+
+Deno.test("Switch from react-router is NOT flagged even without label", () => {
+  const files = new Map([["src/Router.tsx", `
+    import { Switch } from "react-router";
+    export default function Router() {
+      return <Switch><div /></Switch>;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "react-router Switch should be skipped");
+});
+
+Deno.test("Switch with explicit role=switch but unknown import IS flagged", () => {
+  const files = new Map([["src/Toggle.tsx", `
+    import { Switch } from "some-unknown-lib";
+    function Toggle() {
+      return <Switch role="switch" />;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1, "Switch with explicit role=switch should be flagged as control");
+});
+
+// ===== JSX EXPRESSION SYNTAX TESTS =====
+
+Deno.test("Input with aria-label={\"...\"} JSX expression = no violation", () => {
+  const files = new Map([["src/Search.tsx", `
+    <Input aria-label={"Search patients"} placeholder="Search..." />
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "JSX expression aria-label should be recognized");
+});
+
+Deno.test("Input with aria-label={'...'} single quote JSX expression = no violation", () => {
+  const files = new Map([["src/Search.tsx", `
+    <Input aria-label={'Search patients'} placeholder="Search..." />
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Single-quote JSX expression aria-label should be recognized");
+});
+
+Deno.test("native input with aria-label={\"...\"} = no violation", () => {
+  const files = new Map([["src/Form.tsx", `<input type="text" aria-label={"Email address"} />`]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "JSX expression aria-label on native input should be recognized");
+});
+
+Deno.test("SelectTrigger with aria-labelledby={\"id1\"} = no violation", () => {
+  const files = new Map([["src/Filter.tsx", `
+    <span id="lbl">Status</span>
+    <SelectTrigger aria-labelledby={"lbl"}>
+      <SelectValue />
+    </SelectTrigger>
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "JSX expression aria-labelledby should be recognized");
 });

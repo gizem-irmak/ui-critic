@@ -6,6 +6,17 @@ Rule A5 (Missing Form Labels) enforces WCAG 1.3.1, 3.3.2, and optionally 4.1.2 (
 ## Detection (deterministic static analysis)
 Targets: `<input>`, `<textarea>`, `<select>`, elements with `role="textbox|combobox|searchbox|spinbutton|listbox"`, `contenteditable="true"` elements, AND React wrapper components via A5_WRAPPER_COMPONENT_MAP.
 
+### Import-Aware Control Identification
+Before checking labels, the detector extracts import statements from each file to determine where components originate. This prevents false positives from name collisions (e.g., `<Switch>` from react-router vs. `<Switch>` from @/components/ui/switch).
+
+Rules:
+- Native tags (input/select/textarea/button) → always treated as controls
+- Wrapper components in A5_WRAPPER_COMPONENT_MAP:
+  - If imported from a **NON-UI source** (react-router, @remix-run, next/navigation, wouter) → **NOT a control, skip A5**
+  - If imported from a **UI source** (@/components/ui/*, @radix-ui/*, shadcn, @headlessui/*) → **IS a control**
+  - If import source is unknown → check for explicit ARIA role (role="switch", etc.); if no role and no import, assume UI control
+  - If import source is unknown and no ARIA role → skip (not a control)
+
 ### Wrapper Component Map
 Maps React component names to implied control types:
 - Input → input
@@ -16,7 +27,8 @@ Maps React component names to implied control types:
 - RadioGroupItem → radio
 - Slider → slider (role=slider)
 
-Props (aria-label, aria-labelledby, id, name, placeholder) on wrapper components are parsed identically to native elements. A `<Input aria-label="X" />` is treated as labeled.
+### Prop Parsing (supports JSX expression syntax)
+Props (aria-label, aria-labelledby, id, name, placeholder) on wrapper components are parsed identically to native elements. Both static (`aria-label="X"`) and JSX expression (`aria-label={"X"}`, `aria-label={'X'}`) syntax are recognized. A `<Input aria-label="X" />` is treated as labeled.
 
 ### Confirmed sub-checks (no confidence score)
 - **A5.1**: Missing accessible label (no `<label>`, `aria-label`, or `aria-labelledby`). Title-only inputs remain A5.1.
