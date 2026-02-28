@@ -801,29 +801,33 @@ function u3HasExpandMechanism(content: string, pos: number, windowLines: number)
  * Strategy: scan backward from `pos` for `<TagName ... className="...">` that hasn't been closed.
  */
 function u3FindCarrierElement(content: string, pos: number): { tag: string; className: string; tagStart: number; fullTag: string } | null {
-  // Walk backward to find the last unclosed opening tag before pos
+  const U3_TRUNC_CLASS_RE = /\b(truncate|line-clamp-\d+|text-ellipsis)\b/;
+  // Walk backward to find all unclosed opening tags before pos
   const before = content.slice(Math.max(0, pos - 600), pos);
-  // Find all opening tags in the window before the variable
   const tagRe = /<([a-zA-Z][\w.]*)\s([^>]*)>/g;
-  let best: { tag: string; className: string; tagStart: number; fullTag: string } | null = null;
+  // Collect all unclosed ancestors
+  const ancestors: { tag: string; className: string; tagStart: number; fullTag: string }[] = [];
   let tm;
   while ((tm = tagRe.exec(before)) !== null) {
     const tag = tm[1];
     const attrs = tm[2];
     const absStart = Math.max(0, pos - 600) + tm.index;
-    // Check this tag isn't self-closing
     if (attrs.endsWith('/')) continue;
-    // Check there's no closing tag for this between tagEnd and pos
     const tagEnd = absStart + tm[0].length;
     const between = content.slice(tagEnd, pos);
     const closeRe = new RegExp(`</${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*>`, 'i');
-    if (closeRe.test(between)) continue; // Tag was closed before our variable
-    // Extract className
+    if (closeRe.test(between)) continue;
     const classMatch = attrs.match(/className\s*=\s*(?:"([^"]*)"|'([^']*)'|\{[^}]*["']([^"']*)["'][^}]*\})/);
     const className = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
-    best = { tag, className, tagStart: absStart, fullTag: tm[0] };
+    ancestors.push({ tag, className, tagStart: absStart, fullTag: tm[0] });
   }
-  return best;
+  if (ancestors.length === 0) return null;
+  // Prefer the CLOSEST ancestor that actually has a truncation class
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    if (U3_TRUNC_CLASS_RE.test(ancestors[i].className)) return ancestors[i];
+  }
+  // Fallback: closest ancestor (last in list)
+  return ancestors[ancestors.length - 1];
 }
 
 /**
