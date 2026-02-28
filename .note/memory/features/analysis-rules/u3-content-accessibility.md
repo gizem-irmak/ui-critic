@@ -10,6 +10,13 @@ Rule U3 (Truncated or Inaccessible Content) evaluates content visibility via hyb
 - Classes from sibling elements (e.g., other `<td>` cells in the same row) are NOT considered.
 - Element attribution reports the actual tag that carries the truncation class, not unrelated components.
 
+## Carrier Element Selection (all sub-checks)
+- `u3FindCarrierElement` scans backward for unclosed ancestor tags, then prefers the **closest** ancestor whose className contains truncation signals (truncate, line-clamp-*, text-ellipsis).
+- **Table-structural tag guard**: `<tr>`, `<tbody>`, `<thead>`, `<tfoot>`, `<table>`, `<colgroup>` are NEVER reported as carriers unless they themselves carry the truncation class (skipped in ancestor scan).
+- **Forward scan**: If no ancestor has a truncation class, the function scans FORWARD (up to 500 chars) for child elements with truncation classes.
+- **No fallback**: If no element with a truncation class is found, returns null (suppresses finding rather than misattributing to a non-carrier ancestor).
+- **Icon filtering**: `U3_ICON_COMPONENT_RE` filters out 100+ common icon component names; if carrier is an icon, falls back to parent wrapper.
+
 ## Component-Level Expand Detection
 - `u3HasComponentExpandForVar` searches the entire component/file for the same variable field rendered without truncation elsewhere (e.g., `selectedMsg.subject` in a detail view).
 - Also detects onClick → setSelected patterns with corresponding detail views.
