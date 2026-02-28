@@ -924,6 +924,9 @@ function u3HasWidthConstraint(context: string): boolean {
   return /\bw-\d+\b/.test(context) || /\bmax-w-\w+\b/.test(context);
 }
 
+// Icon components that should never be reported as the truncation carrier element
+const U3_ICON_COMPONENT_RE = /^(?:MapPin|Calendar|Clock|Mail|Phone|User|Star|Heart|Search|Check|X|Plus|Minus|ArrowLeft|ArrowRight|ArrowUp|ArrowDown|ChevronLeft|ChevronRight|ChevronUp|ChevronDown|Eye|EyeOff|Edit|Trash|Delete|Copy|Download|Upload|Settings|Menu|Close|Home|Info|AlertCircle|AlertTriangle|Bell|Bookmark|Camera|Circle|Clipboard|Code|Coffee|Compass|CreditCard|Database|Disc|DollarSign|ExternalLink|File|Filter|Flag|Folder|Gift|Globe|Grid|Hash|Headphones|Image|Inbox|Key|Layers|Layout|Link|List|Loader|Lock|LogIn|LogOut|Map|MessageCircle|MessageSquare|Mic|Monitor|Moon|MoreHorizontal|MoreVertical|Move|Music|Navigation|Paperclip|Pause|Pen|Percent|Play|Power|Printer|Radio|RefreshCw|Repeat|RotateCw|Save|Scissors|Send|Server|Share|Shield|ShoppingCart|Sidebar|Slash|Sliders|Smartphone|Speaker|Square|Sun|Sunrise|Sunset|Tag|Target|Terminal|Thermometer|ThumbsUp|ThumbsDown|ToggleLeft|ToggleRight|Tool|TrendingUp|TrendingDown|Triangle|Truck|Tv|Type|Umbrella|Underline|Unlock|Video|Volume|Watch|Wifi|Wind|Zap|ZoomIn|ZoomOut|Icon|Svg|svg|LucideIcon)$/;
+
 function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[] {
   const findings: U3Finding[] = [];
   const seenKeys = new Set<string>();
@@ -997,9 +1000,19 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         if (seenKeys.has(dedupeKey)) continue;
         seenKeys.add(dedupeKey);
 
-        // Detect tag from surrounding context
-        const tagMatch = context.slice(0, 200).match(/<([a-zA-Z][\w.]*)\s/);
-        const elementTag = tagMatch ? tagMatch[1] : undefined;
+        // Detect tag: use carrier element (the one with the truncation class), not nearby icons
+        const carrier = u3FindCarrierElement(content, pos);
+        const elementTag = carrier?.tag && !U3_ICON_COMPONENT_RE.test(carrier.tag) ? carrier.tag : (() => {
+          // Fallback: find the nearest non-icon opening tag
+          const tagRe = /<([a-zA-Z][\w.]*)\s/g;
+          let best: string | undefined;
+          let tm2;
+          const slice = context.slice(0, 300);
+          while ((tm2 = tagRe.exec(slice)) !== null) {
+            if (!U3_ICON_COMPONENT_RE.test(tm2[1])) best = tm2[1];
+          }
+          return best;
+        })();
 
         // Extract variable name from text preview for cross-subcheck dedup
         const d1VarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
@@ -1359,10 +1372,11 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         if (/\bw-\d/.test(boundClasses)) matchedClasses.push('fixed-width');
         if (/\bmax-w-/.test(boundClasses)) matchedClasses.push('max-width');
 
-        // Element attribution: use carrier tag (the element with truncation classes)
-        const reportTag = U3_STRONG_CONSTRAINT.test(carrierClasses) ? (carrier?.tag || undefined) :
+        // Element attribution: use carrier tag (the element with truncation classes), skip icons
+        const rawTag = U3_STRONG_CONSTRAINT.test(carrierClasses) ? (carrier?.tag || undefined) :
                           U3_STRONG_CONSTRAINT.test(parentClasses) ? (parent?.tag || undefined) :
                           (carrier?.tag || undefined);
+        const reportTag = rawTag && U3_ICON_COMPONENT_RE.test(rawTag) ? (parent?.tag || carrier?.tag || undefined) : rawTag;
 
         d5Findings.push({
           subCheck: 'U3.D5',
