@@ -1926,6 +1926,79 @@ const A5_WRAPPER_COMPONENT_MAP: Record<string, { controlType: string; impliedRol
 
 const A5_WRAPPER_NAMES = Object.keys(A5_WRAPPER_COMPONENT_MAP).join('|');
 
+// Import paths that indicate a UI control (not routing, not utility)
+const A5_UI_IMPORT_PATTERNS = [
+  /['"]@\/components\/ui\//,
+  /['"]\.\.?\/components\/ui\//,
+  /['"]@radix-ui\//,
+  /['"]shadcn/,
+  /['"]@headlessui\//,
+];
+
+// Import paths that indicate NON-UI usage (routing, state, etc.)
+const A5_NON_UI_IMPORT_PATTERNS = [
+  /['"]react-router/,
+  /['"]@remix-run/,
+  /['"]next\/navigation/,
+  /['"]wouter/,
+];
+
+function extractImportSources(content: string): Map<string, string> {
+  const importMap = new Map<string, string>();
+  const importRegex = /import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+(['"][^'"]+['"])/g;
+  let m;
+  while ((m = importRegex.exec(content)) !== null) {
+    const path = m[3];
+    if (m[1]) {
+      const names = m[1].split(',').map(n => {
+        const parts = n.trim().split(/\s+as\s+/);
+        return parts.length > 1 ? parts[1].trim() : parts[0].trim();
+      }).filter(Boolean);
+      for (const name of names) importMap.set(name, path);
+    }
+    if (m[2]) importMap.set(m[2], path);
+  }
+  return importMap;
+}
+
+function isUiControl(componentName: string, importMap: Map<string, string>, attrs: string): boolean {
+  const importPath = importMap.get(componentName);
+  if (importPath) {
+    if (A5_NON_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return false;
+    if (A5_UI_IMPORT_PATTERNS.some(p => p.test(importPath))) return true;
+  }
+  const FORM_CONTROL_ROLES = /role\s*=\s*["'](?:switch|combobox|checkbox|radio|slider|textbox|searchbox|spinbutton|listbox)["']/i;
+  if (FORM_CONTROL_ROLES.test(attrs)) return true;
+  if (!importPath) return true;
+  return false;
+}
+
+function parseAriaLabelValue(attrs: string): string | null {
+  const staticMatch = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+  if (staticMatch) {
+    const val = staticMatch[1] || staticMatch[2];
+    if (val && val.trim().length > 0) return val;
+  }
+  const exprMatch = attrs.match(/aria-label\s*=\s*\{\s*(?:"([^"]+)"|'([^']+)')\s*\}/);
+  if (exprMatch) {
+    const val = exprMatch[1] || exprMatch[2];
+    if (val && val.trim().length > 0) return val;
+  }
+  return null;
+}
+
+function hasAriaLabelPresent(attrs: string): boolean {
+  return parseAriaLabelValue(attrs) !== null;
+}
+
+function parseAriaLabelledByValue(attrs: string): string | null {
+  const staticMatch = attrs.match(/aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/);
+  if (staticMatch) return staticMatch[1] || staticMatch[2] || null;
+  const exprMatch = attrs.match(/aria-labelledby\s*=\s*\{\s*(?:"([^"]+)"|'([^']+)')\s*\}/);
+  if (exprMatch) return exprMatch[1] || exprMatch[2] || null;
+  return null;
+}
+
 interface A5Finding {
   elementLabel: string;
   elementType: string;
@@ -2014,6 +2087,9 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       }
     }
 
+    // Extract imports for this file to determine component sources
+    const importMap = extractImportSources(content);
+
     const EXCLUDED_INPUT_TYPES = new Set(['hidden', 'submit', 'reset', 'button']);
     // Native tags + React wrapper components from A5_WRAPPER_COMPONENT_MAP
     const controlRegex = new RegExp(`(<(?:input|textarea|select)\\b([^>]*)(?:>|\\/>))|(<(?:${A5_WRAPPER_NAMES})\\b([^>]*)(?:>|\\/>))`, 'g');
@@ -2025,6 +2101,11 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const isReactComponent = /^[A-Z]/.test(rawTag);
       const tag = isReactComponent ? rawTag : rawTag.toLowerCase();
       if (tag === 'Select') continue;
+
+      // Import-aware control identification: skip wrapper components from non-UI sources
+      if (isReactComponent && A5_WRAPPER_COMPONENT_MAP[tag]) {
+        if (!isUiControl(tag, importMap, attrs)) continue;
+      }
 
       const tagLower = tag.toLowerCase();
       if (tagLower === 'input') {
@@ -2049,8 +2130,11 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
       const inputSubtype = (controlTypeVal === 'input') ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
 
-      const hasAriaLabel = /aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs) && !/aria-label\s*=\s*["']\s*["']/.test(attrs);
-      const hasAriaLabelledBy = /aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/.test(attrs);
+      // Check for valid label sources (supports JSX expression syntax: aria-label={"..."})
+      const ariaLabelParsed = parseAriaLabelValue(attrs);
+      const hasAriaLabel = ariaLabelParsed !== null;
+      const ariaLabelledByParsed = parseAriaLabelledByValue(attrs);
+      const hasAriaLabelledBy = ariaLabelledByParsed !== null;
       const controlIdMatch = attrs.match(/(?<![a-zA-Z-])id\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/);
       const controlId = controlIdMatch?.[1] || controlIdMatch?.[2] || controlIdMatch?.[3];
       const hasExplicitLabel = controlId ? labelForTargets.has(controlId) : false;
@@ -2070,27 +2154,24 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const nameMatch = attrs.match(/(?<![a-zA-Z-])(?:name)\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const elementNameAttr = nameMatch?.[1] || nameMatch?.[2] || controlId || '';
-      const ariaLabelVal = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      const label = ariaLabelVal?.[1] || ariaLabelVal?.[2] || placeholder || elementNameAttr || `<${displayTag}> control`;
+      const label = ariaLabelParsed || placeholder || elementNameAttr || `<${displayTag}> control`;
       const fileName = filePath.split('/').pop() || filePath;
 
       // Build selector hints
       const selectorHints: string[] = [];
       if (controlId) selectorHints.push(`id="${controlId}"`);
       if (nameMatch?.[1] || nameMatch?.[2]) selectorHints.push(`name="${nameMatch?.[1] || nameMatch?.[2]}"`);
-      const ariaLabelExtract = attrs.match(/aria-label\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-      if (ariaLabelExtract?.[1] || ariaLabelExtract?.[2]) selectorHints.push(`aria-label="${ariaLabelExtract?.[1] || ariaLabelExtract?.[2]}"`);
+      if (ariaLabelParsed) selectorHints.push(`aria-label="${ariaLabelParsed}"`);
+      if (ariaLabelledByParsed) selectorHints.push(`aria-labelledby="${ariaLabelledByParsed}"`);
 
       // Determine labeling method (include evidence)
       let labelingMethod = '';
       if (isInFormControl) labelingMethod = 'FormLabel/FormControl (shadcn)';
       else if (hasAriaLabel) {
-        const alv = ariaLabelVal?.[1] || ariaLabelVal?.[2] || '';
-        labelingMethod = alv ? `aria-label="${alv}"` : 'aria-label';
+        labelingMethod = ariaLabelParsed ? `aria-label="${ariaLabelParsed}"` : 'aria-label';
       }
       else if (hasAriaLabelledBy) {
-        const albv = attrs.match(/aria-labelledby\s*=\s*(?:"([^"]+)"|'([^']+)')/);
-        labelingMethod = albv ? `aria-labelledby="${albv[1] || albv[2]}"` : 'aria-labelledby';
+        labelingMethod = ariaLabelledByParsed ? `aria-labelledby="${ariaLabelledByParsed}"` : 'aria-labelledby';
       }
       else if (hasExplicitLabel) labelingMethod = `label[htmlFor="${controlId}"]`;
       else if (isWrappedInLabel) labelingMethod = 'wrapping <label>';
