@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { LocationBadge } from './LocationBadge';
 import type { Violation, E2ElementSubItem } from '@/types/project';
+import {
+  RuleIdBadge, RuleHeader, ElementCountBadge, CardDescription,
+  ComponentTitle, ElementItemWrapper, DetailContainer,
+  FieldRow, FieldLabel, FieldValue, ConfidenceValue, AdvisoryBlock,
+} from './CardTypography';
 
 function E2ElementItem({ element, compact = false }: {
   element: E2ElementSubItem;
@@ -16,15 +20,10 @@ function E2ElementItem({ element, compact = false }: {
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className={cn(
-        'rounded-lg border space-y-0 bg-warning/5 border-warning/20',
-        compact ? 'p-2' : 'p-3'
-      )}>
+      <ElementItemWrapper isConfirmed={false} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
-            <span className={cn('font-medium text-left', compact ? 'text-sm' : '')}>
-              {displayLabel}
-            </span>
+            <ComponentTitle>{displayLabel}</ComponentTitle>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
@@ -37,39 +36,37 @@ function E2ElementItem({ element, compact = false }: {
         </CollapsibleTrigger>
 
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+          <DetailContainer>
             {element.detection && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Detection:</span>
-                <span>{element.detection}</span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Detection:</FieldLabel>
+                <FieldValue>{element.detection}</FieldValue>
+              </FieldRow>
             )}
 
             {element.evidence && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Evidence:</span>
-                <span>{element.evidence}</span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Evidence:</FieldLabel>
+                <FieldValue>{element.evidence}</FieldValue>
+              </FieldRow>
             )}
 
             {element.recommendedFix && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Fix:</span>
-                <span>{element.recommendedFix}</span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Fix:</FieldLabel>
+                <FieldValue>{element.recommendedFix}</FieldValue>
+              </FieldRow>
             )}
 
             {element.confidence != null && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-24 flex-shrink-0">Confidence:</span>
-                <span className="font-mono font-medium text-warning">
-                  {Math.round(element.confidence * 100)}%
-                </span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Confidence:</FieldLabel>
+                <ConfidenceValue value={element.confidence} />
+              </FieldRow>
             )}
-          </div>
+          </DetailContainer>
         </CollapsibleContent>
-      </div>
+      </ElementItemWrapper>
     </Collapsible>
   );
 }
@@ -92,23 +89,17 @@ export function E2AggregatedCard({ violation, compact = false }: E2AggregatedCar
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
 
-  const elementCount = elements.length;
-
   return (
     <Card className="border border-warning/30">
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
-        <CardTitle className="flex items-center gap-2 flex-wrap text-base">
-          <span className="category-badge flex-shrink-0 text-xs category-ethics">
-            E2
-          </span>
-          <span className="font-bold text-base">Imbalanced or Manipulative Choice Architecture</span>
-          <Badge className="gap-1 text-xs bg-warning/10 text-warning border-warning/30">
-            {elementCount} element{elementCount !== 1 ? 's' : ''}
-          </Badge>
+        <CardTitle className="flex items-center gap-2 flex-wrap">
+          <RuleIdBadge ruleId="E2" isConfirmed={false} categoryClass="category-ethics" />
+          <RuleHeader ruleId="E2" title="Imbalanced or Manipulative Choice Architecture" />
+          <ElementCountBadge count={elements.length} isConfirmed={false} />
         </CardTitle>
-        <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
+        <CardDescription compact={compact}>
           Analysis flagged a potential imbalance between choice options; verify neutrality.
-        </p>
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
         {elements.map((el, idx) => (
@@ -119,12 +110,9 @@ export function E2AggregatedCard({ violation, compact = false }: E2AggregatedCar
           />
         ))}
 
-        <div className={cn('bg-muted/30 rounded-md p-3 border border-border', compact ? 'text-xs' : 'text-sm')}>
-          <p className="font-medium text-muted-foreground">💡 Advisory Guidance</p>
-          <p className="text-muted-foreground mt-1">
-            {violation.advisoryGuidance || violation.contextualHint || 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.'}
-          </p>
-        </div>
+        <AdvisoryBlock compact={compact}>
+          {violation.advisoryGuidance || violation.contextualHint || 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.'}
+        </AdvisoryBlock>
       </CardContent>
     </Card>
   );

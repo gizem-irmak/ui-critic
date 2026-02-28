@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
 import { LocationBadge } from './LocationBadge';
 import type { Violation, U1ElementSubItem } from '@/types/project';
+import {
+  RuleIdBadge, RuleHeader, ElementCountBadge, CardDescription,
+  ComponentTitle, ElementItemWrapper, DetailContainer,
+  FieldRow, FieldLabel, FieldValue, ConfidenceValue, AdvisoryBlock,
+} from './CardTypography';
 
 function U1ElementItem({ element, isConfirmed, compact = false }: {
   element: U1ElementSubItem;
@@ -17,18 +21,10 @@ function U1ElementItem({ element, isConfirmed, compact = false }: {
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className={cn(
-        'rounded-lg border space-y-0',
-        isConfirmed
-          ? 'bg-destructive/5 border-destructive/20'
-          : 'bg-warning/5 border-warning/20',
-        compact ? 'p-2' : 'p-3'
-      )}>
+      <ElementItemWrapper isConfirmed={isConfirmed} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
-            <span className={cn('font-medium text-left', compact ? 'text-sm' : '')}>
-              {displayLabel}
-            </span>
+            <ComponentTitle>{displayLabel}</ComponentTitle>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
@@ -41,32 +37,30 @@ function U1ElementItem({ element, isConfirmed, compact = false }: {
         </CollapsibleTrigger>
 
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
+          <DetailContainer>
             {element.detection && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Detection:</span>
-                <span className="font-mono text-xs">{element.detection}</span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Detection:</FieldLabel>
+                <FieldValue mono>{element.detection}</FieldValue>
+              </FieldRow>
             )}
 
             {element.evidence && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Evidence:</span>
-                <span className="font-mono text-xs">{element.evidence}</span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Evidence:</FieldLabel>
+                <FieldValue mono>{element.evidence}</FieldValue>
+              </FieldRow>
             )}
 
             {!isConfirmed && element.confidence != null && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Confidence:</span>
-                <span className="font-mono font-medium text-warning">
-                  {Math.round(element.confidence * 100)}%
-                </span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Confidence:</FieldLabel>
+                <ConfidenceValue value={element.confidence} />
+              </FieldRow>
             )}
-          </div>
+          </DetailContainer>
         </CollapsibleContent>
-      </div>
+      </ElementItemWrapper>
     </Collapsible>
   );
 }
@@ -101,28 +95,16 @@ export function U1AggregatedCard({ violation, compact = false }: U1AggregatedCar
       hasConfirmed ? 'border-destructive/30' : 'border-warning/30'
     )}>
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
-        <CardTitle className="flex items-center gap-2 flex-wrap text-base">
-          <span className={cn(
-            'category-badge flex-shrink-0 text-xs',
-            hasConfirmed ? 'category-usability' : 'bg-warning/10 text-warning border border-warning/20'
-          )}>
-            U1
-          </span>
-          <span className="font-bold text-base">Unclear Primary Action</span>
-          <Badge className={cn(
-            "gap-1 text-xs",
-            hasConfirmed
-              ? "bg-destructive/10 text-destructive border-destructive/30"
-              : "bg-warning/10 text-warning border-warning/30"
-          )}>
-            {elements.length} element{elements.length !== 1 ? 's' : ''}
-          </Badge>
+        <CardTitle className="flex items-center gap-2 flex-wrap">
+          <RuleIdBadge ruleId="U1" isConfirmed={hasConfirmed} categoryClass="category-usability" />
+          <RuleHeader ruleId="U1" title="Unclear Primary Action" />
+          <ElementCountBadge count={elements.length} isConfirmed={hasConfirmed} />
         </CardTitle>
-        <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
+        <CardDescription compact={compact}>
           {hasConfirmed
             ? 'Static analysis identified a structural primary-action issue that prevents clear or functional completion.'
             : 'Static analysis flagged a potential primary-action clarity risk based on CTA structure, emphasis, or labeling; verify in context.'}
-        </p>
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
         {elements.map((el, idx) => (
@@ -134,12 +116,8 @@ export function U1AggregatedCard({ violation, compact = false }: U1AggregatedCar
           />
         ))}
 
-        {/* Advisory guidance — potential findings only */}
         {hasPotential && !hasConfirmed && violation.advisoryGuidance && (
-          <div className={cn('bg-muted/30 rounded-md p-3 border border-border', compact ? 'text-xs' : 'text-sm')}>
-            <p className="font-medium text-muted-foreground">💡 Advisory Guidance</p>
-            <p className="text-muted-foreground mt-1">{violation.advisoryGuidance}</p>
-          </div>
+          <AdvisoryBlock compact={compact}>{violation.advisoryGuidance}</AdvisoryBlock>
         )}
       </CardContent>
     </Card>

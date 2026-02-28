@@ -19,6 +19,10 @@ import { E1AggregatedCard } from './E1AggregatedCard';
 import { E2AggregatedCard } from './E2AggregatedCard';
 import { E3AggregatedCard } from './E3AggregatedCard';
 import { getRuleById } from '@/data/rules';
+import {
+  SectionHeader, RuleIdBadge, RuleHeader, CardDescription,
+  DetailContainer, FieldRow, FieldLabel, FieldValue,
+} from './CardTypography';
 
 const categoryColors: Record<string, string> = {
   accessibility: 'category-accessibility',
@@ -31,9 +35,6 @@ interface ViolationsRendererProps {
   compact?: boolean;
 }
 
-/**
- * Renders a single non-aggregated violation card (for rules that don't have aggregated rendering).
- */
 function EvaluationMethodBadge({ method }: { method?: Violation['evaluationMethod'] }) {
   if (!method) return null;
   const labels: Record<string, { text: string; className: string }> = {
@@ -68,13 +69,13 @@ function GenericViolationCard({ violation, isConfirmed, compact = false }: {
     >
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className={cn('category-badge flex-shrink-0 text-xs', categoryColors[violation.category])}>
+          <span className={cn('category-badge flex-shrink-0 text-xs font-medium', categoryColors[violation.category])}>
             {violation.ruleId}
           </span>
-          <span className="font-bold text-base">{violation.ruleName}</span>
+          <span className="text-lg font-semibold">{violation.ruleName}</span>
           <EvaluationMethodBadge method={violation.evaluationMethod} />
         </div>
-        <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
+        <span className="text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded flex-shrink-0">
           {Math.round(violation.confidence * 100)}%
         </span>
       </div>
@@ -155,26 +156,18 @@ function AggregatedCard({ violation, compact }: { violation: Violation; compact?
   return null;
 }
 
-/**
- * Single source of truth for rendering confirmed + potential violation sections.
- * Used by AnalysisResults, IterationReport, and IterationReportModal.
- */
 export function ViolationsRenderer({ violations, compact = false }: ViolationsRendererProps) {
-  // Deduplicate A6: if an aggregated A6 card exists, drop non-aggregated A6 violations
   const hasAggregatedA6 = violations.some(v => v.ruleId === 'A6' && v.isA6Aggregated);
   const deduped = hasAggregatedA6
     ? violations.filter(v => v.ruleId !== 'A6' || v.isA6Aggregated)
     : violations;
 
-  // Split into confirmed vs potential vs informational (not evaluated)
   const confirmedViolations = deduped.filter(v => v.status !== 'potential' && v.status !== 'informational');
   const potentialViolations = deduped.filter(v => v.status === 'potential');
   const informationalViolations = deduped.filter(v => v.status === 'informational');
 
-  // Separate aggregated from non-aggregated
   const confirmedAggregated = confirmedViolations.filter(isAggregated);
   const confirmedOther = confirmedViolations.filter(v => !isAggregated(v));
-
   const potentialAggregated = potentialViolations.filter(isAggregated);
   const potentialOther = potentialViolations.filter(v => !isAggregated(v));
 
@@ -188,20 +181,17 @@ export function ViolationsRenderer({ violations, compact = false }: ViolationsRe
       {/* Confirmed Violations (Blocking) */}
       {hasConfirmed && (
         <div className="space-y-4">
-          <div className="flex items-center gap-2 pt-2">
-            <AlertTriangle className="h-5 w-5 text-destructive" />
-            <h3 className="text-xl font-bold text-foreground">Confirmed Violations (Blocking)</h3>
-            <span className="text-sm text-muted-foreground">
-              — {confirmedViolations.length} issue{confirmedViolations.length !== 1 ? 's' : ''}
-            </span>
-          </div>
+          <SectionHeader
+            icon={<AlertTriangle className="h-5 w-5 text-destructive" />}
+            count={confirmedViolations.length}
+          >
+            Confirmed Violations (Blocking)
+          </SectionHeader>
 
-          {/* Aggregated rule cards (A1, A2, A3, A4) */}
           {confirmedAggregated.map((v, idx) => (
             <AggregatedCard key={`confirmed-agg-${v.ruleId}-${idx}`} violation={v} compact={compact} />
           ))}
 
-          {/* Other confirmed issues */}
           {confirmedOther.length > 0 && (
             <Card className="border-destructive/30">
               <CardContent className="pt-4 space-y-3">
@@ -222,20 +212,17 @@ export function ViolationsRenderer({ violations, compact = false }: ViolationsRe
       {/* Potential Risks (Non-blocking) */}
       {hasPotential && (
         <div className="space-y-4">
-          <div className="flex items-center gap-2 pt-2">
-            <AlertCircle className="h-5 w-5 text-warning" />
-            <h3 className="text-xl font-bold text-foreground">Potential Risks (Non-blocking)</h3>
-            <span className="text-sm text-muted-foreground">
-              — {totalPotential} issue{totalPotential !== 1 ? 's' : ''}
-            </span>
-          </div>
+          <SectionHeader
+            icon={<AlertCircle className="h-5 w-5 text-warning" />}
+            count={totalPotential}
+          >
+            Potential Risks (Non-blocking)
+          </SectionHeader>
 
-          {/* Aggregated potential cards */}
           {potentialAggregated.map((v, idx) => (
             <AggregatedCard key={`potential-agg-${v.ruleId}-${idx}`} violation={v} compact={compact} />
           ))}
 
-          {/* Other potential risks */}
           {potentialOther.length > 0 && (
             <Card className="border-warning/30">
               <CardContent className="pt-4">
@@ -249,52 +236,46 @@ export function ViolationsRenderer({ violations, compact = false }: ViolationsRe
       {/* Rules Not Evaluated (Input Limitation) */}
       {hasNotEvaluated && (
         <div className="space-y-4">
-          <div className="flex items-center gap-2 pt-2">
-            <Info className="h-5 w-5 text-muted-foreground" />
-            <h3 className="text-xl font-bold text-foreground">Rules Not Evaluated (Input Limitation)</h3>
-            <span className="text-sm text-muted-foreground">
-              — {informationalViolations.length} rule{informationalViolations.length !== 1 ? 's' : ''}
-            </span>
-          </div>
+          <SectionHeader
+            icon={<Info className="h-5 w-5 text-muted-foreground" />}
+            count={informationalViolations.length}
+          >
+            Rules Not Evaluated (Input Limitation)
+          </SectionHeader>
 
           {informationalViolations.map((v, idx) => {
             const rule = getRuleById(v.ruleId);
             return (
               <Card key={`not-eval-${v.ruleId}-${idx}`} className="border-muted-foreground/20 bg-muted/5">
                 <CardContent className={cn('space-y-3', compact ? 'pt-3 pb-3' : 'pt-4 pb-4')}>
-                  {/* Rule ID + Title */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="category-badge flex-shrink-0 text-xs category-accessibility">
+                    <span className="category-badge flex-shrink-0 text-xs font-medium category-accessibility">
                       {v.ruleId}
                     </span>
-                    <span className="font-bold text-base">{v.ruleName || rule?.name || v.ruleId}</span>
+                    <span className="text-lg font-semibold">{v.ruleName || rule?.name || v.ruleId}</span>
                   </div>
 
                   <div className="h-1" />
 
-                  {/* Status */}
-                  <div className={cn('flex items-center gap-2', compact ? 'text-xs' : 'text-sm')}>
-                    <span className="text-muted-foreground font-medium w-24">Status:</span>
-                    <span className="text-muted-foreground">Not evaluated</span>
+                  <FieldRow>
+                    <FieldLabel>Status:</FieldLabel>
+                    <FieldValue>Not evaluated</FieldValue>
+                  </FieldRow>
+
+                  <FieldRow>
+                    <FieldLabel>Input type:</FieldLabel>
+                    <FieldValue>{v.inputType === 'screenshots' ? 'Screenshot' : v.inputType || 'Unknown'}</FieldValue>
+                  </FieldRow>
+
+                  <div className="text-sm">
+                    <span className="font-medium text-muted-foreground">Reason:</span>
+                    <p className="text-sm text-foreground leading-relaxed mt-1">{v.diagnosis}</p>
                   </div>
 
-                  {/* Input type */}
-                  <div className={cn('flex items-center gap-2', compact ? 'text-xs' : 'text-sm')}>
-                    <span className="text-muted-foreground font-medium w-24">Input type:</span>
-                    <span className="text-foreground">{v.inputType === 'screenshots' ? 'Screenshot' : v.inputType || 'Unknown'}</span>
-                  </div>
-
-                  {/* Reason */}
-                  <div className={cn(compact ? 'text-xs' : 'text-sm')}>
-                    <span className="text-muted-foreground font-medium">Reason:</span>
-                    <p className="text-foreground leading-relaxed mt-1">{v.diagnosis}</p>
-                  </div>
-
-                  {/* Advisory */}
                   {v.contextualHint && (
-                    <div className={cn('bg-muted/30 rounded-md p-3 border border-muted-foreground/10', compact ? 'text-xs' : 'text-sm')}>
-                      <span className="text-muted-foreground font-medium">Advisory:</span>
-                      <p className="text-foreground leading-relaxed mt-1">{v.contextualHint}</p>
+                    <div className="bg-muted/30 rounded-md p-3 border border-muted-foreground/10 text-sm">
+                      <span className="font-medium text-muted-foreground">Advisory:</span>
+                      <p className="text-sm text-foreground leading-relaxed mt-1">{v.contextualHint}</p>
                     </div>
                   )}
                 </CardContent>
@@ -304,7 +285,6 @@ export function ViolationsRenderer({ violations, compact = false }: ViolationsRe
         </div>
       )}
 
-      {/* Empty state */}
       {violations.length === 0 && (
         <Card>
           <CardContent className="py-6 text-center text-muted-foreground">

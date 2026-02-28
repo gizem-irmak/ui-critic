@@ -6,6 +6,11 @@ import type { Violation, A6ElementSubItem } from '@/types/project';
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { LocationBadge } from './LocationBadge';
+import {
+  RuleIdBadge, RuleHeader, ElementCountBadge, CardDescription,
+  ComponentTitle, ElementItemWrapper, DetailContainer,
+  FieldRow, FieldLabel, FieldValue,
+} from './CardTypography';
 
 interface A6AggregatedCardProps {
   violation: Violation;
@@ -21,15 +26,10 @@ function A6ElementItem({ element, compact = false }: {
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className={cn(
-        'rounded-lg border space-y-0 bg-destructive/5 border-destructive/20',
-        compact ? 'p-2' : 'p-3'
-      )}>
+      <ElementItemWrapper isConfirmed={true} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
-            <span className={cn('font-medium text-left', compact ? 'text-sm' : '')}>
-              {displayLabel}
-            </span>
+            <ComponentTitle>{displayLabel}</ComponentTitle>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
@@ -42,29 +42,28 @@ function A6ElementItem({ element, compact = false }: {
         </CollapsibleTrigger>
 
         <CollapsibleContent>
-          <div className={cn('space-y-2 pt-2 mt-2 border-t border-border/50', compact ? 'text-xs' : 'text-sm')}>
-
+          <DetailContainer>
             {element.detection && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground font-medium w-20">Detection:</span>
-                <span className="font-mono text-xs">{element.detection}</span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Detection:</FieldLabel>
+                <FieldValue mono>{element.detection}</FieldValue>
+              </FieldRow>
             )}
 
             {element.evidence && (
-              <div className="flex items-start gap-2">
-                <span className="text-muted-foreground font-medium w-20">Evidence:</span>
-                <span className="font-mono text-xs">{element.evidence}</span>
-              </div>
+              <FieldRow>
+                <FieldLabel>Evidence:</FieldLabel>
+                <FieldValue mono>{element.evidence}</FieldValue>
+              </FieldRow>
             )}
 
-            <div className="flex items-start gap-2">
-              <span className="text-muted-foreground font-medium w-20">Requirement:</span>
-              <span>WCAG 2.1 — 4.1.2 Name, Role, Value (Level A)</span>
-            </div>
-          </div>
+            <FieldRow>
+              <FieldLabel>Requirement:</FieldLabel>
+              <FieldValue>WCAG 2.1 — 4.1.2 Name, Role, Value (Level A)</FieldValue>
+            </FieldRow>
+          </DetailContainer>
         </CollapsibleContent>
-      </div>
+      </ElementItemWrapper>
     </Collapsible>
   );
 }
@@ -87,7 +86,6 @@ export function A6AggregatedCard({ violation, compact = false }: A6AggregatedCar
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
 
-  // Suppress A6.1 for elements that also have A6.2 (A6.2 takes precedence)
   const a62Keys = new Set(
     rawElements.filter(el => el.subCheck === 'A6.2').map(el => el.deduplicationKey?.replace('-A6.2', '') ?? el.elementLabel)
   );
@@ -100,18 +98,14 @@ export function A6AggregatedCard({ violation, compact = false }: A6AggregatedCar
   return (
     <Card className="border border-destructive/30">
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
-        <CardTitle className="flex items-center gap-2 flex-wrap text-base">
-          <span className="category-badge flex-shrink-0 text-xs category-accessibility">
-            A6
-          </span>
-          <span className="font-bold text-base">Missing Accessible Names</span>
-          <Badge className="gap-1 text-xs bg-destructive/10 text-destructive border-destructive/30">
-            {elements.length} element{elements.length !== 1 ? 's' : ''}
-          </Badge>
+        <CardTitle className="flex items-center gap-2 flex-wrap">
+          <RuleIdBadge ruleId="A6" isConfirmed={true} categoryClass="category-accessibility" />
+          <RuleHeader ruleId="A6" title="Missing Accessible Names" />
+          <ElementCountBadge count={elements.length} isConfirmed={true} />
         </CardTitle>
-        <p className={cn('text-muted-foreground', compact ? 'text-xs mt-2' : 'text-sm mt-2')}>
+        <CardDescription compact={compact}>
           Interactive elements must have programmatic accessible names (WCAG 4.1.2).
-        </p>
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
         {elements.map((element, idx) => (
