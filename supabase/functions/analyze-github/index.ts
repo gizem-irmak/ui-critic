@@ -3284,6 +3284,10 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
 
     if (ctaLabels.length === 0 && formFields.length === 0 && stepIndicators.length === 0 && headings.length === 0 && !hasPagination) continue;
 
+    const hasGenericCTA = ctaLabels.some(l => GENERIC_CTA_RE.test(l));
+    const hasSummaryWords = SUMMARY_WORDS.test(content);
+    const hasHelperExamples = HELPER_EXAMPLE_RE.test(content);
+
     // ---- Multi-step flow analysis ----
     const hasBackwardNavigation = /\b(Previous|Back|Go\s*Back)\b/i.test(content) && /<(?:Button|button)\b[^>]*>[^<]*(Previous|Back|Go\s*Back)[^<]*<\/(?:Button|button)>/i.test(content);
     const STEP_INDEX_RE = /\b(step|currentStep|activeStep|stepIndex)\b\s*[=<>!]/i;
@@ -3336,9 +3340,9 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
       headings: [...new Set(headings)].slice(0, 6),
       formFields: formFields.slice(0, 8),
       stepIndicators: [...new Set(stepIndicators)].slice(0, 6),
-      hasSummaryWords: SUMMARY_WORDS.test(content),
-      hasHelperExamples: HELPER_EXAMPLE_RE.test(content),
-      hasGenericCTA: ctaLabels.some(l => GENERIC_CTA_RE.test(l)),
+      hasSummaryWords,
+      hasHelperExamples,
+      hasGenericCTA,
       hasPagination,
       paginationContextFound,
       paginationContextText,

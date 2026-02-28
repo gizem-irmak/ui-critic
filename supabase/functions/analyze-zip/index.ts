@@ -4273,6 +4273,10 @@ function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundl
     // Skip files with no relevant content
     if (ctaLabels.length === 0 && formFields.length === 0 && stepIndicators.length === 0 && headings.length === 0 && !hasPagination) continue;
 
+    const hasGenericCTA = ctaLabels.some(l => GENERIC_CTA_RE.test(l));
+    const hasSummaryWords = SUMMARY_WORDS.test(content);
+    const hasHelperExamples = HELPER_EXAMPLE_RE.test(content);
+
     // ---- Multi-step flow analysis ----
     const hasBackwardNavigation = /\b(Previous|Back|Go\s*Back)\b/i.test(content) && /<(?:Button|button)\b[^>]*>[^<]*(Previous|Back|Go\s*Back)[^<]*<\/(?:Button|button)>/i.test(content);
     const STEP_INDEX_RE = /\b(step|currentStep|activeStep|stepIndex)\b\s*[=<>!]/i;
