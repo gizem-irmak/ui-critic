@@ -4016,6 +4016,15 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         if (!isDynamic && staticLen >= 0 && staticLen <= 30 && u3HasWideContainer(context)) continue;
         if (u3HasExpandMechanism(content, pos, 20)) continue;
 
+        // SUPPRESS: component-level expand for dynamic text (click-to-open detail view)
+        if (isDynamic && textPreview) {
+          const dynVarMatch = textPreview.match(/\(dynamic text: ([^)]+)\)/);
+          if (dynVarMatch) {
+            const expandCheck = u3HasComponentExpandForVar(content, dynVarMatch[1], pos);
+            if (expandCheck.hasExpand) continue;
+          }
+        }
+
         let confidence = 0.70;
         let triggerReason = '';
         if (isDynamic) {
@@ -4073,6 +4082,15 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (!isDynamic && staticLen >= 0 && staticLen <= 18) continue;
       if (!isDynamic && staticLen >= 0 && staticLen <= 30 && u3HasWideContainer(context)) continue;
       if (u3HasExpandMechanism(content, pos, 20)) continue;
+
+      // SUPPRESS: component-level expand for dynamic text
+      if (isDynamic && textPreview) {
+        const dynVarMatch = textPreview.match(/\(dynamic text: ([^)]+)\)/);
+        if (dynVarMatch) {
+          const expandCheck = u3HasComponentExpandForVar(content, dynVarMatch[1], pos);
+          if (expandCheck.hasExpand) continue;
+        }
+      }
 
       const lineNumber = content.slice(0, pos).split('\n').length;
       const dedupeKey = `U3.D1|${filePath}|${lineNumber}`;
