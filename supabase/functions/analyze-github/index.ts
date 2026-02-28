@@ -3995,9 +3995,10 @@ function u3HasExpandMechanism(content: string, pos: number, windowLines: number)
 }
 
 function u3FindCarrierElement(content: string, pos: number): { tag: string; className: string; tagStart: number; fullTag: string } | null {
+  const U3_TRUNC_CLASS_RE = /\b(truncate|line-clamp-\d+|text-ellipsis)\b/;
   const before = content.slice(Math.max(0, pos - 600), pos);
   const tagRe = /<([a-zA-Z][\w.]*)\s([^>]*)>/g;
-  let best: { tag: string; className: string; tagStart: number; fullTag: string } | null = null;
+  const ancestors: { tag: string; className: string; tagStart: number; fullTag: string }[] = [];
   let tm;
   while ((tm = tagRe.exec(before)) !== null) {
     const tag = tm[1];
@@ -4010,9 +4011,13 @@ function u3FindCarrierElement(content: string, pos: number): { tag: string; clas
     if (closeRe.test(between)) continue;
     const classMatch = attrs.match(/className\s*=\s*(?:"([^"]*)"|'([^']*)'|\{[^}]*["']([^"']*)["'][^}]*\})/);
     const className = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
-    best = { tag, className, tagStart: absStart, fullTag: tm[0] };
+    ancestors.push({ tag, className, tagStart: absStart, fullTag: tm[0] });
   }
-  return best;
+  if (ancestors.length === 0) return null;
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    if (U3_TRUNC_CLASS_RE.test(ancestors[i].className)) return ancestors[i];
+  }
+  return ancestors[ancestors.length - 1];
 }
 
 function u3FindParentElement(content: string, carrierTagStart: number): { tag: string; className: string } | null {
