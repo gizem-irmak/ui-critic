@@ -103,8 +103,23 @@ function detectA6AccessibleNames(allFiles: Map<string, string>): A6Finding[] {
       const closingMatch = afterTag.match(closingTagRegex);
       const innerContent = closingMatch ? afterTag.slice(0, closingMatch.index) : afterTag.slice(0, 200);
 
-      const visibleText = innerContent.replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
+      const strippedOfTags = innerContent.replace(/<[^>]*>/g, '');
+      const visibleText = strippedOfTags.replace(/\{[^}]*\}/g, '').trim();
       if (visibleText.length > 0) return;
+
+      // Check for JSX expression children that likely render text
+      const exprMatches = strippedOfTags.match(/\{([^}]+)\}/g);
+      if (exprMatches) {
+        const TEXT_PROP_SUFFIXES = /\.(label|name|title|text|caption|heading|description|content|displayName|value)\s*\}$/;
+        const SINGLE_IDENT = /^\{\s*[a-zA-Z_$][\w$]*\s*\}$/;
+        const TEMPLATE_LITERAL = /^\{\s*`[^`]*`\s*\}$/;
+        const I18N_CALL = /^\{\s*(?:t|i18n\.t|formatMessage|intl\.formatMessage)\s*\(/;
+        for (const expr of exprMatches) {
+          if (TEXT_PROP_SUFFIXES.test(expr) || SINGLE_IDENT.test(expr) || TEMPLATE_LITERAL.test(expr) || I18N_CALL.test(expr)) {
+            return;
+          }
+        }
+      }
 
       const imgAltMatch = innerContent.match(/<img\b[^>]*alt\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>/i);
       const imgAlt = (imgAltMatch?.[1] || imgAltMatch?.[2] || '').trim();
@@ -341,4 +356,73 @@ export default function LabelledBy() {
 `);
   const results = detectA6AccessibleNames(files);
   assertEquals(results.length, 0, `Expected 0 findings, got ${results.length}`);
+});
+
+// ========== JSX Expression Children Tests ==========
+
+Deno.test("PASS: button with {item.label} expression child → no A6 issue", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/NavButton.tsx", `
+export default function NavButton({ item }) {
+  return <button><Icon />{item.label}</button>;
+}
+`);
+  const results = detectA6AccessibleNames(files);
+  assertEquals(results.length, 0, `Expected 0 findings, got ${results.length}`);
+});
+
+Deno.test("PASS: button with {label} identifier child → no A6 issue", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/SimpleButton.tsx", `
+export default function SimpleButton({ label }) {
+  return <button>{label}</button>;
+}
+`);
+  const results = detectA6AccessibleNames(files);
+  assertEquals(results.length, 0, `Expected 0 findings, got ${results.length}`);
+});
+
+Deno.test("PASS: button with template literal child → no A6 issue", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/TemplateButton.tsx", `
+export default function TemplateButton({ name }) {
+  return <button>{\`Hello \${name}\`}</button>;
+}
+`);
+  const results = detectA6AccessibleNames(files);
+  assertEquals(results.length, 0, `Expected 0 findings, got ${results.length}`);
+});
+
+Deno.test("PASS: button with i18n t() call child → no A6 issue", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/I18nButton.tsx", `
+export default function I18nButton() {
+  return <button>{t("save")}</button>;
+}
+`);
+  const results = detectA6AccessibleNames(files);
+  assertEquals(results.length, 0, `Expected 0 findings, got ${results.length}`);
+});
+
+Deno.test("PASS: link with {item.title} expression child → no A6 issue", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/NavLink.tsx", `
+export default function NavLink({ item }) {
+  return <a href={item.href}><Icon />{item.title}</a>;
+}
+`);
+  const results = detectA6AccessibleNames(files);
+  assertEquals(results.length, 0, `Expected 0 findings, got ${results.length}`);
+});
+
+Deno.test("A6.1: button with only icon component and no text expression → flagged", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/IconOnly.tsx", `
+export default function IconOnly() {
+  return <button><MenuIcon /></button>;
+}
+`);
+  const results = detectA6AccessibleNames(files);
+  assert(results.length >= 1, `Expected at least 1 finding, got ${results.length}`);
+  assertEquals(results[0].subCheck, "A6.1");
 });

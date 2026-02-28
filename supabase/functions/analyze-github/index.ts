@@ -2730,8 +2730,23 @@ function detectA6AccessibleNames(allFiles: Map<string, string>): A6Finding[] {
       const closingMatch = afterTag.match(closingTagRegex);
       const innerContent = closingMatch ? afterTag.slice(0, closingMatch.index) : afterTag.slice(0, 200);
 
-      const visibleText = innerContent.replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
+      const strippedOfTags = innerContent.replace(/<[^>]*>/g, '');
+      const visibleText = strippedOfTags.replace(/\{[^}]*\}/g, '').trim();
       if (visibleText.length > 0) return;
+
+      // Check for JSX expression children that likely render text
+      const exprMatches = strippedOfTags.match(/\{([^}]+)\}/g);
+      if (exprMatches) {
+        const TEXT_PROP_SUFFIXES = /\.(label|name|title|text|caption|heading|description|content|displayName|value)\s*\}$/;
+        const SINGLE_IDENT = /^\{\s*[a-zA-Z_$][\w$]*\s*\}$/;
+        const TEMPLATE_LITERAL = /^\{\s*`[^`]*`\s*\}$/;
+        const I18N_CALL = /^\{\s*(?:t|i18n\.t|formatMessage|intl\.formatMessage)\s*\(/;
+        for (const expr of exprMatches) {
+          if (TEXT_PROP_SUFFIXES.test(expr) || SINGLE_IDENT.test(expr) || TEMPLATE_LITERAL.test(expr) || I18N_CALL.test(expr)) {
+            return;
+          }
+        }
+      }
 
       const imgAltMatch = innerContent.match(/<img\b[^>]*alt\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>/i);
       if ((imgAltMatch?.[1] || imgAltMatch?.[2] || '').trim().length > 0) return;
