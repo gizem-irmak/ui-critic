@@ -3470,6 +3470,51 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
         continue;
       }
 
+      // STEP 2b: Check focus-within wrapper indicators
+      const hasFocusWithinIndicator = tokens.some(t =>
+        /^focus-within:ring-(?!0$)/i.test(t) ||
+        /^focus-within:border-(?!0$|none$)/i.test(t) ||
+        /^focus-within:shadow-(?!none$)/i.test(t)
+      );
+      if (hasFocusWithinIndicator) {
+        console.log(`A2 PASS (deterministic): ${filePath}:${line} — focus-within wrapper indicator`);
+        continue;
+      }
+
+      // STEP 2c: Check state-driven highlight patterns (Radix/CMDK/listbox/menu)
+      // These patterns provide visible selection/highlight feedback managed by the component library
+      const hasStateDrivenIndicator = tokens.some(t =>
+        /^data-\[selected(?:=true|='true')?\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
+        /^data-\[highlighted(?:=true|='true')?\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
+        /^aria-selected:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
+        /^data-\[state=active\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
+        /^data-\[state=open\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t)
+      );
+      if (hasStateDrivenIndicator) {
+        console.log(`A2 PASS (deterministic): ${filePath}:${line} — state-driven focus/selection indicator`);
+        continue;
+      }
+
+      // STEP 2d: Check if wrapper element (one hop up) has focus-within indicator
+      // Look at the surrounding JSX context for a parent with focus-within styles
+      const wrapperContextStart = Math.max(0, content.indexOf(classStr) - 800);
+      const wrapperContextBefore = content.slice(wrapperContextStart, content.indexOf(classStr));
+      // Find a parent className in the preceding context that has focus-within
+      const parentClassMatch = wrapperContextBefore.match(/className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[^}]*(?:`([^`]+)`|["']([^"']+)["'])[^}]*\})(?:[^<]*<[^/]){0,2}[^<]*$/);
+      if (parentClassMatch) {
+        const parentClasses = (parentClassMatch[1] || parentClassMatch[2] || parentClassMatch[3] || parentClassMatch[4] || '');
+        const parentTokens = parentClasses.split(/\s+/).filter(Boolean);
+        const parentHasFocusWithin = parentTokens.some(t =>
+          /^focus-within:ring-(?!0$)/i.test(t) ||
+          /^focus-within:border-(?!0$|none$)/i.test(t) ||
+          /^focus-within:shadow-(?!none$)/i.test(t)
+        );
+        if (parentHasFocusWithin) {
+          console.log(`A2 PASS (deterministic): ${filePath}:${line} — parent wrapper has focus-within indicator`);
+          continue;
+        }
+      }
+
       // STEP 3: Check weak focus styling (focus-scoped only)
       const weakFocusTokens = tokens.filter(t =>
         /^focus(?:-visible)?:bg-/i.test(t) ||
