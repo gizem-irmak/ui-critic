@@ -2487,7 +2487,7 @@ ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: $
 
 Consider:
 - Visual hierarchy and primary action clarity (U1)
-- Navigation WAYFINDING ONLY: Can users know where they are, where they can go, and navigate back? (U2) — Do NOT comment on layout grouping (U6), truncation (U3), step indicators (U4), or landmark semantics (A-rules)
+- Navigation WAYFINDING ONLY: Can users know where they are, where they can go, and navigate back? (U2) — Do NOT flag just because breadcrumbs are missing. Active nav highlight + page heading = sufficient. Do NOT comment on layout grouping (U6), truncation (U3), step indicators (U4), exit/cancel absence (E3), or landmark semantics (A-rules). Confidence: 0.60–0.80, cap at 0.80.
 - Content truncation, overflow, and text visibility (U3)
 - Recognition vs recall: visible options, labels, contextual cues (U4) — see U4 CONSTRAINTS below
 - Interaction feedback: loading states, confirmations, error messages (U5)
