@@ -3870,35 +3870,48 @@ Your role is to provide contextual enrichment for navigation assessment:
 }
 \`\`\`
 
-### U4 (Recognition-to-Recall Regression) — HYBRID EVALUATION:
-**U4 has 4 subtypes. U4.2 (Hidden Selection State) and U4.3 (Multi-Step Context) are handled by deterministic analysis — do NOT evaluate those.**
-**Your role: assess U4.1 candidates and detect U4.4.**
+### U4 (Recognition-to-Recall Regression) — LLM-MANDATORY EVALUATION:
+**ALL U4 subtypes require YOUR decision. Deterministic analysis extracted CANDIDATES in \`[U4_EVIDENCE_BUNDLE]\`. You are the SOLE decision maker.**
 
-**U4.1 (Structured Selection → Free-Text Substitution):**
-Pre-detected candidates are in \`[U4_1_CANDIDATES]\`. For each:
-- CONFIRM (status="confirmed", confidence 0.75–0.80) if the field clearly expects a structured/enumerable choice (e.g., category, status, specialty) and no selection alternative exists.
-- DISMISS (omit from output) if the field is genuinely free-form, optional, or supplementary.
-- Keep as POTENTIAL (status="potential", confidence 0.60–0.70) if semantic intent is unclear.
-Do NOT trigger U4.1 if: autocomplete/suggestions are present, the field is clearly open-ended, or the label implies free-form input.
+**GLOBAL CONSTRAINTS (MANDATORY):**
+- U4 MUST NEVER output "confirmed". Status is ALWAYS "potential".
+- Maximum confidence: 0.65. Range: 0.45–0.65.
+- If evidence is ambiguous → SUPPRESS (do not report).
+- If categorical intent cannot be verified → SUPPRESS.
+- Do NOT assume text inputs require structured selection.
+- Do NOT infer enum expectation from generic labels: reason, message, description, notes, details.
+- U4 must prioritize false-positive avoidance over sensitivity. You are ALLOWED to decline reporting.
+- Truncation/overflow issues are U3 scope — never flag under U4.
 
-**U4.4 (Generic or Context-Free Action Labels):**
-Evidence is in \`[U4_4_EVIDENCE]\`. Trigger ONLY when ALL are true:
-- Button text is generic ("Next", "Continue", "Submit", "Confirm")
-- No adjacent contextual descriptor clarifies action intent
-- The action transitions to another step or commits data
-Do NOT trigger if: button is inside a clearly labeled section, action is universally understood (e.g., Login on login form), or context is explicitly visible above/near the button.
-Status: ALWAYS "potential". Confidence: 0.55–0.70.
+**EVALUATION QUESTIONS (answer for each candidate):**
+1. Does this reduce recognition-based interaction?
+2. Is recall burden plausibly increased?
+3. Are there visible mitigations?
+4. Is semantic intent clearly categorical?
+If ANY answer is "no" or "uncertain" → SUPPRESS.
+
+**U4.1 (Structured Selection → Free-Text):**
+Report ONLY if: strong evidence the field represents a FINITE categorical domain AND no structured input exists AND the field is NOT narrative/open-ended.
+Suppress if: label implies open description, domain expectation unclear, no explicit enum evidence.
+
+**U4.2 (Hidden Selection State):**
+Report ONLY if: selection interaction exists AND active state is NOT visually persistent AND no visible badge/highlight/breadcrumb/summary exists.
+Suppress if: active styling present, aria-selected present, context visible elsewhere.
+
+**U4.3 (Multi-Step Context Regression):**
+Report ONLY if: multi-step flow confirmed AND missing step indicator AND missing back navigation AND missing summary AND missing persistent context.
+If ANY mitigation exists → SUPPRESS.
+
+**U4.4 (Generic Context-Free CTAs):**
+Report ONLY if: button text is generic AND action outcome is NOT contextually clarified nearby.
+Suppress if: section heading clarifies action, page title clarifies context, action universally obvious (e.g., Login form).
 
 **ANTI-HALLUCINATION RULES (MANDATORY):**
 - Do NOT use file names, component names, page titles, or variable names as evidence.
-- Base conclusions ONLY on field labels, CTA text, nearby headings from the evidence bundles.
+- Base conclusions ONLY on field labels, CTA text, nearby headings, and code context from the evidence bundles.
 - If evidence is insufficient, return NO U4 finding.
 
-**FALSE POSITIVE PREVENTION:**
-- Never trigger U4 solely based on: presence of \`<input type="text">\`, absence of step indicator without multi-step logic, minimalist styling, truncation/overflow, or short button labels alone.
-- If uncertainty > 40%, classify as Potential, not Confirmed.
-
-**OUTPUT FOR U4 — STRUCTURED u4Elements (with subCheck):**
+**OUTPUT FOR U4 — STRUCTURED u4Elements (ALL Potential):**
 \`\`\`json
 {
   "ruleId": "U4",
@@ -3910,33 +3923,23 @@ Status: ALWAYS "potential". Confidence: 0.55–0.70.
       "elementLabel": "\\"Category\\" text input",
       "elementType": "input",
       "location": "src/components/Form.tsx",
-      "detection": "U4.1: Text input for 'category' with no selection component",
-      "evidence": "Field expects structured category selection but only provides free-text input",
+      "detection": "U4.1: Text input for categorical field with no selection component",
+      "evidence": "Field expects structured category selection but only provides free-text input. Recognition → recall shift: user must remember valid categories instead of selecting from a list.",
       "subCheck": "U4.1",
       "subCheckLabel": "Structured Selection → Free-Text",
-      "status": "confirmed",
-      "recommendedFix": "Replace with <Select> or <Combobox>",
-      "confidence": 0.78
-    },
-    {
-      "elementLabel": "\\"Submit\\" button in checkout",
-      "elementType": "button",
-      "location": "src/pages/Checkout.tsx",
-      "detection": "U4.4: Generic 'Submit' CTA transitions to payment without describing action",
-      "evidence": "CTA 'Submit' commits payment data without describing what will happen",
-      "subCheck": "U4.4",
-      "subCheckLabel": "Generic Action Label",
       "status": "potential",
-      "recommendedFix": "Change to 'Place Order' or 'Confirm Payment' to describe the action",
-      "confidence": 0.65
+      "recommendedFix": "Replace with <Select> or <Combobox>",
+      "confidence": 0.60,
+      "mitigationSummary": "No selection component, no autocomplete, no datalist"
     }
   ],
-  "diagnosis": "Summary of U4 findings...",
-  "confidence": 0.70
+  "diagnosis": "Summary of U4 findings — recognition-to-recall shift explanation...",
+  "confidence": 0.55
 }
 \`\`\`
-- If NO U4.1/U4.4 issues found, do NOT include U4 in the violations array.
-- Each u4Element MUST include subCheck ("U4.1" or "U4.4") and status.
+- If NO U4 issues pass evaluation, do NOT include U4 in the violations array.
+- Each u4Element MUST include: subCheck, status ("potential"), confidence (0.45–0.65), and mitigationSummary.
+- The explanation/evidence MUST explicitly describe the recognition → recall shift.
 
 
 ### U6 (Weak Grouping / Layout Coherence) — LLM-ASSISTED EVALUATION:
@@ -4173,33 +4176,28 @@ IMPORTANT CONSTRAINTS:
 }`;
 }
 
-// ========== U4 DETECTION (Recognition-to-Recall Regression) — 4-SUBTYPE PIPELINE ==========
+// ========== U4 CANDIDATE EXTRACTION (Recognition-to-Recall Regression) — TWO-STAGE ==========
+// Stage 1: Deterministic candidate extraction ONLY — no classification, no emission.
+// All candidates are sent to LLM (Stage 2) for final decision.
 
-interface U4DetFinding {
-  subCheck: 'U4.1' | 'U4.2' | 'U4.3';
-  subCheckLabel: string;
+interface U4Candidate {
+  candidateType: 'U4.1' | 'U4.2' | 'U4.3' | 'U4.4';
   elementLabel: string;
   elementType: string;
   filePath: string;
-  detection: string;
-  evidence: string;
-  recommendedFix: string;
-  confidence: number;
-  status: 'confirmed' | 'potential';
-  evaluationMethod: 'deterministic' | 'hybrid_deterministic';
+  codeSnippet: string;
+  nearbyHeadings: string[];
+  mitigationSignals: string[];
+  rawEvidence: string;
 }
 
-// Labels suggesting structured/enumerable choice
-const U4_STRUCTURED_LABEL_RE = /\b(category|type|status|reason|specialty|department|gender|country|state|province|region|language|currency|priority|severity|role|level|grade|plan|tier|occupation|industry|marital|blood\s*type|ethnicity|nationality|education|degree|sport|position|brand|model|color|size|material|condition|source|channel|frequency|method|mode|format|platform|device)\b/i;
-// Labels that indicate free-form input — exclude from U4.1
-const U4_FREEFORM_LABEL_RE = /\b(note|notes|comment|comments|description|details|message|bio|biography|about|story|narrative|explain|additional|other|remarks|feedback|suggestion|instructions|address|street|thoughts|opinion|custom|free.?text)\b/i;
-// Selection component patterns
+const U4_STRUCTURED_LABEL_RE = /\b(category|type|status|specialty|department|gender|country|state|province|region|language|currency|priority|severity|role|level|grade|plan|tier|occupation|industry|marital|blood\s*type|ethnicity|nationality|education|degree|sport|position|brand|model|color|size|material|condition|source|channel|frequency|method|mode|format|platform|device)\b/i;
+const U4_FREEFORM_LABEL_RE = /\b(note|notes|comment|comments|description|details|message|reason|bio|biography|about|story|narrative|explain|additional|other|remarks|feedback|suggestion|instructions|address|street|thoughts|opinion|custom|free.?text)\b/i;
 const U4_SELECTION_RE = /<(?:Select|RadioGroup|Radio|CheckboxGroup|Combobox|Autocomplete|Listbox|ToggleGroup|SegmentedControl|Dropdown|DropdownMenu)\b|<(?:select|datalist)\b|\b(?:autocomplete|datalist|onSuggest|filterOptions|combobox)\b/i;
-// Standard auth/navigation CTAs — excluded from U4.4
 const U4_STANDARD_AUTH_CTAS = /^(Sign\s*In|Sign\s*Up|Log\s*In|Log\s*Out|Register|Create\s*Account|Go\s*to\s*Dashboard|Go\s*Home|Back\s*to\s*Home|Back\s*to\s*Login|Forgot\s*Password|Reset\s*Password|Verify\s*Email|Resend\s*Code|Resend\s*Email|Sign\s*Out|Logout)$/i;
 
-function detectU4Deterministic(allFiles: Map<string, string>): U4DetFinding[] {
-  const findings: U4DetFinding[] = [];
+function extractU4Candidates(allFiles: Map<string, string>): U4Candidate[] {
+  const candidates: U4Candidate[] = [];
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -4208,9 +4206,25 @@ function detectU4Deterministic(allFiles: Map<string, string>): U4DetFinding[] {
     if (filePath.includes('components/ui/') || filePath.includes('node_modules')) continue;
 
     const lines = content.split('\n');
-    const fileHasSelection = U4_SELECTION_RE.test(content);
 
-    // ---- U4.1: Structured Selection → Free-Text Substitution ----
+    const getHeadings = (lineNum: number, range: number): string[] => {
+      const ctxStart = Math.max(0, lineNum - range);
+      const ctxEnd = Math.min(lines.length, lineNum + range);
+      const nearby = lines.slice(ctxStart, ctxEnd).join('\n');
+      const headings: string[] = [];
+      const hRe = /<h([1-6])\b[^>]*>([^<]{2,60})<\/h\1>/gi;
+      let hm;
+      while ((hm = hRe.exec(nearby)) !== null) headings.push(hm[2].replace(/\{[^}]*\}/g, '').trim());
+      return headings;
+    };
+
+    const getSnippet = (lineNum: number, range: number): string => {
+      const ctxStart = Math.max(0, lineNum - range);
+      const ctxEnd = Math.min(lines.length, lineNum + range);
+      return lines.slice(ctxStart, ctxEnd).join('\n');
+    };
+
+    // ---- U4.1 Candidates ----
     const inputRe = /<(?:Input|input|textarea|Textarea)\b([^>]*?)(?:\/>|>)/gi;
     let m;
     while ((m = inputRe.exec(content)) !== null) {
@@ -4229,29 +4243,21 @@ function detectU4Deterministic(allFiles: Map<string, string>): U4DetFinding[] {
       if (U4_FREEFORM_LABEL_RE.test(fieldText)) continue;
       if (/optional/i.test(attrs)) continue;
 
-      // Check ±30 lines for selection components
       const lineNum = content.substring(0, m.index).split('\n').length;
-      const ctxStart = Math.max(0, lineNum - 30);
-      const ctxEnd = Math.min(lines.length, lineNum + 30);
-      const nearbyContent = lines.slice(ctxStart, ctxEnd).join('\n');
-      if (U4_SELECTION_RE.test(nearbyContent)) continue;
+      const nearbyContent = getSnippet(lineNum, 30);
+      const mitigations: string[] = [];
+      if (U4_SELECTION_RE.test(nearbyContent)) mitigations.push('selection_component_nearby');
+      if (/autocomplete/i.test(attrs)) mitigations.push('autocomplete_present');
 
-      const matchedWord = fieldText.match(U4_STRUCTURED_LABEL_RE)?.[0] || 'choice';
-      const status: 'confirmed' | 'potential' = fileHasSelection ? 'potential' : 'confirmed';
-      const confidence = status === 'confirmed' ? 0.78 : 0.65;
-
-      findings.push({
-        subCheck: 'U4.1', subCheckLabel: 'Structured Selection → Free-Text Substitution',
-        elementLabel: `"${label || placeholder}" text input`,
-        elementType: 'input', filePath,
-        detection: `Text input for "${matchedWord}" — no selection component nearby`,
-        evidence: `Field "${fieldText}" uses <input type="text"> where a structured selector (dropdown, radio, combobox) would be expected. No <Select>, <RadioGroup>, <Combobox>, or <datalist> within ±30 lines.`,
-        recommendedFix: `Replace with a structured selection component (e.g., <Select>, <RadioGroup>, <Combobox>) for "${matchedWord}".`,
-        confidence, status, evaluationMethod: 'hybrid_deterministic',
+      candidates.push({
+        candidateType: 'U4.1', elementLabel: `"${label || placeholder}" text input`,
+        elementType: 'input', filePath, codeSnippet: getSnippet(lineNum, 8),
+        nearbyHeadings: getHeadings(lineNum, 15), mitigationSignals: mitigations,
+        rawEvidence: `Text input with label/placeholder "${fieldText}". Matched keyword: "${fieldText.match(U4_STRUCTURED_LABEL_RE)?.[0] || ''}". ${mitigations.length > 0 ? 'Mitigations: ' + mitigations.join(', ') : 'No nearby selection component or autocomplete.'}`,
       });
     }
 
-    // ---- U4.2: Hidden or Non-Persistent Selection State ----
+    // ---- U4.2 Candidates ----
     const ACTIVE_STATE_RE = /\b(bg-primary|bg-accent|aria-selected|aria-current|aria-pressed|isActive|isSelected|data-state\s*=\s*"active"|data-active|activeTab|selectedTab|currentTab|activeIndex|selectedIndex|variant\s*=.*default)\b/i;
     const selectionPatterns = [
       { re: /<(?:Tabs|TabsList|TabsTrigger)\b/gi, label: 'Tabs component', type: 'tab' },
@@ -4262,25 +4268,22 @@ function detectU4Deterministic(allFiles: Map<string, string>): U4DetFinding[] {
       let pm;
       while ((pm = pat.re.exec(content)) !== null) {
         const lineNum = content.substring(0, pm.index).split('\n').length;
-        const ctxStart = Math.max(0, lineNum - 20);
-        const ctxEnd = Math.min(lines.length, lineNum + 20);
-        const nearbyContent = lines.slice(ctxStart, ctxEnd).join('\n');
-        if (ACTIVE_STATE_RE.test(nearbyContent)) continue;
-        if (/className.*\b(active|selected)\b/i.test(nearbyContent)) continue;
+        const nearbyContent = getSnippet(lineNum, 20);
+        const mitigations: string[] = [];
+        if (ACTIVE_STATE_RE.test(nearbyContent)) mitigations.push('active_state_indicator');
+        if (/className.*\b(active|selected)\b/i.test(nearbyContent)) mitigations.push('active_class');
 
-        findings.push({
-          subCheck: 'U4.2', subCheckLabel: 'Hidden or Non-Persistent Selection State',
-          elementLabel: `${pat.label}`, elementType: pat.type, filePath,
-          detection: `${pat.label} without visible active state indicator`,
-          evidence: `Selection interaction found but no active state styling (bg-primary, aria-selected, isActive, variant, etc.) within ±20 lines.`,
-          recommendedFix: `Add visual active state indicators (e.g., bg-primary, aria-selected="true") to show current selection.`,
-          confidence: 0.65, status: 'potential', evaluationMethod: 'deterministic',
+        candidates.push({
+          candidateType: 'U4.2', elementLabel: pat.label, elementType: pat.type, filePath,
+          codeSnippet: getSnippet(lineNum, 10), nearbyHeadings: getHeadings(lineNum, 15),
+          mitigationSignals: mitigations,
+          rawEvidence: `${pat.label} detected. ${mitigations.length > 0 ? 'Active state signals: ' + mitigations.join(', ') : 'No active state indicator found within ±20 lines.'}`,
         });
-        break; // one per pattern per file
+        break;
       }
     }
 
-    // ---- U4.3: Multi-Step Context Regression ----
+    // ---- U4.3 Candidates ----
     const STEP_INDEX_RE = /\b(step|currentStep|activeStep|stepIndex)\b\s*[=<>!]/i;
     if (STEP_INDEX_RE.test(content)) {
       let stepCount = 0;
@@ -4296,72 +4299,29 @@ function detectU4Deterministic(allFiles: Map<string, string>): U4DetFinding[] {
       }
 
       if (stepCount >= 2) {
-        const hasStepIndicator = /Step\s+\{?\w*\}?\s*(of|\/)\s*\{?\w*\}?|Step\s+\d+\s*(of|\/)\s*\d+/i.test(content) || /<(?:Progress|Stepper|Steps|StepIndicator|ProgressBar)\b/i.test(content);
-        const hasBackNav = /\b(Previous|Back|Go\s*Back)\b/i.test(content) && /<(?:Button|button)\b[^>]*>[^<]*(Previous|Back|Go\s*Back)[^<]*<\/(?:Button|button)>/i.test(content);
-        const hasSummary = /\b(summary|review|confirm|overview)\b/i.test(content) && /\b(selected|chosen|your\s+(?:selection|choice))\b/i.test(content);
-        const hasPersistent = /(?:selected(?:Location|Doctor|Service|Date|Time|Item|Plan|Option)|chosen(?:Plan|Option|Service))\b/.test(content) || /<(?:Breadcrumb|BreadcrumbItem|BreadcrumbLink)\b/i.test(content);
+        const mitigations: string[] = [];
+        if (/Step\s+\{?\w*\}?\s*(of|\/)\s*\{?\w*\}?|Step\s+\d+\s*(of|\/)\s*\d+/i.test(content) || /<(?:Progress|Stepper|Steps|StepIndicator|ProgressBar)\b/i.test(content)) mitigations.push('step_indicator');
+        if (/\b(Previous|Back|Go\s*Back)\b/i.test(content) && /<(?:Button|button)\b[^>]*>[^<]*(Previous|Back|Go\s*Back)[^<]*<\/(?:Button|button)>/i.test(content)) mitigations.push('back_navigation');
+        if (/\b(summary|review|confirm|overview)\b/i.test(content) && /\b(selected|chosen|your\s+(?:selection|choice))\b/i.test(content)) mitigations.push('summary_step');
+        if (/(?:selected(?:Location|Doctor|Service|Date|Time|Item|Plan|Option)|chosen(?:Plan|Option|Service))\b/.test(content) || /<(?:Breadcrumb|BreadcrumbItem|BreadcrumbLink)\b/i.test(content)) mitigations.push('persistent_context');
 
-        // Suppress if well-mitigated
-        if (!hasPersistent && !(hasSummary && hasBackNav && hasStepIndicator)) {
-          const missing: string[] = [];
-          if (!hasStepIndicator) missing.push('step indicator');
-          if (!hasBackNav) missing.push('back navigation');
-          if (!hasSummary) missing.push('summary/review step');
-          if (!hasPersistent) missing.push('persistent context');
+        let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || '';
+        const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+        if (exportedFn?.[1]) componentName = exportedFn[1];
+        const stepLine = content.search(STEP_INDEX_RE);
+        const lineNum = stepLine >= 0 ? content.substring(0, stepLine).split('\n').length : 1;
 
-          if (missing.length > 0) {
-            let confidence = missing.length >= 3 ? 0.75 : missing.length >= 2 ? 0.70 : 0.60;
-            if (hasSummary && hasBackNav) confidence = Math.min(confidence, 0.55);
-
-            let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || '';
-            const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
-            if (exportedFn?.[1]) componentName = exportedFn[1];
-
-            findings.push({
-              subCheck: 'U4.3', subCheckLabel: 'Multi-Step Context Regression',
-              elementLabel: `${componentName} (${stepCount}-step flow)`,
-              elementType: 'wizard', filePath,
-              detection: `Multi-step flow (${stepCount} steps) missing: ${missing.join(', ')}`,
-              evidence: `${stepCount}-step flow. Missing: ${missing.join(', ')}.${hasStepIndicator ? ' Has step indicator.' : ''}${hasBackNav ? ' Has back nav.' : ''}${hasSummary ? ' Has summary.' : ''}`,
-              recommendedFix: `Add ${missing.join(' and ')} to help users track progress and recall prior selections.`,
-              confidence: Math.min(confidence, 0.80), status: 'potential', evaluationMethod: 'deterministic',
-            });
-          }
-        }
+        candidates.push({
+          candidateType: 'U4.3', elementLabel: `${componentName} (${stepCount}-step flow)`,
+          elementType: 'wizard', filePath, codeSnippet: getSnippet(lineNum, 15),
+          nearbyHeadings: getHeadings(lineNum, 20), mitigationSignals: mitigations,
+          rawEvidence: `${stepCount}-step flow detected. Mitigations present: ${mitigations.length > 0 ? mitigations.join(', ') : 'none'}.`,
+        });
       }
     }
-  }
 
-  // Deduplicate
-  const seen = new Set<string>();
-  return findings.filter(f => {
-    const key = `${f.filePath}|${f.subCheck}|${f.elementLabel}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, 15);
-}
-
-// ---- U4.4 Evidence Bundle for LLM (Generic/Context-Free Action Labels) ----
-interface U4_4EvidenceBundle {
-  filePath: string;
-  componentName: string;
-  genericCTAs: { label: string; nearbyHeadings: string[]; transitionsStep: boolean; commitsData: boolean }[];
-}
-
-function extractU4_4EvidenceBundle(allFiles: Map<string, string>): U4_4EvidenceBundle[] {
-  const bundles: U4_4EvidenceBundle[] = [];
-  const GENERIC_CTA_RE = /^(Next|Continue|Submit|Confirm|OK|Done|Proceed|Go|Save|Apply|Accept)$/i;
-
-  for (const [filePathRaw, content] of allFiles) {
-    const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
-    if (!/\.(tsx|jsx)$/.test(filePath)) continue;
-    if (/\.(test|spec)\./i.test(filePath)) continue;
-    if (filePath.includes('components/ui/') || filePath.includes('node_modules')) continue;
-
-    const contentLines = content.split('\n');
-    const genericCTAs: U4_4EvidenceBundle['genericCTAs'] = [];
-
+    // ---- U4.4 Candidates ----
+    const GENERIC_CTA_RE = /^(Next|Continue|Submit|Confirm|OK|Done|Proceed|Go|Save|Apply|Accept)$/i;
     const btnRe = /<(?:Button|button)\b[^>]*>([^<]{1,40})<\/(?:Button|button)>/gi;
     let bm;
     while ((bm = btnRe.exec(content)) !== null) {
@@ -4371,70 +4331,52 @@ function extractU4_4EvidenceBundle(allFiles: Map<string, string>): U4_4EvidenceB
       if (!GENERIC_CTA_RE.test(label)) continue;
 
       const lineNum = content.substring(0, bm.index).split('\n').length;
-      const ctxStart = Math.max(0, lineNum - 10);
-      const ctxEnd = Math.min(contentLines.length, lineNum + 5);
-      const nearby = contentLines.slice(ctxStart, ctxEnd).join('\n');
-
-      const nearbyHeadings: string[] = [];
-      const hRe = /<h([1-6])\b[^>]*>([^<]{2,60})<\/h\1>/gi;
-      let hm;
-      while ((hm = hRe.exec(nearby)) !== null) {
-        nearbyHeadings.push(hm[2].replace(/\{[^}]*\}/g, '').trim());
-      }
-
+      const nearby = getSnippet(lineNum, 10);
       const transitionsStep = /\b(setStep|nextStep|activeStep|step\s*\+|step\s*\+=)\b/i.test(nearby);
       const commitsData = /\b(onSubmit|handleSubmit|mutate|\.insert|\.update|fetch\(|axios)\b/i.test(nearby);
+      if (!transitionsStep && !commitsData) continue;
 
-      if (!transitionsStep && !commitsData) continue; // Only flag if it transitions or commits
+      const headings = getHeadings(lineNum, 10);
+      const mitigations: string[] = [];
+      if (headings.length > 0) mitigations.push(`nearby_headings: ${headings.join(', ')}`);
 
-      genericCTAs.push({ label, nearbyHeadings, transitionsStep, commitsData });
+      candidates.push({
+        candidateType: 'U4.4', elementLabel: `"${label}" button`, elementType: 'button', filePath,
+        codeSnippet: getSnippet(lineNum, 8), nearbyHeadings: headings, mitigationSignals: mitigations,
+        rawEvidence: `Generic CTA "${label}". ${transitionsStep ? 'Transitions step.' : ''} ${commitsData ? 'Commits data.' : ''} ${headings.length > 0 ? 'Nearby headings: ' + headings.join(', ') : 'No nearby headings.'}`,
+      });
     }
-
-    if (genericCTAs.length === 0) continue;
-
-    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || '';
-    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
-    if (exportedFn?.[1]) componentName = exportedFn[1];
-
-    bundles.push({ filePath, componentName, genericCTAs });
   }
 
-  return bundles.slice(0, 10);
+  const seen = new Set<string>();
+  return candidates.filter(c => {
+    const key = `${c.filePath}|${c.candidateType}|${c.elementLabel}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 20);
 }
 
-function formatU4EvidenceForLLM(u4DetFindings: U4DetFinding[], u4_4Bundles: U4_4EvidenceBundle[]): string {
-  const u41Candidates = u4DetFindings.filter(f => f.subCheck === 'U4.1');
-  if (u41Candidates.length === 0 && u4_4Bundles.length === 0) return '';
-
+function formatU4CandidatesForLLM(candidates: U4Candidate[]): string {
+  if (candidates.length === 0) return '';
   const lines: string[] = [];
-
-  if (u41Candidates.length > 0) {
-    lines.push('[U4_1_CANDIDATES]');
-    lines.push('Pre-detected text inputs that may replace structured selections. For each, CONFIRM if the field clearly expects an enumerable choice, DISMISS if genuinely free-form, or keep as POTENTIAL if unclear.');
-    lines.push('Do NOT use file names or variable names as evidence — only assess the field label/placeholder semantics.');
-    for (const c of u41Candidates) {
-      lines.push(`- ${c.filePath}: ${c.elementLabel} — ${c.detection}`);
-    }
-    lines.push('[/U4_1_CANDIDATES]');
+  lines.push('[U4_EVIDENCE_BUNDLE]');
+  lines.push('CANDIDATE regions detected by static analysis. You MUST evaluate each and decide: REPORT or SUPPRESS.');
+  lines.push('You are the SOLE decision maker. Do NOT auto-confirm. Status is ALWAYS "potential". Max confidence: 0.65.');
+  lines.push('For each: (1) Does this reduce recognition-based interaction? (2) Is recall burden plausibly increased? (3) Are there visible mitigations? (4) Is semantic intent clearly categorical?');
+  lines.push('If ANY answer uncertain → SUPPRESS.');
+  lines.push('');
+  for (const c of candidates) {
+    lines.push(`--- ${c.candidateType} CANDIDATE ---`);
+    lines.push(`Element: ${c.elementLabel} (${c.elementType})`);
+    lines.push(`File: ${c.filePath}`);
+    lines.push(`Evidence: ${c.rawEvidence}`);
+    if (c.mitigationSignals.length > 0) lines.push(`Mitigations: ${c.mitigationSignals.join(', ')}`);
+    if (c.nearbyHeadings.length > 0) lines.push(`Nearby headings: ${c.nearbyHeadings.join(', ')}`);
+    lines.push(`Code:\n${c.codeSnippet.slice(0, 400)}`);
+    lines.push('');
   }
-
-  if (u4_4Bundles.length > 0) {
-    if (lines.length > 0) lines.push('');
-    lines.push('[U4_4_EVIDENCE]');
-    lines.push('Assess whether these generic action labels lack sufficient context for users to understand what happens next.');
-    lines.push('Do NOT use file names or component names as evidence.');
-    for (const b of u4_4Bundles) {
-      for (const cta of b.genericCTAs) {
-        let row = `- ${b.filePath}: CTA "${cta.label}"`;
-        if (cta.nearbyHeadings.length > 0) row += ` | Headings: ${cta.nearbyHeadings.join(', ')}`;
-        if (cta.transitionsStep) row += ' | Transitions step';
-        if (cta.commitsData) row += ' | Commits data';
-        lines.push(row);
-      }
-    }
-    lines.push('[/U4_4_EVIDENCE]');
-  }
-
+  lines.push('[/U4_EVIDENCE_BUNDLE]');
   return lines.join('\n');
 }
 
@@ -6520,10 +6462,9 @@ serve(async (req) => {
       .map(([path, content]) => `### File: ${path}\n\`\`\`\n${content.slice(0, 5000)}\n\`\`\``)
       .join('\n\n');
 
-    // Extract U4 deterministic findings (U4.1/U4.2/U4.3) and U4.4 evidence for LLM
-    const u4DetFindings: U4DetFinding[] = selectedRulesSet.has('U4') ? detectU4Deterministic(allFiles) : [];
-    const u4_4Bundles = selectedRulesSet.has('U4') ? extractU4_4EvidenceBundle(allFiles) : [];
-    const u4BundleText = formatU4EvidenceForLLM(u4DetFindings, u4_4Bundles);
+    // Extract U4 candidates (Stage 1: deterministic extraction only, no classification)
+    const u4Candidates: U4Candidate[] = selectedRulesSet.has('U4') ? extractU4Candidates(allFiles) : [];
+    const u4BundleText = formatU4CandidatesForLLM(u4Candidates);
 
     // Extract U6 layout evidence bundle (context for LLM layout assessment)
     const u6LayoutBundles = selectedRulesSet.has('U6') ? extractU6LayoutEvidence(allFiles) : [];
@@ -7551,105 +7492,61 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       }
     }
 
-    // ========== U4 POST-PROCESSING (Recognition-to-Recall — Hybrid 4-Subtype) ==========
+    // ========== U4 POST-PROCESSING (Recognition-to-Recall — Two-Stage, LLM-Mandatory) ==========
+    // ALL U4 output comes from LLM (Stage 2). NEVER confirmed, always potential, max 0.65.
     const aggregatedU4List: any[] = [];
     if (selectedRulesSet.has('U4')) {
       const u4FromLLM = aiViolations.filter((v: any) => v.ruleId === 'U4');
       aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'U4');
 
-      // Collect all U4 elements from deterministic + LLM
       const allU4Elements: any[] = [];
 
-      // 1. Deterministic U4.2 and U4.3 findings (final, no LLM needed)
-      for (const f of u4DetFindings.filter(f => f.subCheck === 'U4.2' || f.subCheck === 'U4.3')) {
-        allU4Elements.push({
-          elementLabel: f.elementLabel, elementType: f.elementType,
-          location: f.filePath, detection: f.detection, evidence: f.evidence,
-          recommendedFix: f.recommendedFix, confidence: Math.min(f.confidence, 0.80),
-          subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
-          status: f.status, evaluationMethod: f.evaluationMethod,
-          deduplicationKey: `U4|${f.subCheck}|${f.filePath}|${f.elementLabel}`,
-        });
-      }
-
-      // 2. LLM findings (U4.1 confirmed/dismissed + U4.4)
+      // Only LLM findings — no deterministic emission
       if (u4FromLLM.length > 0) {
         const aggregatedOne = u4FromLLM.find((v: any) => v.isU4Aggregated && v.u4Elements?.length > 0);
         const llmElements = aggregatedOne?.u4Elements || u4FromLLM.map((v: any) => ({
           elementLabel: v.evidence?.split('.')[0] || 'UI region',
           elementType: 'component', location: v.evidence || 'Unknown',
           detection: v.diagnosis || '', evidence: v.evidence || '',
-          recommendedFix: v.contextualHint || '', confidence: v.confidence || 0.65,
+          recommendedFix: v.contextualHint || '', confidence: v.confidence || 0.55,
           subCheck: 'U4.4', subCheckLabel: 'Generic Action Labels',
         }));
 
         for (const el of llmElements) {
+          // ENFORCE: always potential, max confidence 0.65
+          const cappedConf = Math.min(el.confidence || 0.55, 0.65);
           allU4Elements.push({
             elementLabel: el.elementLabel || 'UI region',
             elementType: el.elementType || 'component',
             location: el.location || el.filePath || 'Unknown',
             detection: el.detection || '', evidence: el.evidence || '',
             recommendedFix: el.recommendedFix || '',
-            confidence: Math.min(el.confidence || 0.65, 0.80),
+            confidence: Math.round(cappedConf * 100) / 100,
             subCheck: el.subCheck || 'U4.4',
-            subCheckLabel: el.subCheckLabel || (el.subCheck === 'U4.1' ? 'Structured Selection → Free-Text' : 'Generic Action Labels'),
-            status: el.status || 'potential',
-            evaluationMethod: el.subCheck === 'U4.1' ? 'hybrid_deterministic' : 'llm_assisted',
+            subCheckLabel: el.subCheckLabel || 'Generic Action Labels',
+            status: 'potential', // ALWAYS potential
+            evaluationMethod: 'llm_assisted',
+            mitigationSummary: el.mitigationSummary || '',
             deduplicationKey: el.deduplicationKey || `U4|${el.subCheck || 'U4.4'}|${el.location || ''}|${el.elementLabel || ''}`,
           });
         }
       }
 
-      // 3. Deterministic U4.1 candidates NOT addressed by LLM → keep as potential
-      const llmHandledU41 = new Set(allU4Elements.filter(e => e.subCheck === 'U4.1').map(e => `${e.location}|${e.elementLabel}`));
-      for (const f of u4DetFindings.filter(f => f.subCheck === 'U4.1')) {
-        if (llmHandledU41.has(`${f.filePath}|${f.elementLabel}`)) continue;
-        allU4Elements.push({
-          elementLabel: f.elementLabel, elementType: f.elementType,
-          location: f.filePath, detection: f.detection, evidence: f.evidence,
-          recommendedFix: f.recommendedFix, confidence: Math.min(f.confidence, 0.80),
-          subCheck: 'U4.1', subCheckLabel: 'Structured Selection → Free-Text',
-          status: 'potential', evaluationMethod: 'hybrid_deterministic',
-          deduplicationKey: `U4|U4.1|${f.filePath}|${f.elementLabel}`,
-        });
-      }
-
       if (allU4Elements.length > 0) {
-        // Split confirmed vs potential for correct section routing
-        const confirmedEls = allU4Elements.filter(e => e.status === 'confirmed');
-        const potentialEls = allU4Elements.filter(e => e.status !== 'confirmed');
-
-        if (confirmedEls.length > 0) {
-          const conf = Math.min(Math.max(...confirmedEls.map((e: any) => e.confidence)), 0.80);
-          aggregatedU4List.push({
-            ruleId: 'U4', ruleName: 'Recognition-to-recall regression', category: 'usability',
-            status: 'confirmed', blocksConvergence: true,
-            inputType: 'zip', isU4Aggregated: true, u4Elements: confirmedEls, evaluationMethod: 'hybrid_deterministic',
-            diagnosis: `Confirmed recognition-to-recall regressions: ${confirmedEls.length} finding(s) where structured selection was replaced with free-text input.`,
-            contextualHint: 'Replace free-text inputs with structured selection components for enumerable choices.',
-            advisoryGuidance: 'Use <Select>, <RadioGroup>, or <Combobox> for fields that expect a finite set of options.',
-            confidence: Math.round(conf * 100) / 100,
-            correctivePrompt: 'Replace free-text inputs with structured selection components (dropdowns, radio groups, comboboxes) for fields that expect enumerable choices.',
-          });
-        }
-
-        if (potentialEls.length > 0) {
-          const conf = Math.min(Math.max(...potentialEls.map((e: any) => e.confidence)), 0.80);
-          aggregatedU4List.push({
-            ruleId: 'U4', ruleName: 'Recognition-to-recall regression', category: 'usability',
-            status: 'potential', blocksConvergence: false,
-            inputType: 'zip', isU4Aggregated: true, u4Elements: potentialEls,
-            evaluationMethod: potentialEls.some((e: any) => e.evaluationMethod === 'llm_assisted') ? 'llm_assisted' : 'hybrid_deterministic',
-            diagnosis: `Potential recognition-to-recall risks: ${potentialEls.length} finding(s).`,
-            contextualHint: 'Review to ensure recognition-based interaction is preferred over recall-dependent alternatives.',
-            advisoryGuidance: 'Ensure structured selections, active state indicators, step context, and descriptive CTAs are provided.',
-            confidence: Math.round(conf * 100) / 100,
-          });
-        }
-
-        console.log(`U4 aggregated: ${confirmedEls.length} confirmed, ${potentialEls.length} potential`);
+        const conf = Math.min(Math.max(...allU4Elements.map((e: any) => e.confidence)), 0.65);
+        aggregatedU4List.push({
+          ruleId: 'U4', ruleName: 'Recognition-to-recall regression', category: 'usability',
+          status: 'potential', blocksConvergence: false,
+          inputType: 'zip', isU4Aggregated: true, u4Elements: allU4Elements,
+          evaluationMethod: 'llm_assisted',
+          diagnosis: `Potential recognition-to-recall risks: ${allU4Elements.length} finding(s). LLM evaluated ${u4Candidates.length} candidates, reported ${allU4Elements.length}.`,
+          contextualHint: 'Review to ensure recognition-based interaction is preferred over recall-dependent alternatives.',
+          advisoryGuidance: 'Ensure structured selections, active state indicators, step context, and descriptive CTAs are provided where appropriate.',
+          confidence: Math.round(conf * 100) / 100,
+        });
+        console.log(`U4 aggregated: ${allU4Elements.length} potential (from ${u4Candidates.length} candidates)`);
       } else {
-        console.log('U4: No findings detected');
+        console.log(`U4: LLM suppressed all ${u4Candidates.length} candidates — no findings`);
       }
     }
 

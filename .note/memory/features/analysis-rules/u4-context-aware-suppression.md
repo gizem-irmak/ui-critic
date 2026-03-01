@@ -1,41 +1,63 @@
 # Memory: features/analysis-rules/u4-context-aware-suppression
 Updated: now
 
-Rule U4 (Recognition-to-Recall Regression) was rewritten with a 4-subtype pipeline:
-
-## Subtypes
-
-1. **U4.1 — Structured Selection → Free-Text Substitution** (Hybrid: deterministic + LLM)
-   - Detects `<input type="text">` / `<textarea>` with semantic labels (category, type, status, etc.) where no `<Select>`, `<RadioGroup>`, `<Combobox>`, or `<datalist>` exists nearby (±30 lines).
-   - **Confirmed** if no selection component exists anywhere in the file.
-   - **Potential** if selection components exist elsewhere in the file.
-   - LLM confirms/dismisses/adjusts deterministic candidates via `[U4_1_CANDIDATES]` bundle.
-   - Excluded: free-form labels (notes, description, message), optional fields, fields with autocomplete.
-
-2. **U4.2 — Hidden or Non-Persistent Selection State** (Deterministic)
-   - Detects `<Tabs>`, `<ToggleGroup>` etc. without active state indicators (bg-primary, aria-selected, isActive, etc.) within ±20 lines.
-   - Always **Potential**. Confidence: 0.65.
-
-3. **U4.3 — Multi-Step Context Regression** (Deterministic)
-   - Detects multi-step flows (stepCount ≥ 2) missing: step indicator, back navigation, summary/review, or persistent context.
-   - Suppressed if persistent context OR (summary + back nav + step indicator) all exist.
-   - Confidence scaled by missing mitigations: 0.60 (1 missing) → 0.75 (3+ missing).
-   - Always **Potential**.
-
-4. **U4.4 — Generic or Context-Free Action Labels** (LLM-assisted)
-   - Evaluates generic CTAs ("Next", "Continue", "Submit") that transition steps or commit data.
-   - Only flagged if no adjacent context describes the action.
-   - Standard auth CTAs excluded. Always **Potential**. Confidence: 0.55–0.70.
+Rule U4 (Recognition-to-Recall Regression) uses a **two-stage architecture** where Stage 1 is candidate-only extraction and Stage 2 is mandatory LLM decision.
 
 ## Architecture
 
-- **Deterministic-first**: U4.1 candidates, U4.2, U4.3 run before LLM call.
-- **Evidence bundles**: `[U4_1_CANDIDATES]` and `[U4_4_EVIDENCE]` sent to LLM.
-- **Post-processing**: Merges deterministic U4.2/U4.3 + LLM U4.1/U4.4. Splits into confirmed and potential aggregated violations.
-- **Confirmed U4.1** findings block convergence; all other subtypes are non-blocking.
+### Stage 1 — Deterministic Candidate Extraction (No Classification)
+Extracts candidates across 4 subtypes. Does NOT classify, emit, or assign status. Builds evidence bundles with:
+- Code snippets, nearby headings, mitigation signals, raw evidence descriptions
+
+### Stage 2 — LLM Decision Layer (Mandatory)
+ALL candidates go to LLM. The LLM is the SOLE decision maker and must answer:
+1. Does this reduce recognition-based interaction?
+2. Is recall burden plausibly increased?
+3. Are there visible mitigations?
+4. Is semantic intent clearly categorical?
+
+If ANY answer is uncertain → candidate is SUPPRESSED.
+
+## Global Constraints (Mandatory)
+- U4 MUST NEVER output "confirmed" — status is ALWAYS "potential"
+- Maximum confidence: **0.65** (range: 0.45–0.65)
+- If evidence is ambiguous → suppress
+- If categorical intent cannot be verified → suppress
+- Do NOT assume text inputs require structured selection
+- Do NOT infer enum expectation from generic labels: reason, message, description, notes, details
+- Truncation/overflow is U3 scope — never flag under U4
+- U4 prioritizes false-positive avoidance over sensitivity
+
+## Subtypes
+
+1. **U4.1 — Structured Selection → Free-Text** (LLM-decided)
+   - Candidates: text inputs with semantic labels (category, status, etc.) without nearby selection components
+   - LLM reports ONLY if finite categorical domain is strongly evidenced
+   - Suppressed if: label implies open description, domain unclear, no enum evidence
+
+2. **U4.2 — Hidden Selection State** (LLM-decided)
+   - Candidates: Tabs/ToggleGroup without active state indicators
+   - LLM reports ONLY if active state truly not persistent
+   - Suppressed if: active styling, aria-selected, or visible context exists
+
+3. **U4.3 — Multi-Step Context Regression** (LLM-decided)
+   - Candidates: flows with ≥2 steps
+   - LLM reports ONLY if ALL mitigations missing (step indicator, back nav, summary, persistent context)
+   - If ANY mitigation exists → suppress
+
+4. **U4.4 — Generic Context-Free CTAs** (LLM-decided)
+   - Candidates: generic buttons (Next, Submit, etc.) that transition steps or commit data
+   - LLM reports ONLY if action outcome not contextually clarified
+   - Suppressed if: headings clarify, universally obvious action
+
+## Post-Processing
+- ALL findings come from LLM only — no deterministic emission
+- Every element forced to status="potential", confidence capped at 0.65
+- blocksConvergence is always false
+- evaluationMethod is always "llm_assisted"
+- Single aggregated violation object (no confirmed/potential split)
 
 ## False Positive Prevention
-
-- Never trigger based solely on: `<input type="text">` presence, absence of step indicator without multi-step logic, minimalist styling, truncation (U3 scope), or short labels alone.
-- If uncertainty > 40%, classify as Potential.
-- Free-form labels, optional fields, and fields with autocomplete/suggestions are excluded from U4.1.
+- Never trigger based solely on: text input presence, missing step indicator without multi-step logic, minimalist styling, truncation, short labels
+- LLM is explicitly allowed to decline reporting
+- Generic labels (reason, message, description, notes, details) excluded from U4.1
