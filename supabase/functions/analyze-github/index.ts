@@ -3131,30 +3131,37 @@ Suppress if: section heading clarifies action, page title clarifies context, act
 \`\`\`
 - If NO E2 issues found, do NOT include E2 in the violations array.
 
-### E3 (Obscured or Restricted User Control) — HYBRID EVALUATION:
-**NOTE:** E3 uses pre-extracted control restriction evidence bundles appended as \`[E3_CONTROL_RESTRICTION_EVIDENCE]\`. Use ONLY the provided structural evidence to validate whether user control is meaningfully restricted.
+### E3 (Structural Absence of Exit/Cancel for High-Impact Actions) — HYBRID EVALUATION:
+**NOTE:** E3 uses pre-extracted evidence bundles appended as \`[E3_CONTROL_RESTRICTION_EVIDENCE]\`. Use ONLY the provided structural evidence.
 
-**CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
-- Do NOT use file names, component names, or test wording as evidence.
-- Do NOT infer malicious intent. Use neutral language ("control restriction risk", "dismissal may be missing").
-- If evidence is insufficient, return NO E3 finding — do not guess.
+**SCOPE — E3 detects ONLY:**
+- High-impact destructive/irreversible actions (delete, payment, subscribe, account deletion) that lack ANY structural exit mechanism (cancel, back, close, undo, dismiss, breadcrumb).
 
-**EVALUATE:**
-- Missing dismissal: modals/dialogs without close/cancel
-- Missing cancel path: forms with only submit action
-- Forced opt-in: required marketing/consent checkboxes
-- Missing back navigation: multi-step flows without back button
+**E3 must NOT evaluate:**
+- Visual bias between cancel and confirm buttons (belongs to E2)
+- Missing consequence/transparency text (belongs to E1)
+- Multi-step wizard usability or step indicators (belongs to U4)
+- Forced marketing opt-ins or consent checkboxes (belongs to E1)
+
+**HIGH-IMPACT ACTION GATE:** E3 triggers ONLY if a high-impact action is present (delete, payment, subscribe, account deletion, destructive variants). If NO high-impact action → do NOT report E3.
+
+**STRUCTURAL CONTROL ABSENCE:** E3 triggers ONLY if NO structural exit exists near the high-impact action (cancel, back, close, undo, dismiss, breadcrumb, onClose handler). If ANY exists → SUPPRESS E3.
+
+**SUPPRESSION:**
+- Cancel exists but visually weaker → E2, NOT E3. Suppress.
+- Consequence text missing but cancel exists → E1. Suppress.
+- Step indicators or wizard navigation → U4. Suppress.
 
 **CLASSIFICATION:**
 - E3 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
-- Confidence: 0.60–0.85
+- Confidence: 0.65–0.80 (cap at 0.80). Suppress below 0.65.
 
 **OUTPUT FOR E3 — STRUCTURED e3Elements:**
 \`\`\`json
 {
-  "ruleId": "E3", "ruleName": "Obscured or restricted user control", "category": "ethics",
+  "ruleId": "E3", "ruleName": "Structural absence of exit control for high-impact actions", "category": "ethics",
   "status": "potential", "isE3Aggregated": true,
-  "e3Elements": [{ "elementLabel": "Dialog component", "elementType": "dialog", "location": "...", "subCheck": "E3.D1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.75 }]
+  "e3Elements": [{ "elementLabel": "Delete dialog without cancel", "elementType": "dialog", "location": "...", "subCheck": "E3.D1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.78 }]
 }
 \`\`\`
 - If NO E3 issues found, do NOT include E3 in the violations array.
@@ -3696,11 +3703,11 @@ function formatE2ChoiceBundleForPrompt(bundles: E2ChoiceBundle[]): string {
   return lines.join('\n');
 }
 
-// ========== E3 DETERMINISTIC DETECTION (Obscured or Restricted User Control) ==========
+// ========== E3 DETERMINISTIC DETECTION (Structural Absence of Exit Control for High-Impact Actions) ==========
 interface E3Finding {
   filePath: string;
   line: number;
-  subCheck: 'E3.D1' | 'E3.D2' | 'E3.D3' | 'E3.D4';
+  subCheck: 'E3.D1' | 'E3.D2';
   elementLabel: string;
   elementType: string;
   detection: string;
@@ -3710,13 +3717,22 @@ interface E3Finding {
   deduplicationKey: string;
 }
 
-const E3_CLOSE_PATTERNS = /\b(onClose|onDismiss|handleClose|handleDismiss|closeModal|dismissModal|setOpen\(false\)|setIsOpen\(false\)|setShow\(false\)|onOpenChange)\b/i;
-const E3_CLOSE_BUTTON_RE = /<(?:Button|button)\b[^>]*>([^<]*(?:close|cancel|dismiss|×|✕|X)[^<]*)<\/(?:Button|button)>/gi;
+const E3_HIGH_IMPACT_CTA = /\b(delete|remove|permanently\s*delete|destroy|erase|confirm\s*payment|pay\s*now|pay\b|subscribe|proceed\s*with\s*charge|deactivate\s*account|close\s*account|account\s*deletion|danger|destructive)\b/i;
+const E3_HIGH_IMPACT_VARIANT = /\b(variant\s*=\s*["'](?:destructive|danger)["']|colorScheme\s*=\s*["'](?:red|danger)["'])\b/i;
+const E3_EXIT_PATTERNS = /\b(onClose|onDismiss|handleClose|handleDismiss|closeModal|dismissModal|setOpen\(false\)|setIsOpen\(false\)|setShow\(false\)|onOpenChange)\b/i;
+const E3_EXIT_BUTTON_RE = /<(?:Button|button|a)\b[^>]*>([^<]*(?:cancel|back|close|dismiss|decline|undo|no\s*thanks|go\s*back|return|exit|skip|×|✕|X)[^<]*)<\/(?:Button|button|a)>/gi;
 const E3_ESCAPE_RE = /\b(Escape|escape|onEscapeKeyDown|closeOnEsc|closeOnOverlayClick|closeOnBackdropClick)\b/i;
-const E3_CANCEL_LABELS = /\b(cancel|back|close|go\s*back|return|previous|exit|skip|dismiss|decline|no\s*thanks)\b/i;
-const E3_MARKETING_LABELS = /\b(marketing|newsletter|promotions?|offers?|updates?|emails?|subscribe|notifications?|tracking|analytics|consent|opt.?in|communications?)\b/i;
-const E3_STEP_INDICATORS = /\b(step\s*\d|step\s*\w+\s*of\s*\d|\d\s*of\s*\d|\d\s*\/\s*\d|progress|stepper|wizard|multi.?step|onboarding)\b/i;
-const E3_BACK_BUTTON = /<(?:Button|button|a)\b[^>]*>([^<]*(?:back|previous|go\s*back|return|←|⬅|ArrowLeft)[^<]*)<\/(?:Button|button|a)>/gi;
+const E3_DIALOG_CLOSE_RE = /DialogClose|SheetClose|DrawerClose|AlertDialogCancel/i;
+const E3_BREADCRUMB_RE = /<(?:Breadcrumb|breadcrumb|nav)\b[^>]*(?:aria-label\s*=\s*["']breadcrumb["']|className\s*=\s*["'][^"]*breadcrumb)/i;
+
+function hasStructuralExit(region: string): boolean {
+  E3_EXIT_BUTTON_RE.lastIndex = 0;
+  return E3_EXIT_PATTERNS.test(region) ||
+    E3_EXIT_BUTTON_RE.test(region) ||
+    E3_ESCAPE_RE.test(region) ||
+    E3_DIALOG_CLOSE_RE.test(region) ||
+    E3_BREADCRUMB_RE.test(region);
+}
 
 function detectE3ControlRestrictions(allFiles: Map<string, string>): E3Finding[] {
   const findings: E3Finding[] = [];
@@ -3728,126 +3744,81 @@ function detectE3ControlRestrictions(allFiles: Map<string, string>): E3Finding[]
     if (/\.(test|spec)\./i.test(filePath)) continue;
     if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
 
-    // E3.D1 — Modal/Dialog Without Dismissal
+    if (!E3_HIGH_IMPACT_CTA.test(content) && !E3_HIGH_IMPACT_VARIANT.test(content)) continue;
+
+    // E3.D1 — High-impact action in Modal/Dialog without structural exit
     const dialogRe = /<(?:Dialog|dialog|Modal|AlertDialog|Drawer|Sheet)\b([^>]*)>/gi;
     let dm;
     while ((dm = dialogRe.exec(content)) !== null) {
       const lineNum = content.substring(0, dm.index).split('\n').length;
-      const regionEnd = Math.min(content.length, dm.index + 800);
+      const regionEnd = Math.min(content.length, dm.index + 1000);
       const region = content.slice(dm.index, regionEnd);
-      const hasCloseHandler = E3_CLOSE_PATTERNS.test(region);
-      E3_CLOSE_BUTTON_RE.lastIndex = 0;
-      const hasCloseButton = E3_CLOSE_BUTTON_RE.test(region);
-      E3_CLOSE_BUTTON_RE.lastIndex = 0;
-      const hasEscapeHandler = E3_ESCAPE_RE.test(region);
-      const hasDialogClose = /DialogClose|SheetClose|DrawerClose/i.test(region);
-      if (!hasCloseHandler && !hasCloseButton && !hasEscapeHandler && !hasDialogClose) {
-        const key = `${filePath}|E3|E3.D1|${lineNum}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          const tagName = dm[0].match(/<(\w+)/)?.[1] || 'Dialog';
-          findings.push({
-            filePath, line: lineNum, subCheck: 'E3.D1', elementLabel: `${tagName} component`, elementType: 'dialog',
-            detection: `Modal/dialog without visible dismissal mechanism`,
-            evidence: `<${tagName}> found without close button, onClose handler, escape key handler, or DialogClose component`,
-            recommendedFix: 'Add a close/cancel button and ensure the dialog can be dismissed via escape key or backdrop click',
-            confidence: 0.75, deduplicationKey: key,
-          });
-        }
+
+      if (!E3_HIGH_IMPACT_CTA.test(region) && !E3_HIGH_IMPACT_VARIANT.test(region)) continue;
+      E3_EXIT_BUTTON_RE.lastIndex = 0;
+      if (hasStructuralExit(region)) continue;
+
+      const key = `${filePath}|E3|E3.D1|${lineNum}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        const tagName = dm[0].match(/<(\w+)/)?.[1] || 'Dialog';
+        const ctaMatch = region.match(/>([^<]*(?:delete|remove|pay|subscribe|deactivate|destroy|confirm)[^<]*)</i);
+        const ctaLabel = ctaMatch ? ctaMatch[1].trim() : 'destructive action';
+        findings.push({
+          filePath, line: lineNum, subCheck: 'E3.D1',
+          elementLabel: `${tagName} with "${ctaLabel}" but no exit control`,
+          elementType: 'dialog',
+          detection: `High-impact action in ${tagName} without visible cancel, close, or dismiss mechanism`,
+          evidence: `<${tagName}> contains high-impact CTA ("${ctaLabel}") but no cancel/close/dismiss button, onClose handler, or escape key handler`,
+          recommendedFix: 'Add a cancel or close button alongside the destructive action',
+          confidence: 0.78, deduplicationKey: key,
+        });
       }
     }
 
-    // E3.D2 — Form Without Cancel / Back Option
+    // E3.D2 — High-impact action in form/page without structural exit
     const formRe = /<form\b([^>]*)>/gi;
     let fm;
     while ((fm = formRe.exec(content)) !== null) {
       const lineNum = content.substring(0, fm.index).split('\n').length;
       const regionEnd = Math.min(content.length, fm.index + 1200);
       const region = content.slice(fm.index, regionEnd);
+
+      if (!E3_HIGH_IMPACT_CTA.test(region) && !E3_HIGH_IMPACT_VARIANT.test(region)) continue;
+      E3_EXIT_BUTTON_RE.lastIndex = 0;
+      if (hasStructuralExit(region)) continue;
+
       const inputCount = (region.match(/<(?:Input|input)\b/gi) || []).length;
-      const hasSubmit = /<(?:Button|button)\b[^>]*(?:type\s*=\s*["']submit["'])[^>]*>|<(?:Button|button)\b[^>]*>([^<]*(?:submit|continue|confirm|save|send|next|create|sign\s*up|register|log\s*in|sign\s*in)[^<]*)<\/(?:Button|button)>/gi.test(region);
-      const hasCancelButton = E3_CANCEL_LABELS.test(
-        (region.match(/<(?:Button|button|a)\b[^>]*>([^<]{1,40})<\/(?:Button|button|a)>/gi) || []).map(m => m.replace(/<[^>]*>/g, '')).join(' ')
-      );
-      const isSimpleLogin = inputCount <= 2 && /\b(log\s*in|sign\s*in|login|password)\b/i.test(region);
-      if (hasSubmit && !hasCancelButton && !isSimpleLogin && inputCount >= 1) {
-        const key = `${filePath}|E3|E3.D2|${lineNum}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          findings.push({
-            filePath, line: lineNum, subCheck: 'E3.D2', elementLabel: 'Form without cancel/back', elementType: 'form',
-            detection: `Form has submit action but no cancel, back, or close option`,
-            evidence: `<form> with ${inputCount} input(s) and submit button but no cancel/back/close CTA`,
-            recommendedFix: 'Add a cancel or back button to allow users to exit the form without submitting',
-            confidence: 0.65, deduplicationKey: key,
-          });
-        }
-      }
-    }
+      const isSimpleAuth = inputCount <= 2 && /\b(log\s*in|sign\s*in|login|sign\s*up|register)\b/i.test(region);
+      if (isSimpleAuth) continue;
 
-    // E3.D3 — Forced Required Opt-In
-    const checkboxRe = /<(?:Input|input|Checkbox)\b([^>]*(?:type\s*=\s*["']checkbox["']|checkbox)[^>]*)(?:\/>|>)/gi;
-    let cm;
-    while ((cm = checkboxRe.exec(content)) !== null) {
-      const attrs = cm[1] || '';
-      if (!/\brequired\b/i.test(attrs)) continue;
-      const lineNum = content.substring(0, cm.index).split('\n').length;
-      const regionStart = Math.max(0, cm.index - 200);
-      const regionEnd = Math.min(content.length, cm.index + 300);
-      const region = content.slice(regionStart, regionEnd);
-      if (E3_MARKETING_LABELS.test(region)) {
-        const key = `${filePath}|E3|E3.D3|${lineNum}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          const labelMatch = region.match(/<(?:Label|label)\b[^>]*>([^<]{3,80})<\/(?:Label|label)>/i);
-          const labelText = labelMatch ? labelMatch[1].replace(/\{[^}]*\}/g, '').trim() : 'marketing/consent checkbox';
-          findings.push({
-            filePath, line: lineNum, subCheck: 'E3.D3', elementLabel: `Required opt-in: "${labelText}"`, elementType: 'checkbox',
-            detection: `Required checkbox for marketing/consent with no opt-out alternative`,
-            evidence: `<input type="checkbox" required> with label "${labelText}" and no visible opt-out path`,
-            recommendedFix: 'Make the opt-in optional or provide a visible alternative that does not require consent to proceed',
-            confidence: 0.75, deduplicationKey: key,
-          });
-        }
-      }
-    }
-
-    // E3.D4 — Multi-Step Flow Without Back
-    if (E3_STEP_INDICATORS.test(content)) {
-      const stepRe = new RegExp(E3_STEP_INDICATORS.source, 'gi');
-      let sm;
-      while ((sm = stepRe.exec(content)) !== null) {
-        const lineNum = content.substring(0, sm.index).split('\n').length;
-        E3_BACK_BUTTON.lastIndex = 0;
-        const hasBackButton = E3_BACK_BUTTON.test(content);
-        E3_BACK_BUTTON.lastIndex = 0;
-        const hasPrevStep = /\b(prevStep|previousStep|goBack|handleBack|onBack|stepBack|setStep\s*\(\s*(?:step|currentStep)\s*-\s*1\))\b/i.test(content);
-        if (!hasBackButton && !hasPrevStep) {
-          const key = `${filePath}|E3|E3.D4|${lineNum}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            findings.push({
-              filePath, line: lineNum, subCheck: 'E3.D4', elementLabel: 'Multi-step flow without back navigation', elementType: 'stepper',
-              detection: `Step indicator detected but no back/previous button or navigation control`,
-              evidence: `Step indicator ("${sm[0]}") found without back button or previous-step handler`,
-              recommendedFix: 'Add a back/previous button to allow users to navigate to earlier steps',
-              confidence: 0.70, deduplicationKey: key,
-            });
-          }
-          break;
-        }
+      const key = `${filePath}|E3|E3.D2|${lineNum}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        const ctaMatch = region.match(/>([^<]*(?:delete|remove|pay|subscribe|deactivate|destroy|confirm\s*payment)[^<]*)</i);
+        const ctaLabel = ctaMatch ? ctaMatch[1].trim() : 'high-impact action';
+        findings.push({
+          filePath, line: lineNum, subCheck: 'E3.D2',
+          elementLabel: `Form with "${ctaLabel}" but no cancel/exit`,
+          elementType: 'form',
+          detection: `Form contains high-impact action but no cancel, back, or close option`,
+          evidence: `<form> with high-impact CTA ("${ctaLabel}") and ${inputCount} input(s) but no cancel/back/close control`,
+          recommendedFix: 'Add a cancel or back button to allow users to exit without committing',
+          confidence: 0.70, deduplicationKey: key,
+        });
       }
     }
   }
 
-  return findings.slice(0, 30);
+  return findings.slice(0, 20);
 }
 
 function formatE3FindingsForPrompt(findings: E3Finding[]): string {
   if (findings.length === 0) return '';
   const lines = [
     '[E3_CONTROL_RESTRICTION_EVIDENCE]',
-    'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence.',
+    'IMPORTANT: E3 triggers ONLY for high-impact actions (delete, payment, subscribe) that lack ALL structural exit controls.',
+    'SUPPRESS if: cancel/back/close exists (even if visually weaker — that is E2), consequence text missing (that is E1), or wizard navigation (that is U4).',
   ];
   for (const f of findings) {
     lines.push(`\n--- Location: ${f.filePath}:${f.line} (${f.subCheck}) ---`);
@@ -6115,7 +6086,7 @@ serve(async (req) => {
       }
     }
 
-    // ========== E3 POST-PROCESSING (Obscured/Restricted User Control — HYBRID) ==========
+    // ========== E3 POST-PROCESSING (Structural Absence of Exit Control — HYBRID) ==========
     const aggregatedE3GitHubList: any[] = [];
     if (selectedRulesSet.has('E3')) {
       const deterministicE3 = e3Findings;
@@ -6128,12 +6099,14 @@ serve(async (req) => {
         const llmReinforced = e3FromLLM.some((v: any) =>
           v.e3Elements?.some((el: any) => el.subCheck === f.subCheck && el.location?.includes(f.filePath.split('/').pop() || ''))
         );
-        if (llmReinforced) confidence = Math.min(confidence + 0.05, 0.85);
+        if (llmReinforced) confidence = Math.min(confidence + 0.05, 0.80);
+        if (confidence < 0.65) continue;
+
         e3Elements.push({
           elementLabel: f.elementLabel, elementType: f.elementType, location: f.filePath,
           subCheck: f.subCheck, detection: f.detection, evidence: f.evidence,
           recommendedFix: f.recommendedFix,
-          confidence: Math.min(confidence, 0.85),
+          confidence: Math.min(confidence, 0.80),
           evaluationMethod: llmReinforced ? 'hybrid_structural_llm' as const : 'deterministic_structural' as const,
           deduplicationKey: f.deduplicationKey,
         });
@@ -6144,12 +6117,14 @@ serve(async (req) => {
           for (const el of (aggregatedLLM.e3Elements || [])) {
             const alreadyCovered = e3Elements.some(e => e.subCheck === el.subCheck && e.location === el.location);
             if (!alreadyCovered) {
+              const conf = Math.min(el.confidence || 0.65, 0.80);
+              if (conf < 0.65) continue;
               e3Elements.push({
-                elementLabel: el.elementLabel || 'Control restriction', elementType: el.elementType || 'unknown',
+                elementLabel: el.elementLabel || 'High-impact action without exit', elementType: el.elementType || 'unknown',
                 location: el.location || 'Unknown', subCheck: el.subCheck,
                 detection: el.detection || '', evidence: el.evidence || '',
                 recommendedFix: el.recommendedFix || '',
-                confidence: Math.min(el.confidence || 0.65, 0.85),
+                confidence: conf,
                 evaluationMethod: 'hybrid_structural_llm' as const,
                 deduplicationKey: el.deduplicationKey || `E3|${el.location || ''}|${el.elementLabel || ''}`,
               });
@@ -6158,19 +6133,19 @@ serve(async (req) => {
         }
       }
       if (e3Elements.length > 0) {
-        const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.85);
+        const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.80);
         aggregatedE3GitHubList.push({
-          ruleId: 'E3', ruleName: 'Obscured or restricted user control', category: 'ethics',
+          ruleId: 'E3', ruleName: 'Structural absence of exit control for high-impact actions', category: 'ethics',
           status: 'potential', blocksConvergence: false,
           inputType: 'github', isE3Aggregated: true, e3Elements, evaluationMethod: 'hybrid_deterministic',
-          diagnosis: `Control restriction issues: ${e3Elements.length} potential risk(s).`,
-          contextualHint: 'Ensure users can easily dismiss, cancel, or opt out of actions.',
-          advisoryGuidance: 'Provide clear dismissal, cancellation, or opt-out mechanisms and ensure users can easily reverse or exit actions.',
+          diagnosis: `Structural exit absence: ${e3Elements.length} high-impact action(s) without visible cancel/close/exit mechanism.`,
+          contextualHint: 'Verify that high-impact actions provide clear exit controls.',
+          advisoryGuidance: 'Analysis flagged potential restriction of user control; verify structural exit mechanisms for high-impact actions.',
           confidence: Math.round(overallConfidence * 100) / 100,
         });
         console.log(`E3 aggregated (GitHub): ${deterministicE3.length} deterministic + ${e3FromLLM.length} LLM → ${e3Elements.length} element(s)`);
       } else {
-        console.log('E3: No findings for control restrictions (GitHub)');
+        console.log('E3: No findings (all suppressed or no high-impact actions without exit) (GitHub)');
       }
     }
 
