@@ -4935,11 +4935,121 @@ function detectU5InteractionFeedback(allFiles: Map<string, string>): U5Finding[]
 }
 
 // =====================
-// U2 Navigation Detection — Web/Desktop Wayfinding Clarity Only (v3)
-// Sub-checks: U2.D1 (missing nav landmark), U2.D2 (deep pages without "you are here" cues), U2.D3 (breadcrumb dead code)
+// U2 Navigation Detection — Web/Desktop Wayfinding Clarity Only (v4)
+// Sub-checks: U2.D1 (missing nav landmark), U2.D2 (deep pages without "you are here" cues), U2.D3 (breadcrumb depth risk — evidence-gated)
 // Scope: Can users know where they are, where they can go, and how to go back?
 // U2 must NOT evaluate: layout grouping (U6), truncation (U3), step indicators (U4), exit/cancel absence (E3), landmark semantics (A-rules)
 // =====================
+
+// U2.D3 helpers (project-agnostic breadcrumb depth risk detection)
+function detectBreadcrumbCapDepthGH(allFiles: Map<string, string>, breadcrumbLogicFilesArg: string[]): { capped: boolean; file: string; functionName: string } | null {
+  const breadcrumbFilePatterns = /breadcrumb|crumbs|navtrail/i;
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (!/\.(tsx|jsx|ts|js)$/.test(filePath)) continue;
+    if (filePath.includes('node_modules/')) continue;
+    const isBreadcrumbFile = breadcrumbFilePatterns.test(filePath) || breadcrumbLogicFilesArg.includes(filePath);
+    const hasBreadcrumbTokens = /getBreadcrumbs|buildBreadcrumbs|makeCrumbs|breadcrumbs?\s*[:=]\s*\[/i.test(content);
+    if (!isBreadcrumbFile && !hasBreadcrumbTokens) continue;
+    const fnNameMatch = content.match(/(?:function|const)\s+(getBreadcrumbs|buildBreadcrumbs|makeCrumbs|createBreadcrumbs?|useBreadcrumbs?)\b/i);
+    const functionName = fnNameMatch ? fnNameMatch[1] : 'breadcrumb logic';
+    if (/(?:return|=)\s*\[\s*\{[^}]+\}\s*,\s*\{[^}]+\}\s*\]/i.test(content) &&
+        !/(?:return|=)\s*\[\s*\{[^}]+\}\s*,\s*\{[^}]+\}\s*,\s*\{/i.test(content)) {
+      return { capped: true, file: filePath, functionName };
+    }
+    if (/\.split\s*\(\s*["']\/?["']\s*\)/.test(content)) {
+      const usesShallowIndex = /segments?\[0\]|segments?\[1\]|parts?\[0\]|parts?\[1\]/i.test(content);
+      const usesDeepIndex = /segments?\[[2-9]\]|parts?\[[2-9]\]|\.slice\(\s*0\s*,\s*[3-9]/i.test(content);
+      if (usesShallowIndex && !usesDeepIndex) return { capped: true, file: filePath, functionName };
+    }
+    if (/switch\s*\(/i.test(content)) {
+      const cases = content.match(/case\s*["']\/[^"']*["']/gi) || [];
+      if (cases.length >= 1) {
+        const maxCaseDepth = Math.max(...cases.map(c => {
+          const p = c.replace(/case\s*["']/i, '').replace(/["']$/, '');
+          return p.split('/').filter(Boolean).length;
+        }), 0);
+        if (maxCaseDepth <= 2) return { capped: true, file: filePath, functionName };
+      }
+    }
+    if (/\.slice\s*\(\s*0\s*,\s*2\s*\)|\.slice\s*\(\s*-2\s*\)/i.test(content) &&
+        /segment|crumb|path|part/i.test(content)) {
+      return { capped: true, file: filePath, functionName };
+    }
+  }
+  return null;
+}
+
+function collectDeepRouteEvidenceGH(allFiles: Map<string, string>): { maxDepth: number; exampleRoute: string; channels: string[] } {
+  let maxDepth = 0;
+  let exampleRoute = '';
+  const channelsUsed = new Set<string>();
+  function measureDepth(pathStr: string): number {
+    return pathStr.replace(/:[^/]+|\[[^\]]+\]|\$[^/]+/g, '_dyn').split('/').filter(Boolean).length;
+  }
+  function updateMax(path: string, depth: number, channel: string) {
+    if (depth > maxDepth) { maxDepth = depth; exampleRoute = path; }
+    if (depth >= 3) channelsUsed.add(channel);
+  }
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = normalizePath(filePathRaw);
+    if (filePath.includes('node_modules/')) continue;
+    if (/\.(tsx|jsx|ts|js)$/.test(filePath)) {
+      const routePaths = content.match(/path\s*[:=]\s*["'](\/?[^"']+)["']/gi) || [];
+      for (const m of routePaths) {
+        const p = m.replace(/path\s*[:=]\s*["']/i, '').replace(/["']$/, '');
+        updateMax(p, measureDepth(p), 'A');
+      }
+      const linkMatches = content.match(/(?:to|href|navigate)\s*(?:=\s*|[(])\s*["'](\/[^"']{4,})["']/gi) || [];
+      for (const m of linkMatches) {
+        const p = m.replace(/(?:to|href|navigate)\s*(?:=\s*|[(])\s*["']/i, '').replace(/["']$/, '');
+        updateMax(p, measureDepth(p), 'B');
+      }
+      const templateLinks = content.match(/(?:to|href|navigate)\s*(?:=\s*|[(])\s*`(\/[^`]{4,})`/gi) || [];
+      for (const m of templateLinks) {
+        const p = m.replace(/(?:to|href|navigate)\s*(?:=\s*|[(])\s*`/i, '').replace(/`$/, '');
+        const normalized = p.replace(/\$\{[^}]+\}/g, '_dyn');
+        updateMax(normalized, measureDepth(normalized), 'B');
+      }
+    }
+    if (/\/(pages|app|routes|views)\//.test(filePath)) {
+      const routePart = filePath.replace(/^.*?\/(pages|app|routes|views)\//, '/');
+      const cleanedRoute = routePart.replace(/\.(tsx|jsx|ts|js|mdx?)$/, '').replace(/\/index$/, '').replace(/\/page$/, '');
+      const depth = measureDepth(cleanedRoute);
+      if (depth >= 3) updateMax(cleanedRoute, depth, 'C');
+    }
+  }
+  return { maxDepth, exampleRoute, channels: [...channelsUsed] };
+}
+
+function detectBreadcrumbDepthRiskGH(
+  allFiles: Map<string, string>, breadcrumbLogicFilesArg: string[],
+  hasBreadcrumbLogicDefined: boolean, _hasBreadcrumbComponentInDesignSystem: boolean,
+  hasBreadcrumbRendered: boolean, hasActiveNavHighlight: boolean, hasPageHeadingInLayout: boolean,
+): Omit<U2Finding, 'deduplicationKey'> | null {
+  const capDepth = detectBreadcrumbCapDepthGH(allFiles, breadcrumbLogicFilesArg);
+  if (!capDepth) return null;
+  const evidence = collectDeepRouteEvidenceGH(allFiles);
+  const hasStrongEvidence = evidence.maxDepth >= 3 && (evidence.channels.includes('A') || evidence.channels.includes('B'));
+  if (!hasStrongEvidence) return null;
+  if (hasBreadcrumbRendered && hasActiveNavHighlight && hasPageHeadingInLayout) return null;
+  let confidence = 0.60;
+  if (evidence.channels.includes('A')) confidence += 0.10;
+  if (evidence.channels.includes('B')) confidence += 0.10;
+  if (evidence.channels.includes('A') && evidence.channels.includes('B')) confidence += 0.05;
+  confidence = Math.min(confidence, 0.85);
+  return {
+    subCheck: 'U2.D3', subCheckLabel: 'Breadcrumb depth may not cover deep routes', classification: 'potential',
+    elementLabel: capDepth.functionName, elementType: 'navigation', filePath: capDepth.file,
+    detection: 'Breadcrumb implementation appears limited to 1–2 levels',
+    evidence: `${capDepth.functionName} in ${capDepth.file} appears capped at ≤2 levels. App includes deeper routes (e.g., "${evidence.exampleRoute}", depth ${evidence.maxDepth}). Evidence channels: ${evidence.channels.join(', ')}.`,
+    explanation: `Breadcrumb logic appears limited to 1–2 levels, but the app includes deeper routes such as "${evidence.exampleRoute}", which may reduce wayfinding cues.`,
+    confidence,
+    advisoryGuidance: 'Review breadcrumb logic to ensure it covers the full route depth, or provide alternative wayfinding cues for deep views.',
+  };
+}
+
+
 
 interface U2Finding {
   subCheck: 'U2.D1' | 'U2.D2' | 'U2.D3';
@@ -5024,7 +5134,8 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
       }
     }
 
-    if (/getBreadcrumbs\s*\(|breadcrumbs?\s*[:=]\s*\[/i.test(content)) {
+    if (/getBreadcrumbs\s*\(|buildBreadcrumbs\s*\(|makeCrumbs\s*\(|breadcrumbs?\s*[:=]\s*\[/i.test(content) ||
+        /breadcrumb|crumbs|navtrail/i.test(filePath)) {
       hasBreadcrumbLogicDefined = true;
       breadcrumbLogicFiles.push(filePath);
     }
@@ -5141,22 +5252,14 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
     }
   }
 
-  // U2.D3 — Breadcrumb defined but not rendered
-  if (hasBreadcrumbLogicDefined && hasBreadcrumbComponentInDesignSystem && !hasBreadcrumbRendered && maxRouteDepth >= 3) {
-    const hasStrongAlternative = hasActiveNavHighlight && hasPageHeadingInLayout;
-    if (!hasStrongAlternative) {
+  // U2.D3 — Breadcrumb depth risk (evidence-gated, project-agnostic)
+  {
+    const d3Result = detectBreadcrumbDepthRiskGH(allFiles, breadcrumbLogicFiles, hasBreadcrumbLogicDefined, hasBreadcrumbComponentInDesignSystem, hasBreadcrumbRendered, hasActiveNavHighlight, hasPageHeadingInLayout);
+    if (d3Result) {
       const dedupeKey = 'U2.D3|global';
       if (!seenKeys.has(dedupeKey)) {
         seenKeys.add(dedupeKey);
-        findings.push({
-          subCheck: 'U2.D3', subCheckLabel: 'Breadcrumb defined but not rendered', classification: 'potential',
-          elementLabel: 'Breadcrumb component', elementType: 'navigation', filePath: breadcrumbLogicFiles[0] || 'Unknown',
-          detection: 'Breadcrumb logic/component exists but is not rendered',
-          evidence: `Breadcrumb logic in: ${breadcrumbLogicFiles.join(', ')}. Max route depth: ${maxRouteDepth}.`,
-          explanation: 'Breadcrumb data is computed and component exists, but not rendered.',
-          confidence: 0.65, advisoryGuidance: 'Render the Breadcrumb component or remove unused breadcrumb logic.',
-          deduplicationKey: dedupeKey,
-        });
+        findings.push({ ...d3Result, deduplicationKey: dedupeKey });
       }
     }
   }
