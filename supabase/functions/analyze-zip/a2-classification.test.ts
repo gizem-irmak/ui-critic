@@ -41,6 +41,24 @@ function classifyA2Finding(evidence: string, diagnosis: string = '', focusable: 
     return 'pass';
   }
 
+  // STEP 2b: focus-within wrapper indicators
+  const hasFocusWithinIndicator = /(?:^|\s|"|')focus-within:ring-(?!0\b)/i.test(combined) ||
+                                   /(?:^|\s|"|')focus-within:border-(?!0\b|none)/i.test(combined) ||
+                                   /(?:^|\s|"|')focus-within:shadow-(?!none)/i.test(combined);
+  if (hasFocusWithinIndicator) {
+    return 'pass';
+  }
+
+  // STEP 2c: State-driven highlight patterns (Radix/CMDK/listbox/menu)
+  const hasStateDrivenIndicator = /(?:^|\s|"|')data-\[selected(?:=true|='true')?\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(combined) ||
+                                   /(?:^|\s|"|')data-\[highlighted(?:=true|='true')?\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(combined) ||
+                                   /(?:^|\s|"|')aria-selected:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(combined) ||
+                                   /(?:^|\s|"|')data-\[state=active\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(combined) ||
+                                   /(?:^|\s|"|')data-\[state=open\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(combined);
+  if (hasStateDrivenIndicator) {
+    return 'pass';
+  }
+
   // STEP 3: hasWeakFocusStyling — ONLY focus-scoped tokens count
   const hasWeakFocusStyling = /(?:^|\s|"|')focus(?:-visible)?:(?:bg-|text-|underline|opacity-|font-)/i.test(combined);
 
@@ -180,14 +198,10 @@ Deno.test("A2: focus-visible:outline-none + focus-visible:ring-2 + focus-visible
 // ACCEPTANCE TESTS — Menu component false-positive fix
 // ============================================================
 
-Deno.test("A2: outline-none + focus:bg-accent + focus:text-accent-foreground → Potential (weak focus style, NOT confirmed)", () => {
+Deno.test("A2: outline-none + data-[state=open]:bg-accent + focus:bg-accent → PASS (state-driven indicator present)", () => {
   const evidence = "outline-none data-[state=open]:bg-accent data-[state=open]:text-accent-foreground focus:bg-accent focus:text-accent-foreground";
   const result = classifyA2Finding(evidence);
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isPotential, true, "Should be potential (bg/text is weak focus style)");
-    assertEquals(result.isConfirmed, false, "Should NOT be confirmed — bg/text change is a weak replacement");
-  }
+  assertEquals(result, 'pass', "Should PASS — data-[state=open]:bg-* is a valid state-driven indicator");
 });
 
 Deno.test("A2: focus:outline-none alone → Confirmed (no replacement at all)", () => {
@@ -258,13 +272,10 @@ Deno.test("A2: outline-none + bare bg-accent + bare text-accent-foreground → C
   }
 });
 
-Deno.test("A2: outline-none + data-[state=open]:bg-accent → Confirmed (data-state is not focus-scoped)", () => {
+Deno.test("A2: outline-none + data-[state=open]:bg-accent → PASS (state-driven indicator)", () => {
   const evidence = "outline-none data-[state=open]:bg-accent data-[state=open]:text-accent-foreground";
   const result = classifyA2Finding(evidence, '', 'yes');
-  assertEquals(typeof result, 'object');
-  if (typeof result === 'object') {
-    assertEquals(result.isConfirmed, true, "data-state styles are not focus indicators");
-  }
+  assertEquals(result, 'pass', "data-[state=open]:bg-* is now recognized as a valid state-driven indicator → PASS");
 });
 
 // ============================================================
@@ -306,4 +317,79 @@ Deno.test("A2: outline-none + focus:bg-accent + focusable=unknown → Potential 
 Deno.test("A2: outline-none + focus-visible:ring-2 + focusable=unknown → PASS (strong replacement always passes)", () => {
   const result = classifyA2Finding("focus:outline-none focus-visible:ring-2", '', 'unknown');
   assertEquals(result, 'pass', "Strong replacement → PASS regardless of focusability");
+});
+
+// ============================================================
+// STATE-DRIVEN INDICATOR TESTS (Radix/CMDK/listbox/menu)
+// ============================================================
+
+Deno.test("A2: outline-none + data-[selected=true]:bg-accent → PASS (state-driven indicator)", () => {
+  const evidence = "outline-none data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "data-[selected=true]:bg-* is a valid visible indicator → PASS");
+});
+
+Deno.test("A2: outline-none + data-[highlighted=true]:bg-accent → PASS (CMDK highlight)", () => {
+  const evidence = "outline-none data-[highlighted=true]:bg-accent";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "data-[highlighted=true]:bg-* is a valid visible indicator → PASS");
+});
+
+Deno.test("A2: outline-none + aria-selected:bg-primary → PASS (aria-selected indicator)", () => {
+  const evidence = "outline-none aria-selected:bg-primary";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "aria-selected:bg-* is a valid visible indicator → PASS");
+});
+
+Deno.test("A2: outline-none + data-[state=active]:bg-muted → PASS (active state indicator)", () => {
+  const evidence = "outline-none data-[state=active]:bg-muted data-[state=active]:text-muted-foreground";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "data-[state=active]:bg-* is a valid visible indicator → PASS");
+});
+
+Deno.test("A2: CMDK CommandItem — outline-none + data-[selected='true']:bg-accent → PASS", () => {
+  const evidence = "outline-none data-[disabled=true]:pointer-events-none data-[selected='true']:bg-accent data-[selected=true]:text-accent-foreground data-[disabled=true]:opacity-50";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "CommandItem with data-[selected] styling is not an A2 violation");
+});
+
+// ============================================================
+// FOCUS-WITHIN WRAPPER TESTS
+// ============================================================
+
+Deno.test("A2: outline-none + focus-within:ring-2 on same element → PASS", () => {
+  const evidence = "outline-none focus-within:ring-2 focus-within:ring-primary";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "focus-within:ring-2 is a valid wrapper indicator → PASS");
+});
+
+Deno.test("A2: outline-none + focus-within:border-primary → PASS", () => {
+  const evidence = "outline-none focus-within:border-primary";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "focus-within:border-* is a valid wrapper indicator → PASS");
+});
+
+Deno.test("A2: outline-none + focus-within:shadow-md → PASS", () => {
+  const evidence = "outline-none focus-within:shadow-md";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "focus-within:shadow-* is a valid wrapper indicator → PASS");
+});
+
+// ============================================================
+// BARE input with only outline-none → still Confirmed
+// ============================================================
+
+Deno.test("A2: <input> with only outline-none → Confirmed (no indicator at all)", () => {
+  const evidence = "outline-none";
+  const result = classifyA2Finding(evidence, '', 'yes');
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, true, "Bare outline-none on focusable input → Confirmed");
+  }
+});
+
+Deno.test("A2: outline-none + data-[state=open]:bg-accent only (no selected/highlighted) + focusable=yes → Potential via weak? No → PASS (state=open counts)", () => {
+  const evidence = "outline-none data-[state=open]:bg-accent";
+  const result = classifyA2Finding(evidence);
+  assertEquals(result, 'pass', "data-[state=open]:bg-* counts as a state-driven indicator → PASS");
 });
