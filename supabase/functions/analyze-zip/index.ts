@@ -4342,40 +4342,158 @@ function extractU4Candidates(allFiles: Map<string, string>): U4Candidate[] {
       }
     }
 
-    // ---- U4.3 Candidates ----
+    // ---- U4.3 Candidates (Conservative multi-step detection) ----
     const STEP_INDEX_RE = /\b(step|currentStep|activeStep|stepIndex)\b\s*[=<>!]/i;
     if (STEP_INDEX_RE.test(content)) {
-      let stepCount = 0;
-      const stepArrayMatch = content.match(/(?:steps|STEPS)\s*=\s*\[([^\]]{10,})\]/);
-      if (stepArrayMatch) stepCount = (stepArrayMatch[1].match(/[,{]/g) || []).length + 1;
-      if (stepCount === 0) {
-        const caseSteps = content.match(/case\s+(\d+)\s*:/g);
-        if (caseSteps && caseSteps.length >= 2) stepCount = caseSteps.length;
+      // --- stepCount: derive ONLY from explicit sources ---
+      let stepCount: number | 'unknown' = 'unknown';
+      let stepCountSource: 'array' | 'stepper' | 'state-based' | 'unknown' = 'unknown';
+      let stepLabels: string[] = [];
+
+      // Source A: Explicit steps array with label properties
+      const stepArrayMatch = content.match(/(?:steps|STEPS|stepsConfig|STEP_CONFIG)\s*=\s*\[([^\]]{10,})\]/s);
+      if (stepArrayMatch) {
+        const arrayContent = stepArrayMatch[1];
+        // Count objects with label/title/name properties (user-visible steps)
+        const labelMatches = arrayContent.match(/(?:label|title|name)\s*:\s*["'`]([^"'`]+)["'`]/gi);
+        if (labelMatches && labelMatches.length >= 2) {
+          stepCount = labelMatches.length;
+          stepCountSource = 'array';
+          stepLabels = labelMatches.map(lm => {
+            const v = lm.match(/["'`]([^"'`]+)["'`]/);
+            return v?.[1] || '';
+          }).filter(Boolean);
+        }
       }
-      if (stepCount === 0) {
-        const stepChecks = new Set((content.match(/(?:step|currentStep|activeStep)\s*===?\s*(\d+)/g) || []).map(sm => sm.match(/(\d+)$/)?.[1]));
-        if (stepChecks.size >= 2) stepCount = stepChecks.size;
+
+      // Source B: Stepper/Progress component with multiple step items rendered in JSX
+      if (stepCount === 'unknown') {
+        const stepperItemRe = /<(?:Step|StepItem|StepTrigger|StepperItem)\b[^>]*>/gi;
+        const stepperItems = content.match(stepperItemRe);
+        if (stepperItems && stepperItems.length >= 2) {
+          stepCount = stepperItems.length;
+          stepCountSource = 'stepper';
+        }
       }
 
-      if (stepCount >= 2) {
-        const mitigations: string[] = [];
-        if (/Step\s+\{?\w*\}?\s*(of|\/)\s*\{?\w*\}?|Step\s+\d+\s*(of|\/)\s*\d+/i.test(content) || /<(?:Progress|Stepper|Steps|StepIndicator|ProgressBar)\b/i.test(content)) mitigations.push('step_indicator');
-        if (/\b(Previous|Back|Go\s*Back)\b/i.test(content) && /<(?:Button|button)\b[^>]*>[^<]*(Previous|Back|Go\s*Back)[^<]*<\/(?:Button|button)>/i.test(content)) mitigations.push('back_navigation');
-        if (/\b(summary|review|confirm|overview)\b/i.test(content) && /\b(selected|chosen|your\s+(?:selection|choice))\b/i.test(content)) mitigations.push('summary_step');
-        if (/(?:selected(?:Location|Doctor|Service|Date|Time|Item|Plan|Option)|chosen(?:Plan|Option|Service))\b/.test(content) || /<(?:Breadcrumb|BreadcrumbItem|BreadcrumbLink)\b/i.test(content)) mitigations.push('persistent_context');
+      // Source C: Conditional render branches tied to a SINGLE step state variable
+      if (stepCount === 'unknown') {
+        // Only count step === N comparisons for the SAME variable
+        for (const varName of ['step', 'currentStep', 'activeStep', 'stepIndex']) {
+          const re = new RegExp(`\\b${varName}\\b\\s*===?\\s*(\\d+)`, 'g');
+          const matches = content.match(re);
+          if (matches) {
+            const uniqueValues = new Set(matches.map(m => m.match(/(\d+)$/)?.[1]));
+            if (uniqueValues.size >= 2 && uniqueValues.size <= 10) {
+              stepCount = uniqueValues.size;
+              stepCountSource = 'state-based';
+              break;
+            }
+          }
+        }
+      }
 
-        let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || '';
-        const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
-        if (exportedFn?.[1]) componentName = exportedFn[1];
-        const stepLine = content.search(STEP_INDEX_RE);
-        const lineNum = stepLine >= 0 ? content.substring(0, stepLine).split('\n').length : 1;
+      // Only proceed if we found evidence of a multi-step flow
+      if (stepCount !== 'unknown' ? stepCount >= 2 : STEP_INDEX_RE.test(content)) {
+        // --- hasStepIndicator: strong signals only ---
+        let hasStepIndicator: boolean | 'unknown' = 'unknown';
+        // Step labels rendered in horizontal nav/stepper
+        if (stepLabels.length >= 2) hasStepIndicator = true;
+        // Stepper/Progress components
+        if (hasStepIndicator !== true && /<(?:Stepper|Steps|StepIndicator|StepList)\b/i.test(content)) hasStepIndicator = true;
+        // "Step X of Y" text pattern
+        if (hasStepIndicator !== true && /Step\s+\d+\s+of\s+\d+/i.test(content)) hasStepIndicator = true;
+        if (hasStepIndicator !== true && /Step\s+\{[^}]*\}\s*(?:of|\/)\s*\{[^}]*\}/i.test(content)) hasStepIndicator = true;
+        // aria-current="step" or role="tablist" used as step navigation
+        if (hasStepIndicator !== true && /aria-current\s*=\s*["']step["']/i.test(content)) hasStepIndicator = true;
+        if (hasStepIndicator !== true && /role\s*=\s*["']tablist["']/i.test(content) && STEP_INDEX_RE.test(content)) hasStepIndicator = true;
+        // Rendered step labels (e.g., steps.map rendering label text in nav)
+        if (hasStepIndicator !== true && /\.map\b[^)]*=>\s*[^)]*(?:step|s)\.(?:label|title|name)\b/i.test(content)) hasStepIndicator = true;
+        // Ambiguous "progress" in className is NOT enough — leave as unknown
 
-        candidates.push({
-          candidateType: 'U4.3', elementLabel: `${componentName} (${stepCount}-step flow)`,
-          elementType: 'wizard', filePath, codeSnippet: getSnippet(lineNum, 15),
-          nearbyHeadings: getHeadings(lineNum, 20), mitigationSignals: mitigations,
-          rawEvidence: `${stepCount}-step flow detected. Mitigations present: ${mitigations.length > 0 ? mitigations.join(', ') : 'none'}.`,
-        });
+        // --- hasBackNav: robust detection ---
+        let hasBackNav: boolean | 'unknown' = 'unknown';
+        // Button/link with back label in JSX
+        const backLabelRe = />\s*(Previous|Back|Go\s*[Bb]ack|Return)\s*</i;
+        if (backLabelRe.test(content)) hasBackNav = true;
+        // Also accept aria-label or title with back text on buttons
+        if (hasBackNav !== true && /<(?:Button|button)\b[^>]*(?:aria-label|title)\s*=\s*["'](?:Previous|Back|Go\s*back|Return)["'][^>]*>/i.test(content)) hasBackNav = true;
+        // Handler that decrements step state
+        if (hasBackNav !== true && /\b(?:setStep|setCurrentStep|setActiveStep)\s*\(\s*(?:\w+\s*(?:=>|-)|\(\s*\w+\s*\)\s*=>)\s*\w+\s*-\s*1\b/i.test(content)) hasBackNav = true;
+        if (hasBackNav !== true && /\bstep\s*-\s*1\b/i.test(content) && /\b(?:setStep|setCurrentStep|setActiveStep)\b/i.test(content)) hasBackNav = true;
+
+        // --- persistentContext: conservative ---
+        let persistentContext: boolean | 'unknown' = 'unknown';
+        // Previous selections displayed on later steps
+        if (/(?:selected(?:Location|Doctor|Service|Date|Time|Item|Plan|Option|Specialty|Provider|Slot)|chosen(?:Plan|Option|Service|Doctor|Location))\b/.test(content)) {
+          // Check that these values are rendered in JSX (not just state declarations)
+          if (/\{[^}]*selected(?:Location|Doctor|Service|Date|Time|Item|Plan|Option|Specialty|Provider|Slot)[^}]*\}/i.test(content)) {
+            persistentContext = true;
+          }
+        }
+        if (persistentContext !== true && /<(?:Breadcrumb|BreadcrumbItem|BreadcrumbLink)\b/i.test(content)) persistentContext = true;
+        // Side panel or summary showing selections
+        if (persistentContext !== true && /(?:summary|recap|overview|selected-items|selection-panel)\b/i.test(content) && /\{[^}]*selected/i.test(content)) persistentContext = true;
+
+        // --- summaryStep: accurate ---
+        let summaryStep: boolean | 'unknown' = 'unknown';
+        const hasSummaryHeading = /(?:Review|Review\s*(?:&|and)\s*Confirm|Summary|Confirm\s*(?:&|and)\s*Book|Confirmation)\b/i.test(content);
+        if (hasSummaryHeading) {
+          // Check that selections are displayed in that context
+          if (/\{[^}]*(?:selected|chosen|formData|appointmentData|bookingData)/i.test(content)) {
+            summaryStep = true;
+          } else {
+            summaryStep = 'unknown';
+          }
+        } else {
+          summaryStep = false;
+        }
+
+        // --- Pre-LLM suppression rules ---
+        const shouldSuppress = (
+          // Rule 1: step indicator + back nav = well-structured wizard
+          (hasStepIndicator === true && hasBackNav === true) ||
+          // Rule 2: persistent context + summary + back nav not false
+          (persistentContext === true && summaryStep === true && hasBackNav !== false) ||
+          // Rule 3: small wizard (≤4 steps) with step indicator
+          (typeof stepCount === 'number' && stepCount <= 4 && hasStepIndicator === true)
+        );
+
+        if (shouldSuppress) {
+          console.log(`U4.3 SUPPRESSED for ${filePath}: stepCount=${stepCount}, hasStepIndicator=${hasStepIndicator}, hasBackNav=${hasBackNav}, persistentContext=${persistentContext}, summaryStep=${summaryStep}`);
+        } else {
+          // Only send to LLM when evidence suggests missing mitigations
+          const sendToLLM = (
+            ((typeof stepCount === 'number' && stepCount >= 5) || stepCount === 'unknown') &&
+            hasStepIndicator !== true &&
+            persistentContext !== true
+          );
+
+          if (sendToLLM) {
+            let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || '';
+            const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+            if (exportedFn?.[1]) componentName = exportedFn[1];
+            const stepLine = content.search(STEP_INDEX_RE);
+            const lineNum = stepLine >= 0 ? content.substring(0, stepLine).split('\n').length : 1;
+
+            candidates.push({
+              candidateType: 'U4.3',
+              elementLabel: `${componentName} (${stepCount === 'unknown' ? 'unknown' : stepCount}-step flow)`,
+              elementType: 'wizard', filePath, codeSnippet: getSnippet(lineNum, 15),
+              nearbyHeadings: getHeadings(lineNum, 20), mitigationSignals: [
+                `stepCount=${stepCount} (source: ${stepCountSource})`,
+                `hasStepIndicator=${hasStepIndicator}`,
+                `hasBackNav=${hasBackNav}`,
+                `persistentContext=${persistentContext}`,
+                `summaryStep=${summaryStep}`,
+                ...(stepLabels.length > 0 ? [`stepLabels: ${stepLabels.join(', ')}`] : []),
+              ],
+              rawEvidence: `Multi-step flow detected (stepCount=${stepCount}, source=${stepCountSource}). hasStepIndicator=${hasStepIndicator}, hasBackNav=${hasBackNav}, persistentContext=${persistentContext}, summaryStep=${summaryStep}. ${stepLabels.length > 0 ? 'Step labels: ' + stepLabels.join(', ') + '.' : ''} Not suppressed — sent to LLM for evaluation.`,
+            });
+          } else {
+            console.log(`U4.3 NOT SENT TO LLM for ${filePath}: stepCount=${stepCount}, hasStepIndicator=${hasStepIndicator}, persistentContext=${persistentContext} — does not meet LLM send criteria.`);
+          }
+        }
       }
     }
 
