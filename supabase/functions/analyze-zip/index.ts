@@ -3945,12 +3945,14 @@ Suppress if: section heading clarifies action, page title clarifies context, act
 
 ### U6 (Weak Grouping / Layout Coherence) — LLM-ASSISTED EVALUATION:
 **NOTE:** U6 uses pre-extracted layout evidence bundles appended as \`[U6_LAYOUT_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted layout cues to assess grouping/hierarchy.
+**NOTE:** U6 is ONLY evaluated on page-like components (not router/config files). Files have already been filtered. Each bundle includes a trigger summary line: "Blocks:X Containers:Y Headings:Z SemanticSections:S Grid:true/false". Use these counts to ground your assessment.
 
 **CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
 - Do NOT use file names, component names, page titles, or "test" wording as evidence.
 - Do NOT infer developer intent from naming conventions.
-- Base conclusions ONLY on the extracted layout evidence: headings, container counts, flex/grid usage, spacing tokens, repeated patterns, flat-stack cues.
+- Base conclusions ONLY on the extracted layout evidence: headings, container counts, flex/grid usage, spacing tokens, repeated patterns, flat-stack cues, and the trigger summary counts.
 - If evidence is insufficient to demonstrate weak grouping, return NO U6 finding — do not guess.
+- If the trigger summary shows Containers >= 2, this indicates deliberate visual grouping — be very cautious about reporting.
 
 **EVALUATE (using ONLY the layout evidence bundle, not file names):**
 - Missing section separation: Related content not grouped into visual containers
@@ -3977,18 +3979,18 @@ Suppress if: section heading clarifies action, page title clarifies context, act
       "elementType": "section",
       "location": "src/components/Form.tsx",
       "detection": "Long sequence of inputs without heading or visual grouping",
-      "evidence": "12 sibling inputs without section headings or fieldset wrappers; no gap/space-y tokens between logical groups",
+      "evidence": "Blocks:8 Containers:0 Headings:1 — 12 sibling inputs without section headings or fieldset wrappers",
       "recommendedFix": "Group related fields into fieldsets with legends or add section headings",
       "confidence": 0.70
     }
   ],
-  "diagnosis": "Summary of grouping/layout issues...",
+  "diagnosis": "Summary of grouping/layout issues grounded in trigger summary counts...",
   "contextualHint": "Short guidance...",
   "confidence": 0.70
 }
 \`\`\`
 - If NO U6 issues found, do NOT include U6 in the violations array.
-- Each u6Element MUST cite evidence from the provided layout evidence bundle (container counts, spacing, headings — NOT file names).
+- Each u6Element MUST cite evidence grounded in the trigger summary counts (Blocks, Containers, Headings — NOT file names).
 
 Usability rules to check:
 ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name}`).join('\n')}
@@ -4984,24 +4986,62 @@ interface U6LayoutEvidence {
   flatStackCues: string[];
   majorSiblingEstimate: number;
   tableCount: number;
+  navCount: number;
+  mainCount: number;
+  asideCount: number;
+  formCount: number;
+  blockCount: number;
+  usesGridOrColumns: boolean;
+  triggerSummary: string;
   suppressReason: string | null;
 }
 
-// Component names that count as grouping containers
-const U6_COMPONENT_BLOCK_RE = /\b(Card|CardHeader|CardContent|CardFooter|Panel|Container|Sheet|SheetContent|DialogContent|PopoverContent|DrawerContent|AccordionItem|TabsContent|Table|TableBody|FormField|Sidebar|SidebarContent)\b/;
-const U6_COMPONENT_NAME_RE = /<(Card|Panel|Section|Container|Drawer|Sheet|Accordion|AccordionItem|Tabs|TabsContent|Table|FormField|Sidebar|Dialog|Popover|HoverCard|AlertDialog)\b/gi;
+// Component names that count as grouping containers (expanded)
+const U6_COMPONENT_NAME_RE = /<(Card|Panel|Section|Container|Drawer|Sheet|Accordion|AccordionItem|Tabs|TabsContent|Table|FormField|Sidebar|Dialog|DialogContent|Popover|PopoverContent|HoverCard|AlertDialog|Separator)\b/gi;
 
-// Card-like div: className with 2+ of border/rounded/shadow/bg-*/ring/p-4+/overflow-hidden
+// Card-like div: className with rounded-* AND (border OR bg-* OR shadow OR ring-*) AND padding p-3+
 function u6IsCardLikeDiv(classStr: string): boolean {
-  let signals = 0;
-  if (/\b(border|border-[a-z])/.test(classStr)) signals++;
-  if (/\brounded(?:-[a-z]+)?\b/.test(classStr)) signals++;
-  if (/\bshadow(?:-[a-z]+)?\b/.test(classStr)) signals++;
-  if (/\bbg-(?!transparent\b)[a-zA-Z]/.test(classStr)) signals++;
-  if (/\bring(?:-[a-z]+)?\b/.test(classStr)) signals++;
-  if (/\bp-(4|5|6|8|10|12|16|20)\b/.test(classStr)) signals++;
-  if (/\boverflow-hidden\b/.test(classStr)) signals++;
-  return signals >= 2;
+  const hasRounded = /\brounded(?:-[a-z]+)?\b/.test(classStr);
+  if (!hasRounded) return false;
+  let structureSignals = 0;
+  if (/\b(border|border-[a-z])/.test(classStr)) structureSignals++;
+  if (/\bshadow(?:-[a-z]+)?\b/.test(classStr)) structureSignals++;
+  if (/\bbg-(?!transparent\b)[a-zA-Z]/.test(classStr)) structureSignals++;
+  if (/\bring(?:-[a-z]+)?\b/.test(classStr)) structureSignals++;
+  if (structureSignals === 0) return false;
+  if (/\bp-(3|4|5|6|8|10|12|16|20)\b/.test(classStr)) return true;
+  if (/\bpx-(3|4|5|6|8)\b/.test(classStr) && /\bpy-(3|4|5|6|8)\b/.test(classStr)) return true;
+  return false;
+}
+
+// Hard scope: files that should NEVER be evaluated for U6
+function u6ShouldSkipFile(filePath: string, content: string): string | null {
+  // 1) Router/config files
+  const baseName = filePath.split('/').pop() || '';
+  if (/^(App|main|index)\.(tsx|jsx)$/i.test(baseName)) return `Router/entry file: ${baseName}`;
+  if (/^(router|routes)/i.test(baseName)) return `Router config file: ${baseName}`;
+  // 2) JSX contains routing components
+  if (/<(Routes|Route|Switch|Router|BrowserRouter|HashRouter)\b/i.test(content)) return 'Contains routing components';
+  if (/createBrowserRouter|createHashRouter/i.test(content)) return 'Contains router factory';
+  // 3) Mostly providers, no real UI
+  const providerCount = (content.match(/<(BrowserRouter|ThemeProvider|AuthProvider|QueryClientProvider|Provider|StoreProvider|TooltipProvider|SidebarProvider)\b/gi) || []).length;
+  const totalJsxTags = (content.match(/<[A-Z]\w+\b/g) || []).length;
+  if (providerCount >= 2 && totalJsxTags > 0 && providerCount / totalJsxTags > 0.5) return 'Composition/provider wrapper file';
+  return null;
+}
+
+// Check if file is page-like (has page layout signals)
+function u6IsPageLike(content: string, headings: string[], headingLikeCount: number, sectionCount: number, formCount: number, tableCount: number, componentBlocks: number, cardLikeDivs: number, mainCount: number): boolean {
+  // Has main/header/aside/section/form/table/Card
+  if (mainCount > 0) return true;
+  if (/<(header|aside)\b/i.test(content)) return true;
+  if (sectionCount > 0 || formCount > 0 || tableCount > 0) return true;
+  if (componentBlocks > 0 || cardLikeDivs > 0) return true;
+  // Has H1/H2 + multiple blocks
+  const hasTopHeading = headings.some(h => /^h[12]:/.test(h));
+  if (hasTopHeading && (headings.length + headingLikeCount >= 2)) return true;
+  if (headingLikeCount >= 1 && sectionCount + componentBlocks + cardLikeDivs >= 1) return true;
+  return false;
 }
 
 function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidence[] {
@@ -5012,6 +5052,10 @@ function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidenc
     if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
     if (/\.(test|spec)\./i.test(filePath)) continue;
     if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
+
+    // Hard scope suppression
+    const skipReason = u6ShouldSkipFile(filePath, content);
+    if (skipReason) continue; // completely skip, don't even create a bundle
 
     // 1) Headings
     const headings: string[] = [];
@@ -5027,18 +5071,21 @@ function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidenc
       headings.push(`role=heading: ${rhm[1].trim()}`);
     }
 
-    // heading-like styled spans/divs: text-xl+ with font-semibold/bold
     let headingLikeCount = 0;
     const twHeadingRe = /className\s*=\s*["'][^"']*\b(text-(?:xl|2xl|3xl|4xl|5xl|6xl))\b[^"']*\b(font-(?:semibold|bold|extrabold))\b[^"']*["']/gi;
     const twHeadingRe2 = /className\s*=\s*["'][^"']*\b(font-(?:semibold|bold|extrabold))\b[^"']*\b(text-(?:xl|2xl|3xl|4xl|5xl|6xl))\b[^"']*["']/gi;
     headingLikeCount += (content.match(twHeadingRe) || []).length;
     headingLikeCount += (content.match(twHeadingRe2) || []).length;
 
-    // 2) Semantic containers
+    // 2) Semantic containers (expanded)
     const sectionCount = (content.match(/<section\b/gi) || []).length;
     const fieldsetCount = (content.match(/<fieldset\b/gi) || []).length;
     const articleCount = (content.match(/<article\b/gi) || []).length;
     const tableCount = (content.match(/<(?:Table|table)\b/gi) || []).length;
+    const navCount = (content.match(/<nav\b/gi) || []).length;
+    const mainCount = (content.match(/<main\b/gi) || []).length;
+    const asideCount = (content.match(/<aside\b/gi) || []).length;
+    const formCount = (content.match(/<form\b/gi) || []).length;
 
     // 3) Component blocks (strong grouping signal)
     let componentBlocks = 0;
@@ -5046,17 +5093,14 @@ function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidenc
     const compBlockSet = new Set<string>();
     let cbm;
     const cbRe = new RegExp(U6_COMPONENT_NAME_RE.source, 'gi');
-    while ((cbm = cbRe.exec(content)) !== null) {
-      const name = cbm[1];
-      compBlockSet.add(name);
-    }
+    while ((cbm = cbRe.exec(content)) !== null) compBlockSet.add(cbm[1]);
     for (const name of compBlockSet) {
       const count = (content.match(new RegExp(`<${name}\\b`, 'gi')) || []).length;
       componentBlocks += count;
       componentBlockExamples.push(`${name} x${count}`);
     }
 
-    // 4) Card-like divs (visual grouping containers)
+    // 4) Card-like divs
     let cardLikeDivs = 0;
     const cardLikeDivExamples: string[] = [];
     const divClassRe = /<div\b[^>]*className\s*=\s*["']([^"']+)["']/gi;
@@ -5071,6 +5115,12 @@ function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidenc
       }
     }
 
+    // Also count divide-y sections with headings as containers
+    const divideYWithHeading = (content.match(/className\s*=\s*["'][^"']*\bdivide-y\b[^"']*["']/gi) || []).length;
+    if (divideYWithHeading > 0 && headings.length > 0) {
+      cardLikeDivs += divideYWithHeading;
+    }
+
     // 5) Separators (<hr>, <Separator>, border-b/border-t dividers)
     let separatorCount = (content.match(/<(?:hr|Separator)\b/gi) || []).length;
     separatorCount += (content.match(/className\s*=\s*["'][^"']*\bborder-[bt]\b[^"']*["']/gi) || []).length;
@@ -5078,6 +5128,7 @@ function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidenc
     // 6) Layout primitives
     const flexCount = (content.match(/\bflex\b/g) || []).length;
     const gridCount = (content.match(/\bgrid\b/g) || []).length;
+    const usesGridOrColumns = gridCount > 0 || /\bgrid-cols-\d\b/.test(content) || /\bcolumns-\d\b/.test(content);
 
     // 7) Spacing tokens
     const spacingTokenSet = new Set<string>();
@@ -5097,51 +5148,75 @@ function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidenc
       flatStackCues.push('5+ flat sibling divs');
     }
 
-    // 10) Estimate major siblings at return-level (rough: count top-level children in the return)
+    // 10) Major sibling estimate
     const returnMatch = content.match(/return\s*\(\s*\n?\s*<(\w+)/);
     let majorSiblingEstimate = 0;
     if (returnMatch) {
-      // Count sibling blocks after the root wrapper open
-      const rootTag = returnMatch[1];
       const afterReturn = content.slice((returnMatch.index || 0) + returnMatch[0].length);
       const directChildRe = /^\s{2,6}<(\w+)\b/gm;
       let dcChild;
       const directChildren = new Set<number>();
       while ((dcChild = directChildRe.exec(afterReturn)) !== null) {
-        if (dcChild.index > 3000) break; // only scan first ~3000 chars
+        if (dcChild.index > 3000) break;
         directChildren.add(dcChild.index);
       }
       majorSiblingEstimate = directChildren.size;
     }
 
+    // Page-like check: only evaluate page-like components
+    if (!u6IsPageLike(content, headings, headingLikeCount, sectionCount, formCount, tableCount, componentBlocks, cardLikeDivs, mainCount)) continue;
+
     // Skip files with minimal layout content
     if (headings.length === 0 && headingLikeCount === 0 && sectionCount === 0 && fieldsetCount === 0 &&
         componentBlocks === 0 && cardLikeDivs === 0 && flexCount < 2 && spacingTokenSet.size === 0 && flatStackCues.length === 0) continue;
 
-    // ===== Deterministic suppression =====
-    let suppressReason: string | null = null;
-    const totalGroupingContainers = sectionCount + articleCount + fieldsetCount + componentBlocks + cardLikeDivs;
+    // Compute blockCount (semantic + component + card-like)
+    const semanticSections = sectionCount + articleCount + fieldsetCount + navCount + asideCount;
+    const totalContainers = semanticSections + componentBlocks + cardLikeDivs;
+    const blockCount = majorSiblingEstimate;
+    const totalHeadings = headings.length + headingLikeCount;
 
-    // S1: Page uses >= 2 Card-like containers OR component blocks
-    if (componentBlocks + cardLikeDivs >= 2) {
+    // ===== Deterministic complexity gate: skip LLM if too simple =====
+    if (blockCount < 4 && !usesGridOrColumns) {
+      continue; // Not complex enough to warrant U6 evaluation
+    }
+
+    // ===== Strong suppression rules =====
+    let suppressReason: string | null = null;
+
+    // S1: Table page with thead/column headers
+    if (tableCount >= 1 && (/<thead\b/i.test(content) || /<TableHead\b/i.test(content) || /<th\b/i.test(content))) {
+      suppressReason = `Table-centric layout with column headers`;
+    }
+    // S2: >=2 headings each followed by a container/block
+    else if (totalHeadings >= 2 && totalContainers >= 2) {
+      suppressReason = `Structured: ${totalHeadings} headings + ${totalContainers} containers`;
+    }
+    // S3: >=2 layout primitives (Card, Separator, Tabs, Accordion) indicating deliberate structure
+    else if (componentBlockExamples.length >= 2) {
+      const distinctPrimitives = new Set(componentBlockExamples.map(e => e.split(' ')[0]));
+      if (distinctPrimitives.size >= 2) {
+        suppressReason = `Deliberate structure: ${[...distinctPrimitives].join(', ')} used`;
+      }
+    }
+    // S4: Well-grouped with component blocks + card-like divs
+    else if (componentBlocks + cardLikeDivs >= 2) {
       suppressReason = `Well-grouped: ${componentBlocks} component blocks + ${cardLikeDivs} card-like divs`;
     }
-    // S2: Clear headings + separators even with divs
-    else if ((headings.length + headingLikeCount >= 2) && separatorCount >= 1) {
-      suppressReason = `Clear hierarchy: ${headings.length + headingLikeCount} headings + ${separatorCount} separators`;
+    // S5: Clear headings + separators
+    else if (totalHeadings >= 2 && separatorCount >= 1) {
+      suppressReason = `Clear hierarchy: ${totalHeadings} headings + ${separatorCount} separators`;
     }
-    // S3: Table-centric page
-    else if (tableCount >= 1 && headings.length >= 1 && majorSiblingEstimate <= 4) {
-      suppressReason = `Table-centric layout with heading`;
+    // S6: Semantic blocks provide grouping
+    else if (semanticSections >= 2) {
+      suppressReason = `Semantic grouping: ${sectionCount} sections + ${articleCount} articles + ${fieldsetCount} fieldsets`;
     }
-    // S4: Simple page
+    // S7: Simple page with no flat stack issues
     else if (majorSiblingEstimate <= 2 && flatStackCues.length === 0) {
       suppressReason = `Simple page: ${majorSiblingEstimate} major siblings`;
     }
-    // S5: Semantic blocks provide grouping
-    else if (sectionCount + articleCount + fieldsetCount >= 2) {
-      suppressReason = `Semantic grouping: ${sectionCount} sections + ${articleCount} articles + ${fieldsetCount} fieldsets`;
-    }
+
+    const triggerSummary = `Blocks:${blockCount} Containers:${totalContainers} Headings:${totalHeadings} SemanticSections:${semanticSections} Grid:${usesGridOrColumns}`;
 
     bundles.push({
       filePath,
@@ -5163,6 +5238,13 @@ function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidenc
       flatStackCues,
       majorSiblingEstimate,
       tableCount,
+      navCount,
+      mainCount,
+      asideCount,
+      formCount,
+      blockCount,
+      usesGridOrColumns,
+      triggerSummary,
       suppressReason,
     });
   }
@@ -5171,7 +5253,6 @@ function extractU6LayoutEvidence(allFiles: Map<string, string>): U6LayoutEvidenc
 }
 
 function formatU6LayoutEvidenceForPrompt(bundles: U6LayoutEvidence[]): string {
-  // Only include non-suppressed bundles for LLM evaluation
   const unsuppressed = bundles.filter(b => !b.suppressReason);
   if (unsuppressed.length === 0) return '';
   const lines = [
@@ -5180,14 +5261,15 @@ function formatU6LayoutEvidenceForPrompt(bundles: U6LayoutEvidence[]): string {
   ];
   for (const b of unsuppressed) {
     lines.push(`\n--- Location: ${b.filePath} ---`);
+    lines.push(`  Trigger summary: ${b.triggerSummary}`);
     if (b.headings.length > 0) lines.push(`  Headings: ${b.headings.join(' | ')}`);
     if (b.headingLikeCount > 0) lines.push(`  Heading-like styled elements: ${b.headingLikeCount}`);
-    lines.push(`  Semantic containers: ${b.sectionCount} <section>, ${b.fieldsetCount} <fieldset>, ${b.articleCount} <article>`);
+    lines.push(`  Semantic containers: ${b.sectionCount} <section>, ${b.fieldsetCount} <fieldset>, ${b.articleCount} <article>, ${b.navCount} <nav>, ${b.asideCount} <aside>`);
     lines.push(`  Component blocks: ${b.componentBlocks} (${b.componentBlockExamples.join(', ') || 'none'})`);
     lines.push(`  Card-like divs: ${b.cardLikeDivs} (${b.cardLikeDivExamples.join(', ') || 'none'})`);
     if (b.separatorCount > 0) lines.push(`  Separators: ${b.separatorCount}`);
     if (b.tableCount > 0) lines.push(`  Tables: ${b.tableCount}`);
-    lines.push(`  Layout: ${b.flexCount} flex, ${b.gridCount} grid, div depth ~${b.maxDivDepth}`);
+    lines.push(`  Layout: ${b.flexCount} flex, ${b.gridCount} grid, grid/columns: ${b.usesGridOrColumns}, div depth ~${b.maxDivDepth}`);
     if (b.spacingTokens.length > 0) lines.push(`  Spacing tokens: ${b.spacingTokens.join(', ')}`);
     if (b.repeatedBlockCount > 0) lines.push(`  Repeated blocks (map): ${b.repeatedBlockCount}`);
     lines.push(`  Major sibling blocks: ~${b.majorSiblingEstimate}`);
