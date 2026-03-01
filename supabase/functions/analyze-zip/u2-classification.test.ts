@@ -98,31 +98,75 @@ Deno.test("U2.D2: Does NOT trigger without deep routes", () => {
 });
 
 // ============================================================
-// U2.D3 — Breadcrumb logic defined but not rendered
+// U2.D3 — Breadcrumb depth risk (evidence-gated, project-agnostic)
+// Only triggers when BOTH:
+//   (1) cap-depth breadcrumb implementation detected
+//   (2) multi-channel evidence of deeper routes (≥3 segments) from router (A) or links (B)
 // ============================================================
 
-Deno.test("U2.D3: Triggers when breadcrumb logic + component exist, not rendered, AND maxRouteDepth ≥3", () => {
-  const scenario = { hasBreadcrumbLogicDefined: true, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: false, maxRouteDepth: 3 };
-  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered && scenario.maxRouteDepth >= 3;
-  assert(shouldTrigger);
+Deno.test("U2.D3: No trigger when shallow app routes only (no deep evidence)", () => {
+  const capDepthDetected = true;
+  const maxRouteDepthEvidence = 2;
+  const evidenceChannels: string[] = ['A'];
+  const hasStrongEvidence = maxRouteDepthEvidence >= 3 && (evidenceChannels.includes('A') || evidenceChannels.includes('B'));
+  const shouldTrigger = capDepthDetected && hasStrongEvidence;
+  assert(!shouldTrigger, "Should NOT trigger when maxRouteDepthEvidence < 3");
 });
 
-Deno.test("U2.D3: Does NOT trigger when breadcrumb is rendered", () => {
-  const scenario = { hasBreadcrumbLogicDefined: true, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: true, maxRouteDepth: 4 };
-  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered && scenario.maxRouteDepth >= 3;
-  assert(!shouldTrigger);
+Deno.test("U2.D3: Triggers when deep route (channel A) + cap-depth breadcrumb", () => {
+  const capDepthDetected = true;
+  const maxRouteDepthEvidence = 3;
+  const evidenceChannels = ['A'];
+  const hasStrongEvidence = maxRouteDepthEvidence >= 3 && (evidenceChannels.includes('A') || evidenceChannels.includes('B'));
+  const shouldTrigger = capDepthDetected && hasStrongEvidence;
+  assert(shouldTrigger, "Should trigger: cap-depth + deep routes from router defs");
 });
 
-Deno.test("U2.D3: Does NOT trigger on unused imports alone (no logic defined)", () => {
-  const scenario = { hasBreadcrumbLogicDefined: false, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: false, maxRouteDepth: 4 };
-  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered && scenario.maxRouteDepth >= 3;
-  assert(!shouldTrigger);
+Deno.test("U2.D3: Triggers when deep links (channel B) + cap-depth breadcrumb", () => {
+  const capDepthDetected = true;
+  const maxRouteDepthEvidence = 4;
+  const evidenceChannels = ['B'];
+  const hasStrongEvidence = maxRouteDepthEvidence >= 3 && (evidenceChannels.includes('A') || evidenceChannels.includes('B'));
+  const shouldTrigger = capDepthDetected && hasStrongEvidence;
+  assert(shouldTrigger, "Should trigger: cap-depth + deep links in code");
 });
 
-Deno.test("U2.D3: Does NOT trigger for shallow apps (maxRouteDepth < 3)", () => {
-  const scenario = { hasBreadcrumbLogicDefined: true, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: false, maxRouteDepth: 2 };
-  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered && scenario.maxRouteDepth >= 3;
-  assert(!shouldTrigger, "U2.D3 should not trigger for shallow apps without deep routes");
+Deno.test("U2.D3: Does NOT trigger when deep routes exist but breadcrumb NOT capped", () => {
+  const capDepthDetected = false;
+  const maxRouteDepthEvidence = 5;
+  const evidenceChannels = ['A', 'B'];
+  const hasStrongEvidence = maxRouteDepthEvidence >= 3 && (evidenceChannels.includes('A') || evidenceChannels.includes('B'));
+  const shouldTrigger = capDepthDetected && hasStrongEvidence;
+  assert(!shouldTrigger, "Should NOT trigger: no cap-depth pattern in breadcrumb");
+});
+
+Deno.test("U2.D3: Does NOT trigger when deep evidence only from file-system (channel C)", () => {
+  const capDepthDetected = true;
+  const maxRouteDepthEvidence = 4;
+  const evidenceChannels = ['C']; // only file system hints
+  const hasStrongEvidence = maxRouteDepthEvidence >= 3 && (evidenceChannels.includes('A') || evidenceChannels.includes('B'));
+  const shouldTrigger = capDepthDetected && hasStrongEvidence;
+  assert(!shouldTrigger, "Should NOT trigger: channel C alone is insufficient");
+});
+
+Deno.test("U2.D3: Confidence increases with multiple evidence channels", () => {
+  let confidence = 0.60;
+  const channels = ['A', 'B'];
+  if (channels.includes('A')) confidence += 0.10;
+  if (channels.includes('B')) confidence += 0.10;
+  if (channels.includes('A') && channels.includes('B')) confidence += 0.05;
+  confidence = Math.min(confidence, 0.85);
+  assertEquals(confidence, 0.85, "Both A + B should yield max confidence 0.85");
+});
+
+Deno.test("U2.D3: Confidence with single channel A stays at 0.70", () => {
+  let confidence = 0.60;
+  const channels = ['A'];
+  if (channels.includes('A')) confidence += 0.10;
+  if (channels.includes('B')) confidence += 0.10;
+  if (channels.includes('A') && channels.includes('B')) confidence += 0.05;
+  confidence = Math.min(confidence, 0.85);
+  assertEquals(confidence, 0.70, "Single channel A should yield 0.70");
 });
 
 // ============================================================
