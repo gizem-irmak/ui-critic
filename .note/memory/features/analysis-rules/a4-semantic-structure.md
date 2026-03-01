@@ -1,25 +1,27 @@
 # Memory: features/analysis-rules/a4-semantic-structure
 Updated: now
 
-Rule A4 (Missing Semantic Structure) requires source code (ZIP/GitHub) and uses `status: 'not_evaluated'` (message: "Semantic structure cannot be verified without source code.") for screenshot-only inputs. It performs four sub-checks:
+Rule A4 (Missing Semantic Structure) evaluates WCAG 1.3.1/2.4.1 at the **page level**, not repo-wide.
+
+## Page-Level Architecture
+- **Page identification**: Files under `/pages/`, `/routes/`, `/app/`, `/views/` directories, OR files referenced as route elements in React Router config.
+- **Layout wrapper inference**: One-hop import resolution (`@/` alias supported) to check if a page's wrapper component provides `<main>`.
+
+## Sub-checks:
 
 - **A4.1 (Heading Semantics)**:
-  - `missing_h1`: No `<h1>` found → **Potential** (apps may define h1 dynamically).
-  - `skipped_levels`: Heading hierarchy gaps → **Potential**.
-  - `multiple_h1`: More than one `<h1>` → **Potential**.
-  - `visual_heading_missing_semantics`: `<div>`/`<span>`/`<p>` with large font class tokens (`text-xl`+, `text-lg`, bracket sizes like `text-[32px]`, with optional responsive prefixes `sm:`/`md:`/`lg:`) AND bold (`font-bold`/`font-semibold`) AND text 3–80 chars AND no `role="heading"` → **Confirmed** (0.92 confidence).
-  - `visual_heading_no_h1`: Same visual heading detection BUT element is the FIRST heading-like match after `return (` in the file AND no `<h1>` in the same file (per-file check) → **Potential/borderline** (0.68 confidence). Detection text: "Visual heading rendered without semantic heading (<h1> or role='heading' aria-level)".
+  - `visual_heading_missing_semantics`: `<div>`/`<span>`/`<p>` with large font + bold but no heading role → **Confirmed** (0.92).
+  - `visual_heading_no_h1`: Top-of-page visual heading in a page file with no `<h1>` → **Potential/borderline** (0.68-0.70).
+  - `multiple_h1`: >1 `<h1>` **in the same page file** → **Potential** (0.70). Repo-wide h1 counting is **removed**.
+  - `skipped_levels`: Heading hierarchy gaps (global) → **Potential** (0.78).
 
-- **A4.2 (Interactive Semantics)** — deliberately avoids overlap with A3:
-  - Only fires when a non-semantic element has a pointer handler (`onClick`, etc.) AND keyboard support is present (`tabIndex>=0` AND `onKeyDown`/`onKeyUp`/`onKeyPress`) BUT missing `role="button"`/`role="link"`.
-  - If keyboard support is missing → suppressed (deferred to A3-C1).
-  - Ancestor exemptions applied: elements inside `<button>`, `<a>`, `<input>`, `<select>`, `<textarea>`, `<label>`, `<details>` are skipped.
-  - Uses `extractJsxOpeningTags` for multiline JSX support.
+- **A4.2 (Interactive Semantics)**: Only fires when keyboard support present (tabIndex+keyHandler) but `role` missing. Suppresses if keyboard missing (→ A3-C1).
 
-- **A4.3 (Landmark Regions)**: Missing `<main>` or `role="main"` → **Potential**.
+- **A4.3 (Landmark Regions)**: Layout-aware. If no file has `<main>`/`role="main"`, checks if any page's layout wrapper provides it via one-hop import resolution. Only emits if truly absent everywhere. Confidence 0.80 (with page files) or 0.60 (without).
 
-- **A4.4 (List Semantics)** — tightened heuristic, always **Potential**:
-  - Requires ≥3 repeated elements with identical className AND list-like intent evidence (class contains "item"/"card"/"entry"/"row"/"record"/"list", OR text content has bullet/number prefixes).
-  - Pure Tailwind utility class repetition without list-intent keywords is NOT flagged.
+- **A4.4 (List Semantics)**: Requires ≥3 repeated elements with list-intent evidence. Always **Potential** (0.82).
 
-The `detection` field now includes the trigger type (`missing_h1`, `skipped_levels`, `visual_heading_missing_semantics`, `visual_heading_no_h1`, `multiple_h1`) for UI rendering.
+## Key Design Decisions
+- No repo-wide `<h1>` counting (was causing false positives when many pages each had one `<h1>`).
+- Layout wrapper inference resolves `@/` aliases and relative imports (one hop only).
+- `client/` prefix added to file path filter for monorepo support.
