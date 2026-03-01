@@ -361,6 +361,11 @@ export interface A2ElementSubItem {
   // Grouping metadata (pattern-signature grouping)
   occurrences?: number; // How many raw findings this group represents
   affectedComponents?: string[]; // Component names sharing this pattern
+  
+  // Source location
+  startLine?: number | null;
+  endLine?: number | null;
+  filePath?: string; // Canonical file path for sorting
 }
 
 // A3 Element sub-item for aggregated keyboard operability reporting

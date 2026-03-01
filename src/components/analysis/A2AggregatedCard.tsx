@@ -29,6 +29,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
     ? element.elementName
     : (element.sourceLabel || element.elementLabel);
   const isBorderline = element.potentialSubtype === 'borderline';
+  const effectiveFilePath = element.filePath || element.location;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -37,9 +38,9 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
           <div className="flex items-center justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
               <ComponentTitle>{displayLabel}</ComponentTitle>
-              {(element.occurrences ?? 1) > 1 && (
+              {element.affectedComponents && element.affectedComponents.length > 1 && (
                 <Badge variant="outline" className="text-xs font-medium border-muted-foreground/40 text-muted-foreground">
-                  {element.occurrences} occurrences
+                  {element.affectedComponents.length} components
                 </Badge>
               )}
               {isBorderline && (
@@ -52,7 +53,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <LocationBadge filePath={element.location} compact={compact} />
+              <LocationBadge filePath={effectiveFilePath} compact={compact} startLine={element.startLine} endLine={element.endLine} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
@@ -110,6 +111,25 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 <FieldLabel>Requirement:</FieldLabel>
                 <FieldValue>WCAG 2.4.7 Focus Visible</FieldValue>
               </FieldRow>
+
+              {/* Source location */}
+              {effectiveFilePath && (
+                <FieldRow>
+                  <FieldLabel>Source:</FieldLabel>
+                  <FieldValue mono>
+                    {(() => {
+                      const fp = effectiveFilePath;
+                      const basename = fp.replace(/\\/g, '/').split('/').pop() || fp;
+                      if (element.startLine != null) {
+                        const end = element.endLine != null && element.endLine !== element.startLine
+                          ? `–${element.endLine}` : '';
+                        return `${basename}:${element.startLine}${end}`;
+                      }
+                      return basename;
+                    })()}
+                  </FieldValue>
+                </FieldRow>
+              )}
             </DetailContainer>
           ) : (
             <DetailContainer>
@@ -191,6 +211,25 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                 <FieldValue>WCAG 2.4.7 Focus Visible</FieldValue>
               </FieldRow>
 
+              {/* Source location */}
+              {effectiveFilePath && (
+                <FieldRow>
+                  <FieldLabel>Source:</FieldLabel>
+                  <FieldValue mono>
+                    {(() => {
+                      const fp = effectiveFilePath;
+                      const basename = fp.replace(/\\/g, '/').split('/').pop() || fp;
+                      if (element.startLine != null) {
+                        const end = element.endLine != null && element.endLine !== element.startLine
+                          ? `–${element.endLine}` : '';
+                        return `${basename}:${element.startLine}${end}`;
+                      }
+                      return basename;
+                    })()}
+                  </FieldValue>
+                </FieldRow>
+              )}
+
               {/* Potential reason */}
               {element.potentialReason && (
                 <FieldRow>
@@ -233,7 +272,15 @@ export function A2AggregatedCard({ violation, compact = false }: A2AggregatedCar
   }
 
   const isConfirmed = violation.status === 'confirmed';
-  const elements = violation.a2Elements;
+  const elements = [...violation.a2Elements].sort((a, b) => {
+    const fpA = (a.filePath || a.location || '').toLowerCase();
+    const fpB = (b.filePath || b.location || '').toLowerCase();
+    if (fpA !== fpB) return fpA.localeCompare(fpB);
+    const lnA = a.startLine ?? Infinity;
+    const lnB = b.startLine ?? Infinity;
+    if (lnA !== lnB) return lnA - lnB;
+    return (a.deduplicationKey || '').localeCompare(b.deduplicationKey || '');
+  });
 
   return (
     <Card className={cn(
