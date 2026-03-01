@@ -156,6 +156,119 @@ function AggregatedCard({ violation, compact }: { violation: Violation; compact?
   return null;
 }
 
+/**
+ * Merges multiple violations of the same ruleId into a single violation object.
+ * Combines element arrays and deduplicates items using composite keys.
+ */
+function mergeViolationsByRule(violations: Violation[]): Violation[] {
+  const grouped = new Map<string, Violation[]>();
+  for (const v of violations) {
+    const existing = grouped.get(v.ruleId) || [];
+    existing.push(v);
+    grouped.set(v.ruleId, existing);
+  }
+
+  const merged: Violation[] = [];
+  for (const [, group] of grouped) {
+    if (group.length === 1) {
+      merged.push(group[0]);
+      continue;
+    }
+
+    // Start from the first violation as base, merge others into it
+    const base = { ...group[0] };
+
+    // Merge element arrays for all known aggregated element types
+    const elementKeys = [
+      'a1Elements', 'a2Elements', 'a3Elements', 'a4Elements', 'a5Elements', 'a6Elements',
+      'u1Elements', 'u2Elements', 'u3Elements', 'u4Elements', 'u5Elements', 'u6Elements',
+      'e1Elements', 'e2Elements', 'e3Elements',
+    ] as const;
+
+    for (const key of elementKeys) {
+      const allElements: any[] = [];
+      for (const v of group) {
+        if (v[key] && Array.isArray(v[key])) {
+          allElements.push(...(v[key] as any[]));
+        }
+      }
+      if (allElements.length > 0) {
+        // Deduplicate by deduplicationKey
+        const seen = new Map<string, any>();
+        for (const el of allElements) {
+          const dedupeKey = el.deduplicationKey ||
+            `${base.ruleId}|${el.subCheck || el.classificationCode || ''}|${el.location || el.filePath || ''}|${el.lineRange || ''}|${(el.evidence || el.detection || '').slice(0, 80)}`;
+          if (seen.has(dedupeKey)) {
+            // Merge: increment occurrences
+            const existing = seen.get(dedupeKey);
+            existing.occurrences = (existing.occurrences || 1) + 1;
+          } else {
+            seen.set(dedupeKey, { ...el, occurrences: el.occurrences || 1 });
+          }
+        }
+        (base as any)[key] = Array.from(seen.values());
+      }
+    }
+
+    // Use highest confidence from the group
+    base.confidence = Math.max(...group.map(v => v.confidence));
+
+    merged.push(base);
+  }
+
+  // Sort: highest confidence first, then most items
+  merged.sort((a, b) => {
+    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+    // Count total items across all element arrays
+    const countItems = (v: Violation) => {
+      let count = 0;
+      for (const key of ['a1Elements', 'a2Elements', 'a3Elements', 'a4Elements', 'a5Elements', 'a6Elements',
+        'u1Elements', 'u2Elements', 'u3Elements', 'u4Elements', 'u5Elements', 'u6Elements',
+        'e1Elements', 'e2Elements', 'e3Elements'] as const) {
+        if (v[key] && Array.isArray(v[key])) count += (v[key] as any[]).length;
+      }
+      return count || 1;
+    };
+    return countItems(b) - countItems(a);
+  });
+
+  return merged;
+}
+
+/**
+ * Deduplicates non-aggregated potential violations by ruleId, merging duplicates.
+ */
+function deduplicateOtherViolations(violations: Violation[]): Violation[] {
+  const grouped = new Map<string, Violation[]>();
+  for (const v of violations) {
+    const existing = grouped.get(v.ruleId) || [];
+    existing.push(v);
+    grouped.set(v.ruleId, existing);
+  }
+
+  const result: Violation[] = [];
+  for (const [, group] of grouped) {
+    // Deduplicate within group
+    const seen = new Map<string, Violation & { occurrences?: number }>();
+    for (const v of group) {
+      const evidenceNorm = (v.evidence || v.diagnosis || '').slice(0, 100).toLowerCase().replace(/\s+/g, ' ').trim();
+      const dedupeKey = `${v.ruleId}|${v.potentialSubtype || ''}|${v.elementIdentifier || ''}|${evidenceNorm}`;
+      if (seen.has(dedupeKey)) {
+        const existing = seen.get(dedupeKey)!;
+        existing.occurrences = (existing.occurrences || 1) + 1;
+        if (v.confidence > existing.confidence) existing.confidence = v.confidence;
+      } else {
+        seen.set(dedupeKey, { ...v, occurrences: 1 });
+      }
+    }
+    result.push(...Array.from(seen.values()));
+  }
+
+  // Sort by confidence desc
+  result.sort((a, b) => b.confidence - a.confidence);
+  return result;
+}
+
 export function ViolationsRenderer({ violations, compact = false }: ViolationsRendererProps) {
   const hasAggregatedA6 = violations.some(v => v.ruleId === 'A6' && v.isA6Aggregated);
   const deduped = hasAggregatedA6
@@ -168,8 +281,12 @@ export function ViolationsRenderer({ violations, compact = false }: ViolationsRe
 
   const confirmedAggregated = confirmedViolations.filter(isAggregated);
   const confirmedOther = confirmedViolations.filter(v => !isAggregated(v));
-  const potentialAggregated = potentialViolations.filter(isAggregated);
-  const potentialOther = potentialViolations.filter(v => !isAggregated(v));
+
+  // Group potential violations by ruleId — one card per rule
+  const potentialAggregatedRaw = potentialViolations.filter(isAggregated);
+  const potentialOtherRaw = potentialViolations.filter(v => !isAggregated(v));
+  const potentialAggregated = mergeViolationsByRule(potentialAggregatedRaw);
+  const potentialOther = deduplicateOtherViolations(potentialOtherRaw);
 
   const hasConfirmed = confirmedViolations.length > 0;
   const hasPotential = potentialViolations.length > 0;
@@ -209,7 +326,7 @@ export function ViolationsRenderer({ violations, compact = false }: ViolationsRe
         </div>
       )}
 
-      {/* Potential Risks (Non-blocking) */}
+      {/* Potential Risks (Non-blocking) — one card per ruleId */}
       {hasPotential && (
         <div className="space-y-4">
           <SectionHeader
