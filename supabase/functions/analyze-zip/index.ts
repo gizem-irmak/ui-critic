@@ -4159,6 +4159,7 @@ Your role is ONLY to provide optional LLM reinforcement when deterministic D2 si
 - Code maintainability or routing scalability → out of scope
 
 **CRITICAL:** Do NOT flag just because breadcrumbs are missing. If active nav highlight + page heading exist, that is sufficient wayfinding.
+**CRITICAL:** Do NOT generate findings about breadcrumb depth, shallow breadcrumbs, or breadcrumbs not reflecting deeper navigation. Breadcrumb-depth analysis is handled EXCLUSIVELY by the deterministic D3 gate. Any LLM breadcrumb-depth finding will be discarded.
 
 **CLASSIFICATION:**
 - U2 findings are ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
@@ -8056,9 +8057,17 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
 
         console.log(`U2 aggregated: ${u2Findings.length} findings → 1 potential violation object`);
       } else {
-        // If no deterministic signals, keep LLM U2 findings but ensure they are Potential
+        // If no deterministic signals, keep LLM U2 findings but:
+        // 1. Ensure they are Potential
+        // 2. FILTER OUT any LLM breadcrumb-depth findings — these MUST only come from deterministic D3 gate
         aiViolations = aiViolations.map((v: any) => {
           if (v.ruleId === 'U2') {
+            // Reject LLM breadcrumb-depth speculations that bypass the evidence gate
+            const diagnosisLower = ((v.diagnosis || '') + (v.evidence || '') + (v.contextualHint || '')).toLowerCase();
+            if (/breadcrumb.*depth|breadcrumb.*shallow|breadcrumb.*level|breadcrumb.*cap|breadcrumb.*reflect|breadcrumb.*limited|breadcrumb.*not cover|breadcrumb.*deeper|breadcrumb.*insufficient/i.test(diagnosisLower)) {
+              console.log('[U2] Filtered out LLM breadcrumb-depth finding — must pass deterministic D3 gate');
+              return null; // will be filtered below
+            }
             return {
               ...v,
               status: 'potential',
@@ -8068,8 +8077,8 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
             };
           }
           return v;
-        });
-        console.log('U2: No deterministic signals found, LLM findings (if any) preserved as Potential');
+        }).filter(Boolean);
+        console.log('U2: No deterministic signals found, LLM findings (if any) preserved as Potential (breadcrumb-depth filtered)');
       }
     }
 
