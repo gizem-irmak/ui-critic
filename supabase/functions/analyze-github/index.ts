@@ -1443,9 +1443,35 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       } else if (/^(div|span|p|section|article|header|footer|aside|nav|figure|main)$/.test(elementTag)) {
         focusable = parsedTabIndex !== null && parsedTabIndex < 0 ? 'no' : (parsedTabIndex === null ? 'no' : 'yes');
       }
-      if (elementTag === 'unknown' || /^[A-Z]/.test(tagMatch?.[1] || '')) {
-        if (/input|button|select|textarea|command/i.test(componentName)) focusable = 'yes';
-        else if (/content|wrapper|container|card|popover|hover/i.test(componentName)) focusable = parsedTabIndex !== null && parsedTabIndex >= 0 ? 'yes' : 'unknown';
+      // Component wrappers (capitalized tag) → check against known lists
+      const jsxTagName = tagMatch?.[1] || '';
+      const isCapitalized = /^[A-Z]/.test(jsxTagName);
+
+      // ── Non-focusable wrapper/content suppression list ──
+      const NON_FOCUSABLE_WRAPPER_RE = /^(?:HoverCard|HoverCardContent|Popover|PopoverContent|DropdownMenuContent|ContextMenuContent|MenubarContent|DialogContent|SheetContent|DrawerContent|TooltipContent|AlertDialogContent|Portal|Viewport)$|Content$/;
+      // ── Known interactive Radix/shadcn primitives ──
+      const KNOWN_INTERACTIVE_RE = /(?:Trigger|Item|Button|Link|Tab|Checkbox|Switch|Radio|Slider|Toggle)$/;
+
+      if (isCapitalized || elementTag === 'unknown') {
+        if (NON_FOCUSABLE_WRAPPER_RE.test(jsxTagName)) {
+          if (parsedTabIndex === null || parsedTabIndex < 0) {
+            if (!FOCUSABLE_ROLES.test(parsedRole)) {
+              focusable = 'no';
+            }
+          }
+        } else if (KNOWN_INTERACTIVE_RE.test(jsxTagName)) {
+          focusable = 'yes';
+        } else if (/input|button|select|textarea|command/i.test(componentName)) {
+          focusable = 'yes';
+        } else if (/content|wrapper|container|card|popover|hover/i.test(componentName)) {
+          focusable = parsedTabIndex !== null && parsedTabIndex >= 0 ? 'yes' : 'no';
+        }
+      }
+
+      // ── Focusable target gate: suppress unknown-focusable component wrappers ──
+      if (focusable === 'unknown' && isCapitalized && !hasWeakFocusStyling) {
+        console.log(`A2 SUPPRESSED (deterministic): ${filePath}:${line} — unknown focusability on component ${jsxTagName}, no evidence of keyboard target`);
+        continue;
       }
 
       const lineEnd = Math.min(line + 5, content.split('\n').length);
@@ -1454,15 +1480,14 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       const allMatchedTokens = [...outlineRemovalTokens, ...(isBorderline ? weakFocusTokens : [])];
 
       let classification: 'confirmed' | 'potential' | 'not_applicable';
-      if (isBorderline) {
-        classification = 'potential';
-      } else if (focusable === 'no') {
+      if (focusable === 'no') {
         classification = 'not_applicable';
-        console.log(`A2 NOT_APPLICABLE (deterministic): ${filePath}:${line} — non-focusable ${elementTag}`);
+        console.log(`A2 NOT_APPLICABLE (deterministic): ${filePath}:${line} — non-focusable ${jsxTagName || elementTag}`);
+      } else if (isBorderline) {
+        classification = 'potential';
       } else if (focusable === 'yes') {
         classification = 'confirmed';
       } else {
-        // focusable === 'unknown' → Potential (component wrappers, unresolved tags)
         classification = 'potential';
       }
 

@@ -393,3 +393,39 @@ Deno.test("A2: outline-none + data-[state=open]:bg-accent only (no selected/high
   const result = classifyA2Finding(evidence);
   assertEquals(result, 'pass', "data-[state=open]:bg-* counts as a state-driven indicator → PASS");
 });
+
+// ============================================================
+// WRAPPER / NON-FOCUSABLE SUPPRESSION TESTS
+// ============================================================
+
+Deno.test("A2: HoverCardContent with outline-none → suppress (non-focusable wrapper)", () => {
+  const result = classifyA2Finding("outline-none", '', 'no');
+  assertEquals(result, 'not_applicable', "HoverCardContent (focusable=no) should be suppressed");
+});
+
+Deno.test("A2: PopoverContent with outline-none → suppress (non-focusable wrapper)", () => {
+  const result = classifyA2Finding("outline-none", '', 'no');
+  assertEquals(result, 'not_applicable', "PopoverContent (focusable=no) should be suppressed");
+});
+
+Deno.test("A2: DropdownMenuItem with outline-none + focus:bg-accent → Potential (interactive primitive)", () => {
+  const result = classifyA2Finding("outline-none focus:bg-accent focus:text-accent-foreground", '', 'yes');
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isPotential, true, "DropdownMenuItem with weak focus styling → Potential");
+    assertEquals(result.isConfirmed, false);
+  }
+});
+
+Deno.test("A2: <input> with outline-none only → Confirmed (focusable native element)", () => {
+  const result = classifyA2Finding("outline-none", '', 'yes');
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, true, "Native input with outline-none → Confirmed");
+  }
+});
+
+Deno.test("A2: <button> with outline-none + focus-visible:ring-2 → PASS (strong replacement)", () => {
+  const result = classifyA2Finding("outline-none focus-visible:ring-2", '', 'yes');
+  assertEquals(result, 'pass', "Button with ring-2 replacement → PASS");
+});
