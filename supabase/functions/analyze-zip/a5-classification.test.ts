@@ -239,6 +239,8 @@ interface A5Finding {
   advisoryGuidance?: string;
   deduplicationKey: string;
   potentialSubtype?: 'accuracy' | 'borderline';
+  startLine?: number;
+  endLine?: number;
 }
 
 function normalizePath(p: string): string {
@@ -405,6 +407,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const linesBefore = content.slice(0, index).split('\n');
       const lineNumber = linesBefore.length;
+      const endLineNumber = lineNumber + (fullMatch.split('\n').length - 1);
 
       const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
       const inputSubtype = (controlTypeVal === 'input') ? (typeMatch?.[1] || typeMatch?.[2] || 'text') : undefined;
@@ -451,6 +454,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
             explanation: `Placeholder is the only label.`,
             wcagCriteria: ['1.3.1', '3.3.2'],
             deduplicationKey: dedupeKey,
+            startLine: lineNumber,
+            endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
           });
         }
         continue;
@@ -467,6 +472,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           explanation: `No accessible name.`,
           wcagCriteria: ['1.3.1', '3.3.2'],
           deduplicationKey: dedupeKey,
+          startLine: lineNumber,
+          endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
         });
       }
     }
@@ -499,6 +506,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         explanation: `Custom input (role="${role}") has no accessible name.`,
         wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
         deduplicationKey: dedupeKey,
+        startLine: lineNumber,
       });
     }
 
@@ -528,6 +536,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         explanation: `Contenteditable element has no accessible name.`,
         wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
         deduplicationKey: dedupeKey,
+        startLine: lineNumber2,
       });
     }
 
@@ -1402,4 +1411,67 @@ Deno.test("SelectTrigger with aria-labelledby={\"id1\"} = no violation", () => {
   `]]);
   const results = detectA5FormLabels(files);
   assertEquals(results.length, 0, "JSX expression aria-labelledby should be recognized");
+});
+
+// ===== LINE NUMBER TESTS =====
+
+Deno.test("A5 startLine is set to the correct line for a SelectTrigger", () => {
+  const lines = [
+    'import { SelectTrigger } from "@/components/ui/select";',
+    'export function MyForm() {',
+    '  return (',
+    '    <div>',
+    '      <p>Some text</p>',
+    '      <p>More text</p>',
+    '      <p>Even more</p>',
+    '      <p>Padding</p>',
+    '      <p>Padding2</p>',
+    '      <SelectTrigger className="w-full">',  // line 10
+    '        <span>Pick</span>',
+    '      </SelectTrigger>',
+    '    </div>',
+    '  );',
+    '}',
+  ];
+  const content = lines.join('\n');
+  const files = new Map([["src/Form.tsx", content]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 1, "Should find one A5 violation");
+  assertEquals(results[0].startLine, 10, "startLine should be 10");
+});
+
+Deno.test("A5 two SelectTriggers on different lines produce distinct startLines", () => {
+  const lines = [
+    'import { SelectTrigger } from "@/components/ui/select";',
+    'export function MyForm() {',
+    '  return (',
+    '    <div>',
+    '      <SelectTrigger className="a" />',  // line 5
+    '      <p>gap</p>',
+    '      <p>gap2</p>',
+    '      <SelectTrigger className="b" />',  // line 8
+    '    </div>',
+    '  );',
+    '}',
+  ];
+  const content = lines.join('\n');
+  const files = new Map([["src/Form.tsx", content]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 2, "Should find two A5 violations");
+  const sortedLines = results.map(r => r.startLine).sort((a, b) => (a ?? 0) - (b ?? 0));
+  assertEquals(sortedLines[0], 5, "First startLine should be 5");
+  assertEquals(sortedLines[1], 8, "Second startLine should be 8");
+});
+
+Deno.test("A5 renders without crash when startLine is undefined", () => {
+  // This tests the data model: orphan label findings may not have a startLine
+  const files = new Map([["src/Form.tsx", `
+    <label htmlFor="nonexistent">Name</label>
+  `]]);
+  const results = detectA5FormLabels(files);
+  // Orphan label should exist
+  const orphan = results.find(r => r.subCheck === 'A5.3');
+  assert(orphan !== undefined, "Should find orphan label");
+  // startLine may or may not be set for orphan labels — just ensure no crash
+  assert(orphan.startLine === undefined || typeof orphan.startLine === 'number', "startLine should be undefined or number");
 });

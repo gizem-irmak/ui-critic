@@ -31,7 +31,7 @@ function A5ElementItem({ element, isConfirmed, compact = false }: {
           <div className="flex items-center justify-between gap-2 cursor-pointer">
             <ComponentTitle>{displayLabel}</ComponentTitle>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <LocationBadge filePath={element.filePath || element.location} compact={compact} />
+              <LocationBadge filePath={element.filePath || element.location} compact={compact} startLine={element.startLine} endLine={element.endLine} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (
