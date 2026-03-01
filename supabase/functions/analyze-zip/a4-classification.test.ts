@@ -27,6 +27,8 @@ interface A4Finding {
   correctivePrompt?: string;
   deduplicationKey: string;
   potentialSubtype?: 'borderline' | 'accuracy';
+  startLine?: number | null;
+  endLine?: number | null;
 }
 
 function normalizePath(p: string): string {
@@ -145,7 +147,7 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
   const listIssues: A4Finding[] = [];
 
   const pageFiles = identifyPageFiles(allFiles);
-  const pageH1Counts = new Map<string, number>();
+  const pageH1Counts = new Map<string, number[]>();
 
   const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
   const POINTER_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
@@ -162,8 +164,13 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
 
     const isPage = pageFiles.has(filePath);
     if (isPage) {
-      const h1Matches = content.match(/<h1\b/gi);
-      pageH1Counts.set(filePath, h1Matches ? h1Matches.length : 0);
+      const h1LineNumbers: number[] = [];
+      const h1Re = /<h1\b/gi;
+      let h1Match;
+      while ((h1Match = h1Re.exec(content)) !== null) {
+        h1LineNumbers.push(content.slice(0, h1Match.index).split('\n').length);
+      }
+      pageH1Counts.set(filePath, h1LineNumbers);
     }
 
     for (let i = 1; i <= 6; i++) {
@@ -195,8 +202,9 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
         detection: `visual_heading_missing_semantics: <${tag}> with large font + bold but no heading`,
         evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
         explanation: `Visual heading without semantic markup.`,
-        confidence: 0.92,
+         confidence: 0.92,
         deduplicationKey: dedupeKey,
+        startLine: lineNumber,
       });
     }
 
@@ -224,6 +232,7 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
         explanation: `Has keyboard support but no semantic role.`,
         confidence: 0.93,
         deduplicationKey: dedupeKey,
+        startLine: lineNumber,
       });
     }
 
@@ -271,19 +280,25 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
     }
   }
 
-  // Page-level multiple h1
-  for (const [pagePath, count] of pageH1Counts) {
-    if (count > 1) {
-      headingIssues.push({
-        elementLabel: `Multiple <h1> in ${pagePath.split('/').pop()}`, elementType: 'h1',
-        subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
-        classification: 'potential',
-        detection: `multiple_h1: ${count} <h1> elements in the same page file`,
-        evidence: `${count} <h1> tags in ${pagePath}`,
-        explanation: `This page file has ${count} <h1> elements.`,
-        confidence: 0.70,
-        deduplicationKey: `A4.1|multiple-h1|${pagePath}`,
-      });
+  // Page-level multiple h1 — per-occurrence with line numbers
+  for (const [pagePath, h1Lines] of pageH1Counts) {
+    if (h1Lines.length > 1) {
+      for (const h1Line of h1Lines) {
+        const dedupeKey = `A4.1|multiple-h1|${pagePath}|${h1Line}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+        headingIssues.push({
+          elementLabel: `<h1> at line ${h1Line}`, elementType: 'h1',
+          subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+          classification: 'potential',
+          detection: `multiple_h1: ${h1Lines.length} <h1> elements in the same page file`,
+          evidence: `<h1> at ${pagePath}:${h1Line} (${h1Lines.length} total in file)`,
+          explanation: `This page file has ${h1Lines.length} <h1> elements.`,
+          confidence: 0.70,
+          deduplicationKey: dedupeKey,
+          startLine: h1Line,
+        });
+      }
     }
   }
 
@@ -326,6 +341,7 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
         explanation: 'No <main> landmark found.',
         confidence: 0.75,
         deduplicationKey: 'A4.3|no-main',
+        startLine: 1,
       });
     }
   }
@@ -498,4 +514,35 @@ Deno.test("A4.3: Layout wrapper with @/ alias resolved → NO missing main", () 
   const results = detectA4(files);
   const missingMain = results.find(f => f.subCheck === 'A4.3');
   assertEquals(!!missingMain, false, "Should resolve @/ alias and find <main> in layout");
+});
+
+// ============================================================
+// LINE NUMBER TESTS
+// ============================================================
+
+Deno.test("A4 LINE: Multiple <h1> at lines 10 and 25 → separate findings with startLine", () => {
+  const content = Array(9).fill("").join("\n") + "\n<h1>Title One</h1>\n" + Array(14).fill("").join("\n") + "\n<h1>Title Two</h1>";
+  const files = new Map([["src/pages/Multi.tsx", content]]);
+  const results = detectA4(files);
+  const h1Findings = results.filter(f => f.detection.includes('multiple_h1'));
+  assertEquals(h1Findings.length, 2, "Should emit two separate findings for two <h1>");
+  assertEquals(h1Findings[0].startLine, 10, "First <h1> should be at line 10");
+  assertEquals(h1Findings[1].startLine, 25, "Second <h1> should be at line 25");
+});
+
+Deno.test("A4 LINE: Missing <main> landmark → startLine = 1", () => {
+  const files = new Map([["src/pages/NoMain.tsx", "<h1>Hello</h1><p>No main here</p>"]]);
+  const results = detectA4(files);
+  const mainFinding = results.find(f => f.subCheck === 'A4.3');
+  assertEquals(!!mainFinding, true, "Should flag missing main");
+  assertEquals(mainFinding!.startLine, 1, "Missing main should have startLine=1");
+});
+
+Deno.test("A4 LINE: Visual heading → startLine matches line number", () => {
+  const content = "\n\n\n\n" + '<div className="text-3xl font-bold">My Title</div>';
+  const files = new Map([["src/pages/Heading.tsx", content]]);
+  const results = detectA4(files);
+  const vh = results.find(f => f.detection.includes('visual_heading'));
+  assertEquals(!!vh, true, "Should detect visual heading");
+  assertEquals(vh!.startLine, 5, "Visual heading should be at line 5");
 });
