@@ -36,6 +36,32 @@ When Tabs/TabsTrigger/ToggleGroup usage is detected in a page file:
 4. If found → sets `active_state_in_component_definition` mitigation and **SUPPRESSES U4.2 entirely**
 5. U4.2 only reports when NO active state exists in BOTH local usage AND resolved component definition
 
+## U4.3 Conservative Multi-Step Grounding (Anti-False-Positive)
+
+### Step Count Sources (ONLY these are valid)
+- **Source A**: Explicit steps array with `label`/`title`/`name` properties
+- **Source B**: Stepper component with ≥2 StepItem/StepTrigger elements in JSX
+- **Source C**: Conditional render branches (`step === 0/1/2/3`) tied to a SINGLE state variable, max 10
+- If none match → `stepCount = "unknown"` (never guess)
+
+### Mitigation Signals (tri-state: true / false / "unknown")
+- **hasStepIndicator**: Step labels in nav, Stepper components, "Step X of Y", aria-current="step", steps.map rendering labels
+- **hasBackNav**: Button with "Previous"/"Back"/"Go Back"/"Return" text, step decrement handler, aria-label with back text
+- **persistentContext**: Selected values rendered in JSX on later steps, Breadcrumbs, summary panels
+- **summaryStep**: "Review"/"Summary"/"Confirm" heading AND selected data rendered
+
+### Pre-LLM Suppression Rules
+U4.3 is suppressed (never sent to LLM) when:
+1. `hasStepIndicator == true AND hasBackNav == true`
+2. `persistentContext == true AND summaryStep == true AND hasBackNav != false`
+3. `stepCount <= 4 AND hasStepIndicator == true`
+
+### LLM Send Criteria
+Only sent to LLM when ALL of:
+- `stepCount >= 5 OR stepCount == "unknown"`
+- `hasStepIndicator != true`
+- `persistentContext != true`
+
 ## Subtypes
 
 1. **U4.1 — Structured Selection → Free-Text** (LLM-decided)
@@ -49,8 +75,9 @@ When Tabs/TabsTrigger/ToggleGroup usage is detected in a page file:
    - LLM reports ONLY if active state truly not persistent in both usage AND definition
    - Suppressed if: active styling, aria-selected, or visible context exists (locally OR in component definition)
 
-3. **U4.3 — Multi-Step Context Regression** (LLM-decided)
-   - Candidates: flows with ≥2 steps
+3. **U4.3 — Multi-Step Context Regression** (LLM-decided, conservative grounding)
+   - Candidates: flows with ≥2 steps (counted conservatively)
+   - Pre-LLM suppression when strong mitigations present (see rules above)
    - LLM reports ONLY if ALL mitigations missing (step indicator, back nav, summary, persistent context)
    - If ANY mitigation exists → suppress
 
@@ -70,3 +97,4 @@ When Tabs/TabsTrigger/ToggleGroup usage is detected in a page file:
 - Never trigger based solely on: text input presence, missing step indicator without multi-step logic, minimalist styling, truncation, short labels
 - LLM is explicitly allowed to decline reporting
 - Generic labels (reason, message, description, notes, details) excluded from U4.1
+- Prefer "unknown" over false when evidence is incomplete — do not infer
