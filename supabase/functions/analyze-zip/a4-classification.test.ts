@@ -138,7 +138,14 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
   const findings: A4Finding[] = [];
   const seenKeys = new Set<string>();
 
+  // Global pre-pass: scan ALL files for <main> or role="main" (no directory filter)
   let hasMainLandmark = false;
+  for (const [, content] of allFiles) {
+    if (/<main\b/i.test(content) || /role\s*=\s*["']main["']/i.test(content)) {
+      hasMainLandmark = true;
+      break;
+    }
+  }
   const headingLevelsUsed = new Set<number>();
   const headingIssues: A4Finding[] = [];
   const visualHeadingIssues: A4Finding[] = [];
@@ -236,8 +243,7 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
       });
     }
 
-    // A4.3: Landmark detection
-    if (/<main\b/i.test(content) || /role\s*=\s*["']main["']/i.test(content)) hasMainLandmark = true;
+    // A4.3: Nav landmark detection (main handled by pre-pass)
 
     // A4.4: Lists
     const repeatedClassPattern = /className\s*=\s*(?:"([^"]+)"|'([^']+)'|{`([^`]+)`})/g;
@@ -336,8 +342,8 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
         elementLabel: 'Missing <main> landmark', elementType: 'main',
         subCheck: 'A4.3', subCheckLabel: 'Landmark regions',
         classification: 'potential',
-        detection: 'No <main> or role="main" found',
-        evidence: 'No main landmark detected',
+        detection: 'No <main> or role="main" found in any source or layout file',
+        evidence: 'No <main> element or role="main" found across scanned UI source files.',
         explanation: 'No <main> landmark found.',
         confidence: 0.75,
         deduplicationKey: 'A4.3|no-main',
@@ -545,4 +551,65 @@ Deno.test("A4 LINE: Visual heading → startLine matches line number", () => {
   const vh = results.find(f => f.detection.includes('visual_heading'));
   assertEquals(!!vh, true, "Should detect visual heading");
   assertEquals(vh!.startLine, 5, "Visual heading should be at line 5");
+});
+
+// ============================================================
+// GLOBAL MAIN LANDMARK PRE-PASS TESTS
+// ============================================================
+
+// Test A: layout file (outside pages/) contains <main> → NO A4 landmark trigger
+Deno.test("A4.3 GLOBAL: Layout file outside pages/ with <main> → NO missing main", () => {
+  const files = new Map([
+    ["src/pages/Home.tsx", "<div><h1>Home</h1></div>"],
+    ["src/layout/RootLayout.tsx", "<div><main>{children}</main></div>"],
+  ]);
+  const results = detectA4(files);
+  const missingMain = results.find(f => f.subCheck === 'A4.3');
+  assertEquals(!!missingMain, false, "Should NOT flag missing main when layout file has <main>");
+});
+
+// Test B: only role="main" exists → NO trigger
+Deno.test("A4.3 GLOBAL: Only role='main' exists → NO missing main", () => {
+  const files = new Map([
+    ["src/pages/Home.tsx", "<div><h1>Home</h1></div>"],
+    ["src/components/Shell.tsx", '<div role="main">{children}</div>'],
+  ]);
+  const results = detectA4(files);
+  const missingMain = results.find(f => f.subCheck === 'A4.3');
+  assertEquals(!!missingMain, false, "Should NOT flag when role='main' exists");
+});
+
+// Test C: no files contain <main> or role="main" → global trigger emitted
+Deno.test("A4.3 GLOBAL: No <main> anywhere → emit global trigger", () => {
+  const files = new Map([
+    ["src/pages/Home.tsx", "<div><h1>Title</h1><p>Content</p></div>"],
+    ["src/components/Header.tsx", "<header><nav>Nav</nav></header>"],
+  ]);
+  const results = detectA4(files);
+  const missingMain = results.find(f => f.subCheck === 'A4.3');
+  assertEquals(!!missingMain, true, "Should flag missing main");
+  assertEquals(missingMain!.classification, 'potential');
+});
+
+// Test D: <main> in node_modules-like excluded path but also in a real file → no trigger
+// (allFiles should not contain node_modules in practice, but test that a non-standard path works)
+Deno.test("A4.3 GLOBAL: <main> in non-standard directory → NO missing main", () => {
+  const files = new Map([
+    ["src/pages/Home.tsx", "<div><h1>Home</h1></div>"],
+    ["lib/wrappers/AppShell.tsx", "<main><div>{children}</div></main>"],
+  ]);
+  const results = detectA4(files);
+  const missingMain = results.find(f => f.subCheck === 'A4.3');
+  assertEquals(!!missingMain, false, "Should find <main> even in non-standard directories");
+});
+
+// Test: components/ui/ file with <main> → still suppresses (pre-pass has no directory filter)
+Deno.test("A4.3 GLOBAL: <main> in components/ui/ → NO missing main", () => {
+  const files = new Map([
+    ["src/pages/Home.tsx", "<div><h1>Home</h1></div>"],
+    ["src/components/ui/layout.tsx", "<main>{children}</main>"],
+  ]);
+  const results = detectA4(files);
+  const missingMain = results.find(f => f.subCheck === 'A4.3');
+  assertEquals(!!missingMain, false, "Pre-pass should find <main> even in components/ui/");
 });

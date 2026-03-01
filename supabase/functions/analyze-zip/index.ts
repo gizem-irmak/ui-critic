@@ -5855,8 +5855,15 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   const findings: A4Finding[] = [];
   const seenKeys = new Set<string>();
 
-  // Global landmark tracking
+  // Global landmark tracking — pre-pass across ALL files (no directory filter)
+  // to avoid false positives when <main> is in layout/wrapper files outside src/pages/
   let hasMainLandmark = false;
+  for (const [, content] of allFiles) {
+    if (/<main\b/i.test(content) || /role\s*=\s*["']main["']/i.test(content)) {
+      hasMainLandmark = true;
+      break;
+    }
+  }
   let hasNavLandmark = false;
   const headingLevelsUsed = new Set<number>();
   const clickableNonSemantics: A4Finding[] = [];
@@ -6037,8 +6044,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       });
     }
 
-    // A4.3: Landmark detection (global)
-    if (/<main\b/i.test(content) || /role\s*=\s*["']main["']/i.test(content)) hasMainLandmark = true;
+    // A4.3: Nav landmark detection (main is handled by pre-pass)
     if (/<nav\b/i.test(content) || /role\s*=\s*["']navigation["']/i.test(content)) hasNavLandmark = true;
 
     // A4.4: Lists — tightened heuristic (Potential only)
@@ -6148,7 +6154,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
         subCheck: 'A4.3', subCheckLabel: 'Landmark regions',
         classification: 'potential',
         detection: 'No <main> or role="main" found in any source or layout file',
-        evidence: 'No main landmark detected in source files or resolved layout wrappers',
+        evidence: 'No <main> element or role="main" found across scanned UI source files.',
         explanation: 'No <main> landmark found. Screen readers use landmarks to navigate page regions efficiently (WCAG 2.4.1 Bypass Blocks).',
         confidence,
         deduplicationKey: 'A4.3|no-main',
