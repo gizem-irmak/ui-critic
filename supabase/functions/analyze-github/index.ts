@@ -4965,6 +4965,11 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
   let hasDrawerWithMenu = false;
   const navPrimitivesFound = new Set<string>();
   let hasVisiblePageTitle = false;
+  // Desktop-scope suppression signals
+  let hasMobileOnlyNavToggle = false;
+  let hasAccessibleMenuToggle = false;
+  let hasDesktopNavHidden = false;
+  let maxRouteDepth = 0;
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
@@ -5043,6 +5048,30 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
     if (/<Navbar\b|<NavBar\b|<Header\b.*(?:nav|link|menu)/i.test(content)) navPrimitivesFound.add('Navbar');
     if (/<NavigationMenu\b/i.test(content)) navPrimitivesFound.add('NavigationMenu');
     if (/<h1\b/i.test(content)) hasVisiblePageTitle = true;
+
+    // --- Desktop-scope: detect mobile-only nav patterns ---
+    if (/mobileOpen|isMobileMenuOpen|mobileMenuOpen|menuOpen.*mobile/i.test(content)) {
+      hasMobileOnlyNavToggle = true;
+    }
+    if (/(?:sm:|md:)(?:hidden|block|flex|inline-flex)\b/i.test(content) &&
+        /(?:nav|sidebar|menu|header)/i.test(content)) {
+      if (/(?:lg:|xl:)hidden\b/i.test(content)) {
+        hasDesktopNavHidden = true;
+      } else {
+        hasMobileOnlyNavToggle = true;
+      }
+    }
+    if (/aria-label\s*=\s*["'](?:[^"']*(?:menu|navigation|open menu|toggle menu|hamburger)[^"']*)["']/i.test(content)) {
+      hasAccessibleMenuToggle = true;
+    }
+
+    // Track max route depth for breadcrumb refinement
+    const pathMatchesU2 = content.match(/path\s*[:=]\s*["'](\/?[^"']+)["']/gi) || [];
+    for (const match of pathMatchesU2) {
+      const pathValue = match.replace(/path\s*[:=]\s*["']/i, '').replace(/["']$/, '');
+      const depth = pathValue.split('/').filter(Boolean).length;
+      if (depth > maxRouteDepth) maxRouteDepth = depth;
+    }
   }
 
   const navPrimitiveCount = navPrimitivesFound.size;
@@ -5054,6 +5083,10 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
   if (navPrimitiveCount >= 2) { console.log(`[U2] Suppressed: ≥2 nav primitives (${[...navPrimitivesFound].join(', ')})`); return []; }
   if (routeCount <= 2) { console.log('[U2] Suppressed: ≤2 routes'); return []; }
   if (hasLayoutWithNav && hasNavComponentRendered) { console.log('[U2] Suppressed: layout provides nav'); return []; }
+  // 7. Desktop-scope: mobile-only nav toggle without desktop hiding
+  if (hasMobileOnlyNavToggle && !hasDesktopNavHidden) { console.log('[U2] Suppressed: mobile-only nav toggle'); return []; }
+  // 8. Accessible menu toggle present
+  if (hasAccessibleMenuToggle && !hasDesktopNavHidden) { console.log('[U2] Suppressed: accessible menu toggle'); return []; }
 
   // U2.D1 — No visible primary navigation
   if (routeCount >= 3 && !hasNavComponentRendered && !hasNavItemsMapping && !hasLayoutWithNav) {
@@ -5089,8 +5122,8 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
     }
   }
 
-  // U2.D3 — Breadcrumb logic defined but not rendered
-  if (hasBreadcrumbLogicDefined && hasBreadcrumbComponentInDesignSystem && !hasBreadcrumbRendered) {
+  // U2.D3 — Breadcrumb logic defined but not rendered (only if deep routes depth ≥3)
+  if (hasBreadcrumbLogicDefined && hasBreadcrumbComponentInDesignSystem && !hasBreadcrumbRendered && maxRouteDepth >= 3) {
     const dedupeKey = 'U2.D3|global';
     if (!seenKeys.has(dedupeKey)) {
       seenKeys.add(dedupeKey);
@@ -5106,7 +5139,7 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
     }
   }
 
-  console.log(`[U2] Detection (GitHub): routes=${routeCount}, navComponent=${hasNavComponentRendered}, navMapping=${hasNavItemsMapping}, layoutNav=${hasLayoutWithNav}, breadcrumb=${hasBreadcrumbRendered}, back=${hasBackControl}, deep=${deepRouteFiles.length}, navPrimitives=${navPrimitiveCount}, findings=${findings.length}`);
+  console.log(`[U2] Detection (GitHub): routes=${routeCount}, navComponent=${hasNavComponentRendered}, navMapping=${hasNavItemsMapping}, layoutNav=${hasLayoutWithNav}, breadcrumb=${hasBreadcrumbRendered}, back=${hasBackControl}, deep=${deepRouteFiles.length}, maxDepth=${maxRouteDepth}, navPrimitives=${navPrimitiveCount}, mobileOnly=${hasMobileOnlyNavToggle}, a11yToggle=${hasAccessibleMenuToggle}, desktopHidden=${hasDesktopNavHidden}, findings=${findings.length}`);
   return findings;
 }
 

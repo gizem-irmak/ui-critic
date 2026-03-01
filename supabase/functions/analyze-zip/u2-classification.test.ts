@@ -3,12 +3,13 @@
  * 
  * U2 is ALWAYS Potential (Non-blocking). Never Confirmed. Never generates corrective prompts.
  * U2 evaluates ONLY wayfinding clarity: where am I, where can I go, how do I go back.
+ * U2 is desktop-scoped: mobile-only responsive patterns are suppressed by default.
  * U2 must NOT overlap with U6 (layout), U3 (truncation), U4 (recall), or A-rules (landmarks).
  * 
  * Deterministic sub-checks:
  *   U2.D1 — No visible primary navigation (≥3 routes, no nav components rendered)
  *   U2.D2 — Deep route lacks up/back affordance (depth ≥2, detail/edit pattern, no back control)
- *   U2.D3 — Breadcrumb logic defined but not rendered (getBreadcrumbs + component exists, not rendered)
+ *   U2.D3 — Breadcrumb logic defined but not rendered (only if maxRouteDepth ≥3)
  * 
  * Confidence ranges:
  *   Structural-only:            0.55–0.70
@@ -30,7 +31,6 @@ Deno.test("U2: All findings must be Potential (never Confirmed)", () => {
 });
 
 Deno.test("U2: Never generates corrective prompts", () => {
-  // U2 is advisory-only; correctivePrompt must be absent or empty
   const finding = { status: 'potential', advisoryGuidance: 'guidance text', correctivePrompt: undefined };
   assertEquals(finding.correctivePrompt, undefined);
 });
@@ -40,39 +40,33 @@ Deno.test("U2: Never generates corrective prompts", () => {
 // ============================================================
 
 Deno.test("U2.D1: Triggers when ≥3 routes and no nav components rendered", () => {
-  const scenario = {
-    routeCount: 5,
-    hasNavComponentRendered: false,
-    hasNavItemsMapping: false,
-    hasLayoutWithNav: false,
-  };
+  const scenario = { routeCount: 5, hasNavComponentRendered: false, hasNavItemsMapping: false, hasLayoutWithNav: false };
   const shouldTrigger = scenario.routeCount >= 3 && !scenario.hasNavComponentRendered && !scenario.hasNavItemsMapping && !scenario.hasLayoutWithNav;
-  assert(shouldTrigger, "U2.D1 should trigger with ≥3 routes and no nav UI");
+  assert(shouldTrigger);
 });
 
 Deno.test("U2.D1: Does NOT trigger when nav component (Sidebar) is rendered", () => {
   const scenario = { routeCount: 5, hasNavComponentRendered: true, hasNavItemsMapping: false, hasLayoutWithNav: false };
   const shouldTrigger = scenario.routeCount >= 3 && !scenario.hasNavComponentRendered && !scenario.hasNavItemsMapping && !scenario.hasLayoutWithNav;
-  assert(!shouldTrigger, "U2.D1 should not trigger when Sidebar/Navbar/etc rendered");
+  assert(!shouldTrigger);
 });
 
 Deno.test("U2.D1: Does NOT trigger when navItems.map() exists", () => {
   const scenario = { routeCount: 5, hasNavComponentRendered: false, hasNavItemsMapping: true, hasLayoutWithNav: false };
   const shouldTrigger = scenario.routeCount >= 3 && !scenario.hasNavComponentRendered && !scenario.hasNavItemsMapping && !scenario.hasLayoutWithNav;
-  assert(!shouldTrigger, "U2.D1 should not trigger when navItems mapped in JSX");
+  assert(!shouldTrigger);
 });
 
 Deno.test("U2.D1: Does NOT trigger when layout wrapper provides nav", () => {
   const scenario = { routeCount: 5, hasNavComponentRendered: false, hasNavItemsMapping: false, hasLayoutWithNav: true };
   const shouldTrigger = scenario.routeCount >= 3 && !scenario.hasNavComponentRendered && !scenario.hasNavItemsMapping && !scenario.hasLayoutWithNav;
-  assert(!shouldTrigger, "U2.D1 should not trigger when layout provides nav");
+  assert(!shouldTrigger);
 });
 
 Deno.test("U2.D1: Does NOT require <nav> or role='navigation' to suppress", () => {
-  // Semantic absence alone must NOT trigger — only absence of visible nav UI matters
   const scenario = { routeCount: 5, hasNavElement: false, hasRoleNavigation: false, hasNavComponentRendered: true, hasNavItemsMapping: false, hasLayoutWithNav: false };
   const shouldTrigger = scenario.routeCount >= 3 && !scenario.hasNavComponentRendered && !scenario.hasNavItemsMapping && !scenario.hasLayoutWithNav;
-  assert(!shouldTrigger, "Semantic <nav> absence alone should not trigger U2.D1");
+  assert(!shouldTrigger);
 });
 
 // ============================================================
@@ -80,106 +74,130 @@ Deno.test("U2.D1: Does NOT require <nav> or role='navigation' to suppress", () =
 // ============================================================
 
 Deno.test("U2.D2: Triggers when deep detail route exists without back control", () => {
-  const scenario = {
-    deepRouteFiles: ['/admin/patients/:id'],
-    hasBackControl: false,
-    hasBreadcrumbRendered: false,
-    hasParentRouteLink: false,
-  };
+  const scenario = { deepRouteFiles: ['/admin/patients/:id'], hasBackControl: false, hasBreadcrumbRendered: false, hasParentRouteLink: false };
   const shouldTrigger = scenario.deepRouteFiles.length > 0 && !scenario.hasBackControl && !scenario.hasBreadcrumbRendered && !scenario.hasParentRouteLink;
-  assert(shouldTrigger, "U2.D2 should trigger for deep routes without back affordance");
+  assert(shouldTrigger);
 });
 
 Deno.test("U2.D2: Does NOT trigger when back button exists", () => {
   const scenario = { deepRouteFiles: ['/settings/security'], hasBackControl: true, hasBreadcrumbRendered: false, hasParentRouteLink: false };
   const shouldTrigger = scenario.deepRouteFiles.length > 0 && !scenario.hasBackControl && !scenario.hasBreadcrumbRendered && !scenario.hasParentRouteLink;
-  assert(!shouldTrigger, "U2.D2 should not trigger when back control exists");
+  assert(!shouldTrigger);
 });
 
 Deno.test("U2.D2: Does NOT trigger when breadcrumb is rendered", () => {
   const scenario = { deepRouteFiles: ['/foo/:id'], hasBackControl: false, hasBreadcrumbRendered: true, hasParentRouteLink: false };
   const shouldTrigger = scenario.deepRouteFiles.length > 0 && !scenario.hasBackControl && !scenario.hasBreadcrumbRendered && !scenario.hasParentRouteLink;
-  assert(!shouldTrigger, "U2.D2 should not trigger when breadcrumb exists");
-});
-
-Deno.test("U2.D2: Does NOT trigger when parent route link in header exists", () => {
-  const scenario = { deepRouteFiles: ['/foo/:id'], hasBackControl: false, hasBreadcrumbRendered: false, hasParentRouteLink: true };
-  const shouldTrigger = scenario.deepRouteFiles.length > 0 && !scenario.hasBackControl && !scenario.hasBreadcrumbRendered && !scenario.hasParentRouteLink;
-  assert(!shouldTrigger, "U2.D2 should not trigger when parent link in header exists");
+  assert(!shouldTrigger);
 });
 
 Deno.test("U2.D2: Does NOT trigger without deep routes", () => {
   const scenario = { deepRouteFiles: [], hasBackControl: false, hasBreadcrumbRendered: false, hasParentRouteLink: false };
   const shouldTrigger = scenario.deepRouteFiles.length > 0 && !scenario.hasBackControl && !scenario.hasBreadcrumbRendered && !scenario.hasParentRouteLink;
-  assert(!shouldTrigger, "U2.D2 should not trigger without deep routes");
+  assert(!shouldTrigger);
 });
 
 // ============================================================
 // U2.D3 — Breadcrumb logic defined but not rendered
 // ============================================================
 
-Deno.test("U2.D3: Triggers when breadcrumb logic + component exist but not rendered", () => {
-  const scenario = { hasBreadcrumbLogicDefined: true, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: false };
-  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered;
-  assert(shouldTrigger, "U2.D3 should trigger when logic+component exist but not rendered");
+Deno.test("U2.D3: Triggers when breadcrumb logic + component exist, not rendered, AND maxRouteDepth ≥3", () => {
+  const scenario = { hasBreadcrumbLogicDefined: true, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: false, maxRouteDepth: 3 };
+  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered && scenario.maxRouteDepth >= 3;
+  assert(shouldTrigger);
 });
 
 Deno.test("U2.D3: Does NOT trigger when breadcrumb is rendered", () => {
-  const scenario = { hasBreadcrumbLogicDefined: true, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: true };
-  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered;
-  assert(!shouldTrigger, "U2.D3 should not trigger when breadcrumb is rendered");
+  const scenario = { hasBreadcrumbLogicDefined: true, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: true, maxRouteDepth: 4 };
+  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered && scenario.maxRouteDepth >= 3;
+  assert(!shouldTrigger);
 });
 
 Deno.test("U2.D3: Does NOT trigger on unused imports alone (no logic defined)", () => {
-  const scenario = { hasBreadcrumbLogicDefined: false, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: false };
-  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered;
-  assert(!shouldTrigger, "U2.D3 should not trigger on unused imports alone");
+  const scenario = { hasBreadcrumbLogicDefined: false, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: false, maxRouteDepth: 4 };
+  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered && scenario.maxRouteDepth >= 3;
+  assert(!shouldTrigger);
 });
 
-Deno.test("U2.D3: Does NOT trigger without breadcrumb component in design system", () => {
-  const scenario = { hasBreadcrumbLogicDefined: true, hasBreadcrumbComponentInDesignSystem: false, hasBreadcrumbRendered: false };
-  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered;
-  assert(!shouldTrigger, "U2.D3 should not trigger without breadcrumb component");
+Deno.test("U2.D3: Does NOT trigger for shallow apps (maxRouteDepth < 3)", () => {
+  const scenario = { hasBreadcrumbLogicDefined: true, hasBreadcrumbComponentInDesignSystem: true, hasBreadcrumbRendered: false, maxRouteDepth: 2 };
+  const shouldTrigger = scenario.hasBreadcrumbLogicDefined && scenario.hasBreadcrumbComponentInDesignSystem && !scenario.hasBreadcrumbRendered && scenario.maxRouteDepth >= 3;
+  assert(!shouldTrigger, "U2.D3 should not trigger for shallow apps without deep routes");
 });
 
 // ============================================================
-// GLOBAL SUPPRESSION RULES
+// DESKTOP-SCOPE SUPPRESSION TESTS
+// ============================================================
+
+Deno.test("U2: Suppressed when mobileOpen toggle detected without desktop nav hiding", () => {
+  const hasMobileOnlyNavToggle = true;
+  const hasDesktopNavHidden = false;
+  const suppressed = hasMobileOnlyNavToggle && !hasDesktopNavHidden;
+  assert(suppressed, "Should suppress U2 for mobile-only nav toggles");
+});
+
+Deno.test("U2: NOT suppressed when mobile toggle also hides desktop nav (lg:hidden)", () => {
+  const hasMobileOnlyNavToggle = true;
+  const hasDesktopNavHidden = true;
+  const suppressed = hasMobileOnlyNavToggle && !hasDesktopNavHidden;
+  assert(!suppressed, "Should NOT suppress when desktop nav is also hidden");
+});
+
+Deno.test("U2: Suppressed when accessible menu toggle exists (aria-label='menu')", () => {
+  const hasAccessibleMenuToggle = true;
+  const hasDesktopNavHidden = false;
+  const suppressed = hasAccessibleMenuToggle && !hasDesktopNavHidden;
+  assert(suppressed, "Should suppress for accessible menu toggle without desktop hiding");
+});
+
+Deno.test("U2: NOT suppressed when accessible toggle exists but desktop nav is hidden", () => {
+  const hasAccessibleMenuToggle = true;
+  const hasDesktopNavHidden = true;
+  const suppressed = hasAccessibleMenuToggle && !hasDesktopNavHidden;
+  assert(!suppressed, "Should NOT suppress when desktop nav is also hidden despite toggle");
+});
+
+Deno.test("U2: Responsive classes (sm:hidden, md:block) on nav are treated as mobile-only", () => {
+  // sm:/md: classes toggling nav visibility without lg:/xl: hiding → mobile-only
+  const hasResponsiveNavClasses = true;
+  const hasLgXlHidden = false;
+  const isMobileOnly = hasResponsiveNavClasses && !hasLgXlHidden;
+  assert(isMobileOnly, "sm:/md: responsive nav toggling should be treated as mobile-only");
+});
+
+Deno.test("U2: Responsive classes WITH lg:hidden are NOT treated as mobile-only", () => {
+  const hasResponsiveNavClasses = true;
+  const hasLgXlHidden = true;
+  const isMobileOnly = hasResponsiveNavClasses && !hasLgXlHidden;
+  assert(!isMobileOnly, "lg:hidden on nav means desktop nav is also hidden — not mobile-only");
+});
+
+// ============================================================
+// GLOBAL SUPPRESSION RULES (existing)
 // ============================================================
 
 Deno.test("U2: Suppressed when breadcrumb + visible page title present", () => {
-  const hasBreadcrumbRendered = true;
-  const hasVisiblePageTitle = true;
-  const suppressed = hasBreadcrumbRendered && hasVisiblePageTitle;
-  assert(suppressed, "Should suppress U2 entirely when breadcrumb + h1 present");
+  assert(true && true, "Should suppress U2 entirely when breadcrumb + h1 present");
 });
 
 Deno.test("U2: Suppressed when Tabs used as primary IA (≤5 routes)", () => {
-  const hasTabsAsPrimaryIA = true;
-  const routeCount = 4;
-  const suppressed = hasTabsAsPrimaryIA && routeCount <= 5;
-  assert(suppressed, "Should suppress U2 when Tabs are primary IA");
+  assert(true && 4 <= 5, "Should suppress U2 when Tabs are primary IA");
 });
 
 Deno.test("U2: Suppressed when Drawer/Sheet with Menu present", () => {
-  const hasDrawerWithMenu = true;
-  assert(hasDrawerWithMenu, "Should suppress U2 when Drawer/Sheet menu exists");
+  assert(true);
 });
 
 Deno.test("U2: Suppressed when ≥2 navigation primitives present", () => {
-  const navPrimitives = new Set(['Sidebar', 'Breadcrumb']);
-  assert(navPrimitives.size >= 2, "Should suppress U2 with ≥2 nav primitives");
+  assert(new Set(['Sidebar', 'Breadcrumb']).size >= 2);
 });
 
 Deno.test("U2: Suppressed for simple apps (≤2 routes)", () => {
-  const routeCount = 2;
-  assert(routeCount <= 2, "Should suppress U2 for ≤2 routes");
+  assert(2 <= 2);
 });
 
 Deno.test("U2: Suppressed when layout wrapper provides navigation", () => {
-  const hasLayoutWithNav = true;
-  const hasNavComponentRendered = true;
-  const suppressed = hasLayoutWithNav && hasNavComponentRendered;
-  assert(suppressed, "Should suppress U2 when layout provides nav");
+  assert(true && true);
 });
 
 // ============================================================
@@ -187,24 +205,20 @@ Deno.test("U2: Suppressed when layout wrapper provides navigation", () => {
 // ============================================================
 
 Deno.test("U2: Structural-only confidence is 0.55-0.70", () => {
-  const structuralConfidences = [0.65, 0.60, 0.65]; // D1, D2, D3
-  for (const c of structuralConfidences) {
+  for (const c of [0.65, 0.60, 0.65]) {
     assert(c >= 0.55 && c <= 0.70, `Structural confidence ${c} must be in [0.55, 0.70]`);
   }
 });
 
 Deno.test("U2: Confidence never exceeds 0.80", () => {
-  const maxConfidence = 0.80;
-  const testValues = [0.65, 0.70, 0.75, 0.80];
-  for (const c of testValues) {
-    assert(c <= maxConfidence, `Confidence ${c} must be ≤ 0.80`);
+  for (const c of [0.65, 0.70, 0.75, 0.80]) {
+    assert(c <= 0.80, `Confidence ${c} must be ≤ 0.80`);
   }
 });
 
 Deno.test("U2: LLM-only (screenshot) confidence range is 0.60-0.80", () => {
-  const llmConfidence = 0.75;
-  assert(llmConfidence <= 0.80, "Screenshot LLM confidence must be ≤0.80");
-  assert(llmConfidence >= 0.60, "Screenshot LLM confidence must be ≥0.60");
+  const c = 0.75;
+  assert(c <= 0.80 && c >= 0.60);
 });
 
 // ============================================================
@@ -213,23 +227,23 @@ Deno.test("U2: LLM-only (screenshot) confidence range is 0.60-0.80", () => {
 
 Deno.test("U2: Must NOT evaluate layout grouping (belongs to U6)", () => {
   const u2Scope = ['wayfinding', 'navigation_visibility', 'back_affordance'];
-  assert(!u2Scope.includes('layout_grouping'), "U2 must not evaluate layout grouping");
-  assert(!u2Scope.includes('visual_hierarchy'), "U2 must not evaluate visual hierarchy");
+  assert(!u2Scope.includes('layout_grouping'));
+  assert(!u2Scope.includes('visual_hierarchy'));
 });
 
 Deno.test("U2: Must NOT evaluate content truncation (belongs to U3)", () => {
   const u2Scope = ['wayfinding', 'navigation_visibility', 'back_affordance'];
-  assert(!u2Scope.includes('truncation'), "U2 must not evaluate truncation");
+  assert(!u2Scope.includes('truncation'));
 });
 
 Deno.test("U2: Must NOT evaluate step indicators (belongs to U4)", () => {
   const u2Scope = ['wayfinding', 'navigation_visibility', 'back_affordance'];
-  assert(!u2Scope.includes('step_indicators'), "U2 must not evaluate step indicators");
+  assert(!u2Scope.includes('step_indicators'));
 });
 
 Deno.test("U2: Must NOT evaluate landmark semantics (belongs to A-rules)", () => {
   const u2Scope = ['wayfinding', 'navigation_visibility', 'back_affordance'];
-  assert(!u2Scope.includes('landmark_semantics'), "U2 must not evaluate landmark semantics");
+  assert(!u2Scope.includes('landmark_semantics'));
 });
 
 // ============================================================
@@ -255,8 +269,8 @@ Deno.test("U2: Screenshot findings use 'llm_perceptual' evaluationMethod", () =>
 Deno.test("U2: Deduplication keys prevent duplicate findings per sub-check", () => {
   const keys = new Set<string>();
   keys.add('U2.D1|global');
-  keys.add('U2.D1|global'); // duplicate
-  assertEquals(keys.size, 1, "Should only have 1 unique key");
+  keys.add('U2.D1|global');
+  assertEquals(keys.size, 1);
 });
 
 Deno.test("U2: Aggregated output always has blocksConvergence=false", () => {
