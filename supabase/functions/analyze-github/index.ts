@@ -3150,7 +3150,7 @@ Suppress if: section heading clarifies action, page title clarifies context, act
 **OUTPUT FOR E3 — STRUCTURED e3Elements:**
 \`\`\`json
 {
-  "ruleId": "E3", "ruleName": "Structural absence of exit control for high-impact actions", "category": "ethics",
+  "ruleId": "E3", "ruleName": "Obscured or restricted user control", "category": "ethics",
   "status": "potential", "isE3Aggregated": true,
   "e3Elements": [{ "elementLabel": "Delete dialog without cancel", "elementType": "dialog", "location": "...", "subCheck": "E3.D1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.78 }]
 }
@@ -3745,7 +3745,7 @@ function formatE2ChoiceBundleForPrompt(bundles: E2ChoiceBundle[]): string {
   return lines.join('\n');
 }
 
-// ========== E3 DETERMINISTIC DETECTION (Structural Absence of Exit Control for High-Impact Actions) ==========
+// ========== E3 DETERMINISTIC DETECTION (Obscured or Restricted User Control) ==========
 interface E3Finding {
   filePath: string;
   line: number;
@@ -6137,7 +6137,7 @@ serve(async (req) => {
       }
     }
 
-    // ========== E3 POST-PROCESSING (Structural Absence of Exit Control — HYBRID) ==========
+    // ========== E3 POST-PROCESSING (Obscured or Restricted User Control — HYBRID) ==========
     const aggregatedE3GitHubList: any[] = [];
     if (selectedRulesSet.has('E3')) {
       const deterministicE3 = e3Findings;
@@ -6186,7 +6186,7 @@ serve(async (req) => {
       if (e3Elements.length > 0) {
         const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.80);
         aggregatedE3GitHubList.push({
-          ruleId: 'E3', ruleName: 'Structural absence of exit control for high-impact actions', category: 'ethics',
+          ruleId: 'E3', ruleName: 'Obscured or restricted user control', category: 'ethics',
           status: 'potential', blocksConvergence: false,
           inputType: 'github', isE3Aggregated: true, e3Elements, evaluationMethod: 'hybrid_deterministic',
           diagnosis: `Structural exit absence: ${e3Elements.length} high-impact action(s) without visible cancel/close/exit mechanism.`,

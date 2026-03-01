@@ -94,7 +94,7 @@ export function E3AggregatedCard({ violation, compact = false }: E3AggregatedCar
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
         <CardTitle className="flex items-center gap-2 flex-wrap">
           <RuleIdBadge ruleId="E3" isConfirmed={false} categoryClass="category-ethics" />
-          <RuleHeader ruleId="E3" title="Structural Absence of Exit Control for High-Impact Actions" />
+          <RuleHeader ruleId="E3" title="Obscured or Restricted User Control" />
           <ElementCountBadge count={elements.length} isConfirmed={false} />
         </CardTitle>
         <CardDescription compact={compact}>
