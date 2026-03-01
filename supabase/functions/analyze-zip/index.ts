@@ -5674,12 +5674,88 @@ interface A4Finding {
   potentialSubtype?: 'borderline' | 'accuracy';
 }
 
+// --- A4 Helpers: page-level detection ---
+
+/** Identify "page files" — files under common page roots or referenced as route elements */
+function identifyPageFiles(allFiles: Map<string, string>): Set<string> {
+  const pageFiles = new Set<string>();
+  const PAGE_PATH_RE = /(?:^|\/)(?:pages|routes|app|views)\/[^/]+\.(tsx|jsx|ts|js)$/i;
+  for (const filePath of allFiles.keys()) {
+    const norm = normalizePath(filePath);
+    if (PAGE_PATH_RE.test(norm)) pageFiles.add(norm);
+  }
+  // Also find files referenced as route elements in router config
+  for (const [, content] of allFiles) {
+    // React Router: element={<Component />} or element: <Component />
+    const routeElementRe = /element\s*[:=]\s*(?:\{?\s*)?<(\w+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = routeElementRe.exec(content)) !== null) {
+      const compName = m[1];
+      // Try to find a file that exports this component
+      for (const [fp, fc] of allFiles) {
+        const norm = normalizePath(fp);
+        if (pageFiles.has(norm)) continue;
+        const exportRe = new RegExp(`export\\s+(?:default\\s+)?(?:function|const)\\s+${compName}\\b`);
+        if (exportRe.test(fc)) pageFiles.add(norm);
+      }
+    }
+  }
+  return pageFiles;
+}
+
+/** Resolve a single-hop import path to find the target file content */
+function resolveImportedComponent(
+  importSource: string,
+  currentFile: string,
+  allFiles: Map<string, string>
+): { filePath: string; content: string } | null {
+  // Normalize the import source
+  let resolved = importSource.replace(/^@\//, 'src/');
+  // If relative, resolve against current file
+  if (resolved.startsWith('.')) {
+    const dir = currentFile.replace(/\/[^/]+$/, '');
+    const parts = dir.split('/');
+    for (const seg of resolved.split('/')) {
+      if (seg === '..') parts.pop();
+      else if (seg !== '.') parts.push(seg);
+    }
+    resolved = parts.join('/');
+  }
+  // Try with extensions
+  const candidates = [resolved, `${resolved}.tsx`, `${resolved}.ts`, `${resolved}.jsx`, `${resolved}.js`, `${resolved}/index.tsx`, `${resolved}/index.ts`];
+  for (const cand of candidates) {
+    const norm = normalizePath(cand);
+    if (allFiles.has(norm)) return { filePath: norm, content: allFiles.get(norm)! };
+  }
+  return null;
+}
+
+/** Check if a layout component file contains <main> or role="main" */
+function layoutProvidesMain(pageContent: string, pageFilePath: string, allFiles: Map<string, string>): boolean {
+  // Find JSX tags used as wrappers in the return statement
+  const returnMatch = pageContent.match(/\breturn\s*\(\s*</);
+  if (!returnMatch) return false;
+  const afterReturn = pageContent.slice(returnMatch.index!);
+  // Find the outermost component tag (capitalized = React component)
+  const wrapperMatch = afterReturn.match(/^\s*return\s*\(\s*<([A-Z]\w*)/);
+  if (!wrapperMatch) return false;
+  const wrapperName = wrapperMatch[1];
+
+  // Resolve import for this wrapper
+  const importRe = new RegExp(`import\\s+(?:\\{[^}]*\\b${wrapperName}\\b[^}]*\\}|${wrapperName})\\s+from\\s+["']([^"']+)["']`);
+  const importMatch = pageContent.match(importRe);
+  if (!importMatch) return false;
+  const importSource = importMatch[1];
+  const resolved = resolveImportedComponent(importSource, pageFilePath, allFiles);
+  if (!resolved) return false;
+  return /<main\b/i.test(resolved.content) || /role\s*=\s*["']main["']/i.test(resolved.content);
+}
+
 function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   const findings: A4Finding[] = [];
   const seenKeys = new Set<string>();
 
-  // Track global heading/landmark presence
-  let hasH1 = false;
+  // Global landmark tracking
   let hasMainLandmark = false;
   let hasNavLandmark = false;
   const headingLevelsUsed = new Set<number>();
@@ -5689,22 +5765,26 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   const listIssues: A4Finding[] = [];
   const visualHeadingIssues: A4Finding[] = [];
 
+  // Identify page files for page-level h1 analysis
+  const pageFiles = identifyPageFiles(allFiles);
+
+  // Per-page h1 tracking
+  const pageH1Counts = new Map<string, number>();
+
   const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
   const POINTER_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
   const HTML_CLICK_HANDLER_RE = /\b(onclick|onmousedown|onmouseup|onkeydown)\s*=/i;
   const INTERACTIVE_ROLES = /\brole\s*=\s*["'](button|link|menuitem|tab|option|checkbox|radio|switch|combobox|listbox|slider|treeitem|gridcell)["']/i;
   const KEY_HANDLER_RE = /\b(onKeyDown|onKeyUp|onKeyPress)\s*=/;
   const TABINDEX_GTE0_RE = /tabIndex\s*=\s*\{?\s*(?:0|[1-9])\s*\}?/i;
-  // Visual heading heuristic: large font classes + bold (with responsive prefixes and bracket sizes)
   const LARGE_FONT_RE = /(?:^|\s)(?:(?:sm|md|lg|xl|2xl):)?(?:text-(?:lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)|text-\[\d+(?:px|rem|em)\])\b/;
   const BOLD_RE = /(?:^|\s)(?:(?:sm|md|lg|xl|2xl):)?(?:font-bold|font-semibold|font-extrabold|font-black)\b/;
-  // A4.4: list-like intent indicators
   const LIST_INTENT_RE = /^(?:\s*[•\-\*\d]+[\.\)]\s|\s*(?:item|card|entry|row|record)\b)/i;
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
     if (!/\.(tsx|jsx|ts|js|html)$/.test(filePath)) continue;
-    if (!filePath.startsWith('src/') && !filePath.startsWith('components/') && !filePath.startsWith('app/') && !filePath.startsWith('pages/')) continue;
+    if (!filePath.startsWith('src/') && !filePath.startsWith('components/') && !filePath.startsWith('app/') && !filePath.startsWith('pages/') && !filePath.startsWith('client/')) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
 
@@ -5714,8 +5794,14 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
-    // A4.1: Heading semantics — scan for h1–h6
-    if (/<h1\b/gi.test(content)) hasH1 = true;
+    // Track h1 per page file
+    const isPage = pageFiles.has(filePath);
+    if (isPage) {
+      const h1Matches = content.match(/<h1\b/gi);
+      pageH1Counts.set(filePath, h1Matches ? h1Matches.length : 0);
+    }
+
+    // Global heading level tracking (for skipped levels only)
     for (let i = 1; i <= 6; i++) {
       if (new RegExp(`<h${i}\\b`, 'i').test(content)) headingLevelsUsed.add(i);
     }
@@ -5727,9 +5813,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       const classMatch = attrs.match(/className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[`"']([^`"']+)[`"']\})/);
       const cls = classMatch?.[1] || classMatch?.[2] || classMatch?.[3] || '';
       if (!LARGE_FONT_RE.test(cls) || !BOLD_RE.test(cls)) continue;
-      // Skip if has heading role
       if (/role\s*=\s*["']heading["']/i.test(attrs)) continue;
-      // Check text content length (3–80 chars)
       const afterTag = content.slice(index + attrs.length + tag.length + 2, Math.min(content.length, index + attrs.length + tag.length + 200));
       const textMatch = afterTag.match(/^([^<]{3,80})/);
       if (!textMatch) continue;
@@ -5738,18 +5822,34 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
 
       const lineNumber = content.slice(0, index).split('\n').length;
 
-      // Determine if this is the first heading-like element within the returned JSX block
-      // Find the first `return (` or `return(` in the file to locate JSX start
       const returnMatch = content.match(/\breturn\s*\(/);
       const jsxStartIdx = returnMatch ? (returnMatch.index! + returnMatch[0].length) : 0;
-      // "Top of page" = first visual heading match that appears after the JSX return
       const isFirstHeadingInJsx = index >= jsxStartIdx && !visualHeadingIssues.some(
         v => v.filePath === filePath && v.detection.includes('visual_heading_no_h1')
       );
       const isTopHeadingCandidate = isFirstHeadingInJsx && !fileHasH1;
 
-      if (isTopHeadingCandidate) {
-        // New heuristic: top-of-page visual heading without any <h1> → Potential/borderline
+      if (isTopHeadingCandidate && isPage) {
+        // Page-level: visual heading near top without any <h1> → A4-H1-1 Potential
+        const dedupeKey = `A4.1|top-visual-heading|${filePath}|${lineNumber}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        visualHeadingIssues.push({
+          elementLabel: `Visual heading: "${text.substring(0, 40)}"`, elementType: tag, sourceLabel: text.substring(0, 40),
+          filePath, componentName,
+          subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+          classification: 'potential',
+          detection: `visual_heading_no_h1: Page has no <h1> but renders a visual heading (<${tag}> with large font + bold)`,
+          evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
+          explanation: `Page file "${componentName}" has no <h1> but this <${tag}> appears to serve as the page title. Screen readers cannot identify it as a heading.`,
+          confidence: 0.70,
+          correctivePrompt: `Replace <${tag}> with <h1> (or add role="heading" aria-level="1") since it appears to be the primary page heading.`,
+          deduplicationKey: dedupeKey,
+          potentialSubtype: 'borderline',
+        });
+      } else if (isTopHeadingCandidate) {
+        // Non-page file top heading without h1 — lower confidence
         const dedupeKey = `A4.1|top-visual-heading|${filePath}|${lineNumber}`;
         if (seenKeys.has(dedupeKey)) continue;
         seenKeys.add(dedupeKey);
@@ -5761,14 +5861,14 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
           classification: 'potential',
           detection: `visual_heading_no_h1: Visual heading rendered without semantic heading (<h1> or role="heading" aria-level)`,
           evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
-          explanation: `<${tag}> appears to be the page title (large font + bold, near top of component, no <h1> in file) but uses no semantic heading. Screen readers cannot identify it as a heading.`,
+          explanation: `<${tag}> appears to be a page title (large font + bold, near top of component, no <h1> in file) but uses no semantic heading.`,
           confidence: 0.68,
           correctivePrompt: `Replace <${tag}> with <h1> (or add role="heading" aria-level="1") since it appears to be the primary page heading.`,
           deduplicationKey: dedupeKey,
           potentialSubtype: 'borderline',
         });
       } else {
-        // Original heuristic: any visual heading missing semantics → Confirmed
+        // Any visual heading missing semantics → Confirmed
         const dedupeKey = `A4.1|visual-heading|${filePath}|${lineNumber}`;
         if (seenKeys.has(dedupeKey)) continue;
         seenKeys.add(dedupeKey);
@@ -5789,31 +5889,22 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     }
 
     // A4.2: Interactive semantics — using multiline JSX parser
-    // Only flag if element has pointer handler + keyboard support EXISTS but ROLE is missing.
-    // If keyboard support is also missing → this is A3-C1 territory, suppress A4.2.
     const a4NonInteractiveTags = extractJsxOpeningTags(content, NON_INTERACTIVE_TAGS);
     for (const { tag, attrs, index } of a4NonInteractiveTags) {
       if (!POINTER_HANDLER_RE.test(attrs) && !HTML_CLICK_HANDLER_RE.test(attrs)) continue;
       if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
       if (/aria-hidden\s*=\s*\{\s*true\s*\}/i.test(attrs)) continue;
       if (INTERACTIVE_ROLES.test(attrs)) continue;
-
-      // Ancestor exemptions (same as A3)
       if (isInsideInteractiveAncestor(content, index)) continue;
       if (isSummaryInDetails(content, index, tag)) continue;
 
       const hasKeyHandler = KEY_HANDLER_RE.test(attrs);
       const hasTabIndex = TABINDEX_GTE0_RE.test(attrs);
-
-      // If keyboard support is missing (no tabIndex OR no key handler), this is A3-C1 territory.
-      // Suppress A4.2 to avoid overlap.
       if (!hasKeyHandler || !hasTabIndex) continue;
 
-      // Has keyboard support but missing semantic role → A4.2 Confirmed
       const lineNumber = content.slice(0, index).split('\n').length;
       const handlerMatch = attrs.match(/\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/) || attrs.match(/\b(onclick|onmousedown|onmouseup|onkeydown)\s*=/i);
       const triggerHandler = handlerMatch?.[1] || 'onClick';
-
       const afterTag = content.slice(index + attrs.length + tag.length + 2, Math.min(content.length, index + attrs.length + tag.length + 300));
       const childTextMatch = afterTag.match(/^([^<]{1,80})/);
       const innerText = childTextMatch?.[1]?.trim();
@@ -5837,12 +5928,11 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       });
     }
 
-    // A4.3: Landmark detection
+    // A4.3: Landmark detection (global)
     if (/<main\b/i.test(content) || /role\s*=\s*["']main["']/i.test(content)) hasMainLandmark = true;
     if (/<nav\b/i.test(content) || /role\s*=\s*["']navigation["']/i.test(content)) hasNavLandmark = true;
 
     // A4.4: Lists — tightened heuristic (Potential only)
-    // Require ≥3 repeated items AND evidence of list-like intent (not just identical Tailwind classes).
     const repeatedClassPattern = /className\s*=\s*(?:"([^"]+)"|'([^']+)'|{`([^`]+)`})/g;
     const classCounts = new Map<string, { count: number; samples: string[] }>();
     let classMatch2;
@@ -5851,7 +5941,6 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       if (cls.length > 10 && cls.length < 200) {
         const entry = classCounts.get(cls) || { count: 0, samples: [] };
         entry.count++;
-        // Grab text after the tag for list-intent checking
         const afterPos = classMatch2.index + classMatch2[0].length;
         const snippet = content.slice(afterPos, Math.min(content.length, afterPos + 200));
         const closingTag = snippet.match(/>\s*([^<]{0,80})/);
@@ -5863,8 +5952,6 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       if (count < 3) continue;
       const hasSemanticList = /<(?:ul|ol)\b/i.test(content) || /role\s*=\s*["']list["']/i.test(content);
       if (hasSemanticList) continue;
-
-      // Check for list-like intent: bullet/number prefixes or "item"/"card"/"entry" wrappers
       const isTailwindOnlyClass = /^[\s\w\-\/\[\]:]+$/.test(cls) && !/\b(?:item|card|entry|row|record|list)\b/i.test(cls);
       const hasListIntent = samples.some(s => LIST_INTENT_RE.test(s)) || /\b(?:item|card|entry|row|record|list)\b/i.test(cls);
       if (isTailwindOnlyClass && !hasListIntent) continue;
@@ -5887,23 +5974,25 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     }
   }
 
-  // A4.1: Post-scan heading analysis — missing h1 is Potential (apps may define h1 dynamically)
-  if (!hasH1 && headingLevelsUsed.size > 0) {
-    headingIssues.push({
-      elementLabel: 'Missing <h1>', elementType: 'h1', sourceLabel: 'Page heading',
-      filePath: 'global', componentName: undefined,
-      subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
-      classification: 'potential',
-      detection: 'missing_h1: No <h1> found in any source file',
-      evidence: `Heading levels used: ${Array.from(headingLevelsUsed).sort().map(l => `h${l}`).join(', ')} — no h1`,
-      explanation: 'No <h1> heading found. Pages should generally have one <h1> for the page title, though it may be rendered dynamically.',
-      confidence: 0.72,
-      correctivePrompt: 'Add exactly one <h1> element for the page title.',
-      deduplicationKey: 'A4.1|no-h1',
-    });
+  // A4.1 Post-scan: Page-level multiple <h1> check
+  // Only flag if a single page file contains >1 <h1>
+  for (const [pagePath, count] of pageH1Counts) {
+    if (count > 1) {
+      headingIssues.push({
+        elementLabel: `Multiple <h1> in ${pagePath.split('/').pop()}`, elementType: 'h1', sourceLabel: 'Page heading',
+        filePath: pagePath, componentName: undefined,
+        subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+        classification: 'potential',
+        detection: `multiple_h1: ${count} <h1> elements in the same page file`,
+        evidence: `${count} <h1> tags in ${pagePath}`,
+        explanation: `This page file contains ${count} <h1> elements. Each page view should have exactly one <h1>.`,
+        confidence: 0.70,
+        deduplicationKey: `A4.1|multiple-h1|${pagePath}`,
+      });
+    }
   }
 
-  // Check for skipped heading levels — Potential
+  // A4.1 Post-scan: Skipped heading levels (kept as global, this is structural)
   const sortedLevels = Array.from(headingLevelsUsed).sort();
   for (let i = 1; i < sortedLevels.length; i++) {
     if (sortedLevels[i] - sortedLevels[i - 1] > 1) {
@@ -5919,43 +6008,35 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
         confidence: 0.78,
         deduplicationKey: `A4.1|skip-h${sortedLevels[i - 1]}-h${sortedLevels[i]}`,
       });
-      break; // Report first skip only
+      break;
     }
   }
 
-  // Multiple h1s — Potential
-  let h1Count = 0;
-  for (const [, content] of allFiles) {
-    const matches = content.match(/<h1\b/gi);
-    if (matches) h1Count += matches.length;
-  }
-  if (h1Count > 1) {
-    headingIssues.push({
-      elementLabel: `Multiple <h1> elements (${h1Count})`, elementType: 'h1', sourceLabel: 'Page heading',
-      filePath: 'global', componentName: undefined,
-      subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
-      classification: 'potential',
-      detection: `multiple_h1: ${h1Count} <h1> elements found across source files`,
-      evidence: `${h1Count} <h1> tags detected`,
-      explanation: `Multiple <h1> elements detected. Pages should generally have exactly one <h1> for the page title.`,
-      confidence: 0.72,
-      deduplicationKey: 'A4.1|multiple-h1',
-    });
-  }
-
-  // A4.3: Missing landmarks — Potential
+  // A4.3: Missing <main> landmark — layout-aware
+  // If no file has <main> directly, check if any page's layout wrapper provides it
   if (!hasMainLandmark) {
-    landmarkIssues.push({
-      elementLabel: 'Missing <main> landmark', elementType: 'main', sourceLabel: 'Page landmark',
-      filePath: 'global', componentName: undefined,
-      subCheck: 'A4.3', subCheckLabel: 'Landmark regions',
-      classification: 'potential',
-      detection: 'No <main> or role="main" found',
-      evidence: 'No main landmark detected in source files',
-      explanation: 'No <main> landmark found. Screen readers use landmarks to navigate page regions efficiently.',
-      confidence: 0.75,
-      deduplicationKey: 'A4.3|no-main',
-    });
+    let layoutProvidesIt = false;
+    for (const pagePath of pageFiles) {
+      const pageContent = allFiles.get(pagePath);
+      if (pageContent && layoutProvidesMain(pageContent, pagePath, allFiles)) {
+        layoutProvidesIt = true;
+        break;
+      }
+    }
+    if (!layoutProvidesIt) {
+      const confidence = pageFiles.size > 0 ? 0.80 : 0.60;
+      landmarkIssues.push({
+        elementLabel: 'Missing <main> landmark', elementType: 'main', sourceLabel: 'Page landmark',
+        filePath: 'global', componentName: undefined,
+        subCheck: 'A4.3', subCheckLabel: 'Landmark regions',
+        classification: 'potential',
+        detection: 'No <main> or role="main" found in any source or layout file',
+        evidence: 'No main landmark detected in source files or resolved layout wrappers',
+        explanation: 'No <main> landmark found. Screen readers use landmarks to navigate page regions efficiently (WCAG 2.4.1 Bypass Blocks).',
+        confidence,
+        deduplicationKey: 'A4.3|no-main',
+      });
+    }
   }
 
   findings.push(...headingIssues, ...visualHeadingIssues, ...clickableNonSemantics, ...landmarkIssues, ...listIssues);

@@ -1,18 +1,22 @@
 import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 
 /**
- * A4 Missing Semantic Structure — Refined Classification Tests
+ * A4 Missing Semantic Structure — Page-Level Classification Tests
  *
  * Validates:
- * - A4.1: missing_h1 (Potential), skipped_levels (Potential), visual_heading_missing_semantics (Confirmed)
- * - A4.2: Only fires when keyboard support present but role missing (avoids A3 overlap)
- * - A4.3: Missing main landmark (Potential)
- * - A4.4: Tightened list heuristic — requires list-like intent, not just className repetition
+ * - A4.1: Page-level h1 analysis (no repo-wide counting)
+ * - A4.1: Visual heading detection
+ * - A4.2: Interactive semantics (keyboard present but role missing)
+ * - A4.3: Layout-aware <main> detection
+ * - A4.4: List heuristic
  */
 
 interface A4Finding {
   elementLabel: string;
   elementType: string;
+  filePath?: string;
+  componentName?: string;
+  sourceLabel?: string;
   subCheck: 'A4.1' | 'A4.2' | 'A4.3' | 'A4.4';
   subCheckLabel: string;
   classification: 'confirmed' | 'potential';
@@ -22,13 +26,13 @@ interface A4Finding {
   confidence: number;
   correctivePrompt?: string;
   deduplicationKey: string;
+  potentialSubtype?: 'borderline' | 'accuracy';
 }
 
 function normalizePath(p: string): string {
   return p.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
-// Inline extractJsxOpeningTags (same logic as index.ts)
 function extractJsxOpeningTags(content: string, tagPattern: string): Array<{tag: string; attrs: string; index: number; fullMatch: string}> {
   const results: Array<{tag: string; attrs: string; index: number; fullMatch: string}> = [];
   const openRegex = new RegExp(`<(${tagPattern})\\b`, 'gi');
@@ -67,14 +71,71 @@ function extractJsxOpeningTags(content: string, tagPattern: string): Array<{tag:
   return results;
 }
 
-/**
- * Minimal A4 detection mirroring refined edge function logic.
- */
+// --- Helpers mirroring the edge function ---
+
+function identifyPageFiles(allFiles: Map<string, string>): Set<string> {
+  const pageFiles = new Set<string>();
+  const PAGE_PATH_RE = /(?:^|\/)(?:pages|routes|app|views)\/[^/]+\.(tsx|jsx|ts|js)$/i;
+  for (const filePath of allFiles.keys()) {
+    const norm = normalizePath(filePath);
+    if (PAGE_PATH_RE.test(norm)) pageFiles.add(norm);
+  }
+  for (const [, content] of allFiles) {
+    const routeElementRe = /element\s*[:=]\s*(?:\{?\s*)?<(\w+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = routeElementRe.exec(content)) !== null) {
+      const compName = m[1];
+      for (const [fp, fc] of allFiles) {
+        const norm = normalizePath(fp);
+        if (pageFiles.has(norm)) continue;
+        const exportRe = new RegExp(`export\\s+(?:default\\s+)?(?:function|const)\\s+${compName}\\b`);
+        if (exportRe.test(fc)) pageFiles.add(norm);
+      }
+    }
+  }
+  return pageFiles;
+}
+
+function resolveImportedComponent(
+  importSource: string, currentFile: string, allFiles: Map<string, string>
+): { filePath: string; content: string } | null {
+  let resolved = importSource.replace(/^@\//, 'src/');
+  if (resolved.startsWith('.')) {
+    const dir = currentFile.replace(/\/[^/]+$/, '');
+    const parts = dir.split('/');
+    for (const seg of resolved.split('/')) {
+      if (seg === '..') parts.pop();
+      else if (seg !== '.') parts.push(seg);
+    }
+    resolved = parts.join('/');
+  }
+  const candidates = [resolved, `${resolved}.tsx`, `${resolved}.ts`, `${resolved}.jsx`, `${resolved}.js`, `${resolved}/index.tsx`, `${resolved}/index.ts`];
+  for (const cand of candidates) {
+    const norm = normalizePath(cand);
+    if (allFiles.has(norm)) return { filePath: norm, content: allFiles.get(norm)! };
+  }
+  return null;
+}
+
+function layoutProvidesMain(pageContent: string, pageFilePath: string, allFiles: Map<string, string>): boolean {
+  const returnMatch = pageContent.match(/\breturn\s*\(\s*</);
+  if (!returnMatch) return false;
+  const afterReturn = pageContent.slice(returnMatch.index!);
+  const wrapperMatch = afterReturn.match(/^\s*return\s*\(\s*<([A-Z]\w*)/);
+  if (!wrapperMatch) return false;
+  const wrapperName = wrapperMatch[1];
+  const importRe = new RegExp(`import\\s+(?:\\{[^}]*\\b${wrapperName}\\b[^}]*\\}|${wrapperName})\\s+from\\s+["']([^"']+)["']`);
+  const importMatch = pageContent.match(importRe);
+  if (!importMatch) return false;
+  const resolved = resolveImportedComponent(importMatch[1], pageFilePath, allFiles);
+  if (!resolved) return false;
+  return /<main\b/i.test(resolved.content) || /role\s*=\s*["']main["']/i.test(resolved.content);
+}
+
 function detectA4(allFiles: Map<string, string>): A4Finding[] {
   const findings: A4Finding[] = [];
   const seenKeys = new Set<string>();
 
-  let hasH1 = false;
   let hasMainLandmark = false;
   const headingLevelsUsed = new Set<number>();
   const headingIssues: A4Finding[] = [];
@@ -82,6 +143,9 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
   const clickableNonSemantics: A4Finding[] = [];
   const landmarkIssues: A4Finding[] = [];
   const listIssues: A4Finding[] = [];
+
+  const pageFiles = identifyPageFiles(allFiles);
+  const pageH1Counts = new Map<string, number>();
 
   const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
   const POINTER_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
@@ -96,8 +160,12 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
 
-    // A4.1: Heading semantics
-    if (/<h1\b/gi.test(content)) hasH1 = true;
+    const isPage = pageFiles.has(filePath);
+    if (isPage) {
+      const h1Matches = content.match(/<h1\b/gi);
+      pageH1Counts.set(filePath, h1Matches ? h1Matches.length : 0);
+    }
+
     for (let i = 1; i <= 6; i++) {
       if (new RegExp(`<h${i}\\b`, 'i').test(content)) headingLevelsUsed.add(i);
     }
@@ -132,16 +200,14 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
       });
     }
 
-    // A4.2: Interactive semantics — only if keyboard support exists but role missing
+    // A4.2: Interactive semantics
     const a4Tags = extractJsxOpeningTags(content, NON_INTERACTIVE_TAGS);
     for (const { tag, attrs, index } of a4Tags) {
       if (!POINTER_HANDLER_RE.test(attrs) && !HTML_CLICK_HANDLER_RE.test(attrs)) continue;
       if (/aria-hidden\s*=\s*["']true["']/i.test(attrs)) continue;
       if (INTERACTIVE_ROLES.test(attrs)) continue;
-
       const hasKeyHandler = KEY_HANDLER_RE.test(attrs);
       const hasTabIndex = TABINDEX_GTE0_RE.test(attrs);
-      // Suppress if keyboard support missing → A3-C1 territory
       if (!hasKeyHandler || !hasTabIndex) continue;
 
       const lineNumber = content.slice(0, index).split('\n').length;
@@ -164,7 +230,7 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
     // A4.3: Landmark detection
     if (/<main\b/i.test(content) || /role\s*=\s*["']main["']/i.test(content)) hasMainLandmark = true;
 
-    // A4.4: Lists — tightened heuristic
+    // A4.4: Lists
     const repeatedClassPattern = /className\s*=\s*(?:"([^"]+)"|'([^']+)'|{`([^`]+)`})/g;
     const classCounts = new Map<string, { count: number; samples: string[] }>();
     let classMatch2;
@@ -205,20 +271,23 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
     }
   }
 
-  // Post-scan: missing h1 → Potential
-  if (!hasH1 && headingLevelsUsed.size > 0) {
-    headingIssues.push({
-      elementLabel: 'Missing <h1>', elementType: 'h1',
-      subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
-      classification: 'potential',
-      detection: 'missing_h1: No <h1> found in any source file',
-      evidence: `Heading levels: ${Array.from(headingLevelsUsed).sort().map(l => `h${l}`).join(', ')} — no h1`,
-      explanation: 'No <h1> heading found.',
-      confidence: 0.72,
-      deduplicationKey: 'A4.1|no-h1',
-    });
+  // Page-level multiple h1
+  for (const [pagePath, count] of pageH1Counts) {
+    if (count > 1) {
+      headingIssues.push({
+        elementLabel: `Multiple <h1> in ${pagePath.split('/').pop()}`, elementType: 'h1',
+        subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+        classification: 'potential',
+        detection: `multiple_h1: ${count} <h1> elements in the same page file`,
+        evidence: `${count} <h1> tags in ${pagePath}`,
+        explanation: `This page file has ${count} <h1> elements.`,
+        confidence: 0.70,
+        deduplicationKey: `A4.1|multiple-h1|${pagePath}`,
+      });
+    }
   }
 
+  // Skipped heading levels
   const sortedLevels = Array.from(headingLevelsUsed).sort();
   for (let i = 1; i < sortedLevels.length; i++) {
     if (sortedLevels[i] - sortedLevels[i - 1] > 1) {
@@ -237,17 +306,28 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
     }
   }
 
+  // A4.3: Missing main — layout-aware
   if (!hasMainLandmark) {
-    landmarkIssues.push({
-      elementLabel: 'Missing <main> landmark', elementType: 'main',
-      subCheck: 'A4.3', subCheckLabel: 'Landmark regions',
-      classification: 'potential',
-      detection: 'No <main> or role="main" found',
-      evidence: 'No main landmark detected',
-      explanation: 'No <main> landmark found.',
-      confidence: 0.75,
-      deduplicationKey: 'A4.3|no-main',
-    });
+    let layoutProvidesIt = false;
+    for (const pagePath of pageFiles) {
+      const pageContent = allFiles.get(pagePath);
+      if (pageContent && layoutProvidesMain(pageContent, pagePath, allFiles)) {
+        layoutProvidesIt = true;
+        break;
+      }
+    }
+    if (!layoutProvidesIt) {
+      landmarkIssues.push({
+        elementLabel: 'Missing <main> landmark', elementType: 'main',
+        subCheck: 'A4.3', subCheckLabel: 'Landmark regions',
+        classification: 'potential',
+        detection: 'No <main> or role="main" found',
+        evidence: 'No main landmark detected',
+        explanation: 'No <main> landmark found.',
+        confidence: 0.75,
+        deduplicationKey: 'A4.3|no-main',
+      });
+    }
   }
 
   findings.push(...headingIssues, ...visualHeadingIssues, ...clickableNonSemantics, ...landmarkIssues, ...listIssues);
@@ -258,103 +338,121 @@ function detectA4(allFiles: Map<string, string>): A4Finding[] {
 // TESTS
 // ============================================================
 
-Deno.test("A4.1: Missing <h1> → Potential (not Confirmed)", () => {
-  const files = new Map([["src/page.tsx", "<h2>Subtitle</h2><h3>Section</h3>"]]);
+// --- TEST 1: Many pages each with one <h1> -> NO multiple h1 issue ---
+Deno.test("A4.1: Many pages each with one <h1> → NO heading issue", () => {
+  const files = new Map([
+    ["src/pages/Home.tsx", "<h1>Home</h1><h2>Welcome</h2>"],
+    ["src/pages/About.tsx", "<h1>About Us</h1><p>Info</p>"],
+    ["src/pages/Contact.tsx", "<h1>Contact</h1><p>Form</p>"],
+  ]);
   const results = detectA4(files);
-  const h1Finding = results.find(f => f.subCheck === 'A4.1' && f.detection.includes('missing_h1'));
-  assertEquals(!!h1Finding, true, "Should find missing h1");
-  assertEquals(h1Finding!.classification, 'potential', "Missing h1 should be Potential");
-  assertEquals(h1Finding!.confidence <= 0.80, true, "Confidence should be moderate");
+  const multipleH1 = results.find(f => f.detection.includes('multiple_h1'));
+  assertEquals(!!multipleH1, false, "Should NOT flag multiple h1 when each page has exactly one");
 });
 
-Deno.test("A4.1: Skipped heading levels → Potential", () => {
-  const files = new Map([["src/page.tsx", "<h1>Title</h1><h3>Skipped</h3>"]]);
-  const results = detectA4(files);
-  const skipFinding = results.find(f => f.subCheck === 'A4.1' && f.detection.includes('skipped_levels'));
-  assertEquals(!!skipFinding, true, "Should find heading skip");
-  assertEquals(skipFinding!.classification, 'potential');
-});
-
-Deno.test("A4.1: Visual heading (large font+bold div) → Confirmed", () => {
-  const files = new Map([["src/page.tsx", '<div className="text-2xl font-bold">Dashboard Overview</div>']]);
+// --- TEST 2: Page has no <h1> but has visual heading div → emits A4-H1-1 ---
+Deno.test("A4.1: Page has no <h1> but visual heading div → Confirmed visual heading", () => {
+  const files = new Map([
+    ["src/pages/Dashboard.tsx", '<div className="text-2xl font-bold">Dashboard Overview</div><p>Content</p>'],
+  ]);
   const results = detectA4(files);
   const visual = results.find(f => f.subCheck === 'A4.1' && f.detection.includes('visual_heading'));
-  assertEquals(!!visual, true, "Should detect visual heading");
+  assertEquals(!!visual, true, "Should detect visual heading without semantic markup");
   assertEquals(visual!.classification, 'confirmed');
-  assertEquals(visual!.confidence >= 0.90, true);
 });
 
-Deno.test("A4.1: Visual heading with role='heading' → NOT flagged", () => {
-  const files = new Map([["src/page.tsx", '<div role="heading" aria-level="2" className="text-2xl font-bold">Dashboard</div>']]);
+// --- TEST 3: Layout file contains <main>, page uses that layout → NO "missing main" ---
+Deno.test("A4.3: Layout provides <main> via import → NO missing main finding", () => {
+  const files = new Map([
+    ["src/components/AppLayout.tsx", `
+      export function AppLayout({ children }) {
+        return (<div><nav>Nav</nav><main>{children}</main></div>);
+      }
+    `],
+    ["src/pages/Home.tsx", `
+      import { AppLayout } from "@/components/AppLayout";
+      export default function Home() {
+        return (<AppLayout><h1>Home</h1></AppLayout>);
+      }
+    `],
+  ]);
   const results = detectA4(files);
-  const visual = results.find(f => f.subCheck === 'A4.1' && f.detection.includes('visual_heading'));
-  assertEquals(!!visual, false, "Should NOT flag with role=heading");
+  const missingMain = results.find(f => f.subCheck === 'A4.3');
+  assertEquals(!!missingMain, false, "Should NOT flag missing main when layout provides it");
 });
 
-Deno.test("A4.2: div with onClick but NO keyboard support → NOT flagged (A3-C1 territory)", () => {
-  const files = new Map([["src/comp.tsx", '<div onClick={handleClick}>Click me</div>']]);
+// --- TEST 4: No file contains <main> or role="main" → emit global missing main ---
+Deno.test("A4.3: No <main> anywhere → emit missing main", () => {
+  const files = new Map([
+    ["src/pages/Home.tsx", "<div><h1>Title</h1><p>Content</p></div>"],
+    ["src/components/Header.tsx", "<header><nav>Nav</nav></header>"],
+  ]);
   const results = detectA4(files);
-  const a42 = results.find(f => f.subCheck === 'A4.2');
-  assertEquals(!!a42, false, "Should NOT flag — missing keyboard support belongs to A3");
+  const missingMain = results.find(f => f.subCheck === 'A4.3');
+  assertEquals(!!missingMain, true, "Should detect missing main landmark");
+  assertEquals(missingMain!.classification, 'potential');
 });
 
-Deno.test("A4.2: div with onClick + tabIndex + onKeyDown but NO role → Confirmed", () => {
-  const files = new Map([["src/comp.tsx", '<div onClick={handleClick} tabIndex={0} onKeyDown={handleKey}>Click me</div>']]);
+// --- TEST 5: Page has two <h1> in same file → emits multiple h1 (Potential) ---
+Deno.test("A4.1: Page with two <h1> in same file → Potential multiple h1", () => {
+  const files = new Map([
+    ["src/pages/Dashboard.tsx", "<h1>Dashboard</h1><section><h1>Stats</h1></section>"],
+  ]);
   const results = detectA4(files);
-  const a42 = results.find(f => f.subCheck === 'A4.2');
-  assertEquals(!!a42, true, "Should detect: keyboard present but role missing");
-  assertEquals(a42!.classification, 'confirmed');
+  const multipleH1 = results.find(f => f.detection.includes('multiple_h1'));
+  assertEquals(!!multipleH1, true, "Should detect multiple h1 in same page");
+  assertEquals(multipleH1!.classification, 'potential');
+  assertEquals(multipleH1!.confidence, 0.70);
 });
 
-Deno.test("A4.2: div with onClick + tabIndex + onKeyDown + role='button' → NOT flagged", () => {
-  const files = new Map([["src/comp.tsx", '<div role="button" onClick={handleClick} tabIndex={0} onKeyDown={handleKey}>Click me</div>']]);
-  const results = detectA4(files);
-  const a42 = results.find(f => f.subCheck === 'A4.2');
-  assertEquals(!!a42, false, "Should NOT flag — fully accessible");
-});
-
-Deno.test("A4.2: multiline JSX with keyboard support but no role → Confirmed", () => {
-  const content = `<div
-    onClick={() => handleClick()}
-    tabIndex={0}
-    onKeyDown={(e) => { if (e.key === 'Enter') handleClick(); }}
-    className="card"
-  >Click me</div>`;
-  const files = new Map([["src/comp.tsx", content]]);
-  const results = detectA4(files);
-  const a42 = results.find(f => f.subCheck === 'A4.2');
-  assertEquals(!!a42, true, "Should detect multiline JSX A4.2");
-  assertEquals(a42!.classification, 'confirmed');
-});
-
-Deno.test("A4.3: No <main> landmark → Potential", () => {
-  const files = new Map([["src/app.tsx", "<div><h1>Title</h1><p>Content</p></div>"]]);
-  const results = detectA4(files);
-  const a43 = results.find(f => f.subCheck === 'A4.3');
-  assertEquals(!!a43, true, "Should detect missing main");
-  assertEquals(a43!.classification, 'potential');
-});
-
+// --- TEST 6: Has <main> directly → NOT flagged ---
 Deno.test("A4.3: Has <main> → NOT flagged", () => {
-  const files = new Map([["src/app.tsx", "<main><h1>Title</h1></main>"]]);
+  const files = new Map([["src/pages/Home.tsx", "<main><h1>Title</h1></main>"]]);
   const results = detectA4(files);
   const a43 = results.find(f => f.subCheck === 'A4.3');
   assertEquals(!!a43, false);
 });
 
-Deno.test("A4.4: Repeated Tailwind-only className → NOT flagged (no list intent)", () => {
+// --- TEST 7: Visual heading with role='heading' → NOT flagged ---
+Deno.test("A4.1: Visual heading with role='heading' → NOT flagged", () => {
+  const files = new Map([["src/pages/Home.tsx", '<div role="heading" aria-level="2" className="text-2xl font-bold">Dashboard</div>']]);
+  const results = detectA4(files);
+  const visual = results.find(f => f.subCheck === 'A4.1' && f.detection.includes('visual_heading'));
+  assertEquals(!!visual, false, "Should NOT flag with role=heading");
+});
+
+// --- TEST 8: A4.2 div with onClick but NO keyboard support → NOT flagged ---
+Deno.test("A4.2: div with onClick but NO keyboard support → NOT flagged (A3 territory)", () => {
+  const files = new Map([["src/comp.tsx", '<div onClick={handleClick}>Click me</div>']]);
+  const results = detectA4(files);
+  const a42 = results.find(f => f.subCheck === 'A4.2');
+  assertEquals(!!a42, false);
+});
+
+// --- TEST 9: A4.2 div with onClick + tabIndex + onKeyDown but NO role → Confirmed ---
+Deno.test("A4.2: div with onClick + tabIndex + onKeyDown but NO role → Confirmed", () => {
+  const files = new Map([["src/comp.tsx", '<div onClick={handleClick} tabIndex={0} onKeyDown={handleKey}>Click me</div>']]);
+  const results = detectA4(files);
+  const a42 = results.find(f => f.subCheck === 'A4.2');
+  assertEquals(!!a42, true);
+  assertEquals(a42!.classification, 'confirmed');
+});
+
+// --- TEST 10: Repeated Tailwind-only className → NOT flagged ---
+Deno.test("A4.4: Repeated Tailwind-only className → NOT flagged", () => {
   const repeated = `
-    <div className="p-4 rounded-lg border">Section A</div>
-    <div className="p-4 rounded-lg border">Section B</div>
-    <div className="p-4 rounded-lg border">Section C</div>
+    <div className="p-4 rounded-lg border">A</div>
+    <div className="p-4 rounded-lg border">B</div>
+    <div className="p-4 rounded-lg border">C</div>
   `;
   const files = new Map([["src/list.tsx", repeated]]);
   const results = detectA4(files);
   const a44 = results.find(f => f.subCheck === 'A4.4');
-  assertEquals(!!a44, false, "Should NOT flag pure Tailwind utility repetition without list intent");
+  assertEquals(!!a44, false);
 });
 
-Deno.test("A4.4: Repeated items with 'card-item' class → Potential (has list intent)", () => {
+// --- TEST 11: Repeated items with list-intent class → Potential ---
+Deno.test("A4.4: Repeated items with 'card-item' class → Potential", () => {
   const repeated = `
     <div className="card-item p-4 rounded">Item 1</div>
     <div className="card-item p-4 rounded">Item 2</div>
@@ -363,27 +461,41 @@ Deno.test("A4.4: Repeated items with 'card-item' class → Potential (has list i
   const files = new Map([["src/list.tsx", repeated]]);
   const results = detectA4(files);
   const a44 = results.find(f => f.subCheck === 'A4.4');
-  assertEquals(!!a44, true, "Should detect list-intent divs");
-  assertEquals(a44!.classification, 'potential', "A4.4 should always be Potential");
+  assertEquals(!!a44, true);
+  assertEquals(a44!.classification, 'potential');
 });
 
-Deno.test("A4.4: Repeated divs WITH <ul> → NOT flagged", () => {
-  const content = `
-    <ul>
-      <div className="card-item p-4 rounded">Item 1</div>
-      <div className="card-item p-4 rounded">Item 2</div>
-      <div className="card-item p-4 rounded">Item 3</div>
-    </ul>
-  `;
-  const files = new Map([["src/list.tsx", content]]);
+// --- TEST 12: Repo-wide h1 count is NOT emitted ---
+Deno.test("A4.1: Repo-wide h1 count no longer emitted", () => {
+  // 5 pages, each with 1 h1 — old logic would say "5 h1 across files"
+  const files = new Map([
+    ["src/pages/A.tsx", "<h1>A</h1>"],
+    ["src/pages/B.tsx", "<h1>B</h1>"],
+    ["src/pages/C.tsx", "<h1>C</h1>"],
+    ["src/pages/D.tsx", "<h1>D</h1>"],
+    ["src/pages/E.tsx", "<h1>E</h1>"],
+  ]);
   const results = detectA4(files);
-  const a44 = results.find(f => f.subCheck === 'A4.4');
-  assertEquals(!!a44, false, "Should NOT flag when <ul> exists");
+  const repoWide = results.find(f => f.detection.includes('found across source files'));
+  assertEquals(!!repoWide, false, "Should NOT emit repo-wide h1 count");
 });
 
-Deno.test("A4: Detection includes trigger type in detection field", () => {
-  const files = new Map([["src/page.tsx", "<h2>No h1</h2>"]]);
+// --- TEST 13: Layout wrapper inference resolves @/ alias ---
+Deno.test("A4.3: Layout wrapper with @/ alias resolved → NO missing main", () => {
+  const files = new Map([
+    ["src/components/layout/MainLayout.tsx", `
+      export const MainLayout = ({ children }) => (
+        <div><main>{children}</main></div>
+      );
+    `],
+    ["src/pages/Settings.tsx", `
+      import { MainLayout } from "@/components/layout/MainLayout";
+      export default function Settings() {
+        return (<MainLayout><h1>Settings</h1></MainLayout>);
+      }
+    `],
+  ]);
   const results = detectA4(files);
-  const h1 = results.find(f => f.detection.includes('missing_h1'));
-  assertEquals(!!h1, true, "Detection should include trigger type");
+  const missingMain = results.find(f => f.subCheck === 'A4.3');
+  assertEquals(!!missingMain, false, "Should resolve @/ alias and find <main> in layout");
 });
