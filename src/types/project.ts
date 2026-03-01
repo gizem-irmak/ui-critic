@@ -465,6 +465,9 @@ export interface A5ElementSubItem {
   
   correctivePrompt?: string;
   deduplicationKey: string;
+  // Line numbers for precise file reference
+  startLine?: number | null;
+  endLine?: number | null;
 }
 
 // A6 Element sub-item for aggregated accessible name reporting

@@ -2316,6 +2316,9 @@ interface A5Finding {
   selectorHints?: string[];
   controlId?: string;
   labelingMethod?: string;
+  // Line number metadata
+  startLine?: number;
+  endLine?: number;
 }
 
 function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
@@ -2408,6 +2411,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const linesBefore = content.slice(0, index).split('\n');
       const lineNumber = linesBefore.length;
+      const endLineNumber = lineNumber + (fullMatch.split('\n').length - 1);
       // Determine display tag and element name for wrapper components
       const wrapperInfo = isReactComponent ? A5_WRAPPER_COMPONENT_MAP[tag] : undefined;
       const elementNameVal = isReactComponent ? tag : undefined;
@@ -2481,6 +2485,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
               correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nDuplicate id="${controlId}".\n\nRecommended fix:\nAssign unique ids and update <label for> attributes.`,
               deduplicationKey: dedupeKey,
               selectorHints, controlId, labelingMethod: 'broken (duplicate id)',
+              startLine: lineNumber, endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
             });
           }
           continue;
@@ -2503,6 +2508,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
             correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nPlaceholder-only label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
             deduplicationKey: dedupeKey,
             selectorHints, controlId, labelingMethod: 'none (placeholder only)',
+            startLine: lineNumber, endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
           });
         }
         continue;
@@ -2521,6 +2527,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nNo programmatic label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
           deduplicationKey: dedupeKey,
           selectorHints, controlId, labelingMethod: 'none',
+          startLine: lineNumber, endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
         });
       }
     }
@@ -2555,6 +2562,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         confidence: 0.95,
         correctivePrompt: `[${label}] — ${fileName}\n\nRecommended fix:\nAdd aria-label or aria-labelledby.`,
         deduplicationKey: dedupeKey,
+        startLine: lineNumber,
       });
     }
 
@@ -2586,6 +2594,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         confidence: 0.95,
         correctivePrompt: `[${label2}] — ${fileName2}\n\nRecommended fix:\nAdd aria-label or aria-labelledby.`,
         deduplicationKey: dedupeKey,
+        startLine: lineNumber2,
       });
     }
 
@@ -6054,7 +6063,7 @@ serve(async (req) => {
         const a5Elements = a5Findings.map(f => ({
           elementLabel: f.sourceLabel, elementType: f.elementType, elementName: f.elementName, controlType: f.controlType,
           inputSubtype: f.inputSubtype, role: f.role, sourceLabel: f.sourceLabel,
-          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          location: f.filePath, filePath: f.filePath, detection: f.detection, evidence: f.evidence,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           classification: f.classification,
           explanation: f.explanation, confidence: f.confidence,
@@ -6065,6 +6074,8 @@ serve(async (req) => {
           selectorHints: f.selectorHints,
           controlId: f.controlId,
           labelingMethod: f.labelingMethod,
+          startLine: f.startLine ?? null,
+          endLine: f.endLine ?? null,
         }));
         const hasConfirmed = confirmedFindings.length > 0;
         aggregatedA5GitHub = {

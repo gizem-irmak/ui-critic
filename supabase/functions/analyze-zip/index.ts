@@ -6421,6 +6421,9 @@ interface A5Finding {
   selectorHints?: string[]; // e.g., ['id="email"', 'name="email"']
   controlId?: string; // The actual id if present
   labelingMethod?: string; // What labeling was found/missing
+  // Line number metadata
+  startLine?: number;
+  endLine?: number;
 }
 
 function makeA5ElementKey(tag: string, id: string, name: string, type: string, filePath: string, lineNumber: number): string {
@@ -6531,6 +6534,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const linesBefore = content.slice(0, index).split('\n');
       const lineNumber = linesBefore.length;
+      const endLineNumber = lineNumber + (fullMatch.split('\n').length - 1);
 
       // Determine display tag and element name for wrapper components
       const wrapperInfo = isReactComponent ? A5_WRAPPER_COMPONENT_MAP[tag] : undefined;
@@ -6616,6 +6620,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
               selectorHints,
               controlId,
               labelingMethod: 'broken (duplicate id)',
+              startLine: lineNumber,
+              endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
             });
           }
           continue; // Don't double-report
@@ -6646,6 +6652,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
             selectorHints,
             controlId,
             labelingMethod: 'none (placeholder only)',
+            startLine: lineNumber,
+            endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
           });
         }
         continue; // Don't double-report as A5.1
@@ -6670,6 +6678,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           selectorHints,
           controlId,
           labelingMethod: 'none',
+          startLine: lineNumber,
+          endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
         });
       }
     }
@@ -6710,6 +6720,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
         correctivePrompt: `[${label}] — ${fileName}\n\nIssue reason:\nCustom input with role="${role}" has no programmatic label.\n\nRecommended fix:\nAdd aria-label or aria-labelledby to provide an accessible name for this control.`,
         deduplicationKey: dedupeKey,
+        startLine: lineNumber,
       });
     }
 
@@ -6747,6 +6758,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
         correctivePrompt: `[${label2}] — ${fileName2}\n\nIssue reason:\nContenteditable element has no programmatic label.\n\nRecommended fix:\nAdd aria-label or aria-labelledby.`,
         deduplicationKey: dedupeKey,
+        startLine: lineNumber2,
       });
     }
 
@@ -8076,6 +8088,8 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           selectorHints: f.selectorHints,
           controlId: f.controlId,
           labelingMethod: f.labelingMethod,
+          startLine: f.startLine ?? null,
+          endLine: f.endLine ?? null,
         }));
 
         const subCheckBreakdown = [

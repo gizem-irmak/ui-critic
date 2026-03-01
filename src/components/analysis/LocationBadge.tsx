@@ -6,6 +6,8 @@ interface LocationBadgeProps {
   showIcon?: boolean;
   compact?: boolean;
   className?: string;
+  startLine?: number | null;
+  endLine?: number | null;
 }
 
 function extractBasename(path: string): string {
@@ -20,8 +22,16 @@ export function LocationBadge({
   showIcon = true,
   compact = false,
   className,
+  startLine,
+  endLine,
 }: LocationBadgeProps) {
-  const label = displayName || (filePath ? extractBasename(filePath) : 'global');
+  let label = displayName || (filePath ? extractBasename(filePath) : 'global');
+  if (startLine != null) {
+    label += `:${startLine}`;
+    if (endLine != null && endLine !== startLine) {
+      label += `–${endLine}`;
+    }
+  }
 
   return (
     <span className={cn(
