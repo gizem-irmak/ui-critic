@@ -2571,18 +2571,20 @@ Assess whether high-impact actions (delete, purchase, subscribe, reset) visibly 
 }
 \`\`\`
 
-### E2 (Imbalanced or Manipulative Choice Architecture) — LLM PERCEPTUAL:
-Assess whether choice options are presented with meaningful visual/linguistic imbalance that may nudge users.
-- Look for: button size/contrast/placement imbalance, obscured decline/cancel, asymmetric wording (action vs passive), pre-selected defaults.
-- Do NOT flag normal primary/secondary patterns unless the alternative is materially de-emphasized or obscured.
+### E2 (Imbalanced Choice Architecture in High-Impact Decisions) — LLM PERCEPTUAL:
+E2 flags choice imbalance ONLY in high-impact decision contexts: consent/privacy, monetization/payment, irreversible actions, data sharing.
+- **HIGH-IMPACT GATE (REQUIRED):** Only evaluate if visible CTA context includes: consent, cookie, payment, subscribe, upgrade, delete, confirm, privacy, data sharing keywords.
+- **MUST NOT FLAG:** Standard "Sign Up" primary + "Sign In" secondary on landing pages. Navigation vs auth buttons. Marketing layouts without consent/monetization context.
+- **REQUIRE 2+ imbalance signals:** visual dominance asymmetry, size difference, language bias, default selection, ambiguous alternative.
 - Do NOT infer malicious intent. Use neutral phrasing ("imbalance risk", "may nudge").
-- E2 is ALWAYS "Potential" — NEVER "Confirmed". Confidence: 0.60–0.80.
+- E2 is ALWAYS "Potential" — NEVER "Confirmed". Confidence: 0.55–0.75 (cap at 0.75).
+- If no high-impact context visible or only 1 signal → do NOT report E2.
 - Return structured e2Elements:
 \`\`\`json
 {
-  "ruleId": "E2", "ruleName": "Imbalanced or manipulative choice architecture", "category": "ethics",
+  "ruleId": "E2", "ruleName": "Imbalanced choice architecture in high-impact decision", "category": "ethics",
   "status": "potential", "isE2Aggregated": true,
-  "e2Elements": [{ "elementLabel": "...", "elementType": "button-group", "location": "Screenshot #1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.70 }]
+  "e2Elements": [{ "elementLabel": "...", "elementType": "button-group", "location": "Screenshot #1", "detection": "...", "evidence": "...", "recommendedFix": "Present confirm/decline options with comparable visual weight.", "confidence": 0.65 }]
 }
 \`\`\`
 
@@ -4307,7 +4309,7 @@ serve(async (req) => {
       }
     }
 
-    // ========== E2 POST-PROCESSING (Screenshot — LLM perceptual) ==========
+    // ========== E2 POST-PROCESSING (Screenshot — High-Impact Gate + LLM perceptual) ==========
     const aggregatedE2UIList: any[] = [];
     if (selectedRulesSet.has('E2')) {
       const e2FromLLM = filteredOtherViolations.filter((v: any) => v.ruleId === 'E2');
@@ -4322,8 +4324,8 @@ serve(async (req) => {
               location: el.location || 'Screenshot',
               detection: el.detection || '',
               evidence: el.evidence || '',
-              recommendedFix: el.recommendedFix || '',
-              confidence: Math.min(el.confidence || 0.65, 0.80),
+              recommendedFix: el.recommendedFix || 'Present confirm/decline options with comparable visual weight and equal discoverability.',
+              confidence: Math.min(el.confidence || 0.60, 0.75),
               evaluationMethod: 'llm_perceptual' as const,
               deduplicationKey: el.deduplicationKey || `E2|${el.location || ''}|${el.elementLabel || ''}`,
             }))
@@ -4333,20 +4335,20 @@ serve(async (req) => {
               location: 'Screenshot',
               detection: v.diagnosis || '',
               evidence: v.evidence || '',
-              recommendedFix: v.contextualHint || '',
-              confidence: Math.min(v.confidence || 0.65, 0.80),
+              recommendedFix: v.contextualHint || 'Present confirm/decline options with comparable visual weight and equal discoverability.',
+              confidence: Math.min(v.confidence || 0.60, 0.75),
               evaluationMethod: 'llm_perceptual' as const,
               deduplicationKey: `E2|${v.evidence || 'unknown'}`,
             }));
 
-        const overallConfidence = Math.min(Math.max(...e2Elements.map((e: any) => e.confidence)), 0.80);
+        const overallConfidence = Math.min(Math.max(...e2Elements.map((e: any) => e.confidence)), 0.75);
         aggregatedE2UIList.push({
-          ruleId: 'E2', ruleName: 'Imbalanced or manipulative choice architecture', category: 'ethics',
+          ruleId: 'E2', ruleName: 'Imbalanced choice architecture in high-impact decision', category: 'ethics',
           status: 'potential', blocksConvergence: false,
           inputType: 'screenshots', isE2Aggregated: true, e2Elements, evaluationMethod: 'llm_assisted',
-          diagnosis: `Choice architecture issues: ${e2Elements.length} potential risk(s) detected via visual analysis.`,
-          contextualHint: 'Present choices with equal visual weight and neutral defaults.',
-          advisoryGuidance: 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.',
+          diagnosis: `Choice architecture imbalance: ${e2Elements.length} potential risk(s) in high-impact decision context.`,
+          contextualHint: 'Present confirm/decline options with comparable visual weight and equal discoverability.',
+          advisoryGuidance: 'Present confirm/decline options with comparable visual weight and equal discoverability. Avoid preselected consent/paid options; ensure opt-out is as easy as opt-in.',
           confidence: Math.round(overallConfidence * 100) / 100,
         });
         console.log(`E2 aggregated (UI): ${e2FromLLM.length} finding(s) → ${e2Elements.length} element(s)`);
