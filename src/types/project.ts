@@ -549,11 +549,12 @@ export interface U4ElementSubItem {
   detection?: string;     // Summary of what was detected
   evidence?: string;      // Specific evidence citations
   recommendedFix?: string; // Actionable fix suggestion
-  confidence: number;     // Capped at 0.80
+  confidence: number;     // Capped at 0.65
   subCheck?: 'U4.1' | 'U4.2' | 'U4.3' | 'U4.4'; // Which subtype triggered
   subCheckLabel?: string; // Human-readable subtype label
-  status?: 'confirmed' | 'potential'; // Per-element classification
-  evaluationMethod?: 'deterministic' | 'hybrid_deterministic' | 'llm_assisted';
+  status?: 'potential';   // ALWAYS potential — U4 never confirms
+  evaluationMethod?: 'llm_assisted';
+  mitigationSummary?: string; // Summary of mitigations checked
   deduplicationKey: string;
 }
 

@@ -24,11 +24,10 @@ function U4ElementItem({ element, compact = false }: {
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const displayLabel = element.elementLabel || 'UI region';
-  const isConfirmed = element.status === 'confirmed';
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <ElementItemWrapper isConfirmed={isConfirmed} compact={compact}>
+      <ElementItemWrapper isConfirmed={false} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap min-w-0">
@@ -76,6 +75,13 @@ function U4ElementItem({ element, compact = false }: {
               </FieldRow>
             )}
 
+            {element.mitigationSummary && (
+              <FieldRow>
+                <FieldLabel>Mitigations:</FieldLabel>
+                <FieldValue>{element.mitigationSummary}</FieldValue>
+              </FieldRow>
+            )}
+
             {element.confidence != null && (
               <FieldRow>
                 <FieldLabel>Confidence:</FieldLabel>
@@ -114,20 +120,17 @@ export function U4AggregatedCard({ violation, compact = false }: U4AggregatedCar
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
 
-  const isConfirmed = violation.status === 'confirmed';
-
+  // U4 is always potential — never confirmed
   return (
-    <Card className={cn('border', isConfirmed ? 'border-destructive/30' : 'border-warning/30')}>
+    <Card className={cn('border', 'border-warning/30')}>
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
         <CardTitle className="flex items-center gap-2 flex-wrap">
-          <RuleIdBadge ruleId="U4" isConfirmed={isConfirmed} categoryClass="category-usability" />
+          <RuleIdBadge ruleId="U4" isConfirmed={false} categoryClass="category-usability" />
           <RuleHeader ruleId="U4" title="Recognition-to-Recall Regression" />
-          <ElementCountBadge count={elements.length} isConfirmed={isConfirmed} />
+          <ElementCountBadge count={elements.length} isConfirmed={false} />
         </CardTitle>
         <CardDescription compact={compact}>
-          {isConfirmed
-            ? 'Structured selection replaced with free-text input, increasing cognitive load.'
-            : 'UI regions that may force users to recall information from memory instead of recognizing it from visible cues.'}
+          UI regions that may force users to recall information from memory instead of recognizing it from visible cues.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
