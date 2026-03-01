@@ -2597,7 +2597,7 @@ E3 triggers ONLY if a high-impact action (delete, payment, subscribe, account de
 - Return structured e3Elements:
 \`\`\`json
 {
-  "ruleId": "E3", "ruleName": "Structural absence of exit control for high-impact actions", "category": "ethics",
+  "ruleId": "E3", "ruleName": "Obscured or restricted user control", "category": "ethics",
   "status": "potential", "isE3Aggregated": true,
   "e3Elements": [{ "elementLabel": "Delete dialog without cancel", "elementType": "dialog", "location": "Screenshot #1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.75 }]
 }
@@ -4395,7 +4395,7 @@ serve(async (req) => {
         if (e3Elements.length > 0) {
           const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.80);
           aggregatedE3UIList.push({
-            ruleId: 'E3', ruleName: 'Structural absence of exit control for high-impact actions', category: 'ethics',
+            ruleId: 'E3', ruleName: 'Obscured or restricted user control', category: 'ethics',
             status: 'potential', blocksConvergence: false,
             inputType: 'screenshots', isE3Aggregated: true, e3Elements, evaluationMethod: 'llm_assisted',
             diagnosis: `Structural exit absence: ${e3Elements.length} high-impact action(s) without visible cancel/close/exit mechanism.`,

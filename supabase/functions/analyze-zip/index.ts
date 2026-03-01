@@ -4305,7 +4305,7 @@ If ANY of these are present → SUPPRESS E3 entirely.
 \`\`\`json
 {
   "ruleId": "E3",
-  "ruleName": "Structural absence of exit control for high-impact actions",
+  "ruleName": "Obscured or restricted user control",
   "category": "ethics",
   "status": "potential",
   "isE3Aggregated": true,
@@ -5029,7 +5029,7 @@ function formatE2ChoiceBundleForPrompt(bundles: E2ChoiceBundle[]): string {
   return lines.join('\n');
 }
 
-// ========== E3 DETERMINISTIC DETECTION (Structural Absence of Exit Control for High-Impact Actions) ==========
+// ========== E3 DETERMINISTIC DETECTION (Obscured or Restricted User Control) ==========
 interface E3Finding {
   filePath: string;
   line: number;
@@ -8285,7 +8285,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       }
     }
 
-    // ========== E3 POST-PROCESSING (Structural Absence of Exit Control — HYBRID) ==========
+    // ========== E3 POST-PROCESSING (Obscured or Restricted User Control — HYBRID) ==========
     const aggregatedE3List: any[] = [];
     if (selectedRulesSet.has('E3')) {
       const deterministicE3 = e3Findings;
@@ -8347,7 +8347,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       if (e3Elements.length > 0) {
         const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.80);
         aggregatedE3List.push({
-          ruleId: 'E3', ruleName: 'Structural absence of exit control for high-impact actions', category: 'ethics',
+          ruleId: 'E3', ruleName: 'Obscured or restricted user control', category: 'ethics',
           status: 'potential', blocksConvergence: false,
           inputType: 'zip', isE3Aggregated: true, e3Elements, evaluationMethod: 'hybrid_deterministic',
           diagnosis: `Structural exit absence: ${e3Elements.length} high-impact action(s) without visible cancel/close/exit mechanism.`,
