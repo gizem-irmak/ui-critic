@@ -4411,7 +4411,7 @@ serve(async (req) => {
     }
 
     // Combine all violations - A1 uses aggregated cards (max 2), A2 uses aggregated card
-    const enhancedViolations = [
+    const allViolationsPreSuppression = [
       ...filteredOtherViolations,
       ...aggregatedA1Violations,
       ...aggregatedE1UIList,
@@ -4424,7 +4424,10 @@ serve(async (req) => {
       ...(aggregatedA6UI ? [aggregatedA6UI] : []),
     ];
 
-    console.log(`Analysis complete: ${enhancedViolations.length} violations found`);
+    // ========== CROSS-RULE SUPPRESSION (S1–S10 + fallback priority) ==========
+    const { applyCrossRuleSuppression } = await import('../_shared/cross-rule-suppression.ts');
+    const { kept: enhancedViolations, suppressedElements } = applyCrossRuleSuppression(allViolationsPreSuppression);
+    console.log(`Analysis complete: ${allViolationsPreSuppression.length} pre-suppression → ${enhancedViolations.length} violations (${suppressedElements.length} element(s) suppressed)`);
 
     return new Response(
       JSON.stringify({

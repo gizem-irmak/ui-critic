@@ -6201,7 +6201,7 @@ serve(async (req) => {
     }
 
     // Combine all violations
-    const allViolations = [
+    const allViolationsPreSuppression = [
       ...aggregatedA1Violations,
       ...filteredNonA2AiViolations,
       ...aggregatedU1GitHubList,
@@ -6219,17 +6219,21 @@ serve(async (req) => {
       ...(aggregatedA5GitHub ? [aggregatedA5GitHub] : []),
       ...(aggregatedA6GitHub ? [aggregatedA6GitHub] : []),
     ];
-    
-    // Deduplicate by ruleId
+
+    // ========== CROSS-RULE SUPPRESSION (S1–S10 + fallback priority) ==========
+    const { applyCrossRuleSuppression } = await import('../_shared/cross-rule-suppression.ts');
+    const { kept: suppressedResult, suppressedElements } = applyCrossRuleSuppression(allViolationsPreSuppression);
+
+    // Deduplicate by ruleId+status
     const seenRuleStatus = new Set<string>();
-    const deduplicatedViolations = allViolations.filter(v => {
+    const deduplicatedViolations = suppressedResult.filter(v => {
       const key = `${v.ruleId}|${v.status || 'unknown'}`;
       if (seenRuleStatus.has(key)) return false;
       seenRuleStatus.add(key);
       return true;
     });
     
-    console.log(`GitHub analysis complete: ${deduplicatedViolations.length} violations found`);
+    console.log(`GitHub analysis complete: ${allViolationsPreSuppression.length} pre-suppression → ${deduplicatedViolations.length} violations (${suppressedElements.length} element(s) suppressed)`);
     
     return new Response(
       JSON.stringify({
