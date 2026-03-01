@@ -71,6 +71,24 @@ function A5ElementItem({ element, isConfirmed, compact = false }: {
               </FieldRow>
             )}
 
+            {(element.filePath || element.location) && (
+              <FieldRow>
+                <FieldLabel>Source:</FieldLabel>
+                <FieldValue mono>
+                  {(() => {
+                    const fp = element.filePath || element.location || '';
+                    const basename = fp.replace(/\\/g, '/').split('/').pop() || fp;
+                    if (element.startLine != null) {
+                      const end = element.endLine != null && element.endLine !== element.startLine
+                        ? `–${element.endLine}` : '';
+                      return `${basename}:${element.startLine}${end}`;
+                    }
+                    return basename;
+                  })()}
+                </FieldValue>
+              </FieldRow>
+            )}
+
             {element.detection && (
               <FieldRow>
                 <FieldLabel>Detection:</FieldLabel>
@@ -99,7 +117,7 @@ function A5ElementItem({ element, isConfirmed, compact = false }: {
 export function A5AggregatedCard({ violation, compact = false }: A5AggregatedCardProps) {
   const isConfirmed = violation.status !== 'potential';
 
-  const elements: A5ElementSubItem[] = (violation.isA5Aggregated && violation.a5Elements)
+  const rawElements: A5ElementSubItem[] = (violation.isA5Aggregated && violation.a5Elements)
     ? violation.a5Elements
     : [{
         elementKey: `${violation.ruleId}-fallback`,
@@ -117,6 +135,16 @@ export function A5AggregatedCard({ violation, compact = false }: A5AggregatedCar
         correctivePrompt: violation.correctivePrompt,
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
+
+  const elements = [...rawElements].sort((a, b) => {
+    const fpA = (a.filePath || a.location || '').toLowerCase();
+    const fpB = (b.filePath || b.location || '').toLowerCase();
+    if (fpA !== fpB) return fpA.localeCompare(fpB);
+    const lnA = a.startLine ?? Infinity;
+    const lnB = b.startLine ?? Infinity;
+    if (lnA !== lnB) return lnA - lnB;
+    return (a.deduplicationKey || a.elementKey || '').localeCompare(b.deduplicationKey || b.elementKey || '');
+  });
 
   return (
     <Card className={cn(
