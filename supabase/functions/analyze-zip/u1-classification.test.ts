@@ -236,6 +236,40 @@ function extractActionGroups(content: string, buttonLocalNames: Set<string>): Ac
 }
 
 // =====================
+// U1 Nav/Chrome + Context Gates (matches index.ts)
+// =====================
+
+function isNavOrChromeFile(filePath: string, content: string): boolean {
+  const fp = filePath.toLowerCase();
+  if (/\b(layout|navbar|nav|sidebar|header|menu|navigation|topbar|appbar|toolbar)\b/i.test(fp.split('/').pop() || '')) return true;
+  if (/<nav\b/i.test(content) || /role\s*=\s*["']navigation["']/i.test(content)) {
+    const linkCount = (content.match(/<Link\b|<a\b[^>]*href\s*=|to\s*=\s*["']/gi) || []).length;
+    const buttonCount = (content.match(/<(?:button|Button)\b/gi) || []).length;
+    if (linkCount > 0 && linkCount >= buttonCount) return true;
+  }
+  if (/\b(navItems|menuItems|sidebarItems|navigationItems|navLinks|menuLinks)\b/.test(content)) return true;
+  return false;
+}
+
+function hasPrimaryActionContext(content: string): boolean {
+  if (/<form\b/i.test(content)) return true;
+  if (/onSubmit\s*=/i.test(content)) return true;
+  if (/type\s*=\s*["']submit["']/i.test(content)) return true;
+  if (/\b(handleSubmit|handleSave|handleConfirm|handleContinue|handleNextStep)\b/.test(content)) return true;
+  if (/<(?:Dialog|Modal|AlertDialog|Confirm|Sheet|Drawer)\b/i.test(content)) return true;
+  if (/(?:DialogFooter|ModalFooter|DialogActions)\b/.test(content)) return true;
+  const CTA_KEYWORDS = /\b(save|submit|continue|next|confirm|delete|remove|pay|checkout|create|publish)\b/i;
+  const buttonContentMatches = content.match(/<(?:button|Button)\b[^>]*>([^<]*)</gi) || [];
+  let ctaCount = 0;
+  for (const m of buttonContentMatches) {
+    const textMatch = m.match(/>([^<]+)/);
+    if (textMatch && CTA_KEYWORDS.test(textMatch[1])) ctaCount++;
+  }
+  if (ctaCount >= 1) return true;
+  return false;
+}
+
+// =====================
 // Inline detectU1PrimaryAction (matches generalized index.ts)
 // =====================
 
@@ -263,6 +297,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     if (!/\.(tsx|jsx|html|htm)$/i.test(filePath)) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+    if (isNavOrChromeFile(filePath, content)) continue;
 
     const formRegex = /<form\b([^>]*)>([\s\S]*?)<\/form>/gi;
     let formMatch;
@@ -315,6 +350,8 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     if (!/\.(tsx|jsx)$/.test(filePath)) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+    if (isNavOrChromeFile(filePath, content)) continue;
+    if (!hasPrimaryActionContext(content)) continue;
 
     const buttonLocalNames = new Set<string>();
     const importRegex = /import\s*\{([^}]+)\}\s*from\s*["']([^"']*components\/ui\/button[^"']*)["']/g;
@@ -488,10 +525,12 @@ Deno.test("U1.2: Two buttons with identical primary classes → Potential", () =
 import { Button } from "@/components/ui/button";
 export default function ActionCard() {
   return (
-    <CardFooter>
-      <Button>Accept</Button>
-      <Button>Decline</Button>
-    </CardFooter>
+    <Dialog>
+      <CardFooter>
+        <Button>Confirm</Button>
+        <Button>Delete</Button>
+      </CardFooter>
+    </Dialog>
   );
 }
 `);
@@ -506,7 +545,11 @@ Deno.test("U1.3: Single CTA 'Continue' (generic) → Potential", () => {
   const files = new Map<string, string>();
   files.set("src/components/NextStep.tsx", `
 export default function NextStep() {
-  return <button onClick={handleClick}>Continue</button>;
+  return (
+    <Dialog>
+      <button onClick={handleClick}>Continue</button>
+    </Dialog>
+  );
 }
 `);
   const results = detectU1PrimaryAction(files);
@@ -797,22 +840,24 @@ Deno.test("U1.2: Buttons nested inside grid wrapper divs → fires", () => {
   files.set("src/components/OptionPicker.tsx", `
 export default function OptionPicker() {
   return (
-    <div className="grid grid-cols-2 gap-4">
-      <div>
-        <button className="bg-blue-600 text-white font-semibold px-4 py-2">Option A</button>
+    <Dialog>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <button className="bg-blue-600 text-white font-semibold px-4 py-2">Confirm A</button>
+        </div>
+        <div>
+          <button className="bg-blue-600 text-white font-semibold px-4 py-2">Confirm B</button>
+        </div>
       </div>
-      <div>
-        <button className="bg-blue-600 text-white font-semibold px-4 py-2">Option B</button>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 `);
   const results = detectU1PrimaryAction(files);
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assert(u12 !== undefined, "Expected U1.2 for nested grid buttons with same high-emphasis");
-  assert(u12!.evidence.includes("Option A"), "Evidence should mention Option A");
-  assert(u12!.evidence.includes("Option B"), "Evidence should mention Option B");
+  assert(u12!.evidence.includes("Confirm A"), "Evidence should mention Confirm A");
+  assert(u12!.evidence.includes("Confirm B"), "Evidence should mention Confirm B");
 });
 
 Deno.test("U1.2: Buttons inside justify-between flex container → fires", () => {
@@ -820,10 +865,12 @@ Deno.test("U1.2: Buttons inside justify-between flex container → fires", () =>
   files.set("src/components/Actions.tsx", `
 export default function Actions() {
   return (
-    <div className="flex justify-between items-center">
-      <button className="bg-primary text-white rounded px-4">Accept</button>
-      <button className="bg-primary text-white rounded px-4">Reject</button>
-    </div>
+    <Dialog>
+      <div className="flex justify-between items-center">
+        <button className="bg-primary text-white rounded px-4">Confirm</button>
+        <button className="bg-primary text-white rounded px-4">Delete</button>
+      </div>
+    </Dialog>
   );
 }
 `);
@@ -910,12 +957,12 @@ Deno.test("U1.2: Line-window fallback for orphaned CTAs → fires", () => {
   files.set("src/components/FlatPage.tsx", `
 export default function FlatPage() {
   return (
-    <div>
+    <Dialog>
       <h1>Welcome</h1>
-      <button className="bg-primary text-white px-4 py-2">Sign Up</button>
+      <button className="bg-primary text-white px-4 py-2">Create Account</button>
       <p>Some text</p>
-      <button className="bg-primary text-white px-4 py-2">Get Started</button>
-    </div>
+      <button className="bg-primary text-white px-4 py-2">Submit Application</button>
+    </Dialog>
   );
 }
 `);
@@ -940,4 +987,112 @@ export default function EditDialog() {
   const results = detectU1PrimaryAction(files);
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assert(u12 !== undefined, "Expected U1.2 for DialogFooter");
+});
+
+// ========== NAV/CHROME EXCLUSION + CONTEXT GATE TESTS ==========
+
+Deno.test("NAV GATE: Header with navItems + logout → U1 emits NOTHING", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/components/layout/Header.tsx", `
+import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+const navItems = [
+  { name: 'Dashboard', href: '/' },
+  { name: 'Projects', href: '/projects' },
+];
+export function Header() {
+  return (
+    <header>
+      <nav>
+        {navItems.map(item => (
+          <Link to={item.href} key={item.name}>{item.name}</Link>
+        ))}
+        <Button variant="ghost" onClick={handleLogout}>
+          <LogOut className="h-4 w-4" />
+        </Button>
+      </nav>
+    </header>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  assertEquals(results.length, 0, "Nav header with navItems should produce NO U1 findings");
+});
+
+Deno.test("NAV GATE: Sidebar with role=navigation + Link buttons → U1 emits NOTHING", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/Sidebar.tsx", `
+import { Link } from "react-router-dom";
+export function Sidebar() {
+  return (
+    <aside role="navigation">
+      <Link to="/dashboard">Dashboard</Link>
+      <Link to="/settings">Settings</Link>
+      <button onClick={handleLogout}>Sign out</button>
+    </aside>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  assertEquals(results.length, 0, "Sidebar with role=navigation should produce NO U1 findings");
+});
+
+Deno.test("CONTEXT GATE: Form with Save + Cancel same variant → U1.2 fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/pages/Settings.tsx", `
+import { Button } from "@/components/ui/button";
+export default function Settings() {
+  return (
+    <form onSubmit={handleSubmit}>
+      <input type="text" name="name" />
+      <DialogFooter>
+        <Button>Save</Button>
+        <Button>Cancel</Button>
+      </DialogFooter>
+    </form>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Form with two same-variant CTAs should trigger U1.2");
+});
+
+Deno.test("CONTEXT GATE: Single CTA in main content with no context → U1 emits NOTHING", () => {
+  const files = new Map<string, string>();
+  files.set("src/pages/About.tsx", `
+export default function About() {
+  return (
+    <div>
+      <h1>About Us</h1>
+      <p>We are a company.</p>
+      <button onClick={handleClick}>Learn more</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  assertEquals(results.length, 0, "Single non-CTA button without form/dialog context should produce NO U1 findings");
+});
+
+Deno.test("CONTEXT GATE: Dialog with Delete + Cancel both styled equally → U1.2 fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ConfirmDelete.tsx", `
+export default function ConfirmDelete() {
+  return (
+    <Dialog>
+      <p>Are you sure?</p>
+      <DialogFooter>
+        <button className="bg-red-700 text-white px-4 py-2">Delete</button>
+        <button className="bg-red-700 text-white px-4 py-2">Cancel</button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Dialog with two equally styled destructive CTAs should trigger U1.2");
 });

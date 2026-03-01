@@ -535,6 +535,38 @@ function extractActionGroups(content: string, buttonLocalNames: Set<string>): Ac
 // U1 Primary Action Detection (sub-checks U1.1, U1.2, U1.3)
 // =====================
 
+// --- U1 NAV/CHROME EXCLUSION GATE ---
+function isNavOrChromeFile(filePath: string, content: string): boolean {
+  const fp = filePath.toLowerCase();
+  if (/\b(layout|navbar|nav|sidebar|header|menu|navigation|topbar|appbar|toolbar)\b/i.test(fp.split('/').pop() || '')) return true;
+  if (/<nav\b/i.test(content) || /role\s*=\s*["']navigation["']/i.test(content)) {
+    const linkCount = (content.match(/<Link\b|<a\b[^>]*href\s*=|to\s*=\s*["']/gi) || []).length;
+    const buttonCount = (content.match(/<(?:button|Button)\b/gi) || []).length;
+    if (linkCount > 0 && linkCount >= buttonCount) return true;
+  }
+  if (/\b(navItems|menuItems|sidebarItems|navigationItems|navLinks|menuLinks)\b/.test(content)) return true;
+  return false;
+}
+
+// --- U1 PRIMARY-ACTION CONTEXT GATE ---
+function hasPrimaryActionContext(content: string): boolean {
+  if (/<form\b/i.test(content)) return true;
+  if (/onSubmit\s*=/i.test(content)) return true;
+  if (/type\s*=\s*["']submit["']/i.test(content)) return true;
+  if (/\b(handleSubmit|handleSave|handleConfirm|handleContinue|handleNextStep)\b/.test(content)) return true;
+  if (/<(?:Dialog|Modal|AlertDialog|Confirm|Sheet|Drawer)\b/i.test(content)) return true;
+  if (/(?:DialogFooter|ModalFooter|DialogActions)\b/.test(content)) return true;
+  const CTA_KEYWORDS = /\b(save|submit|continue|next|confirm|delete|remove|pay|checkout|create|publish)\b/i;
+  const buttonContentMatches = content.match(/<(?:button|Button)\b[^>]*>([^<]*)</gi) || [];
+  let ctaCount = 0;
+  for (const m of buttonContentMatches) {
+    const textMatch = m.match(/>([^<]+)/);
+    if (textMatch && CTA_KEYWORDS.test(textMatch[1])) ctaCount++;
+  }
+  if (ctaCount >= 1) return true;
+  return false;
+}
+
 interface U1Finding {
   subCheck: 'U1.1' | 'U1.2' | 'U1.3';
   subCheckLabel: string;
@@ -561,6 +593,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     if (!/\.(tsx|jsx|html|htm)$/i.test(filePath)) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
+    if (isNavOrChromeFile(filePath, content)) continue;
 
     const formRegex = /<form\b([^>]*)>([\s\S]*?)<\/form>/gi;
     let formMatch;
@@ -629,7 +662,14 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     if (filePath.includes('components/ui/button')) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
-    // No longer skip entire file — scoped suppression handled below
+    if (isNavOrChromeFile(filePath, content)) {
+      console.log(`[U1] nav/chrome gate: skipping ${filePath}`);
+      continue;
+    }
+    if (!hasPrimaryActionContext(content)) {
+      console.log(`[U1] context gate: skipping ${filePath} (no form/dialog/CTA context)`);
+      continue;
+    }
 
     const buttonLocalNames = new Set<string>();
     const importRegex = /import\s*\{([^}]+)\}\s*from\s*["']([^"']*components\/ui\/button[^"']*)["']/g;
