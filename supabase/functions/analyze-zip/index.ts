@@ -4189,52 +4189,59 @@ Look for patterns that may undermine user autonomy or informed consent:
 - If NO E1 issues found, do NOT include E1 in the violations array.
 - Each e1Element MUST cite evidence from the provided evidence bundle (CTA labels, nearby text — NOT file names).
 
-### E2 (Imbalanced or Manipulative Choice Architecture) — LLM-ASSISTED EVALUATION:
-**NOTE:** E2 uses pre-extracted choice bundle data appended as \`[E2_CHOICE_BUNDLE]\`. Use ONLY the provided extracted CTA labels, style tokens, and nearby microcopy to assess choice balance.
+### E2 (Imbalanced Choice Architecture in High-Impact Decisions) — LLM-ASSISTED EVALUATION:
+**NOTE:** E2 uses pre-extracted choice bundle data appended as \`[E2_CHOICE_BUNDLE]\`. Each bundle has ALREADY passed the high-impact domain gate (consent/privacy, monetization, irreversible actions) and has 2+ deterministic imbalance signals. Your job is to confirm whether the imbalance plausibly nudges users toward a system-beneficial outcome.
 
-**CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
+**SCOPE — E2 flags ONLY when:**
+- Multiple choice options are presented for a MEANINGFUL decision (consent, payment, subscription, data sharing, deletion), AND
+- One option is visually dominant or frictionless, AND
+- The alternative is visually suppressed, harder to find, or requires extra steps, AND
+- This imbalance could steer users toward an outcome that benefits the system more than the user.
+
+**MUST NOT FLAG (EXCLUSIONS):**
+- Standard "Sign Up" (primary) + "Sign In" (secondary) on landing pages — this is normal hierarchy.
+- Navigation links vs auth buttons on marketing pages.
+- Standard marketing layout unless tied to consent/monetization/data/high-impact context.
+- Role-based dashboard actions that are not explicit user choice sets.
+- Any cluster where BOTH options are clearly visible and accessible, even if styled differently.
+
+**CRITICAL ANTI-HALLUCINATION RULES:**
 - Do NOT use file names, component names, or test wording as evidence.
 - Do NOT infer malicious intent. Use neutral phrasing ("imbalance risk", "may nudge").
-- Do NOT flag normal primary/secondary button patterns unless the alternative is materially de-emphasized or obscured.
-- Base conclusions ONLY on the extracted labels, style tokens, prominence cues, and nearby microcopy.
-- If evidence is insufficient to demonstrate meaningful imbalance, return NO E2 finding — do not guess.
+- If evidence is insufficient to demonstrate meaningful autonomy impact, return NO E2 finding.
+- Base conclusions ONLY on the extracted labels, style tokens, imbalance signals, and nearby microcopy.
 
-**EVALUATE (using ONLY the choice bundle content):**
-- Visual dominance: one option has significantly larger size, bolder color, or higher contrast than alternatives
-- Obscured decline: opt-out/cancel/decline option uses muted color, smaller text, or link-style vs button
-- Asymmetric wording: accept uses action-oriented language while decline uses passive/negative framing
-- Pre-selection bias: default state nudges toward one option
-
-**CLASSIFICATION:**
-- E2 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
-- Confidence: 0.60–0.80 (cap at 0.80)
+**CONFIDENCE RULES (STRICT):**
+- 0.55–0.65: Weak signals — imbalance exists but impact on autonomy is uncertain.
+- 0.65–0.75: Multiple strong signals + clear high-impact context (consent/payment/deletion).
+- NEVER exceed 0.75.
 
 **OUTPUT FOR E2 — STRUCTURED e2Elements:**
 \`\`\`json
 {
   "ruleId": "E2",
-  "ruleName": "Imbalanced or manipulative choice architecture",
+  "ruleName": "Imbalanced choice architecture in high-impact decision",
   "category": "ethics",
   "status": "potential",
   "isE2Aggregated": true,
   "e2Elements": [
     {
-      "elementLabel": "Upgrade dialog choices",
+      "elementLabel": "Consent dialog choices",
       "elementType": "button-group",
-      "location": "src/components/UpgradeModal.tsx",
-      "detection": "Primary option visually dominates: bg-blue-600 px-8 vs text-gray-400 text-sm link for decline",
-      "evidence": "Accept: 'Upgrade Now' (bg-blue-600, text-white, px-8, py-3, font-bold) | Decline: 'Maybe later' (text-gray-400, text-sm, underline)",
-      "recommendedFix": "Balance button prominence: make decline a visible secondary button with adequate contrast and size",
-      "confidence": 0.70
+      "location": "src/components/ConsentModal.tsx",
+      "detection": "Accept option visually dominates decline in consent context",
+      "evidence": "Accept: 'Accept All' (bg-blue-600, w-full, py-3) | Decline: 'Manage preferences' (text-gray-400, text-sm, link) | High-impact: consent, tracking | Signals: visual_dominance, size_asymmetry",
+      "recommendedFix": "Present confirm/decline options with comparable visual weight and equal discoverability.",
+      "confidence": 0.65
     }
   ],
-  "diagnosis": "Summary of choice imbalance issues...",
-  "contextualHint": "Short guidance...",
-  "confidence": 0.70
+  "diagnosis": "Summary of choice imbalance in high-impact context...",
+  "contextualHint": "Present confirm/decline options with comparable visual weight and equal discoverability.",
+  "confidence": 0.65
 }
 \`\`\`
-- If NO E2 issues found, do NOT include E2 in the violations array.
-- Each e2Element MUST cite evidence from the provided choice bundle (labels, style tokens — NOT file names).
+- If NO E2 issues found or evidence is insufficient, do NOT include E2 in the violations array.
+- Each e2Element MUST cite evidence from the provided choice bundle (labels, style tokens, signals — NOT file names).
 
 ### E3 (Structural Absence of Exit/Cancel for High-Impact Actions) — HYBRID EVALUATION:
 **NOTE:** E3 uses pre-extracted evidence bundles appended as \`[E3_CONTROL_RESTRICTION_EVIDENCE]\`. Use ONLY the provided structural evidence.
@@ -4828,11 +4835,57 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
   return bundles.slice(0, 20);
 }
 
-// ========== E2 CHOICE BUNDLE EXTRACTION (Imbalanced Choice Architecture) ==========
+// ========== E2 CHOICE BUNDLE EXTRACTION (Imbalanced Choice Architecture — v2 with High-Impact Gate + Signal Scoring) ==========
+
+// High-impact domain keywords that MUST be present nearby for E2 to evaluate a choice cluster.
+const E2_HIGH_IMPACT_KEYWORDS_RE = /\b(accept|decline|cookie|consent|tracking|personalization|privacy|data|share|subscribe|trial|upgrade|buy|purchase|payment|card|delete|remove|cancel\s*plan|confirm|submit|discharge|book\s*appointment|final|cannot\s*be\s*undone)\b/gi;
+
+// Exclusion patterns — standard nav/auth that should NOT trigger E2
+const E2_EXCLUSION_LABELS = /^(sign\s*in|log\s*in|sign\s*up|register|get\s*started|learn\s*more|home|about|contact|pricing|features|blog|docs|documentation|faq|help|support)$/i;
+
 interface E2ChoiceBundle {
   filePath: string;
   ctaLabels: { label: string; styleTokens: string; position: number }[];
   nearbyMicrocopy: string[];
+  highImpactKeywords: string[];
+  imbalanceSignals: string[];
+  signalCount: number;
+}
+
+function detectE2ImbalanceSignals(ctaLabels: { label: string; styleTokens: string; position: number }[]): string[] {
+  const signals: string[] = [];
+  if (ctaLabels.length < 2) return signals;
+
+  const styles = ctaLabels.map(c => c.styleTokens.toLowerCase());
+  const labels = ctaLabels.map(c => c.label.toLowerCase());
+
+  // Signal 1: Visual dominance asymmetry (filled primary vs ghost/link/muted alternative)
+  const hasPrimary = styles.some(s => /bg-|variant=default|variant=\s*$/.test(s) && !/variant=(ghost|link|outline|secondary)/.test(s));
+  const hasGhostOrLink = styles.some(s => /variant=(ghost|link|outline)|text-(gray|muted|slate)|text-sm/.test(s));
+  if (hasPrimary && hasGhostOrLink) signals.push('visual_dominance');
+
+  // Signal 1b: Size difference (w-full vs small)
+  const hasWFull = styles.some(s => /w-full|px-8|px-10|py-3|py-4/.test(s));
+  const hasSmall = styles.some(s => /text-sm|text-xs|size=sm/.test(s));
+  if (hasWFull && hasSmall) signals.push('size_asymmetry');
+
+  // Signal 4: Language bias — positive vs negative/shaming wording
+  const positiveRe = /\b(yes|continue|accept|agree|upgrade|get|start|try|unlock)\b/i;
+  const negativeRe = /\b(no\s*thanks|no,?\s*i|maybe\s*later|i\s*don'?t|not\s*now|i\s*hate|i\s*prefer\s*not)\b/i;
+  const hasPositive = labels.some(l => positiveRe.test(l));
+  const hasNegative = labels.some(l => negativeRe.test(l));
+  if (hasPositive && hasNegative) signals.push('language_bias');
+
+  // Signal 5: Default/pre-selection
+  const allTokens = styles.join(' ');
+  if (/defaultChecked|checked|defaultValue|pre-?selected/.test(allTokens)) signals.push('default_selection');
+
+  // Signal 6: Ambiguous alternative — "Learn more" as only exit path
+  const hasLearnMore = labels.some(l => /^learn\s*more$/i.test(l));
+  const hasExplicitDecline = labels.some(l => /\b(decline|cancel|no|opt.?out|dismiss|close|skip)\b/i.test(l));
+  if (hasLearnMore && !hasExplicitDecline) signals.push('ambiguous_alternative');
+
+  return signals;
 }
 
 function extractE2ChoiceBundle(allFiles: Map<string, string>): E2ChoiceBundle[] {
@@ -4844,7 +4897,6 @@ function extractE2ChoiceBundle(allFiles: Map<string, string>): E2ChoiceBundle[] 
     if (/\.(test|spec)\./i.test(filePath)) continue;
     if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
 
-    // Find containers with 2+ CTAs (buttons/links)
     const btnRe = /<(?:Button|button|a)\b([^>]*)>([^<]{1,80})<\/(?:Button|button|a)>/gi;
     const ctaMatches: { label: string; attrs: string; index: number }[] = [];
     let bm;
@@ -4854,7 +4906,6 @@ function extractE2ChoiceBundle(allFiles: Map<string, string>): E2ChoiceBundle[] 
       ctaMatches.push({ label, attrs: bm[1] || '', index: bm.index });
     }
 
-    // Group CTAs by proximity (within 500 chars of each other)
     const groups: typeof ctaMatches[] = [];
     let currentGroup: typeof ctaMatches = [];
     for (const cta of ctaMatches) {
@@ -4868,7 +4919,6 @@ function extractE2ChoiceBundle(allFiles: Map<string, string>): E2ChoiceBundle[] 
     if (currentGroup.length >= 2) groups.push(currentGroup);
 
     for (const group of groups) {
-      // Extract style tokens from className/variant
       const ctaLabels = group.map((cta, idx) => {
         const classMatch = cta.attrs.match(/className\s*=\s*(?:{`([^`]*)`}|"([^"]*)"|'([^']*)')/);
         const variantMatch = cta.attrs.match(/variant\s*=\s*(?:"([^"]*)"|'([^']*)')/);
@@ -4880,22 +4930,65 @@ function extractE2ChoiceBundle(allFiles: Map<string, string>): E2ChoiceBundle[] 
         return { label: cta.label, styleTokens: tokens.join(' ').trim(), position: idx };
       });
 
-      // Extract nearby microcopy
-      const regionStart = Math.max(0, group[0].index - 200);
-      const regionEnd = Math.min(content.length, group[group.length - 1].index + 300);
+      // ── EXCLUSION: Skip if ALL labels are standard nav/auth ──
+      const allExcluded = ctaLabels.every(c => E2_EXCLUSION_LABELS.test(c.label));
+      if (allExcluded) continue;
+
+      const regionStart = Math.max(0, group[0].index - 400);
+      const regionEnd = Math.min(content.length, group[group.length - 1].index + 400);
       const region = content.slice(regionStart, regionEnd);
       const nearbyMicrocopy: string[] = [];
-      const textRe = /<(?:p|span|h[1-6]|div)\b[^>]*>([^<]{3,100})<\/(?:p|span|h[1-6]|div)>/gi;
+      const textRe = /<(?:p|span|h[1-6]|div|label)\b[^>]*>([^<]{3,100})<\/(?:p|span|h[1-6]|div|label)>/gi;
       let tm;
       while ((tm = textRe.exec(region)) !== null) {
         const text = tm[1].replace(/\{[^}]*\}/g, '').trim();
         if (text.length >= 3) nearbyMicrocopy.push(text);
       }
 
-      bundles.push({ filePath, ctaLabels, nearbyMicrocopy: [...new Set(nearbyMicrocopy)].slice(0, 5) });
+      // ── HIGH-IMPACT GATE ──
+      const allLabelsLower = ctaLabels.map(c => c.label.toLowerCase()).join(' ');
+      const combinedText = region.toLowerCase() + ' ' + allLabelsLower + ' ' + nearbyMicrocopy.join(' ').toLowerCase();
+
+      const matchedKeywords: string[] = [];
+      E2_HIGH_IMPACT_KEYWORDS_RE.lastIndex = 0;
+      let kwm;
+      while ((kwm = E2_HIGH_IMPACT_KEYWORDS_RE.exec(combinedText)) !== null) {
+        const kw = kwm[1].toLowerCase();
+        if (!matchedKeywords.includes(kw)) matchedKeywords.push(kw);
+      }
+
+      // "sign up" / "register" only count if paired with consent/monetization cues
+      const hasConversionLabel = /\b(sign\s*up|register|create\s*account)\b/i.test(combinedText);
+      const hasConsentOrMoney = matchedKeywords.some(k =>
+        /consent|privacy|data|share|cookie|tracking|payment|subscribe|trial|upgrade|buy|purchase|card/.test(k)
+      );
+      if (hasConversionLabel && hasConsentOrMoney) {
+        if (!matchedKeywords.includes('account_conversion')) matchedKeywords.push('account_conversion');
+      }
+
+      if (matchedKeywords.length === 0) {
+        console.log(`E2 SUPPRESSED (no high-impact gate): ${filePath} — labels: ${ctaLabels.map(c => c.label).join(', ')}`);
+        continue;
+      }
+
+      // ── IMBALANCE SIGNAL SCORING: Require 2+ signals ──
+      const imbalanceSignals = detectE2ImbalanceSignals(ctaLabels);
+      if (imbalanceSignals.length < 2) {
+        console.log(`E2 SUPPRESSED (${imbalanceSignals.length} signal(s), need 2+): ${filePath} — signals: ${imbalanceSignals.join(', ') || 'none'}`);
+        continue;
+      }
+
+      bundles.push({
+        filePath,
+        ctaLabels,
+        nearbyMicrocopy: [...new Set(nearbyMicrocopy)].slice(0, 5),
+        highImpactKeywords: matchedKeywords,
+        imbalanceSignals,
+        signalCount: imbalanceSignals.length,
+      });
+      console.log(`E2 bundle PASSED: ${filePath} — keywords: ${matchedKeywords.join(', ')} — signals (${imbalanceSignals.length}): ${imbalanceSignals.join(', ')}`);
     }
   }
-
   return bundles.slice(0, 20);
 }
 
@@ -4903,10 +4996,14 @@ function formatE2ChoiceBundleForPrompt(bundles: E2ChoiceBundle[]): string {
   if (bundles.length === 0) return '';
   const lines = [
     '[E2_CHOICE_BUNDLE]',
-    'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence. Evaluate ONLY the extracted CTA labels, style tokens, and nearby microcopy.',
+    'IMPORTANT: E2 evaluates ONLY choice clusters in high-impact decision contexts (consent, monetization, irreversible actions).',
+    'Each bundle below has ALREADY passed the high-impact gate and has 2+ imbalance signals.',
+    'Do NOT flag standard marketing or navigation patterns.',
   ];
   for (const b of bundles) {
     lines.push(`\n--- Location: ${b.filePath} ---`);
+    lines.push(`  High-impact context: ${b.highImpactKeywords.join(', ')}`);
+    lines.push(`  Imbalance signals (${b.signalCount}): ${b.imbalanceSignals.join(', ')}`);
     for (const cta of b.ctaLabels) {
       lines.push(`  CTA #${cta.position + 1}: "${cta.label}" | styles: ${cta.styleTokens || '(none detected)'}`);
     }
@@ -8110,7 +8207,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       }
     }
 
-    // ========== E2 POST-PROCESSING (Imbalanced Choice Architecture — LLM-assisted) ==========
+    // ========== E2 POST-PROCESSING (Imbalanced Choice Architecture — High-Impact Gate + LLM-assisted) ==========
     const aggregatedE2List: any[] = [];
     if (selectedRulesSet.has('E2')) {
       const e2FromLLM = aiViolations.filter((v: any) => v.ruleId === 'E2');
@@ -8125,20 +8222,20 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
             location: el.location || el.filePath || 'Unknown',
             detection: el.detection || '',
             evidence: el.evidence || '',
-            recommendedFix: el.recommendedFix || '',
-            confidence: Math.min(el.confidence || 0.65, 0.80),
+            recommendedFix: el.recommendedFix || 'Present confirm/decline options with comparable visual weight and equal discoverability.',
+            confidence: Math.min(el.confidence || 0.60, 0.75),
             evaluationMethod: 'llm_only_code' as const,
             deduplicationKey: el.deduplicationKey || `E2|${el.location || ''}|${el.elementLabel || ''}`,
           }));
 
-          const overallConfidence = Math.min(Math.max(...e2Elements.map((e: any) => e.confidence)), 0.80);
+          const overallConfidence = Math.min(Math.max(...e2Elements.map((e: any) => e.confidence)), 0.75);
           aggregatedE2List.push({
-            ruleId: 'E2', ruleName: 'Imbalanced or manipulative choice architecture', category: 'ethics',
+            ruleId: 'E2', ruleName: 'Imbalanced choice architecture in high-impact decision', category: 'ethics',
             status: 'potential', blocksConvergence: false,
             inputType: 'zip', isE2Aggregated: true, e2Elements, evaluationMethod: 'llm_assisted',
-            diagnosis: aggregatedOne.diagnosis || `Choice architecture issues: ${e2Elements.length} potential risk(s) detected via AI analysis.`,
-            contextualHint: aggregatedOne.contextualHint || 'Present choices with equal visual weight and neutral defaults.',
-            advisoryGuidance: 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.',
+            diagnosis: aggregatedOne.diagnosis || `Choice architecture imbalance: ${e2Elements.length} potential risk(s) in high-impact decision context.`,
+            contextualHint: aggregatedOne.contextualHint || 'Present confirm/decline options with comparable visual weight and equal discoverability.',
+            advisoryGuidance: 'Present confirm/decline options with comparable visual weight and equal discoverability. Avoid preselected consent/paid options; ensure opt-out is as easy as opt-in.',
             confidence: Math.round(overallConfidence * 100) / 100,
           });
         } else {
@@ -8149,26 +8246,26 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
             location: v.evidence || 'Unknown',
             detection: v.diagnosis || '',
             evidence: v.evidence || '',
-            recommendedFix: v.contextualHint || '',
-            confidence: Math.min(v.confidence || 0.65, 0.80),
+            recommendedFix: v.contextualHint || 'Present confirm/decline options with comparable visual weight and equal discoverability.',
+            confidence: Math.min(v.confidence || 0.60, 0.75),
             evaluationMethod: 'llm_only_code' as const,
             deduplicationKey: `E2|${v.evidence || 'unknown'}`,
           }));
 
-          const overallConfidence = Math.min(Math.max(...e2FromLLM.map((v: any) => v.confidence || 0.65)), 0.80);
+          const overallConfidence = Math.min(Math.max(...e2FromLLM.map((v: any) => v.confidence || 0.60)), 0.75);
           aggregatedE2List.push({
-            ruleId: 'E2', ruleName: 'Imbalanced or manipulative choice architecture', category: 'ethics',
+            ruleId: 'E2', ruleName: 'Imbalanced choice architecture in high-impact decision', category: 'ethics',
             status: 'potential', blocksConvergence: false,
             inputType: 'zip', isE2Aggregated: true, e2Elements, evaluationMethod: 'llm_assisted',
-            diagnosis: `Choice architecture issues: ${e2Elements.length} potential risk(s) detected via AI analysis.`,
-            contextualHint: 'Present choices with equal visual weight and neutral defaults.',
-            advisoryGuidance: 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.',
+            diagnosis: `Choice architecture imbalance: ${e2Elements.length} potential risk(s) in high-impact decision context.`,
+            contextualHint: 'Present confirm/decline options with comparable visual weight and equal discoverability.',
+            advisoryGuidance: 'Present confirm/decline options with comparable visual weight and equal discoverability. Avoid preselected consent/paid options; ensure opt-out is as easy as opt-in.',
             confidence: Math.round(overallConfidence * 100) / 100,
           });
         }
         console.log(`E2 aggregated: ${e2FromLLM.length} LLM finding(s) → ${aggregatedE2List[0]?.e2Elements?.length || 0} element(s)`);
       } else {
-        console.log('E2: No LLM findings for choice architecture');
+        console.log('E2: No LLM findings (high-impact gate likely filtered all bundles)');
       }
     }
 

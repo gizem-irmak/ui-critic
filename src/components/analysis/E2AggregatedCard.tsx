@@ -94,11 +94,11 @@ export function E2AggregatedCard({ violation, compact = false }: E2AggregatedCar
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
         <CardTitle className="flex items-center gap-2 flex-wrap">
           <RuleIdBadge ruleId="E2" isConfirmed={false} categoryClass="category-ethics" />
-          <RuleHeader ruleId="E2" title="Imbalanced or Manipulative Choice Architecture" />
+          <RuleHeader ruleId="E2" title="Imbalanced Choice Architecture in High-Impact Decision" />
           <ElementCountBadge count={elements.length} isConfirmed={false} />
         </CardTitle>
         <CardDescription compact={compact}>
-          Analysis flagged a potential imbalance between choice options; verify neutrality.
+          Analysis flagged potential choice imbalance in a high-impact decision context; verify visual weight and discoverability of alternatives.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -111,7 +111,7 @@ export function E2AggregatedCard({ violation, compact = false }: E2AggregatedCar
         ))}
 
         <AdvisoryBlock compact={compact}>
-          {violation.advisoryGuidance || violation.contextualHint || 'Present choices with equal visual weight and neutral defaults. Ensure monetized or data-sharing options are not visually dominant over alternatives.'}
+          {violation.advisoryGuidance || violation.contextualHint || 'Present confirm/decline options with comparable visual weight and equal discoverability. Avoid preselected consent/paid options; ensure opt-out is as easy as opt-in.'}
         </AdvisoryBlock>
       </CardContent>
     </Card>
