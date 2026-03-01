@@ -1778,7 +1778,10 @@ function detectU5InteractionFeedback(allFiles: Map<string, string>): U5Finding[]
 }
 
 // =====================
-// U2 Navigation Detection (sub-checks U2.D1, U2.D2, U2.D3)
+// U2 Navigation Detection — Wayfinding Clarity Only
+// Sub-checks: U2.D1 (no visible primary nav), U2.D2 (deep route lacks up/back), U2.D3 (breadcrumb defined but not rendered)
+// Scope: Can users know where they are, where they can go, and how to go back?
+// U2 must NOT evaluate: layout grouping (U6), truncation (U3), step indicators (U4), landmark semantics (A-rules)
 // =====================
 
 interface U2Finding {
@@ -1796,23 +1799,37 @@ interface U2Finding {
   deduplicationKey: string;
 }
 
+// Navigation UI component names that indicate visible nav exists
+const NAV_COMPONENT_NAMES = /\b(Sidebar|Navbar|Header|Topbar|Menu|Tabs|Breadcrumb|NavigationMenu|Drawer|Sheet|Stepper|AppSidebar|TopNav|BottomNav|NavBar|MainNav|SideNav)\b/;
+
 function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
   const findings: U2Finding[] = [];
   const seenKeys = new Set<string>();
 
-  // --- Collect structural navigation signals across all files ---
+  // --- Collect global signals ---
   let routeCount = 0;
-  let hasNavElement = false;
-  let hasRoleNavigation = false;
-  let hasNavLinks = false;
-  let hasBreadcrumb = false;
-  let hasBreadcrumbImport = false;
-  let hasBreadcrumbRendered = false;
-  let hasBackButton = false;
   const routeFiles: string[] = [];
-  const nestedRouteFiles: string[] = [];
-  const breadcrumbImportFiles: string[] = [];
-  const layoutFiles: string[] = [];
+  // Deep route files: paths with ≥2 depth and detail/edit patterns
+  const deepRouteFiles: string[] = [];
+  // Track nav component rendering across all files
+  let hasNavComponentRendered = false;
+  let hasNavItemsMapping = false;
+  // Breadcrumb signals (D3-specific)
+  let hasBreadcrumbLogicDefined = false; // getBreadcrumbs() or breadcrumb array
+  let hasBreadcrumbComponentInDesignSystem = false;
+  let hasBreadcrumbRendered = false;
+  const breadcrumbLogicFiles: string[] = [];
+  // Back/up affordance signals (D2-specific)
+  let hasBackControl = false;
+  let hasParentRouteLink = false;
+  // Layout wrapper nav detection
+  let hasLayoutWithNav = false;
+  // Suppression signals
+  let hasTabsAsPrimaryIA = false;
+  let hasDrawerWithMenu = false;
+  let navPrimitiveCount = 0;
+  const navPrimitivesFound = new Set<string>();
+  let hasVisiblePageTitle = false;
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
@@ -1820,136 +1837,212 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
     if (filePath.includes('node_modules/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
 
-    const contentLower = content.toLowerCase();
-
-    // Detect route definitions (React Router, Next.js, etc.)
-    const routePatterns = [
-      /<Route\b/gi,
-      /path\s*[:=]\s*["']\//gi,
-      /createBrowserRouter/gi,
-      /useRoutes/gi,
-    ];
+    // --- Count user-facing routes ---
+    const routePatterns = [/<Route\b/gi, /path\s*[:=]\s*["']\//gi, /createBrowserRouter/gi, /useRoutes/gi];
     let fileRouteCount = 0;
     for (const pat of routePatterns) {
       const matches = content.match(pat);
       if (matches) fileRouteCount += matches.length;
     }
-    if (fileRouteCount > 0) {
-      routeCount += fileRouteCount;
-      routeFiles.push(filePath);
-    }
+    if (fileRouteCount > 0) { routeCount += fileRouteCount; routeFiles.push(filePath); }
 
-    // Detect nested routes (children property or nested <Route> inside <Route>)
-    if (/<Route\b[^>]*>\s*<Route\b/s.test(content) || /children\s*:\s*\[/s.test(content)) {
-      nestedRouteFiles.push(filePath);
-    }
-
-    // Detect <nav> element
-    if (/<nav\b/i.test(content)) hasNavElement = true;
-    if (/role\s*=\s*["']navigation["']/i.test(content)) hasRoleNavigation = true;
-
-    // Detect navigation link components
-    if (/<(?:Link|NavLink|a)\b[^>]*(?:href|to)\s*=/i.test(content)) {
-      // Only count if in a layout-like file
-      if (/layout|sidebar|navbar|header|navigation|menu|app\./i.test(filePath)) {
-        hasNavLinks = true;
-        layoutFiles.push(filePath);
+    // --- Detect deep routes (depth ≥2 with detail/edit patterns) ---
+    // Match path patterns like /admin/patients/:id, /settings/security, /foo/bar/edit
+    const deepPathPatterns = content.match(/path\s*[:=]\s*["'](\/?[^"']+)["']/gi) || [];
+    for (const match of deepPathPatterns) {
+      const pathValue = match.replace(/path\s*[:=]\s*["']/i, '').replace(/["']$/, '');
+      const segments = pathValue.split('/').filter(Boolean);
+      if (segments.length >= 2) {
+        // Check if it looks like a detail/edit/new/create view
+        const hasDetailPattern = /(:id|\[id\]|\/edit|\/new|\/create|\/details)/i.test(pathValue);
+        if (hasDetailPattern) {
+          deepRouteFiles.push(filePath);
+        }
       }
     }
 
-    // Detect breadcrumb
-    if (/breadcrumb/i.test(content)) {
-      hasBreadcrumb = true;
-      if (/import\s.*breadcrumb/i.test(content) || /from\s+['"].*breadcrumb/i.test(content)) {
-        hasBreadcrumbImport = true;
-        breadcrumbImportFiles.push(filePath);
-      }
-      if (/<Breadcrumb\b/i.test(content) || /role\s*=\s*["']breadcrumb["']/i.test(content) || /<nav\b[^>]*aria-label\s*=\s*["']breadcrumb["']/i.test(content)) {
-        hasBreadcrumbRendered = true;
+    // --- Detect rendered nav components ---
+    if (NAV_COMPONENT_NAMES.test(content)) {
+      // Check if it's actually rendered in JSX (not just imported)
+      const navCompMatch = content.match(NAV_COMPONENT_NAMES);
+      if (navCompMatch) {
+        const compName = navCompMatch[1];
+        // Check for JSX rendering: <CompName or <CompName>
+        if (new RegExp(`<${compName}\\b`, 'i').test(content)) {
+          hasNavComponentRendered = true;
+        }
       }
     }
 
-    // Detect back button / back navigation
-    if (/(?:back|go\s*back|navigate\(-1\)|history\.back|router\.back|useNavigate.*-1)/i.test(content)) {
-      hasBackButton = true;
+    // --- Detect navItems/routes array mapped in JSX ---
+    if (/(?:navItems|menuItems|routes|links|navigationItems|sidebarItems)\s*\.map\s*\(/i.test(content)) {
+      hasNavItemsMapping = true;
     }
-    if (/<(?:Button|button|a|Link)\b[^>]*>(?:[^<]*(?:Back|Go back|Return|← Back)[^<]*)<\//i.test(content)) {
-      hasBackButton = true;
+
+    // --- Detect layout wrapper providing nav ---
+    if (/layout|sidebar|navbar|header|navigation|menu/i.test(filePath)) {
+      if (/<(?:Link|NavLink|a)\b[^>]*(?:href|to)\s*=/i.test(content)) {
+        hasLayoutWithNav = true;
+      }
+      if (NAV_COMPONENT_NAMES.test(content)) {
+        hasLayoutWithNav = true;
+      }
     }
+
+    // --- Breadcrumb signals (D3) ---
+    if (/getBreadcrumbs\s*\(|breadcrumbs?\s*[:=]\s*\[/i.test(content)) {
+      hasBreadcrumbLogicDefined = true;
+      breadcrumbLogicFiles.push(filePath);
+    }
+    if (/(?:export\s+(?:function|const)\s+Breadcrumb|Breadcrumb\s*=\s*React\.forwardRef|const\s+Breadcrumb\b)/i.test(content)) {
+      hasBreadcrumbComponentInDesignSystem = true;
+    }
+    if (/<Breadcrumb\b/i.test(content) || /role\s*=\s*["']breadcrumb["']/i.test(content)) {
+      hasBreadcrumbRendered = true;
+    }
+
+    // --- Back/up control (D2) ---
+    // Visible back/up controls
+    if (/<(?:Button|button|a|Link)\b[^>]*>(?:[^<]*(?:Back|Go back|Return|← Back|Previous|Cancel)[^<]*)<\//i.test(content)) {
+      hasBackControl = true;
+    }
+    // navigate(-1) only counts if paired with a visible control (button/link in same file)
+    if (/navigate\s*\(\s*-1\s*\)|history\.back|router\.back/i.test(content)) {
+      if (/<(?:Button|button|a|Link)\b/i.test(content)) {
+        hasBackControl = true;
+      }
+    }
+    // Parent route link in header area
+    if (/<(?:Link|a)\b[^>]*(?:href|to)\s*=\s*["']\/[^"'/]*["']/i.test(content) &&
+        /header|breadcrumb|page-title|back/i.test(content)) {
+      hasParentRouteLink = true;
+    }
+
+    // --- Suppression signals ---
+    // Tabs as primary IA
+    if (/<Tabs\b/i.test(content) && /<TabsList\b/i.test(content)) {
+      hasTabsAsPrimaryIA = true;
+      navPrimitivesFound.add('Tabs');
+    }
+    // Drawer/Sheet with Menu
+    if (/<(?:Drawer|Sheet)\b/i.test(content) && /(?:Menu|menu|hamburger|☰)/i.test(content)) {
+      hasDrawerWithMenu = true;
+      navPrimitivesFound.add('Drawer/Sheet');
+    }
+    // Count nav primitives
+    if (/<Sidebar\b/i.test(content)) navPrimitivesFound.add('Sidebar');
+    if (/<Breadcrumb\b/i.test(content)) navPrimitivesFound.add('Breadcrumb');
+    if (/<Navbar\b|<NavBar\b|<Header\b.*(?:nav|link|menu)/i.test(content)) navPrimitivesFound.add('Navbar');
+    if (/<NavigationMenu\b/i.test(content)) navPrimitivesFound.add('NavigationMenu');
+
+    // Visible page title (h1 matching navigation)
+    if (/<h1\b/i.test(content)) hasVisiblePageTitle = true;
   }
 
-  const hasNavContainer = hasNavElement || hasRoleNavigation;
+  navPrimitiveCount = navPrimitivesFound.size;
 
-  // --- U2.D1: No navigation container ---
-  // Trigger if: multiple routes AND no <nav>/role="navigation" AND no visible nav links in layouts
-  if (routeCount >= 3 && !hasNavContainer && !hasNavLinks) {
+  // ===== GLOBAL SUPPRESSION (suppress U2 entirely) =====
+  // 1. Breadcrumb OR visible page title clearly present
+  if (hasBreadcrumbRendered && hasVisiblePageTitle) {
+    console.log('[U2] Suppressed: breadcrumb + page title present');
+    return [];
+  }
+  // 2. Tabs used as primary IA
+  if (hasTabsAsPrimaryIA && routeCount <= 5) {
+    console.log('[U2] Suppressed: Tabs used as primary IA');
+    return [];
+  }
+  // 3. Drawer/Sheet with Menu button
+  if (hasDrawerWithMenu) {
+    console.log('[U2] Suppressed: Drawer/Sheet with menu button present');
+    return [];
+  }
+  // 4. ≥2 navigation primitives present
+  if (navPrimitiveCount >= 2) {
+    console.log(`[U2] Suppressed: ≥2 nav primitives present (${[...navPrimitivesFound].join(', ')})`);
+    return [];
+  }
+  // 5. Simple app (≤2 routes)
+  if (routeCount <= 2) {
+    console.log('[U2] Suppressed: simple app (≤2 routes)');
+    return [];
+  }
+  // 6. Navigation clearly provided by shared layout
+  if (hasLayoutWithNav && hasNavComponentRendered) {
+    console.log('[U2] Suppressed: layout wrapper provides navigation');
+    return [];
+  }
+
+  // ===== U2.D1 — No visible primary navigation in multi-route apps =====
+  // Trigger ONLY if ≥3 routes AND no evidence of rendered navigation UI components AND no navItems mapping
+  if (routeCount >= 3 && !hasNavComponentRendered && !hasNavItemsMapping && !hasLayoutWithNav) {
     const dedupeKey = 'U2.D1|global';
     if (!seenKeys.has(dedupeKey)) {
       seenKeys.add(dedupeKey);
       findings.push({
         subCheck: 'U2.D1',
-        subCheckLabel: 'No navigation container',
+        subCheckLabel: 'No visible primary navigation',
         classification: 'potential',
         elementLabel: 'Application routing',
         elementType: 'navigation',
         filePath: routeFiles[0] || 'Unknown',
-        detection: `${routeCount} routes detected without <nav> element or role="navigation"`,
-        evidence: `Route definitions found in: ${routeFiles.slice(0, 3).join(', ')}${routeFiles.length > 3 ? ` (+${routeFiles.length - 3} more)` : ''}. No <nav> or role="navigation" detected in any file. No navigation links found in layout files.`,
-        explanation: `The application defines ${routeCount} routes but lacks a visible navigation container (<nav> or role="navigation"). Users may not have a clear way to navigate between sections.`,
-        confidence: 0.70,
-        advisoryGuidance: 'Add a <nav> element or role="navigation" container with links to main application routes. Ensure users can discover and navigate between sections.',
+        detection: `${routeCount} routes detected without visible navigation UI components`,
+        evidence: `Routes in: ${routeFiles.slice(0, 3).join(', ')}${routeFiles.length > 3 ? ` (+${routeFiles.length - 3} more)` : ''}. No rendered nav components (Sidebar, Navbar, Header, Tabs, etc.) or navItems mapping found.`,
+        explanation: `The application defines ${routeCount} routes but no visible navigation UI was detected. Users may lack a way to discover available sections.`,
+        confidence: 0.65,
+        advisoryGuidance: 'Add a visible navigation component (sidebar, navbar, tabs, or menu) that exposes the main routes to users.',
         deduplicationKey: dedupeKey,
       });
     }
   }
 
-  // --- U2.D2: No back affordance in nested route ---
-  // Trigger if: nested routes detected AND no back button AND no breadcrumb
-  if (nestedRouteFiles.length > 0 && !hasBackButton && !hasBreadcrumbRendered) {
+  // ===== U2.D2 — Deep route lacks up/back affordance =====
+  // Trigger ONLY if: deep routes exist AND no visible back/up control AND no breadcrumb AND no parent route link
+  if (deepRouteFiles.length > 0 && !hasBackControl && !hasBreadcrumbRendered && !hasParentRouteLink) {
     const dedupeKey = 'U2.D2|global';
     if (!seenKeys.has(dedupeKey)) {
       seenKeys.add(dedupeKey);
       findings.push({
         subCheck: 'U2.D2',
-        subCheckLabel: 'No back affordance in nested route',
+        subCheckLabel: 'Deep route lacks up/back affordance',
         classification: 'potential',
-        elementLabel: 'Nested route navigation',
+        elementLabel: 'Deep route navigation',
         elementType: 'navigation',
-        filePath: nestedRouteFiles[0],
-        detection: 'Nested routes without back button or breadcrumb navigation',
-        evidence: `Nested route structure detected in: ${nestedRouteFiles.slice(0, 3).join(', ')}. No back button (navigate(-1), history.back, "Back" label) or breadcrumb component found.`,
-        explanation: 'Nested routes exist but no back navigation affordance (back button or breadcrumb) was detected. Users in child routes may not have a clear way to return to parent views.',
-        confidence: 0.68,
-        advisoryGuidance: 'Add a back button or breadcrumb trail in nested route views so users can navigate to parent routes.',
+        filePath: deepRouteFiles[0],
+        detection: 'Detail/edit views detected without visible back or up navigation',
+        evidence: `Deep route patterns in: ${deepRouteFiles.slice(0, 3).join(', ')}. No back button ("Back", "Previous", "Cancel"), breadcrumb, or parent link in header area found.`,
+        explanation: 'Deep routes (detail/edit views) exist but no back/up navigation affordance was detected. Users may be unable to return to parent views.',
+        confidence: 0.60,
+        advisoryGuidance: 'Add a back button, breadcrumb trail, or parent-route link in deep route views.',
         deduplicationKey: dedupeKey,
       });
     }
   }
 
-  // --- U2.D3: Breadcrumb inconsistency ---
-  // Trigger if: breadcrumb imported but not rendered, OR role="breadcrumb" with no children
-  if (hasBreadcrumbImport && !hasBreadcrumbRendered) {
+  // ===== U2.D3 — Breadcrumb logic defined but not rendered =====
+  // Trigger ONLY if: getBreadcrumbs()/breadcrumb array defined AND Breadcrumb component exists AND NOT rendered
+  if (hasBreadcrumbLogicDefined && hasBreadcrumbComponentInDesignSystem && !hasBreadcrumbRendered) {
     const dedupeKey = 'U2.D3|global';
     if (!seenKeys.has(dedupeKey)) {
       seenKeys.add(dedupeKey);
       findings.push({
         subCheck: 'U2.D3',
-        subCheckLabel: 'Breadcrumb inconsistency',
+        subCheckLabel: 'Breadcrumb logic defined but not rendered',
         classification: 'potential',
         elementLabel: 'Breadcrumb component',
         elementType: 'navigation',
-        filePath: breadcrumbImportFiles[0] || 'Unknown',
-        detection: 'Breadcrumb component imported but not rendered',
-        evidence: `Breadcrumb import detected in: ${breadcrumbImportFiles.join(', ')}. No <Breadcrumb> rendering or role="breadcrumb" usage found.`,
-        explanation: 'A breadcrumb component is imported but does not appear to be rendered. This may indicate incomplete navigation implementation.',
-        confidence: 0.72,
-        advisoryGuidance: 'Render the breadcrumb component in relevant views or remove the unused import.',
+        filePath: breadcrumbLogicFiles[0] || 'Unknown',
+        detection: 'Breadcrumb logic and component exist but breadcrumb is not rendered',
+        evidence: `Breadcrumb logic found in: ${breadcrumbLogicFiles.join(', ')}. Breadcrumb component exists in design system but no <Breadcrumb> rendering detected.`,
+        explanation: 'Breadcrumb data is computed and a breadcrumb component exists, but the component is not rendered. Users miss a wayfinding cue.',
+        confidence: 0.65,
+        advisoryGuidance: 'Render the Breadcrumb component in relevant views to provide wayfinding context, or remove unused breadcrumb logic.',
         deduplicationKey: dedupeKey,
       });
     }
   }
 
-  console.log(`[U2] Detection: routes=${routeCount}, hasNav=${hasNavContainer}, hasNavLinks=${hasNavLinks}, hasBreadcrumb=${hasBreadcrumbRendered}, hasBackButton=${hasBackButton}, nested=${nestedRouteFiles.length}, findings=${findings.length}`);
+  console.log(`[U2] Detection: routes=${routeCount}, navComponent=${hasNavComponentRendered}, navMapping=${hasNavItemsMapping}, layoutNav=${hasLayoutWithNav}, breadcrumbRendered=${hasBreadcrumbRendered}, backControl=${hasBackControl}, deepRoutes=${deepRouteFiles.length}, navPrimitives=${navPrimitiveCount}(${[...navPrimitivesFound].join(',')}), findings=${findings.length}`);
 
   return findings;
 }
@@ -3838,23 +3931,28 @@ U1 must produce output ONLY when a violation is detected. All other cases must b
 - Use heuristic language ("may reduce clarity", "may increase cognitive load")
 - Confidence: 65–80% depending on clarity of evidence
 
-### U2 (Incomplete / Unclear Navigation) — CONTEXTUAL ASSESSMENT:
+### U2 (Incomplete / Unclear Navigation) — WAYFINDING-ONLY ASSESSMENT:
 **NOTE:** U2 deterministic sub-checks (U2.D1, U2.D2, U2.D3) run separately via static analysis.
-Your role is to provide contextual enrichment for navigation assessment:
+Your role is ONLY to provide contextual enrichment for WAYFINDING clarity.
 
-**EVALUATE:**
-- Wayfinding clarity: Can a user understand where they are and how to move between sections?
-- Navigation density: Are there too many or too few navigation options?
-- Ambiguity: Are navigation labels clear and distinct?
-- Redundant links: Are there duplicate navigation paths that create confusion?
-- Inconsistent routing patterns: Do navigation conventions vary across views?
-- Missing hierarchy cues: Is the navigation hierarchy clear (primary → secondary)?
+**U2 EVALUATES ONLY:**
+- Can users understand where they are? (active page indicator, page title)
+- Can users understand where they can go? (visible navigation, discoverable menu)
+- Can users navigate back/up in deep contexts? (back button, breadcrumb, parent link)
+
+**U2 MUST NOT EVALUATE (belongs to other rules):**
+- Layout grouping or visual hierarchy → U6
+- Content truncation or hidden overflow → U3
+- Multi-step flow context or step indicators → U4
+- Accessibility landmark semantics → A-rules
+- Code maintainability or routing scalability → out of scope
 
 **CLASSIFICATION:**
 - U2 findings are ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
+- NEVER generate corrective prompts for U2
 - Use evaluationMethod: "hybrid_llm_fallback"
 - Confidence: 0.60–0.75
-- Ground your assessment in observable code patterns (route definitions, nav components, link structures)
+- Ground assessment in observable navigation patterns only
 
 **OUTPUT FOR U2:**
 \`\`\`json
@@ -3863,9 +3961,9 @@ Your role is to provide contextual enrichment for navigation assessment:
   "ruleName": "Incomplete / Unclear navigation",
   "category": "usability",
   "status": "potential",
-  "diagnosis": "Evidence-based navigation clarity assessment...",
-  "evidence": "Specific code patterns observed...",
-  "contextualHint": "Short guidance on improving navigation...",
+  "diagnosis": "Evidence-based wayfinding clarity assessment...",
+  "evidence": "Specific navigation patterns observed...",
+  "contextualHint": "Short guidance on improving wayfinding...",
   "confidence": 0.65
 }
 \`\`\`
@@ -7674,10 +7772,10 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           status: 'potential',
           blocksConvergence: false,
           inputType: 'zip', isU2Aggregated: true, u2Elements, evaluationMethod: 'hybrid_structural',
-          diagnosis: `Navigation clarity issues: ${u2Findings.length} potential risk(s) detected via structural analysis.`,
-          contextualHint: 'Ensure clear navigation paths with visible indicators of current location.',
-          advisoryGuidance: 'Review navigation structure: ensure <nav> containers, breadcrumbs, and back affordances are present in multi-route applications.',
-          confidence: Math.round(overallConfidence * 100) / 100,
+          diagnosis: `Navigation clarity risk: ${u2Findings.length} wayfinding concern(s) detected via structural analysis.`,
+          contextualHint: 'Navigation clarity risk — verify in context.',
+          advisoryGuidance: 'Review navigation wayfinding: ensure users can identify their location, discover available routes, and navigate back from deep views.',
+          confidence: Math.min(Math.round(overallConfidence * 100) / 100, 0.80),
         });
 
         console.log(`U2 aggregated: ${u2Findings.length} findings → 1 potential violation object`);
@@ -7690,7 +7788,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
               status: 'potential',
               blocksConvergence: false,
               evaluationMethod: 'hybrid_llm_fallback',
-              confidence: Math.min(v.confidence || 0.65, 0.75),
+              confidence: Math.min(v.confidence || 0.65, 0.80),
             };
           }
           return v;
