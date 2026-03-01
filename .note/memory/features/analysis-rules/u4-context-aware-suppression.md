@@ -28,6 +28,14 @@ If ANY answer is uncertain → candidate is SUPPRESSED.
 - Truncation/overflow is U3 scope — never flag under U4
 - U4 prioritizes false-positive avoidance over sensitivity
 
+## U4.2 Component-Aware Import Resolution (Anti-False-Positive)
+When Tabs/TabsTrigger/ToggleGroup usage is detected in a page file:
+1. The engine resolves the import source path (e.g., `@/components/ui/tabs`)
+2. Loads the referenced file from the analyzed artifact (zip/github)
+3. Checks for persistent active-state tokens: `data-[state=active]:`, `aria-selected`, `isActive`, `isSelected`
+4. If found → sets `active_state_in_component_definition` mitigation and **SUPPRESSES U4.2 entirely**
+5. U4.2 only reports when NO active state exists in BOTH local usage AND resolved component definition
+
 ## Subtypes
 
 1. **U4.1 — Structured Selection → Free-Text** (LLM-decided)
@@ -35,10 +43,11 @@ If ANY answer is uncertain → candidate is SUPPRESSED.
    - LLM reports ONLY if finite categorical domain is strongly evidenced
    - Suppressed if: label implies open description, domain unclear, no enum evidence
 
-2. **U4.2 — Hidden Selection State** (LLM-decided)
+2. **U4.2 — Hidden Selection State** (LLM-decided, component-aware)
    - Candidates: Tabs/ToggleGroup without active state indicators
-   - LLM reports ONLY if active state truly not persistent
-   - Suppressed if: active styling, aria-selected, or visible context exists
+   - **Import resolution**: checks component definition file for `data-[state=active]:` styling
+   - LLM reports ONLY if active state truly not persistent in both usage AND definition
+   - Suppressed if: active styling, aria-selected, or visible context exists (locally OR in component definition)
 
 3. **U4.3 — Multi-Step Context Regression** (LLM-decided)
    - Candidates: flows with ≥2 steps

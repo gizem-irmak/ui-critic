@@ -2939,6 +2939,7 @@ Suppress if: label implies open description, domain expectation unclear, no expl
 **U4.2 (Hidden Selection State):**
 Report ONLY if: selection interaction exists AND active state is NOT visually persistent AND no visible badge/highlight/breadcrumb/summary exists.
 Suppress if: active styling present, aria-selected present, context visible elsewhere.
+**CRITICAL for U4.2:** If the mitigation signals include "active_state_in_component_definition", this means the shared component definition (e.g., components/ui/tabs.tsx) provides persistent active styling via data-[state=active] or similar. In this case you MUST output {"report":"no"} — the active indicator EXISTS in the component definition even if not visible in the page-level usage code.
 
 **U4.3 (Multi-Step Context Regression):**
 Report ONLY if: multi-step flow confirmed AND missing step indicator AND missing back navigation AND missing summary AND missing persistent context.
@@ -3256,9 +3257,51 @@ function extractU4Candidates(allFiles: Map<string, string>): U4Candidate[] {
 
     // ---- U4.2 Candidates ----
     const ACTIVE_STATE_RE = /\b(bg-primary|bg-accent|aria-selected|aria-current|aria-pressed|isActive|isSelected|data-state\s*=\s*"active"|data-active|activeTab|selectedTab|currentTab|activeIndex|selectedIndex|variant\s*=.*default)\b/i;
+    const COMPONENT_DEF_ACTIVE_RE = /data-\[state=active\]:|data-state\s*=\s*["']active["']|aria-selected|\.active\b|isActive|isSelected|&\[data-state="active"\]/i;
+
+    // Helper: resolve import path for a component and check its definition for active state styling
+    const resolveComponentActiveState = (componentNames: string[]): { found: boolean; sourceFile: string; evidence: string } => {
+      for (const cName of componentNames) {
+        const importRe = new RegExp(`import\\s+\\{[^}]*\\b${cName}\\b[^}]*\\}\\s+from\\s+['"]([@./][^'"]+)['"]`, 'i');
+        const importMatch = content.match(importRe);
+        if (!importMatch) continue;
+        const importPath = importMatch[1];
+
+        const candidatePaths: string[] = [];
+        if (importPath.startsWith('@/')) {
+          const rel = importPath.slice(2);
+          candidatePaths.push(`${rel}.tsx`, `${rel}.ts`, `${rel}/index.tsx`, `${rel}/index.ts`);
+          candidatePaths.push(`src/${rel}.tsx`, `src/${rel}.ts`, `src/${rel}/index.tsx`, `src/${rel}/index.ts`);
+        } else {
+          const fileDir = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/')) : '';
+          const segments = importPath.replace(/^\.\//, '').split('/');
+          let resolved = fileDir;
+          for (const seg of segments) {
+            if (seg === '..') resolved = resolved.includes('/') ? resolved.substring(0, resolved.lastIndexOf('/')) : '';
+            else resolved = resolved ? `${resolved}/${seg}` : seg;
+          }
+          candidatePaths.push(`${resolved}.tsx`, `${resolved}.ts`, `${resolved}/index.tsx`, `${resolved}/index.ts`);
+        }
+
+        for (const cp of candidatePaths) {
+          for (const tryPath of [cp, cp.replace(/^src\//, '')]) {
+            for (const [fPath, fContent] of allFiles) {
+              const normalizedFPath = fPath.replace(/\\/g, '/').replace(/^\.\//, '');
+              if (normalizedFPath === tryPath || normalizedFPath.endsWith('/' + tryPath) || normalizedFPath === 'src/' + tryPath) {
+                if (COMPONENT_DEF_ACTIVE_RE.test(fContent)) {
+                  return { found: true, sourceFile: normalizedFPath, evidence: `Component definition in ${normalizedFPath} includes active state styling (data-[state=active]: or similar)` };
+                }
+              }
+            }
+          }
+        }
+      }
+      return { found: false, sourceFile: '', evidence: '' };
+    };
+
     const selectionPatterns = [
-      { re: /<(?:Tabs|TabsList|TabsTrigger)\b/gi, label: 'Tabs component', type: 'tab' },
-      { re: /<(?:ToggleGroup|ToggleGroupItem)\b/gi, label: 'Toggle group', type: 'toggle' },
+      { re: /<(?:Tabs|TabsList|TabsTrigger)\b/gi, label: 'Tabs component', type: 'tab', resolveNames: ['TabsTrigger', 'Tabs', 'TabsList'] },
+      { re: /<(?:ToggleGroup|ToggleGroupItem)\b/gi, label: 'Toggle group', type: 'toggle', resolveNames: ['ToggleGroupItem', 'ToggleGroup'] },
     ];
     for (const pat of selectionPatterns) {
       pat.re.lastIndex = 0;
@@ -3270,11 +3313,23 @@ function extractU4Candidates(allFiles: Map<string, string>): U4Candidate[] {
         if (ACTIVE_STATE_RE.test(nearbyContent)) mitigations.push('active_state_indicator');
         if (/className.*\b(active|selected)\b/i.test(nearbyContent)) mitigations.push('active_class');
 
+        // Component-aware: resolve import and check component definition for active state
+        const componentCheck = resolveComponentActiveState(pat.resolveNames);
+        if (componentCheck.found) {
+          mitigations.push('active_state_in_component_definition');
+        }
+
+        // SUPPRESS entirely if component definition provides active state styling
+        if (mitigations.includes('active_state_in_component_definition')) {
+          console.log(`U4.2 SUPPRESSED for ${pat.label} in ${filePath}: ${componentCheck.evidence}`);
+          break;
+        }
+
         candidates.push({
           candidateType: 'U4.2', elementLabel: pat.label, elementType: pat.type, filePath,
           codeSnippet: getSnippet(lineNum, 10), nearbyHeadings: getHeadings(lineNum, 15),
           mitigationSignals: mitigations,
-          rawEvidence: `${pat.label} detected. ${mitigations.length > 0 ? 'Active state signals: ' + mitigations.join(', ') : 'No active state indicator found within ±20 lines.'}`,
+          rawEvidence: `${pat.label} detected. ${mitigations.length > 0 ? 'Active state signals: ' + mitigations.join(', ') : 'No active state indicator found within ±20 lines AND no active styling in resolved component definition.'}`,
         });
         break;
       }
