@@ -2487,7 +2487,7 @@ ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: $
 
 Consider:
 - Visual hierarchy and primary action clarity (U1)
-- Navigation structure, wayfinding, and location indicators (U2)
+- Navigation WAYFINDING ONLY: Can users know where they are, where they can go, and navigate back? (U2) — Do NOT comment on layout grouping (U6), truncation (U3), step indicators (U4), or landmark semantics (A-rules)
 - Content truncation, overflow, and text visibility (U3)
 - Recognition vs recall: visible options, labels, contextual cues (U4) — see U4 CONSTRAINTS below
 - Interaction feedback: loading states, confirmations, error messages (U5)
