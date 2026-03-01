@@ -31,6 +31,26 @@ function inferA4SubCheck(violation: Violation): 'A4.1' | 'A4.2' | 'A4.3' | 'A4.4
   return 'A4.1';
 }
 
+function formatA4Location(element: A4ElementSubItem): { filePath: string; displayName: string } {
+  const loc = element.location || '';
+  const startLine = element.startLine;
+  const endLine = element.endLine;
+  
+  if (!loc || loc === 'global') {
+    return { filePath: loc, displayName: 'global' };
+  }
+  
+  const basename = loc.replace(/\\/g, '/').split('/').pop() || loc;
+  
+  if (startLine && endLine && endLine !== startLine) {
+    return { filePath: loc, displayName: `${basename}:${startLine}–${endLine}` };
+  }
+  if (startLine) {
+    return { filePath: loc, displayName: `${basename}:${startLine}` };
+  }
+  return { filePath: loc, displayName: basename };
+}
+
 function A4ElementItem({ element, isConfirmed, compact = false }: {
   element: A4ElementSubItem;
   isConfirmed: boolean;
@@ -38,6 +58,7 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const displayLabel = element.sourceLabel || element.elementLabel;
+  const locationInfo = formatA4Location(element);
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -46,7 +67,7 @@ function A4ElementItem({ element, isConfirmed, compact = false }: {
           <div className="flex items-center justify-between gap-2 cursor-pointer">
             <ComponentTitle>{displayLabel}</ComponentTitle>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <LocationBadge filePath={element.location} compact={compact} />
+              <LocationBadge filePath={locationInfo.filePath} displayName={locationInfo.displayName} compact={compact} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (

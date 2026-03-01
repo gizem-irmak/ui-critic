@@ -426,6 +426,10 @@ export interface A4ElementSubItem {
   
   // Deduplication key
   deduplicationKey: string;
+  
+  // Line numbers for precise file reference
+  startLine?: number | null;
+  endLine?: number | null;
 }
 
 // A5 Element sub-item for aggregated form label reporting

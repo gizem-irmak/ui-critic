@@ -5770,6 +5770,8 @@ interface A4Finding {
   correctivePrompt?: string;
   deduplicationKey: string;
   potentialSubtype?: 'borderline' | 'accuracy';
+  startLine?: number | null;
+  endLine?: number | null;
 }
 
 // --- A4 Helpers: page-level detection ---
@@ -5866,8 +5868,8 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   // Identify page files for page-level h1 analysis
   const pageFiles = identifyPageFiles(allFiles);
 
-  // Per-page h1 tracking
-  const pageH1Counts = new Map<string, number>();
+  // Per-page h1 tracking (stores line numbers of each <h1> occurrence)
+  const pageH1Counts = new Map<string, number[]>();
 
   const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
   const POINTER_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
@@ -5892,11 +5894,16 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
-    // Track h1 per page file
+    // Track h1 per page file — store line numbers for each occurrence
     const isPage = pageFiles.has(filePath);
     if (isPage) {
-      const h1Matches = content.match(/<h1\b/gi);
-      pageH1Counts.set(filePath, h1Matches ? h1Matches.length : 0);
+      const h1LineNumbers: number[] = [];
+      const h1Re = /<h1\b/gi;
+      let h1Match;
+      while ((h1Match = h1Re.exec(content)) !== null) {
+        h1LineNumbers.push(content.slice(0, h1Match.index).split('\n').length);
+      }
+      pageH1Counts.set(filePath, h1LineNumbers);
     }
 
     // Global heading level tracking (for skipped levels only)
@@ -5945,6 +5952,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
           correctivePrompt: `Replace <${tag}> with <h1> (or add role="heading" aria-level="1") since it appears to be the primary page heading.`,
           deduplicationKey: dedupeKey,
           potentialSubtype: 'borderline',
+          startLine: lineNumber,
         });
       } else if (isTopHeadingCandidate) {
         // Non-page file top heading without h1 — lower confidence
@@ -5964,6 +5972,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
           correctivePrompt: `Replace <${tag}> with <h1> (or add role="heading" aria-level="1") since it appears to be the primary page heading.`,
           deduplicationKey: dedupeKey,
           potentialSubtype: 'borderline',
+          startLine: lineNumber,
         });
       } else {
         // Any visual heading missing semantics → Confirmed
@@ -5982,6 +5991,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
           confidence: 0.92,
           correctivePrompt: `Replace <${tag}> with an appropriate heading level (<h2>, <h3>, etc.) or add role="heading" aria-level="N".`,
           deduplicationKey: dedupeKey,
+          startLine: lineNumber,
         });
       }
     }
@@ -6023,6 +6033,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
         confidence: 0.93,
         correctivePrompt: `Add role="button" or role="link" to <${tag}>, or replace with a native <button>/<a> element.`,
         deduplicationKey: dedupeKey,
+        startLine: lineNumber,
       });
     }
 
@@ -6074,19 +6085,26 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
 
   // A4.1 Post-scan: Page-level multiple <h1> check
   // Only flag if a single page file contains >1 <h1>
-  for (const [pagePath, count] of pageH1Counts) {
-    if (count > 1) {
-      headingIssues.push({
-        elementLabel: `Multiple <h1> in ${pagePath.split('/').pop()}`, elementType: 'h1', sourceLabel: 'Page heading',
-        filePath: pagePath, componentName: undefined,
-        subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
-        classification: 'potential',
-        detection: `multiple_h1: ${count} <h1> elements in the same page file`,
-        evidence: `${count} <h1> tags in ${pagePath}`,
-        explanation: `This page file contains ${count} <h1> elements. Each page view should have exactly one <h1>.`,
-        confidence: 0.70,
-        deduplicationKey: `A4.1|multiple-h1|${pagePath}`,
-      });
+  for (const [pagePath, h1Lines] of pageH1Counts) {
+    if (h1Lines.length > 1) {
+      // Emit one finding per duplicate <h1> with its specific line number
+      for (const h1Line of h1Lines) {
+        const dedupeKey = `A4.1|multiple-h1|${pagePath}|${h1Line}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+        headingIssues.push({
+          elementLabel: `<h1> at line ${h1Line}`, elementType: 'h1', sourceLabel: 'Page heading',
+          filePath: pagePath, componentName: undefined,
+          subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+          classification: 'potential',
+          detection: `multiple_h1: ${h1Lines.length} <h1> elements in the same page file`,
+          evidence: `<h1> at ${pagePath}:${h1Line} (${h1Lines.length} total in file)`,
+          explanation: `This page file contains ${h1Lines.length} <h1> elements. Each page view should have exactly one <h1>.`,
+          confidence: 0.70,
+          deduplicationKey: dedupeKey,
+          startLine: h1Line,
+        });
+      }
     }
   }
 
@@ -6105,6 +6123,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
         explanation: `Heading level skips from h${sortedLevels[i - 1]} to h${sortedLevels[i]}. This breaks the logical document outline for screen readers.`,
         confidence: 0.78,
         deduplicationKey: `A4.1|skip-h${sortedLevels[i - 1]}-h${sortedLevels[i]}`,
+        startLine: null,
       });
       break;
     }
@@ -6133,6 +6152,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
         explanation: 'No <main> landmark found. Screen readers use landmarks to navigate page regions efficiently (WCAG 2.4.1 Bypass Blocks).',
         confidence,
         deduplicationKey: 'A4.3|no-main',
+        startLine: 1,
       });
     }
   }
@@ -8008,6 +8028,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           potentialSubtype: f.classification === 'potential' ? (f.potentialSubtype || 'borderline') as 'borderline' | 'accuracy' : undefined,
           explanation: f.explanation, confidence: f.confidence, correctivePrompt: f.correctivePrompt,
           deduplicationKey: f.deduplicationKey,
+          startLine: f.startLine ?? null, endLine: f.endLine ?? null,
         }));
 
         const typeBreakdown = [
