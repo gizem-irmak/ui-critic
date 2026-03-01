@@ -398,3 +398,100 @@ export function applyCrossRuleSuppression(violations: any[]): {
 
   return { kept, suppressedElements };
 }
+
+// ─── Positive Finding Filter (Issues-Only Guardrail) ────────────────
+
+/**
+ * Configurable list of phrases that indicate a "positive" or "pass" finding.
+ * Case-insensitive matching against diagnosis + evidence + contextualHint.
+ */
+const POSITIVE_PHRASES: RegExp[] = [
+  /well[- ]implemented/i,
+  /provides?\s+(?:good|clear|adequate|proper)/i,
+  /clear\s+navigation/i,
+  /good\s+wayfinding/i,
+  /works?\s+correctly/i,
+  /\bno\s+issue/i,
+  /\bcompliant\b/i,
+  /\bproperly\s+(?:implemented|structured|organized)/i,
+  /correctly\s+implemented/i,
+  /\bno\s+(?:violation|problem|risk|concern)\b/i,
+  /\bpass(?:es)?\b/i,
+  /\badequate\s+(?:navigation|structure|labels?|contrast)/i,
+  /\bsufficient\s+(?:navigation|structure|labels?|contrast)/i,
+  /\bgood\s+(?:implementation|structure|practice)/i,
+  /\bclear\s+(?:hierarchy|structure|labels?|indication)/i,
+  /\bwell[- ]structured/i,
+  /\bno\s+accessibility\s+(?:issue|concern|violation)/i,
+  /\bno\s+usability\s+(?:issue|concern|violation)/i,
+];
+
+/**
+ * Returns true if the violation text indicates a "pass" or "positive" finding
+ * rather than an actual issue. Such findings MUST be filtered out.
+ */
+export function isPositiveFinding(v: any): boolean {
+  // Primary gate: status-based
+  const status = (v.status || '').toLowerCase();
+  if (status === 'pass' || status === 'compliant' || status === 'ok') return true;
+
+  // Secondary gate: text-based on combined diagnosis + evidence + hint
+  const combined = [
+    v.diagnosis || '',
+    v.evidence || '',
+    v.contextualHint || '',
+    v.advisoryGuidance || '',
+  ].join(' ');
+
+  // Must match positive language AND must NOT contain negative/risk language
+  const hasPositive = POSITIVE_PHRASES.some(re => re.test(combined));
+  if (!hasPositive) return false;
+
+  // If it also contains risk/issue language (NOT preceded by "no"), it's a real finding with context
+  // Remove "no issue/violation/problem/concern" since those are positive phrases, not risk indicators
+  const negatedPositives = combined.replace(/\bno\s+(?:issue|violation|problem|concern|risk)\b/gi, '');
+  const hasNegative = /\b(?:risk|issue|missing|incomplete|unclear|insufficient|truncat|obscur|manipulat|imbalanc|regression|weak|poor|lack|absent|hidden|ambiguous|violat)/i.test(negatedPositives);
+  return !hasNegative;
+}
+
+/**
+ * Filters out positive/pass/praise findings from the violations array.
+ * Also removes violations with 0 elements in their aggregated arrays.
+ * This is the hard guardrail enforcing "issues only" output.
+ */
+export function filterPositiveFindings(violations: any[]): { kept: any[]; filtered: any[] } {
+  const kept: any[] = [];
+  const filtered: any[] = [];
+
+  for (const v of violations) {
+    if (isPositiveFinding(v)) {
+      console.log(`[Positive-filter] Removed ${v.ruleId} "${(v.diagnosis || '').slice(0, 80)}" — positive/pass finding`);
+      filtered.push(v);
+      continue;
+    }
+
+    // Check if aggregated card has 0 elements (empty card guard)
+    const elementKeys = [
+      'a1Elements', 'a2Elements', 'a3Elements', 'a4Elements', 'a5Elements', 'a6Elements',
+      'u1Elements', 'u2Elements', 'u3Elements', 'u4Elements', 'u5Elements', 'u6Elements',
+      'e1Elements', 'e2Elements', 'e3Elements',
+    ];
+    const isAggregated = elementKeys.some(k => v[k] !== undefined);
+    if (isAggregated) {
+      const hasElements = elementKeys.some(k => Array.isArray(v[k]) && v[k].length > 0);
+      if (!hasElements) {
+        console.log(`[Positive-filter] Removed ${v.ruleId} — aggregated card with 0 elements`);
+        filtered.push(v);
+        continue;
+      }
+    }
+
+    kept.push(v);
+  }
+
+  if (filtered.length > 0) {
+    console.log(`[Positive-filter] Removed ${filtered.length} non-issue finding(s)`);
+  }
+
+  return { kept, filtered };
+}
