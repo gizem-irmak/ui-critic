@@ -543,13 +543,17 @@ export interface U3ElementSubItem {
 
 // U4 Element sub-item for aggregated recognition-to-recall reporting
 export interface U4ElementSubItem {
-  elementLabel: string;   // e.g., "Registration form", "Multi-step checkout"
-  elementType?: string;   // form, page, component, etc.
+  elementLabel: string;   // e.g., '"Category" text input', "Tabs component", "CheckoutWizard (4-step flow)"
+  elementType?: string;   // input, tab, toggle, wizard, button, component
   location: string;       // file path
   detection?: string;     // Summary of what was detected
-  evidence?: string;      // Specific evidence citations from the bundle
+  evidence?: string;      // Specific evidence citations
   recommendedFix?: string; // Actionable fix suggestion
   confidence: number;     // Capped at 0.80
+  subCheck?: 'U4.1' | 'U4.2' | 'U4.3' | 'U4.4'; // Which subtype triggered
+  subCheckLabel?: string; // Human-readable subtype label
+  status?: 'confirmed' | 'potential'; // Per-element classification
+  evaluationMethod?: 'deterministic' | 'hybrid_deterministic' | 'llm_assisted';
   deduplicationKey: string;
 }
 

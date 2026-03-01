@@ -1,27 +1,41 @@
 # Memory: features/analysis-rules/u4-context-aware-suppression
 Updated: now
 
-Rule U4 (Recognition-to-Recall Regression) implements multi-layered context-aware suppression:
+Rule U4 (Recognition-to-Recall Regression) was rewritten with a 4-subtype pipeline:
 
-1. **Pagination suppression**: Controls without visible page context ("Page X of Y", item range, total count) within ±15 lines are flagged; if context exists, U4 is suppressed.
+## Subtypes
 
-2. **Standard auth CTA exclusion**: "Sign In", "Sign Up", "Go to Dashboard" etc. are filtered from evidence bundles to prevent false positives.
+1. **U4.1 — Structured Selection → Free-Text Substitution** (Hybrid: deterministic + LLM)
+   - Detects `<input type="text">` / `<textarea>` with semantic labels (category, type, status, etc.) where no `<Select>`, `<RadioGroup>`, `<Combobox>`, or `<datalist>` exists nearby (±30 lines).
+   - **Confirmed** if no selection component exists anywhere in the file.
+   - **Potential** if selection components exist elsewhere in the file.
+   - LLM confirms/dismisses/adjusts deterministic candidates via `[U4_1_CANDIDATES]` bundle.
+   - Excluded: free-form labels (notes, description, message), optional fields, fields with autocomplete.
 
-3. **Multi-step flow analysis** (new): The evidence bundle now extracts:
-   - `stepCount`: estimated number of steps in the flow
-   - `hasBackwardNavigation`: whether Previous/Back buttons exist
-   - `hasSummaryStep`: whether a review/confirm/summary step renders prior selections
-   - `hasPersistentContext`: whether selected values (selectedLocation, selectedDoctor, etc.) are visibly displayed across steps
-   - `hasStepIndicator`: whether "Step X of Y" or progress bars exist
-   - `multiStepMitigation`: computed level — `none`, `summary_final`, `persistent_context`, or `full`
+2. **U4.2 — Hidden or Non-Persistent Selection State** (Deterministic)
+   - Detects `<Tabs>`, `<ToggleGroup>` etc. without active state indicators (bg-primary, aria-selected, isActive, etc.) within ±20 lines.
+   - Always **Potential**. Confidence: 0.65.
 
-4. **Mitigation-based suppression/downgrade**:
-   - `full` or `persistent_context` → SUPPRESS entirely
-   - `summary_final` + backward nav → downgrade to confidence 0.50–0.60, use language "Summary provided only at final step; intermediate steps may require recall of prior selections"
-   - `none` → flag normally (confidence 0.75–0.80)
+3. **U4.3 — Multi-Step Context Regression** (Deterministic)
+   - Detects multi-step flows (stepCount ≥ 2) missing: step indicator, back navigation, summary/review, or persistent context.
+   - Suppressed if persistent context OR (summary + back nav + step indicator) all exist.
+   - Confidence scaled by missing mitigations: 0.60 (1 missing) → 0.75 (3+ missing).
+   - Always **Potential**.
 
-5. **Confidence calibration**:
-   - 0.75–0.80: No summary + no backward nav + no step indicator + generic CTAs
-   - 0.60–0.70: Summary only at final step, no backward nav
-   - 0.50–0.60: Summary at final step AND backward nav exists
-   - SUPPRESS: Persistent context across steps OR full mitigation
+4. **U4.4 — Generic or Context-Free Action Labels** (LLM-assisted)
+   - Evaluates generic CTAs ("Next", "Continue", "Submit") that transition steps or commit data.
+   - Only flagged if no adjacent context describes the action.
+   - Standard auth CTAs excluded. Always **Potential**. Confidence: 0.55–0.70.
+
+## Architecture
+
+- **Deterministic-first**: U4.1 candidates, U4.2, U4.3 run before LLM call.
+- **Evidence bundles**: `[U4_1_CANDIDATES]` and `[U4_4_EVIDENCE]` sent to LLM.
+- **Post-processing**: Merges deterministic U4.2/U4.3 + LLM U4.1/U4.4. Splits into confirmed and potential aggregated violations.
+- **Confirmed U4.1** findings block convergence; all other subtypes are non-blocking.
+
+## False Positive Prevention
+
+- Never trigger based solely on: `<input type="text">` presence, absence of step indicator without multi-step logic, minimalist styling, truncation (U3 scope), or short labels alone.
+- If uncertainty > 40%, classify as Potential.
+- Free-form labels, optional fields, and fields with autocomplete/suggestions are excluded from U4.1.

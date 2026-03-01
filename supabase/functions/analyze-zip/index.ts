@@ -3870,82 +3870,73 @@ Your role is to provide contextual enrichment for navigation assessment:
 }
 \`\`\`
 
-### U4 (Recognition-to-Recall Regression) — LLM-ASSISTED EVALUATION:
-**NOTE:** U4 uses pre-extracted evidence bundles appended as \`[U4_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted UI text/evidence to decide if the UI forces recall rather than recognition.
+### U4 (Recognition-to-Recall Regression) — HYBRID EVALUATION:
+**U4 has 4 subtypes. U4.2 (Hidden Selection State) and U4.3 (Multi-Step Context) are handled by deterministic analysis — do NOT evaluate those.**
+**Your role: assess U4.1 candidates and detect U4.4.**
 
-**CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
-- Do NOT use file names, component names, page titles, variable names, or any "test" wording (e.g., "U4 Recall Test", "RecallPage") as evidence or reasoning.
-- Do NOT infer developer intent from naming conventions — a file named "RecallTest.tsx" does NOT mean the UI forces recall.
-- The evidence bundle header lines showing component names and file paths are for LOCATION REFERENCE ONLY — they are NOT UI content and MUST NOT be cited as evidence of recall issues.
-- Base conclusions ONLY on user-visible UI content extracted in the bundle:
-  - CTA labels, headings, form field labels/placeholders, step indicators
-  - Presence/absence of summary/review content (use the boolean flags as hints, not proof)
-  - Whether CTAs explain what happens next
-- If the extracted evidence is insufficient to demonstrate a concrete recall burden, return NO U4 finding — do not guess.
+**U4.1 (Structured Selection → Free-Text Substitution):**
+Pre-detected candidates are in \`[U4_1_CANDIDATES]\`. For each:
+- CONFIRM (status="confirmed", confidence 0.75–0.80) if the field clearly expects a structured/enumerable choice (e.g., category, status, specialty) and no selection alternative exists.
+- DISMISS (omit from output) if the field is genuinely free-form, optional, or supplementary.
+- Keep as POTENTIAL (status="potential", confidence 0.60–0.70) if semantic intent is unclear.
+Do NOT trigger U4.1 if: autocomplete/suggestions are present, the field is clearly open-ended, or the label implies free-form input.
 
-**SUPPRESSION RULES (MANDATORY — do NOT flag these):**
+**U4.4 (Generic or Context-Free Action Labels):**
+Evidence is in \`[U4_4_EVIDENCE]\`. Trigger ONLY when ALL are true:
+- Button text is generic ("Next", "Continue", "Submit", "Confirm")
+- No adjacent contextual descriptor clarifies action intent
+- The action transitions to another step or commits data
+Do NOT trigger if: button is inside a clearly labeled section, action is universally understood (e.g., Login on login form), or context is explicitly visible above/near the button.
+Status: ALWAYS "potential". Confidence: 0.55–0.70.
 
-1. **Standard auth/navigation CTAs:** Do NOT flag conventional CTAs like "Sign In", "Sign Up", "Log In", "Log Out", "Register", "Create Account", "Go to Dashboard", "Go Home", "Back to Login", "Forgot Password", "Reset Password" as U4. These are standard UI patterns that do not require recalling hidden state. They have already been filtered from the evidence bundle.
+**ANTI-HALLUCINATION RULES (MANDATORY):**
+- Do NOT use file names, component names, page titles, or variable names as evidence.
+- Base conclusions ONLY on field labels, CTA text, nearby headings from the evidence bundles.
+- If evidence is insufficient, return NO U4 finding.
 
-2. **Pagination with visible page context:** If the evidence bundle shows \`Pagination: present=true, contextFound=true\`, do NOT flag pagination as U4. The page context (e.g., "Page 2 of 5", "1–10 of 53", active page indicator) provides sufficient recognition cues. Only flag pagination when \`contextFound=false\` (no visible page position indicator).
+**FALSE POSITIVE PREVENTION:**
+- Never trigger U4 solely based on: presence of \`<input type="text">\`, absence of step indicator without multi-step logic, minimalist styling, truncation/overflow, or short button labels alone.
+- If uncertainty > 40%, classify as Potential, not Confirmed.
 
-3. **Multi-step flows with full mitigation:** If the evidence bundle shows \`MultiStep: mitigation=full\` (persistent context + summary step), SUPPRESS U4 entirely. The user can see prior selections throughout the flow and review them before submission.
-
-4. **Multi-step flows with persistent context:** If \`MultiStep: mitigation=persistent_context\`, SUPPRESS U4. Prior selections are visibly displayed across steps, eliminating recall burden.
-
-5. **Multi-step flows with summary step + backward nav:** If \`MultiStep: mitigation=summary_final\` AND \`backNav=true\`:
-   - DOWNGRADE severity. Do NOT claim "no summary" or "no expand mechanism".
-   - If you still flag, use language: "Summary provided only at final step; intermediate steps may require recall of prior selections."
-   - Set confidence to 0.50–0.60 maximum.
-
-**EVALUATE (using ONLY the evidence bundle content, not file/component names):**
-- Missing summaries: Forms or multi-step flows that don't show what the user previously selected — BUT check the MultiStep flags first. Only flag if mitigation=none.
-- Missing examples: Input fields without helper text, examples, or format hints
-- Generic CTAs without context: Buttons labeled "Continue", "Next", "Submit" without indicating what happens next (but NOT standard auth CTAs) — only increase risk if NO step indicator, NO breadcrumb, NO backward navigation exist.
-- Multi-step flows lacking review: Step indicators without a final review/summary step — only when mitigation=none AND stepCount > 2.
-- Pagination WITHOUT page context: Prev/Next buttons without "Page X of Y" or item count (only when contextFound=false)
-
-**CLASSIFICATION:**
-- U4 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
-- Confidence represents strength of observable cues, NOT model probability
-
-**CONFIDENCE CALIBRATION FOR MULTI-STEP FLOWS:**
-- 0.75–0.80: No summary anywhere + no backward navigation + no step indicator + generic CTAs
-- 0.60–0.70: Summary only at final step, no backward navigation
-- 0.50–0.60: Summary at final step AND backward navigation exists (mitigation=summary_final)
-- SUPPRESS (no finding): Persistent context across steps OR full mitigation
-
-**General confidence cap: 0.80 maximum**
-
-**OUTPUT FOR U4 — STRUCTURED u4Elements:**
-Return U4 findings using a \`u4Elements\` array so findings can be aggregated per UI region:
+**OUTPUT FOR U4 — STRUCTURED u4Elements (with subCheck):**
 \`\`\`json
 {
   "ruleId": "U4",
   "ruleName": "Recognition-to-recall regression",
   "category": "usability",
-  "status": "potential",
   "isU4Aggregated": true,
   "u4Elements": [
     {
-      "elementLabel": "Checkout confirmation step",
-      "elementType": "form",
-      "location": "src/components/Checkout.tsx",
-      "detection": "Multi-step checkout with generic 'Confirm' CTA and no order summary visible",
-      "evidence": "CTAs: 'Confirm', 'Back' | Headings: 'Step 3 of 3 — Confirm Order' | No summary of selected items shown",
-      "recommendedFix": "Add an order summary showing previously selected items before the final confirmation",
-      "confidence": 0.70
+      "elementLabel": "\\"Category\\" text input",
+      "elementType": "input",
+      "location": "src/components/Form.tsx",
+      "detection": "U4.1: Text input for 'category' with no selection component",
+      "evidence": "Field expects structured category selection but only provides free-text input",
+      "subCheck": "U4.1",
+      "subCheckLabel": "Structured Selection → Free-Text",
+      "status": "confirmed",
+      "recommendedFix": "Replace with <Select> or <Combobox>",
+      "confidence": 0.78
+    },
+    {
+      "elementLabel": "\\"Submit\\" button in checkout",
+      "elementType": "button",
+      "location": "src/pages/Checkout.tsx",
+      "detection": "U4.4: Generic 'Submit' CTA transitions to payment without describing action",
+      "evidence": "CTA 'Submit' commits payment data without describing what will happen",
+      "subCheck": "U4.4",
+      "subCheckLabel": "Generic Action Label",
+      "status": "potential",
+      "recommendedFix": "Change to 'Place Order' or 'Confirm Payment' to describe the action",
+      "confidence": 0.65
     }
   ],
-  "diagnosis": "Summary of recognition-to-recall issues...",
-  "contextualHint": "Short guidance...",
+  "diagnosis": "Summary of U4 findings...",
   "confidence": 0.70
 }
 \`\`\`
-- If NO U4 issues found, do NOT include U4 in the violations array.
-- Each u4Element MUST cite evidence from the provided evidence bundle (CTA labels, headings, form fields — NOT file names).
-- For pagination findings, include in evidence: "pageContextFound: false" to document the absence of page context.
-- For multi-step findings with mitigation=summary_final, use phrasing: "Summary provided only at final step; intermediate steps may require recall of prior selections."
+- If NO U4.1/U4.4 issues found, do NOT include U4 in the violations array.
+- Each u4Element MUST include subCheck ("U4.1" or "U4.4") and status.
 
 
 ### U6 (Weak Grouping / Layout Coherence) — LLM-ASSISTED EVALUATION:
@@ -4182,244 +4173,268 @@ IMPORTANT CONSTRAINTS:
 }`;
 }
 
-// ========== U4 EVIDENCE BUNDLE EXTRACTION (Recognition-to-Recall) ==========
-// Extracts compact context per file/page for LLM assessment — NOT deterministic triggers
-interface U4EvidenceBundle {
-  componentName: string;
+// ========== U4 DETECTION (Recognition-to-Recall Regression) — 4-SUBTYPE PIPELINE ==========
+
+interface U4DetFinding {
+  subCheck: 'U4.1' | 'U4.2' | 'U4.3';
+  subCheckLabel: string;
+  elementLabel: string;
+  elementType: string;
   filePath: string;
-  ctaLabels: string[];       // button text
-  headings: string[];        // h1-h6 text near CTAs
-  formFields: { label: string; placeholder?: string; helperText?: string }[];
-  stepIndicators: string[];  // "Step X", "Next", "Back" patterns
-  hasSummaryWords: boolean;
-  hasHelperExamples: boolean;
-  hasGenericCTA: boolean;
-  // Pagination context
-  hasPagination: boolean;
-  paginationContextFound: boolean;
-  paginationContextText?: string;
-  // Multi-step flow analysis
-  isMultiStepFlow: boolean;
-  stepCount: number;           // estimated number of steps (0 = unknown)
-  hasBackwardNavigation: boolean; // "Previous" / "Back" button exists
-  hasSummaryStep: boolean;     // a review/confirm/summary step renders prior selections
-  hasPersistentContext: boolean; // prior selections visibly rendered in later steps (breadcrumb, header, selected* vars)
-  hasStepIndicator: boolean;   // "Step X of Y" or progress bar pattern
-  multiStepMitigation: 'none' | 'summary_final' | 'persistent_context' | 'full';
+  detection: string;
+  evidence: string;
+  recommendedFix: string;
+  confidence: number;
+  status: 'confirmed' | 'potential';
+  evaluationMethod: 'deterministic' | 'hybrid_deterministic';
 }
 
-// Standard auth/navigation CTAs that should NOT trigger U4
+// Labels suggesting structured/enumerable choice
+const U4_STRUCTURED_LABEL_RE = /\b(category|type|status|reason|specialty|department|gender|country|state|province|region|language|currency|priority|severity|role|level|grade|plan|tier|occupation|industry|marital|blood\s*type|ethnicity|nationality|education|degree|sport|position|brand|model|color|size|material|condition|source|channel|frequency|method|mode|format|platform|device)\b/i;
+// Labels that indicate free-form input — exclude from U4.1
+const U4_FREEFORM_LABEL_RE = /\b(note|notes|comment|comments|description|details|message|bio|biography|about|story|narrative|explain|additional|other|remarks|feedback|suggestion|instructions|address|street|thoughts|opinion|custom|free.?text)\b/i;
+// Selection component patterns
+const U4_SELECTION_RE = /<(?:Select|RadioGroup|Radio|CheckboxGroup|Combobox|Autocomplete|Listbox|ToggleGroup|SegmentedControl|Dropdown|DropdownMenu)\b|<(?:select|datalist)\b|\b(?:autocomplete|datalist|onSuggest|filterOptions|combobox)\b/i;
+// Standard auth/navigation CTAs — excluded from U4.4
 const U4_STANDARD_AUTH_CTAS = /^(Sign\s*In|Sign\s*Up|Log\s*In|Log\s*Out|Register|Create\s*Account|Go\s*to\s*Dashboard|Go\s*Home|Back\s*to\s*Home|Back\s*to\s*Login|Forgot\s*Password|Reset\s*Password|Verify\s*Email|Resend\s*Code|Resend\s*Email|Sign\s*Out|Logout)$/i;
 
-function extractU4EvidenceBundle(allFiles: Map<string, string>): U4EvidenceBundle[] {
-  const bundles: U4EvidenceBundle[] = [];
-  const GENERIC_CTA_RE = /\b(Continue|Next|Submit|Save|Confirm|OK|Done|Proceed|Go)\b/i;
-  const STEP_RE = /\b(Step\s+\d+|step\s*[-–—]\s*\d+|Next|Back|Previous)\b/gi;
-  const SUMMARY_WORDS = /\b(summary|review|confirm|overview|receipt|total|selected)\b/i;
-  const HELPER_EXAMPLE_RE = /\b(e\.g\.|example|format|hint|such as|like\s+\"|must be|at least|pattern)\b/i;
-
-  // Pagination detection patterns
-  const PAGINATION_CONTROL_RE = /\b(Prev(?:ious)?|Next)\b|<Pagination|page\s*=\s*\{|currentPage|setPage|onPageChange|pageSize|perPage/i;
-  const PAGINATION_CONTEXT_RE = /Page\s+\{?\w*\}?\s*of\s*\{?\w*\}?|Page\s+\d+\s*of\s*\d+|\d+\s*[-–—]\s*\d+\s*of\s*\d+|Showing\s+\d+|totalPages|totalCount|total\s*:\s*\d+|pageCount|\{.*?total.*?\}/i;
+function detectU4Deterministic(allFiles: Map<string, string>): U4DetFinding[] {
+  const findings: U4DetFinding[] = [];
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
-    if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
+    if (!/\.(tsx|jsx)$/.test(filePath)) continue;
     if (/\.(test|spec)\./i.test(filePath)) continue;
     if (filePath.includes('components/ui/') || filePath.includes('node_modules')) continue;
 
-    // Component name
-    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx|html)$/i, '') || '';
-    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
-    if (exportedFn?.[1]) componentName = exportedFn[1];
+    const lines = content.split('\n');
+    const fileHasSelection = U4_SELECTION_RE.test(content);
 
-    // CTA labels (button text) — filter out standard auth/nav CTAs
-    const ctaLabels: string[] = [];
-    const btnRe = /<(?:Button|button)\b[^>]*>([^<]{1,60})<\/(?:Button|button)>/gi;
-    let bm;
-    while ((bm = btnRe.exec(content)) !== null) {
-      const label = bm[1].replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
-      if (label.length >= 2 && label.length <= 50) {
-        // Skip standard auth/navigation CTAs — they don't indicate recall issues
-        if (U4_STANDARD_AUTH_CTAS.test(label)) continue;
-        ctaLabels.push(label);
-      }
+    // ---- U4.1: Structured Selection → Free-Text Substitution ----
+    const inputRe = /<(?:Input|input|textarea|Textarea)\b([^>]*?)(?:\/>|>)/gi;
+    let m;
+    while ((m = inputRe.exec(content)) !== null) {
+      const attrs = m[1] || '';
+      const typeMatch = attrs.match(/type\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+      const inputType = typeMatch?.[1] || typeMatch?.[2] || 'text';
+      if (!['text', ''].includes(inputType.toLowerCase())) continue;
+
+      const labelMatch = attrs.match(/(?:label|aria-label|name|id)\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+      const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+      const label = labelMatch?.[1] || labelMatch?.[2] || '';
+      const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2] || '';
+      const fieldText = `${label} ${placeholder}`.trim();
+
+      if (!fieldText || !U4_STRUCTURED_LABEL_RE.test(fieldText)) continue;
+      if (U4_FREEFORM_LABEL_RE.test(fieldText)) continue;
+      if (/optional/i.test(attrs)) continue;
+
+      // Check ±30 lines for selection components
+      const lineNum = content.substring(0, m.index).split('\n').length;
+      const ctxStart = Math.max(0, lineNum - 30);
+      const ctxEnd = Math.min(lines.length, lineNum + 30);
+      const nearbyContent = lines.slice(ctxStart, ctxEnd).join('\n');
+      if (U4_SELECTION_RE.test(nearbyContent)) continue;
+
+      const matchedWord = fieldText.match(U4_STRUCTURED_LABEL_RE)?.[0] || 'choice';
+      const status: 'confirmed' | 'potential' = fileHasSelection ? 'potential' : 'confirmed';
+      const confidence = status === 'confirmed' ? 0.78 : 0.65;
+
+      findings.push({
+        subCheck: 'U4.1', subCheckLabel: 'Structured Selection → Free-Text Substitution',
+        elementLabel: `"${label || placeholder}" text input`,
+        elementType: 'input', filePath,
+        detection: `Text input for "${matchedWord}" — no selection component nearby`,
+        evidence: `Field "${fieldText}" uses <input type="text"> where a structured selector (dropdown, radio, combobox) would be expected. No <Select>, <RadioGroup>, <Combobox>, or <datalist> within ±30 lines.`,
+        recommendedFix: `Replace with a structured selection component (e.g., <Select>, <RadioGroup>, <Combobox>) for "${matchedWord}".`,
+        confidence, status, evaluationMethod: 'hybrid_deterministic',
+      });
     }
 
-    // Headings near CTAs
-    const headings: string[] = [];
-    const hRe = /<h([1-6])\b[^>]*>([^<]{2,80})<\/h\1>/gi;
-    let hm;
-    while ((hm = hRe.exec(content)) !== null) {
-      const text = hm[2].replace(/\{[^}]*\}/g, '').trim();
-      if (text.length >= 2) headings.push(text);
-    }
+    // ---- U4.2: Hidden or Non-Persistent Selection State ----
+    const ACTIVE_STATE_RE = /\b(bg-primary|bg-accent|aria-selected|aria-current|aria-pressed|isActive|isSelected|data-state\s*=\s*"active"|data-active|activeTab|selectedTab|currentTab|activeIndex|selectedIndex|variant\s*=.*default)\b/i;
+    const selectionPatterns = [
+      { re: /<(?:Tabs|TabsList|TabsTrigger)\b/gi, label: 'Tabs component', type: 'tab' },
+      { re: /<(?:ToggleGroup|ToggleGroupItem)\b/gi, label: 'Toggle group', type: 'toggle' },
+    ];
+    for (const pat of selectionPatterns) {
+      pat.re.lastIndex = 0;
+      let pm;
+      while ((pm = pat.re.exec(content)) !== null) {
+        const lineNum = content.substring(0, pm.index).split('\n').length;
+        const ctxStart = Math.max(0, lineNum - 20);
+        const ctxEnd = Math.min(lines.length, lineNum + 20);
+        const nearbyContent = lines.slice(ctxStart, ctxEnd).join('\n');
+        if (ACTIVE_STATE_RE.test(nearbyContent)) continue;
+        if (/className.*\b(active|selected)\b/i.test(nearbyContent)) continue;
 
-    // Form fields
-    const formFields: U4EvidenceBundle['formFields'] = [];
-    const inputRe = /<(?:Input|input|textarea|Textarea|select|Select)\b([^>]*)(?:\/>|>[^<]*<\/)/gi;
-    let im;
-    while ((im = inputRe.exec(content)) !== null) {
-      const attrs = im[1] || '';
-      const labelMatch = attrs.match(/(?:label|aria-label)\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/i);
-      const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)'|\{["']([^"']+)["']\})/i);
-      const label = labelMatch?.[1] || labelMatch?.[2] || labelMatch?.[3] || '';
-      const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2] || placeholderMatch?.[3] || '';
-      if (label || placeholder) {
-        // Look for nearby helper text
-        const afterInput = content.slice(im.index, Math.min(content.length, im.index + 300));
-        const helperMatch = afterInput.match(/<(?:p|span|div)\b[^>]*(?:helper|hint|description|muted|text-sm|text-xs)[^>]*>([^<]{3,80})/i);
-        formFields.push({
-          label: label || placeholder,
-          placeholder: placeholder || undefined,
-          helperText: helperMatch?.[1]?.trim() || undefined,
+        findings.push({
+          subCheck: 'U4.2', subCheckLabel: 'Hidden or Non-Persistent Selection State',
+          elementLabel: `${pat.label}`, elementType: pat.type, filePath,
+          detection: `${pat.label} without visible active state indicator`,
+          evidence: `Selection interaction found but no active state styling (bg-primary, aria-selected, isActive, variant, etc.) within ±20 lines.`,
+          recommendedFix: `Add visual active state indicators (e.g., bg-primary, aria-selected="true") to show current selection.`,
+          confidence: 0.65, status: 'potential', evaluationMethod: 'deterministic',
         });
+        break; // one per pattern per file
       }
     }
 
-    // Step indicators
-    const stepIndicators: string[] = [];
-    let sm;
-    while ((sm = STEP_RE.exec(content)) !== null) {
-      stepIndicators.push(sm[1]);
-    }
+    // ---- U4.3: Multi-Step Context Regression ----
+    const STEP_INDEX_RE = /\b(step|currentStep|activeStep|stepIndex)\b\s*[=<>!]/i;
+    if (STEP_INDEX_RE.test(content)) {
+      let stepCount = 0;
+      const stepArrayMatch = content.match(/(?:steps|STEPS)\s*=\s*\[([^\]]{10,})\]/);
+      if (stepArrayMatch) stepCount = (stepArrayMatch[1].match(/[,{]/g) || []).length + 1;
+      if (stepCount === 0) {
+        const caseSteps = content.match(/case\s+(\d+)\s*:/g);
+        if (caseSteps && caseSteps.length >= 2) stepCount = caseSteps.length;
+      }
+      if (stepCount === 0) {
+        const stepChecks = new Set((content.match(/(?:step|currentStep|activeStep)\s*===?\s*(\d+)/g) || []).map(sm => sm.match(/(\d+)$/)?.[1]));
+        if (stepChecks.size >= 2) stepCount = stepChecks.size;
+      }
 
-    // Pagination context detection
-    const hasPagination = PAGINATION_CONTROL_RE.test(content);
-    let paginationContextFound = false;
-    let paginationContextText: string | undefined;
-    if (hasPagination) {
-      // Search ±15 lines around pagination controls for page context
-      const lines = content.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        if (PAGINATION_CONTROL_RE.test(lines[i])) {
-          const windowStart = Math.max(0, i - 15);
-          const windowEnd = Math.min(lines.length - 1, i + 15);
-          const window = lines.slice(windowStart, windowEnd + 1).join('\n');
-          if (PAGINATION_CONTEXT_RE.test(window)) {
-            paginationContextFound = true;
-            const ctxMatch = window.match(PAGINATION_CONTEXT_RE);
-            paginationContextText = ctxMatch?.[0] || 'Page context found';
-            break;
+      if (stepCount >= 2) {
+        const hasStepIndicator = /Step\s+\{?\w*\}?\s*(of|\/)\s*\{?\w*\}?|Step\s+\d+\s*(of|\/)\s*\d+/i.test(content) || /<(?:Progress|Stepper|Steps|StepIndicator|ProgressBar)\b/i.test(content);
+        const hasBackNav = /\b(Previous|Back|Go\s*Back)\b/i.test(content) && /<(?:Button|button)\b[^>]*>[^<]*(Previous|Back|Go\s*Back)[^<]*<\/(?:Button|button)>/i.test(content);
+        const hasSummary = /\b(summary|review|confirm|overview)\b/i.test(content) && /\b(selected|chosen|your\s+(?:selection|choice))\b/i.test(content);
+        const hasPersistent = /(?:selected(?:Location|Doctor|Service|Date|Time|Item|Plan|Option)|chosen(?:Plan|Option|Service))\b/.test(content) || /<(?:Breadcrumb|BreadcrumbItem|BreadcrumbLink)\b/i.test(content);
+
+        // Suppress if well-mitigated
+        if (!hasPersistent && !(hasSummary && hasBackNav && hasStepIndicator)) {
+          const missing: string[] = [];
+          if (!hasStepIndicator) missing.push('step indicator');
+          if (!hasBackNav) missing.push('back navigation');
+          if (!hasSummary) missing.push('summary/review step');
+          if (!hasPersistent) missing.push('persistent context');
+
+          if (missing.length > 0) {
+            let confidence = missing.length >= 3 ? 0.75 : missing.length >= 2 ? 0.70 : 0.60;
+            if (hasSummary && hasBackNav) confidence = Math.min(confidence, 0.55);
+
+            let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || '';
+            const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+            if (exportedFn?.[1]) componentName = exportedFn[1];
+
+            findings.push({
+              subCheck: 'U4.3', subCheckLabel: 'Multi-Step Context Regression',
+              elementLabel: `${componentName} (${stepCount}-step flow)`,
+              elementType: 'wizard', filePath,
+              detection: `Multi-step flow (${stepCount} steps) missing: ${missing.join(', ')}`,
+              evidence: `${stepCount}-step flow. Missing: ${missing.join(', ')}.${hasStepIndicator ? ' Has step indicator.' : ''}${hasBackNav ? ' Has back nav.' : ''}${hasSummary ? ' Has summary.' : ''}`,
+              recommendedFix: `Add ${missing.join(' and ')} to help users track progress and recall prior selections.`,
+              confidence: Math.min(confidence, 0.80), status: 'potential', evaluationMethod: 'deterministic',
+            });
           }
         }
       }
     }
-
-    // Skip files with no relevant content
-    if (ctaLabels.length === 0 && formFields.length === 0 && stepIndicators.length === 0 && headings.length === 0 && !hasPagination) continue;
-
-    const hasGenericCTA = ctaLabels.some(l => GENERIC_CTA_RE.test(l));
-    const hasSummaryWords = SUMMARY_WORDS.test(content);
-    const hasHelperExamples = HELPER_EXAMPLE_RE.test(content);
-
-    // ---- Multi-step flow analysis ----
-    const hasBackwardNavigation = /\b(Previous|Back|Go\s*Back)\b/i.test(content) && /<(?:Button|button)\b[^>]*>[^<]*(Previous|Back|Go\s*Back)[^<]*<\/(?:Button|button)>/i.test(content);
-    const STEP_INDEX_RE = /\b(step|currentStep|activeStep|stepIndex)\b\s*[=<>!]/i;
-    const STEP_OF_RE = /Step\s+\{?\w*\}?\s*(of|\/)\s*\{?\w*\}?|Step\s+\d+\s*(of|\/)\s*\d+/i;
-    const PROGRESS_RE = /<(?:Progress|Stepper|Steps|StepIndicator|ProgressBar)\b/i;
-    const hasStepIndicator = STEP_OF_RE.test(content) || PROGRESS_RE.test(content);
-
-    // Count steps: look for step arrays, switch/case on step, or ternary step patterns
-    let stepCount = 0;
-    const stepArrayMatch = content.match(/(?:steps|STEPS)\s*=\s*\[([^\]]{10,})\]/);
-    if (stepArrayMatch) {
-      stepCount = (stepArrayMatch[1].match(/[,{]/g) || []).length + 1;
-    }
-    if (stepCount === 0) {
-      const caseSteps = content.match(/case\s+(\d+)\s*:/g);
-      if (caseSteps && caseSteps.length >= 2) stepCount = caseSteps.length;
-    }
-    if (stepCount === 0) {
-      // Count distinct step references like step === 0, step === 1, etc.
-      const stepChecks = new Set((content.match(/(?:step|currentStep|activeStep)\s*===?\s*(\d+)/g) || []).map(m => m.match(/(\d+)$/)?.[1]));
-      if (stepChecks.size >= 2) stepCount = stepChecks.size;
-    }
-
-    const isMultiStepFlow = stepCount > 2 || (stepIndicators.length >= 2 && STEP_INDEX_RE.test(content));
-
-    // Summary step detection: check if a "review"/"confirm"/"summary" step renders prior selections
-    const SUMMARY_STEP_RE = /(?:review|confirm|summary|overview)\b/i;
-    const RENDERS_PRIOR_RE = /(?:selected|chosen|your\s+(?:selection|choice))/i;
-    const hasSummaryStep = hasSummaryWords && (
-      // Look for a step that contains summary words AND renders prior selection state
-      (SUMMARY_STEP_RE.test(content) && RENDERS_PRIOR_RE.test(content)) ||
-      // Or headings that indicate a review step
-      headings.some(h => SUMMARY_STEP_RE.test(h))
-    );
-
-    // Persistent context: prior selections visibly shown in headers/breadcrumbs/step content
-    const PERSISTENT_DISPLAY_RE = /(?:selected(?:Location|Doctor|Service|Date|Time|Item|Plan|Option)|chosen(?:Plan|Option|Service))\b/;
-    const BREADCRUMB_CONTEXT_RE = /<(?:Breadcrumb|BreadcrumbItem|BreadcrumbLink)\b/i;
-    const hasPersistentContext = (
-      PERSISTENT_DISPLAY_RE.test(content) ||
-      (BREADCRUMB_CONTEXT_RE.test(content) && isMultiStepFlow)
-    );
-
-    // Determine mitigation level
-    let multiStepMitigation: U4EvidenceBundle['multiStepMitigation'] = 'none';
-    if (hasPersistentContext && hasSummaryStep) {
-      multiStepMitigation = 'full';
-    } else if (hasPersistentContext) {
-      multiStepMitigation = 'persistent_context';
-    } else if (hasSummaryStep || (hasSummaryWords && hasBackwardNavigation)) {
-      multiStepMitigation = 'summary_final';
-    }
-
-    bundles.push({
-      componentName,
-      filePath,
-      ctaLabels: [...new Set(ctaLabels)].slice(0, 8),
-      headings: [...new Set(headings)].slice(0, 6),
-      formFields: formFields.slice(0, 8),
-      stepIndicators: [...new Set(stepIndicators)].slice(0, 6),
-      hasSummaryWords,
-      hasHelperExamples,
-      hasGenericCTA,
-      hasPagination,
-      paginationContextFound,
-      paginationContextText,
-      isMultiStepFlow,
-      stepCount,
-      hasBackwardNavigation,
-      hasSummaryStep,
-      hasPersistentContext,
-      hasStepIndicator,
-      multiStepMitigation,
-    });
   }
 
-  return bundles.slice(0, 15); // Cap at 15 files
+  // Deduplicate
+  const seen = new Set<string>();
+  return findings.filter(f => {
+    const key = `${f.filePath}|${f.subCheck}|${f.elementLabel}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 15);
 }
 
-function formatU4EvidenceBundleForPrompt(bundles: U4EvidenceBundle[]): string {
-  if (bundles.length === 0) return '';
-  const lines = [
-    '[U4_EVIDENCE_BUNDLE]',
-    'IMPORTANT: The location references below are for traceability ONLY. Do NOT use file names, component names, or page titles as evidence of recall issues. Evaluate ONLY the extracted UI text (CTAs, headings, form fields, step indicators).',
-  ];
-  for (const b of bundles) {
-    lines.push(`\n--- Location: ${b.filePath} ---`);
-    if (b.ctaLabels.length > 0) lines.push(`  CTAs: ${b.ctaLabels.join(', ')}`);
-    if (b.headings.length > 0) lines.push(`  Headings: ${b.headings.join(' | ')}`);
-    if (b.formFields.length > 0) {
-      for (const f of b.formFields) {
-        let row = `  Field: ${f.label}`;
-        if (f.placeholder) row += ` (placeholder: "${f.placeholder}")`;
-        if (f.helperText) row += ` — helper: "${f.helperText}"`;
+// ---- U4.4 Evidence Bundle for LLM (Generic/Context-Free Action Labels) ----
+interface U4_4EvidenceBundle {
+  filePath: string;
+  componentName: string;
+  genericCTAs: { label: string; nearbyHeadings: string[]; transitionsStep: boolean; commitsData: boolean }[];
+}
+
+function extractU4_4EvidenceBundle(allFiles: Map<string, string>): U4_4EvidenceBundle[] {
+  const bundles: U4_4EvidenceBundle[] = [];
+  const GENERIC_CTA_RE = /^(Next|Continue|Submit|Confirm|OK|Done|Proceed|Go|Save|Apply|Accept)$/i;
+
+  for (const [filePathRaw, content] of allFiles) {
+    const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!/\.(tsx|jsx)$/.test(filePath)) continue;
+    if (/\.(test|spec)\./i.test(filePath)) continue;
+    if (filePath.includes('components/ui/') || filePath.includes('node_modules')) continue;
+
+    const contentLines = content.split('\n');
+    const genericCTAs: U4_4EvidenceBundle['genericCTAs'] = [];
+
+    const btnRe = /<(?:Button|button)\b[^>]*>([^<]{1,40})<\/(?:Button|button)>/gi;
+    let bm;
+    while ((bm = btnRe.exec(content)) !== null) {
+      const label = bm[1].replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
+      if (!label || label.length < 2) continue;
+      if (U4_STANDARD_AUTH_CTAS.test(label)) continue;
+      if (!GENERIC_CTA_RE.test(label)) continue;
+
+      const lineNum = content.substring(0, bm.index).split('\n').length;
+      const ctxStart = Math.max(0, lineNum - 10);
+      const ctxEnd = Math.min(contentLines.length, lineNum + 5);
+      const nearby = contentLines.slice(ctxStart, ctxEnd).join('\n');
+
+      const nearbyHeadings: string[] = [];
+      const hRe = /<h([1-6])\b[^>]*>([^<]{2,60})<\/h\1>/gi;
+      let hm;
+      while ((hm = hRe.exec(nearby)) !== null) {
+        nearbyHeadings.push(hm[2].replace(/\{[^}]*\}/g, '').trim());
+      }
+
+      const transitionsStep = /\b(setStep|nextStep|activeStep|step\s*\+|step\s*\+=)\b/i.test(nearby);
+      const commitsData = /\b(onSubmit|handleSubmit|mutate|\.insert|\.update|fetch\(|axios)\b/i.test(nearby);
+
+      if (!transitionsStep && !commitsData) continue; // Only flag if it transitions or commits
+
+      genericCTAs.push({ label, nearbyHeadings, transitionsStep, commitsData });
+    }
+
+    if (genericCTAs.length === 0) continue;
+
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+
+    bundles.push({ filePath, componentName, genericCTAs });
+  }
+
+  return bundles.slice(0, 10);
+}
+
+function formatU4EvidenceForLLM(u4DetFindings: U4DetFinding[], u4_4Bundles: U4_4EvidenceBundle[]): string {
+  const u41Candidates = u4DetFindings.filter(f => f.subCheck === 'U4.1');
+  if (u41Candidates.length === 0 && u4_4Bundles.length === 0) return '';
+
+  const lines: string[] = [];
+
+  if (u41Candidates.length > 0) {
+    lines.push('[U4_1_CANDIDATES]');
+    lines.push('Pre-detected text inputs that may replace structured selections. For each, CONFIRM if the field clearly expects an enumerable choice, DISMISS if genuinely free-form, or keep as POTENTIAL if unclear.');
+    lines.push('Do NOT use file names or variable names as evidence — only assess the field label/placeholder semantics.');
+    for (const c of u41Candidates) {
+      lines.push(`- ${c.filePath}: ${c.elementLabel} — ${c.detection}`);
+    }
+    lines.push('[/U4_1_CANDIDATES]');
+  }
+
+  if (u4_4Bundles.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push('[U4_4_EVIDENCE]');
+    lines.push('Assess whether these generic action labels lack sufficient context for users to understand what happens next.');
+    lines.push('Do NOT use file names or component names as evidence.');
+    for (const b of u4_4Bundles) {
+      for (const cta of b.genericCTAs) {
+        let row = `- ${b.filePath}: CTA "${cta.label}"`;
+        if (cta.nearbyHeadings.length > 0) row += ` | Headings: ${cta.nearbyHeadings.join(', ')}`;
+        if (cta.transitionsStep) row += ' | Transitions step';
+        if (cta.commitsData) row += ' | Commits data';
         lines.push(row);
       }
     }
-    if (b.stepIndicators.length > 0) lines.push(`  Steps: ${b.stepIndicators.join(', ')}`);
-    lines.push(`  Flags: summary=${b.hasSummaryWords}, helpers=${b.hasHelperExamples}, genericCTA=${b.hasGenericCTA}`);
-    if (b.isMultiStepFlow) {
-      lines.push(`  MultiStep: steps=${b.stepCount}, backNav=${b.hasBackwardNavigation}, summaryStep=${b.hasSummaryStep}, persistentContext=${b.hasPersistentContext}, stepIndicator=${b.hasStepIndicator}, mitigation=${b.multiStepMitigation}`);
-    }
-    if (b.hasPagination) {
-      lines.push(`  Pagination: present=${b.hasPagination}, contextFound=${b.paginationContextFound}${b.paginationContextText ? `, contextText="${b.paginationContextText}"` : ''}`);
-    }
+    lines.push('[/U4_4_EVIDENCE]');
   }
-  lines.push('[/U4_EVIDENCE_BUNDLE]');
+
   return lines.join('\n');
 }
 
@@ -6505,9 +6520,10 @@ serve(async (req) => {
       .map(([path, content]) => `### File: ${path}\n\`\`\`\n${content.slice(0, 5000)}\n\`\`\``)
       .join('\n\n');
 
-    // Extract U4 evidence bundle (context for LLM, not deterministic triggers)
-    const u4EvidenceBundles = selectedRulesSet.has('U4') ? extractU4EvidenceBundle(allFiles) : [];
-    const u4BundleText = formatU4EvidenceBundleForPrompt(u4EvidenceBundles);
+    // Extract U4 deterministic findings (U4.1/U4.2/U4.3) and U4.4 evidence for LLM
+    const u4DetFindings: U4DetFinding[] = selectedRulesSet.has('U4') ? detectU4Deterministic(allFiles) : [];
+    const u4_4Bundles = selectedRulesSet.has('U4') ? extractU4_4EvidenceBundle(allFiles) : [];
+    const u4BundleText = formatU4EvidenceForLLM(u4DetFindings, u4_4Bundles);
 
     // Extract U6 layout evidence bundle (context for LLM layout assessment)
     const u6LayoutBundles = selectedRulesSet.has('U6') ? extractU6LayoutEvidence(allFiles) : [];
@@ -7535,76 +7551,105 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       }
     }
 
-    // ========== U4 POST-PROCESSING (Recognition-to-Recall — LLM-assisted) ==========
-    // U4 is fully LLM-assisted. Extract aggregated U4 findings from aiViolations and
-    // ensure they are always Potential with confidence capped at 0.80.
+    // ========== U4 POST-PROCESSING (Recognition-to-Recall — Hybrid 4-Subtype) ==========
     const aggregatedU4List: any[] = [];
     if (selectedRulesSet.has('U4')) {
       const u4FromLLM = aiViolations.filter((v: any) => v.ruleId === 'U4');
       aiViolations = aiViolations.filter((v: any) => v.ruleId !== 'U4');
 
+      // Collect all U4 elements from deterministic + LLM
+      const allU4Elements: any[] = [];
+
+      // 1. Deterministic U4.2 and U4.3 findings (final, no LLM needed)
+      for (const f of u4DetFindings.filter(f => f.subCheck === 'U4.2' || f.subCheck === 'U4.3')) {
+        allU4Elements.push({
+          elementLabel: f.elementLabel, elementType: f.elementType,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          recommendedFix: f.recommendedFix, confidence: Math.min(f.confidence, 0.80),
+          subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
+          status: f.status, evaluationMethod: f.evaluationMethod,
+          deduplicationKey: `U4|${f.subCheck}|${f.filePath}|${f.elementLabel}`,
+        });
+      }
+
+      // 2. LLM findings (U4.1 confirmed/dismissed + U4.4)
       if (u4FromLLM.length > 0) {
-        // Prefer the structured aggregated form (isU4Aggregated + u4Elements)
         const aggregatedOne = u4FromLLM.find((v: any) => v.isU4Aggregated && v.u4Elements?.length > 0);
-        if (aggregatedOne) {
-          const u4Elements = (aggregatedOne.u4Elements || []).map((el: any) => ({
+        const llmElements = aggregatedOne?.u4Elements || u4FromLLM.map((v: any) => ({
+          elementLabel: v.evidence?.split('.')[0] || 'UI region',
+          elementType: 'component', location: v.evidence || 'Unknown',
+          detection: v.diagnosis || '', evidence: v.evidence || '',
+          recommendedFix: v.contextualHint || '', confidence: v.confidence || 0.65,
+          subCheck: 'U4.4', subCheckLabel: 'Generic Action Labels',
+        }));
+
+        for (const el of llmElements) {
+          allU4Elements.push({
             elementLabel: el.elementLabel || 'UI region',
             elementType: el.elementType || 'component',
             location: el.location || el.filePath || 'Unknown',
-            detection: el.detection || '',
-            evidence: el.evidence || '',
+            detection: el.detection || '', evidence: el.evidence || '',
             recommendedFix: el.recommendedFix || '',
             confidence: Math.min(el.confidence || 0.65, 0.80),
-            deduplicationKey: el.deduplicationKey || `U4|${el.location || ''}|${el.elementLabel || ''}`,
-          }));
-
-          const overallConfidence = Math.min(
-            Math.max(...u4Elements.map((e: any) => e.confidence)),
-            0.80
-          );
-
-          aggregatedU4List.push({
-            ruleId: 'U4', ruleName: 'Recognition-to-recall regression', category: 'usability',
-            status: 'potential',
-            blocksConvergence: false,
-            inputType: 'zip', isU4Aggregated: true, u4Elements, evaluationMethod: 'llm_assisted',
-            diagnosis: aggregatedOne.diagnosis || `Recognition-to-recall issues: ${u4Elements.length} potential risk(s) detected via AI analysis.`,
-            contextualHint: aggregatedOne.contextualHint || 'Make options, labels, and actions visible to reduce reliance on user memory.',
-            advisoryGuidance: 'Ensure important choices, actions, and data are visible or easily retrievable. Provide contextual cues, previews, and labels.',
-            confidence: Math.round(overallConfidence * 100) / 100,
-          });
-        } else {
-          // Fallback: wrap non-aggregated U4 findings into aggregated form
-          const u4Elements = u4FromLLM.map((v: any) => ({
-            elementLabel: v.evidence?.split('.')[0] || 'UI region',
-            elementType: 'component',
-            location: v.evidence || 'Unknown',
-            detection: v.diagnosis || '',
-            evidence: v.evidence || '',
-            recommendedFix: v.contextualHint || '',
-            confidence: Math.min(v.confidence || 0.65, 0.80),
-            deduplicationKey: `U4|${v.evidence || 'unknown'}`,
-          }));
-
-          const overallConfidence = Math.min(
-            Math.max(...u4FromLLM.map((v: any) => v.confidence || 0.65)),
-            0.80
-          );
-
-          aggregatedU4List.push({
-            ruleId: 'U4', ruleName: 'Recognition-to-recall regression', category: 'usability',
-            status: 'potential',
-            blocksConvergence: false,
-            inputType: 'zip', isU4Aggregated: true, u4Elements, evaluationMethod: 'llm_assisted',
-            diagnosis: `Recognition-to-recall issues: ${u4Elements.length} potential risk(s) detected via AI analysis.`,
-            contextualHint: 'Make options, labels, and actions visible to reduce reliance on user memory.',
-            advisoryGuidance: 'Ensure important choices, actions, and data are visible or easily retrievable. Provide contextual cues, previews, and labels.',
-            confidence: Math.round(overallConfidence * 100) / 100,
+            subCheck: el.subCheck || 'U4.4',
+            subCheckLabel: el.subCheckLabel || (el.subCheck === 'U4.1' ? 'Structured Selection → Free-Text' : 'Generic Action Labels'),
+            status: el.status || 'potential',
+            evaluationMethod: el.subCheck === 'U4.1' ? 'hybrid_deterministic' : 'llm_assisted',
+            deduplicationKey: el.deduplicationKey || `U4|${el.subCheck || 'U4.4'}|${el.location || ''}|${el.elementLabel || ''}`,
           });
         }
-        console.log(`U4 aggregated: ${u4FromLLM.length} LLM finding(s) → ${aggregatedU4List[0]?.u4Elements?.length || 0} element(s)`);
+      }
+
+      // 3. Deterministic U4.1 candidates NOT addressed by LLM → keep as potential
+      const llmHandledU41 = new Set(allU4Elements.filter(e => e.subCheck === 'U4.1').map(e => `${e.location}|${e.elementLabel}`));
+      for (const f of u4DetFindings.filter(f => f.subCheck === 'U4.1')) {
+        if (llmHandledU41.has(`${f.filePath}|${f.elementLabel}`)) continue;
+        allU4Elements.push({
+          elementLabel: f.elementLabel, elementType: f.elementType,
+          location: f.filePath, detection: f.detection, evidence: f.evidence,
+          recommendedFix: f.recommendedFix, confidence: Math.min(f.confidence, 0.80),
+          subCheck: 'U4.1', subCheckLabel: 'Structured Selection → Free-Text',
+          status: 'potential', evaluationMethod: 'hybrid_deterministic',
+          deduplicationKey: `U4|U4.1|${f.filePath}|${f.elementLabel}`,
+        });
+      }
+
+      if (allU4Elements.length > 0) {
+        // Split confirmed vs potential for correct section routing
+        const confirmedEls = allU4Elements.filter(e => e.status === 'confirmed');
+        const potentialEls = allU4Elements.filter(e => e.status !== 'confirmed');
+
+        if (confirmedEls.length > 0) {
+          const conf = Math.min(Math.max(...confirmedEls.map((e: any) => e.confidence)), 0.80);
+          aggregatedU4List.push({
+            ruleId: 'U4', ruleName: 'Recognition-to-recall regression', category: 'usability',
+            status: 'confirmed', blocksConvergence: true,
+            inputType: 'zip', isU4Aggregated: true, u4Elements: confirmedEls, evaluationMethod: 'hybrid_deterministic',
+            diagnosis: `Confirmed recognition-to-recall regressions: ${confirmedEls.length} finding(s) where structured selection was replaced with free-text input.`,
+            contextualHint: 'Replace free-text inputs with structured selection components for enumerable choices.',
+            advisoryGuidance: 'Use <Select>, <RadioGroup>, or <Combobox> for fields that expect a finite set of options.',
+            confidence: Math.round(conf * 100) / 100,
+            correctivePrompt: 'Replace free-text inputs with structured selection components (dropdowns, radio groups, comboboxes) for fields that expect enumerable choices.',
+          });
+        }
+
+        if (potentialEls.length > 0) {
+          const conf = Math.min(Math.max(...potentialEls.map((e: any) => e.confidence)), 0.80);
+          aggregatedU4List.push({
+            ruleId: 'U4', ruleName: 'Recognition-to-recall regression', category: 'usability',
+            status: 'potential', blocksConvergence: false,
+            inputType: 'zip', isU4Aggregated: true, u4Elements: potentialEls,
+            evaluationMethod: potentialEls.some((e: any) => e.evaluationMethod === 'llm_assisted') ? 'llm_assisted' : 'hybrid_deterministic',
+            diagnosis: `Potential recognition-to-recall risks: ${potentialEls.length} finding(s).`,
+            contextualHint: 'Review to ensure recognition-based interaction is preferred over recall-dependent alternatives.',
+            advisoryGuidance: 'Ensure structured selections, active state indicators, step context, and descriptive CTAs are provided.',
+            confidence: Math.round(conf * 100) / 100,
+          });
+        }
+
+        console.log(`U4 aggregated: ${confirmedEls.length} confirmed, ${potentialEls.length} potential`);
       } else {
-        console.log('U4: No LLM findings for recognition-to-recall');
+        console.log('U4: No findings detected');
       }
     }
 

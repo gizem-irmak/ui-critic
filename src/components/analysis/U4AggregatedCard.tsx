@@ -11,19 +11,37 @@ import {
   FieldRow, FieldLabel, FieldValue, ConfidenceValue, AdvisoryBlock,
 } from './CardTypography';
 
+const subCheckColors: Record<string, string> = {
+  'U4.1': 'bg-orange-500/10 text-orange-700 border-orange-500/20',
+  'U4.2': 'bg-amber-500/10 text-amber-700 border-amber-500/20',
+  'U4.3': 'bg-yellow-500/10 text-yellow-700 border-yellow-500/20',
+  'U4.4': 'bg-lime-500/10 text-lime-700 border-lime-500/20',
+};
+
 function U4ElementItem({ element, compact = false }: {
   element: U4ElementSubItem;
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const displayLabel = element.elementLabel || 'UI region';
+  const isConfirmed = element.status === 'confirmed';
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <ElementItemWrapper isConfirmed={false} compact={compact}>
+      <ElementItemWrapper isConfirmed={isConfirmed} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
-            <ComponentTitle>{displayLabel}</ComponentTitle>
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
+              {element.subCheck && (
+                <span className={cn(
+                  'text-[10px] px-1.5 py-0.5 rounded border font-medium flex-shrink-0',
+                  subCheckColors[element.subCheck] || 'bg-muted text-muted-foreground border-muted'
+                )}>
+                  {element.subCheck}
+                </span>
+              )}
+              <ComponentTitle>{displayLabel}</ComponentTitle>
+            </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
@@ -37,6 +55,13 @@ function U4ElementItem({ element, compact = false }: {
 
         <CollapsibleContent>
           <DetailContainer>
+            {element.subCheckLabel && (
+              <FieldRow>
+                <FieldLabel>Subtype:</FieldLabel>
+                <FieldValue>{element.subCheckLabel}</FieldValue>
+              </FieldRow>
+            )}
+
             {element.detection && (
               <FieldRow>
                 <FieldLabel>Detection:</FieldLabel>
@@ -89,16 +114,20 @@ export function U4AggregatedCard({ violation, compact = false }: U4AggregatedCar
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
 
+  const isConfirmed = violation.status === 'confirmed';
+
   return (
-    <Card className="border border-warning/30">
+    <Card className={cn('border', isConfirmed ? 'border-destructive/30' : 'border-warning/30')}>
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
         <CardTitle className="flex items-center gap-2 flex-wrap">
-          <RuleIdBadge ruleId="U4" isConfirmed={false} categoryClass="category-usability" />
+          <RuleIdBadge ruleId="U4" isConfirmed={isConfirmed} categoryClass="category-usability" />
           <RuleHeader ruleId="U4" title="Recognition-to-Recall Regression" />
-          <ElementCountBadge count={elements.length} isConfirmed={false} />
+          <ElementCountBadge count={elements.length} isConfirmed={isConfirmed} />
         </CardTitle>
         <CardDescription compact={compact}>
-          UI regions that may force users to recall information from memory instead of recognizing it from visible cues.
+          {isConfirmed
+            ? 'Structured selection replaced with free-text input, increasing cognitive load.'
+            : 'UI regions that may force users to recall information from memory instead of recognizing it from visible cues.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
