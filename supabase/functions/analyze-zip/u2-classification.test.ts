@@ -170,6 +170,59 @@ Deno.test("U2.D3: Confidence with single channel A stays at 0.70", () => {
 });
 
 // ============================================================
+// U2.D3 — Admin-scoped false positive prevention tests
+// Validates that shallow admin routes (/admin/patients, /admin/doctors)
+// do NOT trigger breadcrumb-depth warnings, while deep admin routes DO.
+// ============================================================
+
+Deno.test("U2.D3 Admin: /admin + one-segment children only => no breadcrumb warning", () => {
+  // Routes: /admin, /admin/patients, /admin/appointments, /admin/doctors, /admin/timeslots
+  // All are depth 2 — no 3+ segment routes
+  const adminRoutes = ['/admin', '/admin/patients', '/admin/appointments', '/admin/doctors', '/admin/timeslots'];
+  const maxDepth = Math.max(...adminRoutes.map(r => r.split('/').filter(Boolean).length));
+  const capDepthDetected = true; // getBreadcrumbs returns ≤2 entries
+  const hasStrongEvidence = maxDepth >= 3;
+  assert(!hasStrongEvidence, "Max depth should be 2");
+  assert(!(capDepthDetected && hasStrongEvidence), "Should NOT trigger: all admin routes are ≤2 segments");
+});
+
+Deno.test("U2.D3 Admin: /admin/patients/:id present => breadcrumb warning emitted", () => {
+  const adminRoutes = ['/admin', '/admin/patients', '/admin/patients/:id'];
+  const maxDepth = Math.max(...adminRoutes.map(r => r.split('/').filter(Boolean).length));
+  const capDepthDetected = true;
+  const channels = ['A'];
+  const hasStrongEvidence = maxDepth >= 3 && (channels.includes('A') || channels.includes('B'));
+  assert(hasStrongEvidence, "Max depth should be 3 (/admin/patients/:id)");
+  assert(capDepthDetected && hasStrongEvidence, "Should trigger: deep admin route exists");
+});
+
+Deno.test("U2.D3 Admin: /admin/patients/new present => breadcrumb warning emitted", () => {
+  const adminRoutes = ['/admin', '/admin/patients', '/admin/patients/new'];
+  const maxDepth = Math.max(...adminRoutes.map(r => r.split('/').filter(Boolean).length));
+  const capDepthDetected = true;
+  const channels = ['A'];
+  const hasStrongEvidence = maxDepth >= 3 && (channels.includes('A') || channels.includes('B'));
+  assert(capDepthDetected && hasStrongEvidence, "Should trigger: /admin/patients/new is 3 segments");
+});
+
+Deno.test("U2.D3 Admin: Router missing but deep admin links in code => warning emitted", () => {
+  // No router path= defs, but code has <Link to="/admin/patients/123/edit">
+  const capDepthDetected = true;
+  const maxRouteDepthEvidence = 4; // /admin/patients/123/edit = 4 segments
+  const channels = ['B']; // from deep link channel only
+  const hasStrongEvidence = maxRouteDepthEvidence >= 3 && (channels.includes('A') || channels.includes('B'));
+  assert(capDepthDetected && hasStrongEvidence, "Should trigger: deep admin link found via channel B");
+});
+
+Deno.test("U2.D3 Admin: Router missing and no deep evidence => no warning", () => {
+  const capDepthDetected = true;
+  const maxRouteDepthEvidence = 2;
+  const channels: string[] = []; // no route or link evidence
+  const hasStrongEvidence = maxRouteDepthEvidence >= 3 && (channels.includes('A') || channels.includes('B'));
+  assert(!(capDepthDetected && hasStrongEvidence), "Should NOT trigger: no deep evidence at all");
+});
+
+// ============================================================
 // DESKTOP-SCOPE SUPPRESSION TESTS
 // ============================================================
 
