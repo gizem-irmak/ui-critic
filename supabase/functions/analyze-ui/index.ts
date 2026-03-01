@@ -2586,17 +2586,18 @@ Assess whether choice options are presented with meaningful visual/linguistic im
 }
 \`\`\`
 
-### E3 (Obscured or Restricted User Control) — LLM PERCEPTUAL:
-Assess whether the UI restricts or obscures user control (e.g., no visible cancel/back/close, forced progression, no opt-out).
-- Look for: missing close/dismiss buttons on modals, forms without cancel/back, forced consent checkboxes, multi-step flows without back navigation.
-- Use neutral language and do not infer intent.
-- E3 is ALWAYS "Potential" — NEVER "Confirmed". Confidence: 0.60–0.75.
+### E3 (Structural Absence of Exit/Cancel for High-Impact Actions) — LLM PERCEPTUAL:
+E3 triggers ONLY if a high-impact action (delete, payment, subscribe, account deletion) is visible AND no cancel/close/back/exit control is seen in the same region.
+- Do NOT flag: visual imbalance between buttons (that is E2), missing consequence text (that is E1), or wizard/step navigation (that is U4).
+- If cancel/close/back/exit IS visible near the high-impact action → do NOT report E3.
+- If uncertainty exists → downgrade confidence below 0.65 and suppress.
+- E3 is ALWAYS "Potential" — NEVER "Confirmed". Confidence: 0.65–0.80 (cap at 0.80).
 - Return structured e3Elements:
 \`\`\`json
 {
-  "ruleId": "E3", "ruleName": "Obscured or restricted user control", "category": "ethics",
+  "ruleId": "E3", "ruleName": "Structural absence of exit control for high-impact actions", "category": "ethics",
   "status": "potential", "isE3Aggregated": true,
-  "e3Elements": [{ "elementLabel": "...", "elementType": "dialog", "location": "Screenshot #1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.65 }]
+  "e3Elements": [{ "elementLabel": "Delete dialog without cancel", "elementType": "dialog", "location": "Screenshot #1", "detection": "...", "evidence": "...", "recommendedFix": "...", "confidence": 0.75 }]
 }
 \`\`\`
 
@@ -4352,7 +4353,7 @@ serve(async (req) => {
       }
     }
 
-    // ========== E3 POST-PROCESSING (Screenshot — LLM perceptual) ==========
+    // ========== E3 POST-PROCESSING (Structural Exit Absence — LLM perceptual) ==========
     const aggregatedE3UIList: any[] = [];
     if (selectedRulesSet.has('E3')) {
       const e3FromLLM = filteredOtherViolations.filter((v: any) => v.ruleId === 'E3');
@@ -4361,41 +4362,49 @@ serve(async (req) => {
       if (e3FromLLM.length > 0) {
         const aggregatedOne = e3FromLLM.find((v: any) => v.isE3Aggregated && v.e3Elements?.length > 0);
         const e3Elements = aggregatedOne
-          ? (aggregatedOne.e3Elements || []).map((el: any) => ({
-              elementLabel: el.elementLabel || 'Control restriction',
-              elementType: el.elementType || 'unknown',
-              location: el.location || 'Screenshot',
-              subCheck: el.subCheck,
-              detection: el.detection || '',
-              evidence: el.evidence || '',
-              recommendedFix: el.recommendedFix || '',
-              confidence: Math.min(el.confidence || 0.60, 0.75),
-              evaluationMethod: 'llm_perceptual' as const,
-              deduplicationKey: el.deduplicationKey || `E3|${el.location || ''}|${el.elementLabel || ''}`,
-            }))
-          : e3FromLLM.map((v: any) => ({
-              elementLabel: v.evidence?.split('.')[0] || 'Control restriction',
-              elementType: 'unknown',
-              location: 'Screenshot',
-              detection: v.diagnosis || '',
-              evidence: v.evidence || '',
-              recommendedFix: v.contextualHint || '',
-              confidence: Math.min(v.confidence || 0.60, 0.75),
-              evaluationMethod: 'llm_perceptual' as const,
-              deduplicationKey: `E3|${v.evidence || 'unknown'}`,
-            }));
+          ? (aggregatedOne.e3Elements || [])
+              .map((el: any) => ({
+                elementLabel: el.elementLabel || 'High-impact action without exit',
+                elementType: el.elementType || 'unknown',
+                location: el.location || 'Screenshot',
+                subCheck: el.subCheck,
+                detection: el.detection || '',
+                evidence: el.evidence || '',
+                recommendedFix: el.recommendedFix || '',
+                confidence: Math.min(el.confidence || 0.60, 0.80),
+                evaluationMethod: 'llm_perceptual' as const,
+                deduplicationKey: el.deduplicationKey || `E3|${el.location || ''}|${el.elementLabel || ''}`,
+              }))
+              .filter((el: any) => el.confidence >= 0.65)
+          : e3FromLLM
+              .map((v: any) => ({
+                elementLabel: v.evidence?.split('.')[0] || 'High-impact action without exit',
+                elementType: 'unknown',
+                location: 'Screenshot',
+                detection: v.diagnosis || '',
+                evidence: v.evidence || '',
+                recommendedFix: v.contextualHint || '',
+                confidence: Math.min(v.confidence || 0.60, 0.80),
+                evaluationMethod: 'llm_perceptual' as const,
+                deduplicationKey: `E3|${v.evidence || 'unknown'}`,
+              }))
+              .filter((el: any) => el.confidence >= 0.65);
 
-        const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.75);
-        aggregatedE3UIList.push({
-          ruleId: 'E3', ruleName: 'Obscured or restricted user control', category: 'ethics',
-          status: 'potential', blocksConvergence: false,
-          inputType: 'screenshots', isE3Aggregated: true, e3Elements, evaluationMethod: 'llm_assisted',
-          diagnosis: `Control restriction issues: ${e3Elements.length} potential risk(s) detected via visual analysis.`,
-          contextualHint: 'Ensure users can easily dismiss, cancel, or opt out of actions.',
-          advisoryGuidance: 'Provide clear dismissal, cancellation, or opt-out mechanisms and ensure users can easily reverse or exit actions.',
-          confidence: Math.round(overallConfidence * 100) / 100,
-        });
-        console.log(`E3 aggregated (UI): ${e3FromLLM.length} finding(s) → ${e3Elements.length} element(s)`);
+        if (e3Elements.length > 0) {
+          const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.80);
+          aggregatedE3UIList.push({
+            ruleId: 'E3', ruleName: 'Structural absence of exit control for high-impact actions', category: 'ethics',
+            status: 'potential', blocksConvergence: false,
+            inputType: 'screenshots', isE3Aggregated: true, e3Elements, evaluationMethod: 'llm_assisted',
+            diagnosis: `Structural exit absence: ${e3Elements.length} high-impact action(s) without visible cancel/close/exit mechanism.`,
+            contextualHint: 'Verify that high-impact actions provide clear exit controls.',
+            advisoryGuidance: 'Analysis flagged potential restriction of user control; verify structural exit mechanisms for high-impact actions.',
+            confidence: Math.round(overallConfidence * 100) / 100,
+          });
+          console.log(`E3 aggregated (UI): ${e3FromLLM.length} finding(s) → ${e3Elements.length} element(s)`);
+        } else {
+          console.log('E3: All screenshot findings suppressed (below 0.65 confidence)');
+        }
       }
     }
 

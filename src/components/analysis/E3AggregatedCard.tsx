@@ -94,11 +94,11 @@ export function E3AggregatedCard({ violation, compact = false }: E3AggregatedCar
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
         <CardTitle className="flex items-center gap-2 flex-wrap">
           <RuleIdBadge ruleId="E3" isConfirmed={false} categoryClass="category-ethics" />
-          <RuleHeader ruleId="E3" title="Obscured or Restricted User Control" />
+          <RuleHeader ruleId="E3" title="Structural Absence of Exit Control for High-Impact Actions" />
           <ElementCountBadge count={elements.length} isConfirmed={false} />
         </CardTitle>
         <CardDescription compact={compact}>
-          Analysis flagged potential restriction or obscuring of user control; verify in context.
+          Analysis flagged potential restriction of user control; verify structural exit mechanisms for high-impact actions.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -111,7 +111,7 @@ export function E3AggregatedCard({ violation, compact = false }: E3AggregatedCar
         ))}
 
         <AdvisoryBlock compact={compact}>
-          {violation.advisoryGuidance || violation.contextualHint || 'Provide clear dismissal, cancellation, or opt-out mechanisms and ensure users can easily reverse or exit actions.'}
+          {violation.advisoryGuidance || violation.contextualHint || 'Verify that high-impact actions provide clear exit controls (cancel, close, back, undo).'}
         </AdvisoryBlock>
       </CardContent>
     </Card>
