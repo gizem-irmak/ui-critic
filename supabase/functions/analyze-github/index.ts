@@ -2914,6 +2914,7 @@ Your role is ONLY to provide optional LLM reinforcement when deterministic D2 si
 - Accessibility landmark semantics → A-rules
 
 **CRITICAL:** Do NOT flag just because breadcrumbs are missing. Active nav highlight + page heading = sufficient wayfinding.
+**CRITICAL:** Do NOT generate findings about breadcrumb depth, shallow breadcrumbs, or breadcrumbs not reflecting deeper navigation. Breadcrumb-depth analysis is handled EXCLUSIVELY by the deterministic D3 gate. Any LLM breadcrumb-depth finding will be discarded.
 
 **CLASSIFICATION:**
 - U2 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
@@ -5957,10 +5958,16 @@ serve(async (req) => {
     } else {
       filteredNonA2AiViolations = filteredNonA2AiViolations.map((v: any) => {
         if (v.ruleId === 'U2') {
+          // FILTER OUT LLM breadcrumb-depth speculations — must pass deterministic D3 gate
+          const diagnosisLower = ((v.diagnosis || '') + (v.evidence || '') + (v.contextualHint || '')).toLowerCase();
+          if (/breadcrumb.*depth|breadcrumb.*shallow|breadcrumb.*level|breadcrumb.*cap|breadcrumb.*reflect|breadcrumb.*limited|breadcrumb.*not cover|breadcrumb.*deeper|breadcrumb.*insufficient/i.test(diagnosisLower)) {
+            console.log('[U2] Filtered out LLM breadcrumb-depth finding (GitHub) — must pass deterministic D3 gate');
+            return null;
+          }
           return { ...v, status: 'potential', blocksConvergence: false, evaluationMethod: 'hybrid_llm_fallback', confidence: Math.min(v.confidence || 0.65, 0.75) };
         }
         return v;
-      });
+      }).filter(Boolean);
     }
     if (aggregatedU3GitHubList.length > 0) {
       filteredNonA2AiViolations = filteredNonA2AiViolations.filter((v: any) => v.ruleId !== 'U3');
