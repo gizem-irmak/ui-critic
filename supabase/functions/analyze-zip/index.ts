@@ -8524,9 +8524,13 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
 
     const allViolationsPreSuppression = [...aggregatedA1Violations, ...aiViolations, ...aggregatedU1List, ...aggregatedU2List, ...aggregatedU3List, ...aggregatedU4List, ...aggregatedU5List, ...aggregatedU6List, ...aggregatedE1List, ...aggregatedE2List, ...aggregatedE3List, ...(aggregatedA3 ? [aggregatedA3] : []), ...(aggregatedA4 ? [aggregatedA4] : []), ...(aggregatedA5 ? [aggregatedA5] : []), ...(aggregatedA6 ? [aggregatedA6] : [])];
 
+    // ========== POSITIVE FINDING FILTER (Issues-Only Guardrail) ==========
+    const { applyCrossRuleSuppression, filterPositiveFindings } = await import('../_shared/cross-rule-suppression.ts');
+    const { kept: issuesOnly } = filterPositiveFindings(allViolationsPreSuppression);
+    console.log(`Positive-filter: ${allViolationsPreSuppression.length} → ${issuesOnly.length} (removed ${allViolationsPreSuppression.length - issuesOnly.length} non-issues)`);
+
     // ========== CROSS-RULE SUPPRESSION (S1–S10 + fallback priority) ==========
-    const { applyCrossRuleSuppression } = await import('../_shared/cross-rule-suppression.ts');
-    const { kept: allViolations, suppressedElements } = applyCrossRuleSuppression(allViolationsPreSuppression);
+    const { kept: allViolations, suppressedElements } = applyCrossRuleSuppression(issuesOnly);
     console.log(`Code analysis complete: ${allViolationsPreSuppression.length} pre-suppression → ${allViolations.length} violations (${suppressedElements.length} element(s) suppressed)`);
 
     return new Response(

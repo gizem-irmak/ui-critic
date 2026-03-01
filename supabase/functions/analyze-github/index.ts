@@ -6330,9 +6330,13 @@ serve(async (req) => {
       ...(aggregatedA6GitHub ? [aggregatedA6GitHub] : []),
     ];
 
+    // ========== POSITIVE FINDING FILTER (Issues-Only Guardrail) ==========
+    const { applyCrossRuleSuppression, filterPositiveFindings } = await import('../_shared/cross-rule-suppression.ts');
+    const { kept: issuesOnly } = filterPositiveFindings(allViolationsPreSuppression);
+    console.log(`Positive-filter: ${allViolationsPreSuppression.length} → ${issuesOnly.length} (removed ${allViolationsPreSuppression.length - issuesOnly.length} non-issues)`);
+
     // ========== CROSS-RULE SUPPRESSION (S1–S10 + fallback priority) ==========
-    const { applyCrossRuleSuppression } = await import('../_shared/cross-rule-suppression.ts');
-    const { kept: suppressedResult, suppressedElements } = applyCrossRuleSuppression(allViolationsPreSuppression);
+    const { kept: suppressedResult, suppressedElements } = applyCrossRuleSuppression(issuesOnly);
 
     // Deduplicate by ruleId+status
     const seenRuleStatus = new Set<string>();
