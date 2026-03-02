@@ -2438,6 +2438,25 @@ function getContrastRatio(hex1: string, hex2: string): number | null {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+// Alpha-composite a foreground color over a background color
+function alphaComposite(fgHex: string, bgHex: string, alpha: number): string | null {
+  const fg = hexToRgb(fgHex);
+  const bg = hexToRgb(bgHex);
+  if (!fg || !bg) return null;
+  const r = Math.round(fg.r * alpha + bg.r * (1 - alpha));
+  const g = Math.round(fg.g * alpha + bg.g * (1 - alpha));
+  const b = Math.round(fg.b * alpha + bg.b * (1 - alpha));
+  return '#' + [r, g, b].map(c => Math.min(255, c).toString(16).padStart(2, '0')).join('');
+}
+
+// Known Tailwind variant prefixes (state/responsive/pseudo)
+const VARIANT_PREFIXES = new Set([
+  'hover', 'focus', 'focus-visible', 'focus-within', 'active', 'visited',
+  'disabled', 'dark', 'group-hover', 'group-focus', 'peer-hover', 'peer-focus',
+  'first', 'last', 'odd', 'even', 'placeholder', 'selection', 'marker',
+  'before', 'after', 'sm', 'md', 'lg', 'xl', '2xl',
+]);
+
 // ========== A1 TAILWIND-TOKEN + INLINE-STYLE CONTRAST COMPUTATION ==========
 // Extracts text-*/bg-* Tailwind tokens AND inline style colors, traverses
 // parent elements for background resolution, computes actual WCAG contrast
@@ -2548,6 +2567,9 @@ interface A1TokenFinding {
   textType: 'normal' | 'large';
   appliedThreshold: 4.5 | 3.0;
   wcagCriterion: '1.4.3';
+  variant?: string; // 'hover', 'focus', 'active', 'dark', etc. — undefined = base state
+  alpha?: number; // 0-1 opacity from Tailwind /N syntax
+  lineNumber?: number; // approximate line number
 }
 
 // ===== A1 TEXT ELEMENT SCOPE =====
@@ -2618,19 +2640,36 @@ function extractJsxTag(code: string, matchIndex: number): string | undefined {
   return undefined;
 }
 
-function extractTextColorTokens(code: string): Array<{ colorClass: string; colorName: string; context: string; matchIndex: number; jsxTag?: string }> {
-  const results: Array<{ colorClass: string; colorName: string; context: string; matchIndex: number; jsxTag?: string }> = [];
-  const textColorRegex = new RegExp(`text-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?`, 'g');
+function extractTextColorTokens(code: string): Array<{ colorClass: string; colorName: string; context: string; matchIndex: number; jsxTag?: string; variant?: string; alpha?: number }> {
+  const results: Array<{ colorClass: string; colorName: string; context: string; matchIndex: number; jsxTag?: string; variant?: string; alpha?: number }> = [];
+  // Match text-color tokens with optional alpha suffix (/80)
+  const textColorRegex = new RegExp(`text-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?(?:/(\\d{1,3}))?`, 'g');
   
   let match;
   while ((match = textColorRegex.exec(code)) !== null) {
     const colorClass = match[0];
     const colorName = match[1] + (match[2] ? `-${match[2]}` : '');
+    const alphaRaw = match[3] ? parseInt(match[3]) : undefined;
+    const alpha = alphaRaw !== undefined ? alphaRaw / 100 : undefined;
+    
+    // Detect variant prefix: check if preceded by ":"
+    let variant: string | undefined;
+    if (match.index > 0 && code[match.index - 1] === ':') {
+      let vEnd = match.index - 1;
+      let vStart = vEnd - 1;
+      while (vStart >= 0 && /[\w-]/.test(code[vStart])) vStart--;
+      vStart++;
+      const variantName = code.slice(vStart, vEnd);
+      if (variantName && VARIANT_PREFIXES.has(variantName)) {
+        variant = variantName;
+      }
+    }
+    
     const start = Math.max(0, match.index - 100);
     const end = Math.min(code.length, match.index + colorClass.length + 100);
     const context = code.slice(start, end).replace(/\n/g, ' ').trim();
     const jsxTag = extractJsxTag(code, match.index);
-    results.push({ colorClass, colorName, context, matchIndex: match.index, jsxTag });
+    results.push({ colorClass, colorName, context, matchIndex: match.index, jsxTag, variant, alpha });
   }
   return results;
 }
@@ -2695,12 +2734,17 @@ function extractTagContent(code: string, pos: number): string | null {
   return null;
 }
 
-// Extract bg-* from a className string
+// Extract bg-* from a className string (base state only — skips variant-prefixed tokens)
 function extractBgFromClasses(classes: string): { bgClass: string; bgName: string } | null {
-  const bgRegex = new RegExp(`bg-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?`);
-  const m = classes.match(bgRegex);
-  if (!m) return null;
-  return { bgClass: m[0], bgName: m[1] + (m[2] ? `-${m[2]}` : '') };
+  const bgRegex = new RegExp(`^bg-(${TW_COLOR_FAMILIES})-?(\\d{2,3})?(?:/(\\d{1,3}))?$`);
+  const tokens = classes.split(/\s+/);
+  for (const token of tokens) {
+    // Skip variant-prefixed tokens (e.g., hover:bg-blue-500, dark:bg-gray-900)
+    if (token.includes(':')) continue;
+    const m = token.match(bgRegex);
+    if (m) return { bgClass: m[0], bgName: m[1] + (m[2] ? `-${m[2]}` : '') };
+  }
+  return null;
 }
 
 // Walk up ancestor JSX elements to find the nearest bg-* class.
@@ -2858,6 +2902,8 @@ interface ContrastViolation {
   bgSource?: A1BgSource;
   evidenceLevel?: A1EvidenceLevel;
   sizeStatus?: A1SizeStatus;
+  variant?: string; // 'hover', 'focus', 'active', 'dark' — undefined = base
+  lineNumber?: number;
   affectedComponents?: Array<{
     colorClass: string;
     hexColor?: string;
@@ -2882,14 +2928,29 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     // Build set of lucide-react icon imports for this file
     const lucideIcons = extractLucideImports(content);
     
+    // Pre-compute line offsets for approximate line number reporting
+    const lineOffsets: number[] = [0];
+    for (let ci = 0; ci < content.length; ci++) {
+      if (content[ci] === '\n') lineOffsets.push(ci + 1);
+    }
+    const getLineNumber = (idx: number): number => {
+      let lo = 0, hi = lineOffsets.length - 1;
+      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineOffsets[mid] <= idx) lo = mid; else hi = mid - 1; }
+      return lo + 1; // 1-based
+    };
+    
     const textTokens = extractTextColorTokens(content);
     
-    for (const { colorClass, colorName, context, matchIndex, jsxTag } of textTokens) {
+    // ===== BASE STATE PASS: Process only non-variant text tokens =====
+    for (const { colorClass, colorName, context, matchIndex, jsxTag, variant, alpha } of textTokens) {
+      // Skip variant-prefixed tokens (hover:text-*, focus:text-*, etc.)
+      // These are NOT the element's base foreground color
+      if (variant) continue;
+      
       const fgHex = TAILWIND_COLORS[colorName];
       if (!fgHex) continue; // Unknown token — skip
       
       // --- WCAG 1.4.3 SCOPE FILTER ---
-      // Only evaluate text-bearing elements; exclude SVGs, icons, non-text tags
       if (!isTextElement(jsxTag, lucideIcons)) continue;
       
       // --- Background resolution (ancestor-only, no sibling leakage) ---
@@ -2902,7 +2963,6 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         bgHex = resolved.inlineBgHex;
         bgClass = null;
         bgSource = 'inline_style';
-        console.log("[A1] Tailwind fg + inline bg:", fgHex, bgHex, "in", filepath);
       } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
         bgHex = TAILWIND_COLORS[resolved.bgName];
         bgClass = resolved.bgClass;
@@ -2912,8 +2972,15 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         bgSource = 'assumed_default';
       }
       
+      // --- Alpha compositing ---
+      let effectiveFgHex = fgHex;
+      if (alpha !== undefined && alpha < 1) {
+        const composited = alphaComposite(fgHex, bgHex, alpha);
+        if (composited) effectiveFgHex = composited;
+      }
+      
       // --- Contrast computation ---
-      const ratio = getContrastRatio(fgHex, bgHex);
+      const ratio = getContrastRatio(effectiveFgHex, bgHex);
       
       // --- Size inference & WCAG 1.4.3 threshold ---
       const sizeStatus = inferTextSize(context);
@@ -2930,8 +2997,8 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       if (ratio !== null && ratio >= threshold) continue; // PASS
       
       a1Findings.push({
-        fgHex,
-        fgClass: colorClass,
+        fgHex: effectiveFgHex,
+        fgClass: alpha !== undefined ? `${colorClass}/${Math.round(alpha * 100)}` : colorClass,
         fgSource: 'tailwind_token',
         bgHex,
         bgClass,
@@ -2949,6 +3016,78 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         textType,
         appliedThreshold: threshold,
         wcagCriterion: '1.4.3',
+        lineNumber: getLineNumber(matchIndex),
+      });
+    }
+
+    // ===== VARIANT STATE PASS: Process hover/focus/active/dark text tokens =====
+    for (const { colorClass, colorName, context, matchIndex, jsxTag, variant, alpha } of textTokens) {
+      if (!variant) continue; // base tokens already processed above
+      // Only process interactive/visual state variants
+      if (!['hover', 'focus', 'focus-visible', 'focus-within', 'active', 'dark'].includes(variant)) continue;
+      
+      const fgHex = TAILWIND_COLORS[colorName];
+      if (!fgHex) continue;
+      if (!isTextElement(jsxTag, lucideIcons)) continue;
+      
+      // For variant tokens, resolve background from base state (not variant bg)
+      let bgHex: string;
+      let bgClass: string | null = null;
+      let bgSource: A1BgSource;
+      
+      const resolved = resolveBackground(content, matchIndex);
+      if (resolved.inlineBgHex) {
+        bgHex = resolved.inlineBgHex;
+        bgClass = null;
+        bgSource = 'inline_style';
+      } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
+        bgHex = TAILWIND_COLORS[resolved.bgName];
+        bgClass = resolved.bgClass;
+        bgSource = 'tailwind_token';
+      } else {
+        bgHex = '#ffffff';
+        bgSource = 'assumed_default';
+      }
+      
+      let effectiveFgHex = fgHex;
+      if (alpha !== undefined && alpha < 1) {
+        const composited = alphaComposite(fgHex, bgHex, alpha);
+        if (composited) effectiveFgHex = composited;
+      }
+      
+      const ratio = getContrastRatio(effectiveFgHex, bgHex);
+      const sizeStatus = inferTextSize(context);
+      const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
+      const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
+      
+      if (ratio !== null && ratio >= threshold) continue; // PASS
+      
+      const evidenceLevel: A1EvidenceLevel = bgSource === 'tailwind_token' || bgSource === 'inline_style'
+        ? 'structural_deterministic'
+        : 'structural_estimated';
+      
+      a1Findings.push({
+        fgHex: effectiveFgHex,
+        fgClass: `${variant}:${colorClass}`,
+        fgSource: 'tailwind_token',
+        bgHex,
+        bgClass,
+        bgSource,
+        ratio,
+        threshold,
+        sizeStatus,
+        evidenceLevel,
+        filePath: filepath,
+        componentName: componentName || undefined,
+        elementContext: inferElementContext(context) || undefined,
+        jsxTag,
+        context,
+        occurrence_count: 1,
+        textType,
+        appliedThreshold: threshold,
+        wcagCriterion: '1.4.3',
+        variant,
+        lineNumber: getLineNumber(matchIndex),
       });
     }
 
@@ -3045,7 +3184,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   
   const dedupeMap = new Map<string, A1TokenFinding>();
   for (const finding of a1Findings) {
-    const key = `${finding.fgClass}:${finding.bgSource}:${finding.bgHex}:${finding.filePath}`;
+    const key = `${finding.fgClass}:${finding.bgSource}:${finding.bgHex}:${finding.filePath}:${finding.variant || 'base'}`;
     if (dedupeMap.has(key)) {
       dedupeMap.get(key)!.occurrence_count += 1;
     } else {
@@ -3061,8 +3200,10 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       ? `${finding.componentName} (${fileName})`
       : fileName;
     
-    // Classification: Confirmed only when both fg AND bg are from Tailwind tokens
-    const isConfirmed = finding.bgSource === 'tailwind_token' && finding.ratio !== null && finding.ratio < finding.threshold;
+    // Classification: Confirmed when bg is deterministically resolved (tailwind OR inline style) AND no variant
+    // Variant-state findings are Confirmed but labeled as state-specific
+    const bgDeterministic = finding.bgSource === 'tailwind_token' || finding.bgSource === 'inline_style';
+    const isConfirmed = bgDeterministic && finding.ratio !== null && finding.ratio < finding.threshold;
     const status: 'confirmed' | 'potential' = isConfirmed ? 'confirmed' : 'potential';
     
     // Reason codes
@@ -3088,7 +3229,8 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
           ? ' (background unresolved)'
           : ` (background from ${finding.bgClass})`;
     
-    const diagnosis = `Text ${finding.fgClass} (${finding.fgHex}) on ${finding.bgHex}${bgNote} — ` +
+    const variantLabel = finding.variant ? ` [${finding.variant} state]` : '';
+    const diagnosis = `Text ${finding.fgClass} (${finding.fgHex}) on ${finding.bgHex}${bgNote}${variantLabel} — ` +
       `contrast ratio ${ratioStr} vs ${finding.threshold}:1 required (${finding.sizeStatus === 'large' ? 'large' : 'normal'} text).`;
     
     let correctivePrompt = '';
@@ -3116,7 +3258,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       backgroundHex: finding.bgHex,
       elementIdentifier,
       elementDescription: finding.elementContext,
-      evidence: `${finding.fgClass}${finding.bgClass ? ` on ${finding.bgClass}` : ''} in ${finding.filePath}`,
+      evidence: `${finding.fgClass}${finding.bgClass ? ` on ${finding.bgClass}` : ''} in ${finding.filePath}${finding.lineNumber ? `:${finding.lineNumber}` : ''}`,
       diagnosis,
       contextualHint: `Contrast ${ratioStr} — ${finding.evidenceLevel.replace(/_/g, ' ')}.`,
       correctivePrompt,
@@ -3124,14 +3266,16 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       riskLevel,
       reasonCodes: isConfirmed ? undefined : reasonCodes,
       potentialRiskReason: isConfirmed ? undefined : `Background source: ${finding.bgSource.replace(/_/g, ' ')}.`,
-      backgroundStatus: finding.bgSource === 'tailwind_token' ? 'certain' : 'uncertain',
+      backgroundStatus: (finding.bgSource === 'tailwind_token' || finding.bgSource === 'inline_style') ? 'certain' : 'uncertain',
       blocksConvergence: isConfirmed,
-      inputLimitation: finding.bgSource !== 'tailwind_token' ? `Background inferred (${finding.bgSource.replace(/_/g, ' ')}); verify at runtime.` : undefined,
+      inputLimitation: (finding.bgSource !== 'tailwind_token' && finding.bgSource !== 'inline_style') ? `Background inferred (${finding.bgSource.replace(/_/g, ' ')}); verify at runtime.` : undefined,
       advisoryGuidance,
       fgSource: finding.fgSource,
       bgSource: finding.bgSource,
       evidenceLevel: finding.evidenceLevel,
       sizeStatus: finding.sizeStatus,
+      variant: finding.variant,
+      lineNumber: finding.lineNumber,
       affectedComponents: [{
         colorClass: finding.fgClass,
         hexColor: finding.fgHex,
@@ -8203,7 +8347,9 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           ? `Issue reason: ${ratioStr} measured vs ${threshStr} required (WCAG AA, ${sizeLabel} text).\n\nRecommended fix: Increase text contrast for this element (currently ${fgHex} on ${bgHex}) by darkening the text color or adjusting the background to reach ≥${threshStr}; keep visual style consistent across similar elements.`
           : undefined;
         return {
-          elementLabel: v.elementIdentifier || v.elementDescription || 'Unknown element',
+          elementLabel: v.variant
+            ? `${v.elementIdentifier || v.elementDescription || 'Unknown element'} [${v.variant}]`
+            : (v.elementIdentifier || v.elementDescription || 'Unknown element'),
           textSnippet: v.evidence,
           location: v.evidence || '',
           foregroundHex: v.foregroundHex,
@@ -8218,8 +8364,10 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           textType: v.sizeStatus === 'large' ? 'large' : 'normal',
           appliedThreshold: v.thresholdUsed || 4.5,
           wcagCriterion: '1.4.3' as const,
-          deduplicationKey: `a1|${v.elementIdentifier}|${v.foregroundHex}`,
+          deduplicationKey: `a1|${v.elementIdentifier}|${v.foregroundHex}|${v.variant || 'base'}`,
           correctivePrompt: prompt,
+          variant: v.variant || undefined,
+          lineNumber: v.lineNumber || undefined,
         };
       };
       
