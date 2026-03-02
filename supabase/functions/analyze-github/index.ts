@@ -3292,12 +3292,14 @@ Suppress if: section heading clarifies action, page title clarifies context, act
 
 ### E1 (Insufficient Transparency in High-Impact Actions) — LLM-ASSISTED EVALUATION:
 **NOTE:** E1 uses pre-extracted high-impact action evidence bundles appended as \`[E1_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted UI text/context to assess transparency.
+**NOTE:** Actions with strong disclosure (irreversibility warnings, consequence lists) AND a confirmation dialog have ALREADY been filtered out. Do NOT re-flag suppressed actions.
 
 **CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
 - Do NOT use file names, component names, or test wording as evidence.
 - Do NOT infer malicious intent. Use neutral language ("may be unclear", "transparency risk").
 - Base conclusions ONLY on the extracted CTA labels, nearby UI text, and confirmation dialog presence/absence.
 - If evidence is insufficient, return NO E1 finding — do not guess.
+- Do NOT flag password reset, sign-in, sign-out, or other auth-flow actions.
 
 **EVALUATE:**
 - Missing consequence disclosure for destructive actions
@@ -3795,12 +3797,46 @@ interface E1EvidenceBundle {
   hasConfirmationDialog: boolean;
   hasWarningText: boolean;
   hasPricingText: boolean;
+  disclosureTermsFound: string[];
+  frictionMechanisms: string[];
+  suppressed: boolean;
+  suppressionReason?: string;
 }
 
-const E1_HIGH_IMPACT_KEYWORDS = /\b(delete|remove|close\s*account|reset|destroy|erase|unsubscribe|terminate|revoke|cancel\s*(?:subscription|membership|plan|account)|subscribe|buy|purchase|pay|upgrade|checkout|confirm\s*(?:order|purchase|payment)|accept|agree)\b/i;
-const E1_WARNING_WORDS = /\b(permanent|cannot\s*be\s*undone|irreversible|this\s*action|will\s*be\s*(?:deleted|removed|lost)|are\s*you\s*sure|caution|warning)\b/i;
+// Strict high-impact keyword list — excludes "reset", "accept", "agree" (too broad)
+const E1_HIGH_IMPACT_KEYWORDS = /\b(delete|remove\s*account|close\s*account|permanently\s*delete|destroy|erase|cancel\s*(?:subscription|membership|plan|account)|subscribe|buy|purchase|pay\b|upgrade|checkout|confirm\s*(?:order|purchase|payment)|finalize|publish|authorize|grant\s*access|share\s*data|export\s*data|connect\s*account)\b/i;
+
+const E1_AUTH_FLOW_PATH = /(?:forgot.?password|reset.?password|sign.?in|sign.?up|login|register|auth|verify.?email|confirm.?email)/i;
+const E1_AUTH_EXCLUDED_LABELS = /\b(send\s*reset\s*link|reset\s*password|sign\s*in|sign\s*up|log\s*in|log\s*out|sign\s*out|register|create\s*account|verify\s*email|resend\s*code|resend\s*link)\b/i;
+const E1_OVERRIDE_IN_AUTH = /\b(delete|erase|destroy|permanently|purchase|pay\b|subscribe|checkout|billing)\b/i;
+
+const E1_WARNING_WORDS = /\b(permanent|cannot\s*be\s*undone|irreversible|this\s*action|will\s*be\s*(?:deleted|removed|lost)|are\s*you\s*sure|caution|warning|permanently\s*(?:remove|delete|erase)|data\s*will\s*be\s*removed)\b/i;
 const E1_PRICING_WORDS = /\b(\$\d|\€\d|\£\d|USD|EUR|per\s*month|\/mo|\/year|billing|subscription\s*(?:fee|cost|price)|free\s*trial|charged)\b/i;
 const E1_CONFIRMATION_PATTERNS = /\b(AlertDialog|confirm\s*\(|useConfirm|ConfirmDialog|ConfirmModal|confirmation|modal|Dialog)\b/i;
+
+const E1_STRONG_DISCLOSURE_RE = /\b(cannot\s*be\s*undone|irreversible|permanent(?:ly)?|will\s*be\s*(?:deleted|removed|lost|erased)|this\s*(?:action|cannot)|data\s*will\s*be\s*removed|all\s*(?:your\s*)?data|appointments|messages|records|files)\b/gi;
+const E1_FRICTION_TYPE_CONFIRM = /\b(type\s*["']?DELETE|type\s*["']?CONFIRM|type\s*to\s*confirm|enter\s*["']?delete)\b/i;
+const E1_FRICTION_CHECKBOX = /(?:<(?:Checkbox|checkbox|input)\b[^>]*(?:type\s*=\s*["']checkbox["']))[^>]*(?:acknowledge|confirm|understand|agree|consent|irreversible|permanent)/i;
+const E1_FRICTION_DOUBLE_CONFIRM = /(?:Are\s*you\s*(?:sure|certain)|Confirm\s*(?:deletion|removal|action)|This\s*will\s*permanently)/i;
+
+function extractE1DisclosureTerms(text: string): string[] {
+  const terms: string[] = [];
+  E1_STRONG_DISCLOSURE_RE.lastIndex = 0;
+  let m;
+  while ((m = E1_STRONG_DISCLOSURE_RE.exec(text)) !== null) {
+    const term = m[1].toLowerCase().trim();
+    if (!terms.includes(term)) terms.push(term);
+  }
+  return terms;
+}
+
+function extractE1FrictionMechanisms(text: string): string[] {
+  const mechanisms: string[] = [];
+  if (E1_FRICTION_TYPE_CONFIRM.test(text)) mechanisms.push('type-to-confirm');
+  if (E1_FRICTION_CHECKBOX.test(text)) mechanisms.push('checkbox');
+  if (E1_FRICTION_DOUBLE_CONFIRM.test(text)) mechanisms.push('double-confirm');
+  return mechanisms;
+}
 
 function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundle[] {
   const bundles: E1EvidenceBundle[] = [];
@@ -3810,39 +3846,61 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
     if (/\.(test|spec)\./i.test(filePath)) continue;
     if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
 
+    // AUTH-FLOW EXCLUSION
+    const isAuthFlow = E1_AUTH_FLOW_PATH.test(filePath);
+    if (isAuthFlow && !E1_OVERRIDE_IN_AUTH.test(content)) {
+      console.log(`E1 SUPPRESSED (auth-flow file): ${filePath}`);
+      continue;
+    }
+
     const btnRe = /<(?:Button|button|a)\b([^>]*)>([^<]{1,80})<\/(?:Button|button|a)>/gi;
     let bm;
     while ((bm = btnRe.exec(content)) !== null) {
       const attrs = bm[1] || '';
       const label = bm[2].replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
       if (!label || label.length < 2) continue;
+      if (E1_AUTH_EXCLUDED_LABELS.test(label)) continue;
       if (!E1_HIGH_IMPACT_KEYWORDS.test(label) && !E1_HIGH_IMPACT_KEYWORDS.test(attrs)) continue;
 
       let ctaType = 'destructive';
       if (/\b(subscribe|buy|purchase|pay|upgrade|checkout)\b/i.test(label)) ctaType = 'financial';
-      if (/\b(accept|agree|share|consent)\b/i.test(label)) ctaType = 'data-sharing';
+      if (/\b(share\s*data|export\s*data|grant\s*access|connect\s*account|authorize)\b/i.test(label)) ctaType = 'data-sharing';
 
-      const regionStart = Math.max(0, bm.index - 300);
-      const regionEnd = Math.min(content.length, bm.index + bm[0].length + 300);
+      const regionStart = Math.max(0, bm.index - 500);
+      const regionEnd = Math.min(content.length, bm.index + bm[0].length + 500);
       const region = content.slice(regionStart, regionEnd);
 
       const nearbyText: string[] = [];
       const hRe = /<h([1-6])\b[^>]*>([^<]{2,80})<\/h\1>/gi;
       let hm;
       while ((hm = hRe.exec(region)) !== null) nearbyText.push(`h${hm[1]}: ${hm[2].replace(/\{[^}]*\}/g, '').trim()}`);
-      const pRe = /<(?:p|span|div)\b[^>]*>([^<]{3,120})<\/(?:p|span|div)>/gi;
+      const pRe = /<(?:p|span|div|label)\b[^>]*>([^<]{3,150})<\/(?:p|span|div|label)>/gi;
       let pm;
       while ((pm = pRe.exec(region)) !== null) {
         const text = pm[1].replace(/\{[^}]*\}/g, '').trim();
-        if (text.length >= 3 && text.length <= 120) nearbyText.push(text);
+        if (text.length >= 3 && text.length <= 150) nearbyText.push(text);
+      }
+
+      const hasWarningText = E1_WARNING_WORDS.test(region);
+      const hasPricingText = E1_PRICING_WORDS.test(region);
+      const hasConfirmationDialog = E1_CONFIRMATION_PATTERNS.test(content);
+      const disclosureTermsFound = extractE1DisclosureTerms(content);
+      const frictionMechanisms = extractE1FrictionMechanisms(content);
+
+      // DISCLOSURE + CONFIRMATION PASS-THROUGH
+      const hasStrongDisclosure = disclosureTermsFound.length > 0;
+      const labelMentionsAction = /\b(delete|remove|erase|destroy|cancel|unsubscribe)\b/i.test(label);
+
+      if (hasStrongDisclosure && hasConfirmationDialog) {
+        console.log(`E1 SUPPRESSED (disclosure pass-through): "${label}" in ${filePath}`);
+        continue;
       }
 
       bundles.push({
         filePath, ctaLabel: label, ctaType,
         nearbyText: [...new Set(nearbyText)].slice(0, 6),
-        hasConfirmationDialog: E1_CONFIRMATION_PATTERNS.test(content),
-        hasWarningText: E1_WARNING_WORDS.test(region),
-        hasPricingText: E1_PRICING_WORDS.test(region),
+        hasConfirmationDialog, hasWarningText, hasPricingText,
+        disclosureTermsFound, frictionMechanisms, suppressed: false,
       });
     }
   }
@@ -3850,13 +3908,20 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
 }
 
 function formatE1EvidenceBundleForPrompt(bundles: E1EvidenceBundle[]): string {
-  if (bundles.length === 0) return '';
-  const lines = ['[E1_EVIDENCE_BUNDLE]', 'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence. Evaluate ONLY the extracted CTA labels and nearby UI text.'];
-  for (const b of bundles) {
+  const activeBundles = bundles.filter(b => !b.suppressed);
+  if (activeBundles.length === 0) return '';
+  const lines = [
+    '[E1_EVIDENCE_BUNDLE]',
+    'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence.',
+    'NOTE: Actions with strong disclosure + confirmation have ALREADY been filtered out.',
+  ];
+  for (const b of activeBundles) {
     lines.push(`\n--- Location: ${b.filePath} ---`);
     lines.push(`  CTA: "${b.ctaLabel}" (type: ${b.ctaType})`);
     if (b.nearbyText.length > 0) lines.push(`  Nearby text: ${b.nearbyText.join(' | ')}`);
     lines.push(`  Flags: confirmation=${b.hasConfirmationDialog}, warning=${b.hasWarningText}, pricing=${b.hasPricingText}`);
+    if (b.disclosureTermsFound.length > 0) lines.push(`  Disclosure terms found: ${b.disclosureTermsFound.join(', ')}`);
+    if (b.frictionMechanisms.length > 0) lines.push(`  Friction mechanisms: ${b.frictionMechanisms.join(', ')}`);
   }
   lines.push('[/E1_EVIDENCE_BUNDLE]');
   return lines.join('\n');
