@@ -2468,7 +2468,19 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const controlId = (controlIdParsed.isNonEmpty && !controlIdParsed.isDynamic && controlIdParsed.value)
         ? controlIdParsed.value
         : null;
+      const hasDynamicId = controlIdParsed.isNonEmpty && controlIdParsed.isDynamic;
       const hasExplicitLabel = !!controlId && labelForTargets.has(controlId);
+
+      // Component-aware label resolution: check for `label` prop on wrapper components
+      let hasLabelProp = false;
+      let labelPropIsDynamic = false;
+      if (isReactComponent && A5_WRAPPER_COMPONENT_MAP[tag]) {
+        const labelPropParsed = parseA5AttributeFromTag(fullMatch, 'label');
+        if (labelPropParsed.present && labelPropParsed.isNonEmpty) {
+          hasLabelProp = true;
+          labelPropIsDynamic = labelPropParsed.isDynamic;
+        }
+      }
 
       const beforeControl = content.slice(Math.max(0, index - 500), index);
       const lastLabelOpen = Math.max(beforeControl.lastIndexOf('<label'), beforeControl.lastIndexOf('<Label'));
@@ -2477,7 +2489,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const isInFormControl = formControlRanges.some(r => index >= r.start && index <= r.end);
 
-      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl;
+      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl || (hasLabelProp && !labelPropIsDynamic);
+      const hasDynamicLabelOnly = hasLabelProp && labelPropIsDynamic && !hasAriaLabel && !hasAriaLabelledBy && !hasExplicitLabel && !isWrappedInLabel && !isInFormControl;
 
       const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2];
@@ -2491,6 +2504,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       // Build selector hints
       const selectorHints: string[] = [];
       if (controlId) selectorHints.push(`id="${controlId}"`);
+      else if (hasDynamicId) selectorHints.push('id=(dynamic)');
       if (nameParsed.isNonEmpty && nameParsed.value) selectorHints.push(`name="${nameParsed.value}"`);
       if (hasAriaLabel && ariaLabelParsed.evidence) selectorHints.push(ariaLabelParsed.evidence);
       if (hasAriaLabelledBy && ariaLabelledByParsed.evidence) selectorHints.push(ariaLabelledByParsed.evidence);
@@ -2498,10 +2512,12 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       // Determine labeling method (include evidence)
       let labelingMethod = '';
       if (isInFormControl) labelingMethod = 'FormLabel/FormControl (shadcn)';
+      else if (hasLabelProp && !labelPropIsDynamic) labelingMethod = 'label prop (wrapper)';
       else if (hasAriaLabel) labelingMethod = ariaLabelParsed.evidence || 'aria-label';
       else if (hasAriaLabelledBy) labelingMethod = ariaLabelledByParsed.evidence || 'aria-labelledby';
       else if (hasExplicitLabel) labelingMethod = `label[htmlFor="${controlId}"]`;
       else if (isWrappedInLabel) labelingMethod = 'wrapping <label>';
+      else if (hasDynamicLabelOnly) labelingMethod = 'label prop (dynamic — not verified)';
 
       if (controlId && hasExplicitLabel) {
         const idCount = idCounts.get(controlId) || 0;
@@ -2528,6 +2544,31 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       if (hasValidLabel) continue;
 
+      // Dynamic label prop on wrapper → downgrade to Potential
+      if (hasDynamicLabelOnly) {
+        const dedupeKey = `A5.1|${filePath}|${tag}|${label}|${lineNumber}|dynamic-label`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          findings.push({
+            elementLabel: label, elementType: displayTag, elementName: elementNameVal, controlType: controlTypeVal,
+            inputSubtype, sourceLabel: label, filePath, componentName,
+            subCheck: 'A5.1', subCheckLabel: 'Missing label association',
+            classification: 'potential',
+            detection: `<${displayTag}> has label prop but value is dynamic — not statically verifiable`,
+            evidence: `<${displayTag}> at ${filePath}:${lineNumber} — label prop present but runtime-dependent`,
+            explanation: `Wrapper component <${displayTag}> has a label prop with a dynamic value that cannot be statically verified as non-empty.`,
+            confidence: 0.50,
+            potentialSubtype: 'borderline',
+            deduplicationKey: dedupeKey,
+            selectorHints,
+            controlId: controlId || (hasDynamicId ? '(dynamic)' : undefined),
+            labelingMethod,
+            startLine: lineNumber, endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
+          });
+        }
+        continue;
+      }
+
       if (hasPlaceholder && !hasValidLabel) {
         const dedupeKey = `A5.2|${filePath}|${tag}|${label}|${lineNumber}`;
         if (!seenKeys.has(dedupeKey)) {
@@ -2541,7 +2582,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
             confidence: 0.95,
             correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nPlaceholder-only label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
             deduplicationKey: dedupeKey,
-            selectorHints, controlId, labelingMethod: 'none (placeholder only)',
+            selectorHints, controlId: controlId || (hasDynamicId ? '(dynamic)' : undefined), labelingMethod: 'none (placeholder only)',
             startLine: lineNumber, endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
           });
         }
@@ -2560,7 +2601,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           confidence: 0.97,
           correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nNo programmatic label.\n\nRecommended fix:\nAdd a <label> or aria-label/aria-labelledby.`,
           deduplicationKey: dedupeKey,
-          selectorHints, controlId, labelingMethod: 'none',
+          selectorHints, controlId: controlId || (hasDynamicId ? '(dynamic)' : undefined), labelingMethod: 'none',
           startLine: lineNumber, endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
         });
       }

@@ -6739,7 +6739,19 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const controlId = (controlIdParsed.isNonEmpty && !controlIdParsed.isDynamic && controlIdParsed.value)
         ? controlIdParsed.value
         : null;
+      const hasDynamicId = controlIdParsed.isNonEmpty && controlIdParsed.isDynamic;
       const hasExplicitLabel = !!controlId && labelForTargets.has(controlId);
+
+      // Component-aware label resolution: check for `label` prop on wrapper components
+      let hasLabelProp = false;
+      let labelPropIsDynamic = false;
+      if (isReactComponent && A5_WRAPPER_COMPONENT_MAP[tag]) {
+        const labelPropParsed = parseA5AttributeFromTag(fullMatch, 'label');
+        if (labelPropParsed.present && labelPropParsed.isNonEmpty) {
+          hasLabelProp = true;
+          labelPropIsDynamic = labelPropParsed.isDynamic;
+        }
+      }
 
       // Check if wrapped in <label> or <Label>
       const beforeControl = content.slice(Math.max(0, index - 500), index);
@@ -6750,7 +6762,12 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       // Check if inside FormControl with FormLabel (shadcn Form pattern)
       const isInFormControl = formControlRanges.some(r => index >= r.start && index <= r.end);
 
-      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl;
+      // Wrapper with non-dynamic label prop is considered fully labeled
+      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl || (hasLabelProp && !labelPropIsDynamic);
+
+      // Wrapper with dynamic label prop (e.g., label={t('email')}) — not statically verifiable
+      // If no other label source, downgrade to Potential instead of Confirmed
+      const hasDynamicLabelOnly = hasLabelProp && labelPropIsDynamic && !hasAriaLabel && !hasAriaLabelledBy && !hasExplicitLabel && !isWrappedInLabel && !isInFormControl;
 
       // Extract placeholder
       const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/);
@@ -6766,6 +6783,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       // Build selector hints for element metadata
       const selectorHints: string[] = [];
       if (controlId) selectorHints.push(`id="${controlId}"`);
+      else if (hasDynamicId) selectorHints.push('id=(dynamic)');
       if (nameParsed.isNonEmpty && nameParsed.value) selectorHints.push(`name="${nameParsed.value}"`);
       if (hasAriaLabel && ariaLabelParsed.evidence) selectorHints.push(ariaLabelParsed.evidence);
       if (hasAriaLabelledBy && ariaLabelledByParsed.evidence) selectorHints.push(ariaLabelledByParsed.evidence);
@@ -6773,10 +6791,12 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       // Determine labeling method for display (include evidence)
       let labelingMethod = '';
       if (isInFormControl) labelingMethod = 'FormLabel/FormControl (shadcn)';
+      else if (hasLabelProp && !labelPropIsDynamic) labelingMethod = 'label prop (wrapper)';
       else if (hasAriaLabel) labelingMethod = ariaLabelParsed.evidence || 'aria-label';
       else if (hasAriaLabelledBy) labelingMethod = ariaLabelledByParsed.evidence || 'aria-labelledby';
       else if (hasExplicitLabel) labelingMethod = `label[htmlFor="${controlId}"]`;
       else if (isWrappedInLabel) labelingMethod = 'wrapping <label>';
+      else if (hasDynamicLabelOnly) labelingMethod = 'label prop (dynamic — not verified)';
 
       // A5.3: Broken label association — label[for] targets a non-existent or duplicate id
       if (controlId && hasExplicitLabel) {
@@ -6810,6 +6830,34 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       if (hasValidLabel) continue; // Properly labeled — skip
 
+      // Dynamic label prop on wrapper → downgrade to Potential and skip Confirmed paths
+      if (hasDynamicLabelOnly) {
+        const dedupeKey = `A5.1|${filePath}|${tag}|${label}|${lineNumber}|dynamic-label`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          findings.push({
+            elementKey: makeA5ElementKey(tag, controlId || '', elementNameAttr, inputSubtype || tag, filePath, lineNumber),
+            elementLabel: label, elementType: displayTag, elementName: elementNameVal, controlType: controlTypeVal,
+            inputSubtype, sourceLabel: label, filePath, componentName,
+            subCheck: 'A5.1', subCheckLabel: 'Missing label association',
+            classification: 'potential',
+            detection: `<${displayTag}> has label prop but value is dynamic — not statically verifiable`,
+            evidence: `<${displayTag}> at ${filePath}:${lineNumber} — label prop present but runtime-dependent`,
+            explanation: `Wrapper component <${displayTag}> has a label prop with a dynamic value that cannot be statically verified as non-empty.`,
+            wcagCriteria: ['1.3.1', '3.3.2'],
+            confidence: 0.50,
+            potentialSubtype: 'borderline',
+            deduplicationKey: dedupeKey,
+            selectorHints,
+            controlId: controlId || (hasDynamicId ? '(dynamic)' : undefined),
+            labelingMethod,
+            startLine: lineNumber,
+            endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
+          });
+        }
+        continue;
+      }
+
       // title is NOT a valid label source — title-only inputs remain A5.1 Confirmed
 
       // A5.2: Placeholder-only labeling
@@ -6830,7 +6878,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
             correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nPlaceholder text is the only label for this control. Placeholders are not sufficient labels per WCAG 3.3.2.\n\nRecommended fix:\nAdd a persistent <label> associated with this input using for/id, or provide an accessible name via aria-label or aria-labelledby.`,
             deduplicationKey: dedupeKey,
             selectorHints,
-            controlId,
+            controlId: controlId || (hasDynamicId ? '(dynamic)' : undefined),
             labelingMethod: 'none (placeholder only)',
             startLine: lineNumber,
             endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
@@ -6856,7 +6904,7 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
           correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nThis form control has no programmatic label (no <label>, aria-label, or aria-labelledby).\n\nRecommended fix:\nAdd a visible <label> associated with this input using for + id, or provide an accessible name via aria-label or aria-labelledby.`,
           deduplicationKey: dedupeKey,
           selectorHints,
-          controlId,
+          controlId: controlId || (hasDynamicId ? '(dynamic)' : undefined),
           labelingMethod: 'none',
           startLine: lineNumber,
           endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
