@@ -53,7 +53,14 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
       <ElementItemWrapper isConfirmed={isConfirmed} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
-            <ComponentTitle>{cleanLabel}</ComponentTitle>
+            <div className="flex items-center gap-2">
+              <ComponentTitle>{cleanLabel}</ComponentTitle>
+              {element.variant && (
+                <Badge variant="outline" className="text-[10px] font-medium border-amber-500/40 text-amber-600">
+                  {element.variant} state
+                </Badge>
+              )}
+            </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={cleanLocation} compact={compact} />
               {isOpen ? (

@@ -314,6 +314,10 @@ export interface A1ElementSubItem {
   // Two-stage hybrid method label (screenshot A1)
   a1Method?: 'LLM→Pixel' | 'LLM-only (measurement failed)';
   
+  // Variant/state tracking (structural A1)
+  variant?: string; // 'hover', 'focus', 'active', 'dark' — undefined = base state
+  lineNumber?: number; // approximate source line number
+  
   // Deduplication key
   deduplicationKey: string; // screenId + bbox + textSnippet
 }

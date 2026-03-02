@@ -894,14 +894,17 @@ function extractTextColors(content: string): Array<{ colorClass: string; context
   let match;
   while ((match = classPattern.exec(content)) !== null) {
     const classes = match[1] || match[2] || match[3] || '';
-    const textColorMatch = classes.match(/text-(gray|slate|zinc)-[2345]00/g);
-    
-    if (textColorMatch) {
-      for (const colorClass of textColorMatch) {
+    // Split into tokens and only match non-variant-prefixed text color classes
+    const tokens = classes.split(/\s+/);
+    for (const token of tokens) {
+      // Skip variant-prefixed tokens (hover:text-gray-300, dark:text-gray-200, etc.)
+      if (token.includes(':')) continue;
+      const textColorMatch = token.match(/^text-(gray|slate|zinc)-[2345]00$/);
+      if (textColorMatch) {
         const contextStart = Math.max(0, match.index - 100);
         const contextEnd = Math.min(content.length, match.index + 200);
         results.push({
-          colorClass,
+          colorClass: token,
           context: content.slice(contextStart, contextEnd),
         });
       }
