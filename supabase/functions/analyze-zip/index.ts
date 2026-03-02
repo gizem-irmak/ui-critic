@@ -4586,12 +4586,15 @@ Look for patterns that may undermine user autonomy or informed consent:
 
 ### E1 (Insufficient Transparency in High-Impact Actions) — LLM-ASSISTED EVALUATION:
 **NOTE:** E1 uses pre-extracted high-impact action evidence bundles appended as \`[E1_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted UI text/context to assess transparency.
+**NOTE:** Actions with strong disclosure (irreversibility warnings, consequence lists) AND a confirmation dialog have ALREADY been filtered out. The bundles you receive represent actions where disclosure may be missing or insufficient. Do NOT re-flag actions that were suppressed.
 
 **CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
 - Do NOT use file names, component names, or test wording as evidence.
 - Do NOT infer malicious intent. Use neutral language ("may be unclear", "transparency risk").
 - Base conclusions ONLY on the extracted CTA labels, nearby UI text (headings, warnings, pricing), and confirmation dialog presence/absence.
 - If evidence is insufficient to demonstrate missing transparency, return NO E1 finding — do not guess.
+- Do NOT flag password reset, sign-in, sign-out, or other auth-flow actions.
+- Do NOT flag actions where disclosure terms are already present (check the "Disclosure terms found" field in the bundle).
 
 **EVALUATE (using ONLY the evidence bundle content):**
 - Missing consequence disclosure: delete/remove actions without "permanent", "cannot be undone" warnings
@@ -4602,6 +4605,7 @@ Look for patterns that may undermine user autonomy or informed consent:
 **CLASSIFICATION:**
 - E1 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
 - Confidence: 0.60–0.80 (cap at 0.80)
+- If the bundle shows partial disclosure (some terms found but confirmation missing), use lower confidence (0.60–0.65)
 
 **OUTPUT FOR E1 — STRUCTURED e1Elements:**
 \`\`\`json
@@ -5178,16 +5182,56 @@ interface E1EvidenceBundle {
   filePath: string;
   ctaLabel: string;
   ctaType: string; // 'destructive' | 'financial' | 'data-sharing'
-  nearbyText: string[]; // headings, warnings, pricing, helper text near the CTA
+  nearbyText: string[];
   hasConfirmationDialog: boolean;
   hasWarningText: boolean;
   hasPricingText: boolean;
+  disclosureTermsFound: string[];
+  frictionMechanisms: string[];
+  suppressed: boolean;
+  suppressionReason?: string;
 }
 
-const E1_HIGH_IMPACT_KEYWORDS = /\b(delete|remove|close\s*account|reset|destroy|erase|unsubscribe|terminate|revoke|cancel\s*(?:subscription|membership|plan|account)|subscribe|buy|purchase|pay|upgrade|checkout|confirm\s*(?:order|purchase|payment)|accept|agree)\b/i;
-const E1_WARNING_WORDS = /\b(permanent|cannot\s*be\s*undone|irreversible|this\s*action|will\s*be\s*(?:deleted|removed|lost)|are\s*you\s*sure|caution|warning)\b/i;
+// Strict high-impact keyword list — excludes "reset", "accept", "agree" (too broad)
+const E1_HIGH_IMPACT_KEYWORDS = /\b(delete|remove\s*account|close\s*account|permanently\s*delete|destroy|erase|cancel\s*(?:subscription|membership|plan|account)|subscribe|buy|purchase|pay\b|upgrade|checkout|confirm\s*(?:order|purchase|payment)|finalize|publish|authorize|grant\s*access|share\s*data|export\s*data|connect\s*account)\b/i;
+
+// Auth-flow file path patterns — excluded from E1 unless destructive/billing keywords present
+const E1_AUTH_FLOW_PATH = /(?:forgot.?password|reset.?password|sign.?in|sign.?up|login|register|auth|verify.?email|confirm.?email)/i;
+// Auth-flow CTA labels to exclude
+const E1_AUTH_EXCLUDED_LABELS = /\b(send\s*reset\s*link|reset\s*password|sign\s*in|sign\s*up|log\s*in|log\s*out|sign\s*out|register|create\s*account|verify\s*email|resend\s*code|resend\s*link)\b/i;
+// Destructive/billing keywords that override auth-flow exclusion
+const E1_OVERRIDE_IN_AUTH = /\b(delete|erase|destroy|permanently|purchase|pay\b|subscribe|checkout|billing)\b/i;
+
+const E1_WARNING_WORDS = /\b(permanent|cannot\s*be\s*undone|irreversible|this\s*action|will\s*be\s*(?:deleted|removed|lost)|are\s*you\s*sure|caution|warning|permanently\s*(?:remove|delete|erase)|data\s*will\s*be\s*removed)\b/i;
 const E1_PRICING_WORDS = /\b(\$\d|\€\d|\£\d|USD|EUR|per\s*month|\/mo|\/year|billing|subscription\s*(?:fee|cost|price)|free\s*trial|charged)\b/i;
 const E1_CONFIRMATION_PATTERNS = /\b(AlertDialog|confirm\s*\(|useConfirm|ConfirmDialog|ConfirmModal|confirmation|modal|Dialog)\b/i;
+
+// Strong disclosure terms — if found near CTA or in modal, disclosure is considered present
+const E1_STRONG_DISCLOSURE_RE = /\b(cannot\s*be\s*undone|irreversible|permanent(?:ly)?|will\s*be\s*(?:deleted|removed|lost|erased)|this\s*(?:action|cannot)|data\s*will\s*be\s*removed|all\s*(?:your\s*)?data|appointments|messages|records|files)\b/gi;
+
+// Friction mechanisms — typed confirmation, checkbox acknowledgement, double-confirm
+const E1_FRICTION_TYPE_CONFIRM = /\b(type\s*["']?DELETE|type\s*["']?CONFIRM|type\s*to\s*confirm|enter\s*["']?delete)\b/i;
+const E1_FRICTION_CHECKBOX = /(?:<(?:Checkbox|checkbox|input)\b[^>]*(?:type\s*=\s*["']checkbox["']))[^>]*(?:acknowledge|confirm|understand|agree|consent|irreversible|permanent)/i;
+const E1_FRICTION_DOUBLE_CONFIRM = /(?:Are\s*you\s*(?:sure|certain)|Confirm\s*(?:deletion|removal|action)|This\s*will\s*permanently)/i;
+
+function extractE1DisclosureTerms(text: string): string[] {
+  const terms: string[] = [];
+  E1_STRONG_DISCLOSURE_RE.lastIndex = 0;
+  let m;
+  while ((m = E1_STRONG_DISCLOSURE_RE.exec(text)) !== null) {
+    const term = m[1].toLowerCase().trim();
+    if (!terms.includes(term)) terms.push(term);
+  }
+  return terms;
+}
+
+function extractE1FrictionMechanisms(text: string): string[] {
+  const mechanisms: string[] = [];
+  if (E1_FRICTION_TYPE_CONFIRM.test(text)) mechanisms.push('type-to-confirm');
+  if (E1_FRICTION_CHECKBOX.test(text)) mechanisms.push('checkbox');
+  if (E1_FRICTION_DOUBLE_CONFIRM.test(text)) mechanisms.push('double-confirm');
+  return mechanisms;
+}
 
 function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundle[] {
   const bundles: E1EvidenceBundle[] = [];
@@ -5198,6 +5242,13 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
     if (/\.(test|spec)\./i.test(filePath)) continue;
     if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
 
+    // AUTH-FLOW EXCLUSION: Skip auth-flow files unless they contain destructive/billing actions
+    const isAuthFlow = E1_AUTH_FLOW_PATH.test(filePath);
+    if (isAuthFlow && !E1_OVERRIDE_IN_AUTH.test(content)) {
+      console.log(`E1 SUPPRESSED (auth-flow file, no destructive/billing override): ${filePath}`);
+      continue;
+    }
+
     // Find high-impact CTA candidates
     const btnRe = /<(?:Button|button|a)\b([^>]*)>([^<]{1,80})<\/(?:Button|button|a)>/gi;
     let bm;
@@ -5205,37 +5256,77 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
       const attrs = bm[1] || '';
       const label = bm[2].replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
       if (!label || label.length < 2) continue;
+
+      // Skip explicitly excluded auth labels
+      if (E1_AUTH_EXCLUDED_LABELS.test(label)) {
+        console.log(`E1 SUPPRESSED (auth-excluded label): "${label}" in ${filePath}`);
+        continue;
+      }
+
       if (!E1_HIGH_IMPACT_KEYWORDS.test(label) && !E1_HIGH_IMPACT_KEYWORDS.test(attrs)) continue;
 
       // Classify CTA type
       let ctaType = 'destructive';
       if (/\b(subscribe|buy|purchase|pay|upgrade|checkout)\b/i.test(label)) ctaType = 'financial';
-      if (/\b(accept|agree|share|consent)\b/i.test(label)) ctaType = 'data-sharing';
+      if (/\b(share\s*data|export\s*data|grant\s*access|connect\s*account|authorize)\b/i.test(label)) ctaType = 'data-sharing';
 
-      // Collect nearby text (300 chars before and after the CTA)
-      const regionStart = Math.max(0, bm.index - 300);
-      const regionEnd = Math.min(content.length, bm.index + bm[0].length + 300);
+      // Collect nearby text (500 chars before and after the CTA for better disclosure detection)
+      const regionStart = Math.max(0, bm.index - 500);
+      const regionEnd = Math.min(content.length, bm.index + bm[0].length + 500);
       const region = content.slice(regionStart, regionEnd);
 
       const nearbyText: string[] = [];
-      // Extract headings
       const hRe = /<h([1-6])\b[^>]*>([^<]{2,80})<\/h\1>/gi;
       let hm;
       while ((hm = hRe.exec(region)) !== null) {
         nearbyText.push(`h${hm[1]}: ${hm[2].replace(/\{[^}]*\}/g, '').trim()}`);
       }
-      // Extract paragraph/span text
-      const pRe = /<(?:p|span|div)\b[^>]*>([^<]{3,120})<\/(?:p|span|div)>/gi;
+      const pRe = /<(?:p|span|div|label)\b[^>]*>([^<]{3,150})<\/(?:p|span|div|label)>/gi;
       let pm;
       while ((pm = pRe.exec(region)) !== null) {
         const text = pm[1].replace(/\{[^}]*\}/g, '').trim();
-        if (text.length >= 3 && text.length <= 120) nearbyText.push(text);
+        if (text.length >= 3 && text.length <= 150) nearbyText.push(text);
       }
 
       const hasWarningText = E1_WARNING_WORDS.test(region);
       const hasPricingText = E1_PRICING_WORDS.test(region);
-      // Check for confirmation dialog in the same file
       const hasConfirmationDialog = E1_CONFIRMATION_PATTERNS.test(content);
+
+      // Extract disclosure terms and friction mechanisms from the full file (includes modals)
+      const disclosureTermsFound = extractE1DisclosureTerms(content);
+      const frictionMechanisms = extractE1FrictionMechanisms(content);
+
+      // DISCLOSURE + CONFIRMATION PASS-THROUGH:
+      // If strong disclosure exists AND confirmation dialog present, suppress the bundle
+      const hasStrongDisclosure = disclosureTermsFound.length > 0;
+      const hasFriction = frictionMechanisms.length > 0;
+      const labelMentionsAction = /\b(delete|remove|erase|destroy|cancel|unsubscribe)\b/i.test(label);
+
+      let suppressed = false;
+      let suppressionReason: string | undefined;
+
+      if (hasStrongDisclosure && hasConfirmationDialog) {
+        // CTA label is descriptive AND disclosure + confirmation exist → full pass
+        if (labelMentionsAction) {
+          suppressed = true;
+          suppressionReason = `Descriptive CTA label ("${label}") + strong disclosure (${disclosureTermsFound.slice(0, 3).join(', ')}) + confirmation dialog`;
+        }
+        // Even with ambiguous label, if friction is present → full pass
+        else if (hasFriction) {
+          suppressed = true;
+          suppressionReason = `Disclosure (${disclosureTermsFound.slice(0, 3).join(', ')}) + confirmation + friction (${frictionMechanisms.join(', ')})`;
+        }
+        // Ambiguous label + disclosure + confirmation but no friction → still suppress (disclosure is sufficient)
+        else {
+          suppressed = true;
+          suppressionReason = `Strong disclosure (${disclosureTermsFound.slice(0, 3).join(', ')}) + confirmation dialog present`;
+        }
+      }
+
+      if (suppressed) {
+        console.log(`E1 SUPPRESSED (disclosure pass-through): "${label}" in ${filePath} — ${suppressionReason}`);
+        continue; // Do not include in bundles sent to LLM
+      }
 
       bundles.push({
         filePath,
@@ -5245,6 +5336,9 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
         hasConfirmationDialog,
         hasWarningText,
         hasPricingText,
+        disclosureTermsFound,
+        frictionMechanisms,
+        suppressed: false,
       });
     }
 
@@ -5254,13 +5348,22 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
     while ((ibm = iconBtnRe.exec(content)) !== null) {
       const label = ibm[2] || ibm[3] || '';
       if (!label || !E1_HIGH_IMPACT_KEYWORDS.test(label)) continue;
-      // Avoid duplicates
+      if (E1_AUTH_EXCLUDED_LABELS.test(label)) continue;
       if (bundles.some(b => b.filePath === filePath && b.ctaLabel === label)) continue;
 
       let ctaType = 'destructive';
       if (/\b(subscribe|buy|purchase|pay|upgrade|checkout)\b/i.test(label)) ctaType = 'financial';
 
       const hasConfirmationDialog = E1_CONFIRMATION_PATTERNS.test(content);
+      const disclosureTermsFound = extractE1DisclosureTerms(content);
+      const frictionMechanisms = extractE1FrictionMechanisms(content);
+
+      // Apply same disclosure pass-through
+      if (disclosureTermsFound.length > 0 && hasConfirmationDialog) {
+        console.log(`E1 SUPPRESSED (icon btn disclosure pass-through): "${label}" in ${filePath}`);
+        continue;
+      }
+
       bundles.push({
         filePath,
         ctaLabel: label,
@@ -5269,6 +5372,9 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
         hasConfirmationDialog,
         hasWarningText: false,
         hasPricingText: false,
+        disclosureTermsFound,
+        frictionMechanisms,
+        suppressed: false,
       });
     }
   }
@@ -5597,16 +5703,23 @@ function formatE3FindingsForPrompt(findings: E3Finding[]): string {
 }
 
 function formatE1EvidenceBundleForPrompt(bundles: E1EvidenceBundle[]): string {
-  if (bundles.length === 0) return '';
+  // Filter out suppressed bundles (should already be filtered, but safety net)
+  const activeBundles = bundles.filter(b => !b.suppressed);
+  if (activeBundles.length === 0) return '';
   const lines = [
     '[E1_EVIDENCE_BUNDLE]',
-    'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence. Evaluate ONLY the extracted CTA labels and nearby UI text.',
+    'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence.',
+    'Evaluate ONLY the extracted CTA labels and nearby UI text.',
+    'NOTE: Bundles where strong disclosure + confirmation dialog are present have ALREADY been filtered out.',
+    'The bundles below represent actions where disclosure may be missing or insufficient.',
   ];
-  for (const b of bundles) {
+  for (const b of activeBundles) {
     lines.push(`\n--- Location: ${b.filePath} ---`);
     lines.push(`  CTA: "${b.ctaLabel}" (type: ${b.ctaType})`);
     if (b.nearbyText.length > 0) lines.push(`  Nearby text: ${b.nearbyText.join(' | ')}`);
     lines.push(`  Flags: confirmation=${b.hasConfirmationDialog}, warning=${b.hasWarningText}, pricing=${b.hasPricingText}`);
+    if (b.disclosureTermsFound.length > 0) lines.push(`  Disclosure terms found: ${b.disclosureTermsFound.join(', ')}`);
+    if (b.frictionMechanisms.length > 0) lines.push(`  Friction mechanisms: ${b.frictionMechanisms.join(', ')}`);
   }
   lines.push('[/E1_EVIDENCE_BUNDLE]');
   return lines.join('\n');
