@@ -240,7 +240,23 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
 
               {/* Explanation */}
               <div className="pt-1">
-              <p className="text-sm text-foreground leading-relaxed">{element.explanation}</p>
+                {element.explanation.includes('Issue reason:') && element.explanation.includes('Recommended fix:') ? (
+                  <>
+                    {element.explanation.split('\n').filter(Boolean).map((line, i) => {
+                      const isLabel = /^(Issue reason|Recommended fix):/.test(line.trim());
+                      return (
+                        <p key={i} className={cn(
+                          'text-sm leading-relaxed',
+                          isLabel ? 'font-medium text-foreground' : 'text-foreground'
+                        )}>
+                          {line.trim()}
+                        </p>
+                      );
+                    })}
+                  </>
+                ) : (
+                  <p className="text-sm text-foreground leading-relaxed">{element.explanation}</p>
+                )}
               </div>
             </DetailContainer>
           )}
