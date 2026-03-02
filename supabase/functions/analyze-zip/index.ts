@@ -671,7 +671,12 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     }
 
     // U1.3: Generic CTA labels (suppressed if label already covered by U1.2 in same file)
+    // Context-aware suppression: detect stepper, strong headings, single primary CTA
     const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
+
+    // Pre-compute context signals for U1.3 suppression
+    const u13ContextSignals = detectU13ContextSignals(content, allButtons, buttonImpl);
+
     for (const btn of allButtons) {
       const labelLower = btn.label.trim().toLowerCase();
       if (GENERIC_LABELS.has(labelLower)) {
@@ -688,18 +693,23 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
         const dedupeKey = `U1.3|${filePath}|${labelLower}`;
         if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
 
+        // Context-aware suppression: suppress if labeled stepper or strong heading present
+        if (u13ContextSignals.hasLabeledStepper || u13ContextSignals.hasStrongNearbyHeading(btn.offset)) {
+          console.log(`[U1.3] context-suppressed: "${btn.label}" in ${filePath} — stepper=${u13ContextSignals.hasLabeledStepper}, heading=${u13ContextSignals.hasStrongNearbyHeading(btn.offset)}`);
+          continue;
+        }
+
         // Signal-based confidence for U1.3
         const HIGH_RISK_GENERICS = new Set(['continue', 'next', 'submit', 'save', 'confirm', 'ok']);
-        let u13Confidence = 0.55;
-        // +0.10 if label is in high-risk generic set
+        let u13Confidence = 0.40; // lowered base from 0.55
+        // +0.10 if label is in high-risk generic set AND no context
         if (HIGH_RISK_GENERICS.has(labelLower)) {
           u13Confidence += 0.10;
         }
         // +0.05 if no contextual heading or nearby descriptive text detected
-        // Heuristic: check if there's an <h1-h6> or <label> near the button in the file
         const hasNearbyHeading = /<(?:h[1-6]|label|legend)\b[^>]*>/.test(content);
         if (!hasNearbyHeading) {
-          u13Confidence += 0.05;
+          u13Confidence += 0.10;
         }
         // +0.05 if button is visually emphasized (high-emphasis styling)
         const btnEmphasis = buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)
@@ -712,7 +722,11 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
         if (btnEmphasis === 'high') {
           u13Confidence += 0.05;
         }
-        u13Confidence = Math.min(u13Confidence, 0.80);
+        // +0.05 if single primary CTA (no competing buttons → less ambiguity, but still generic)
+        if (!u13ContextSignals.isSinglePrimaryCTA) {
+          u13Confidence += 0.05;
+        }
+        u13Confidence = Math.min(u13Confidence, 0.75);
 
         findings.push({
           subCheck: 'U1.3',
@@ -1532,6 +1546,126 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
   console.log(`[U3] Detection: ${findings.length} raw → ${mergedFindings.length} after merge → ${capped.length} after capping (${subChecks.size} sub-checks)`);
 
   return capped;
+}
+
+// =====================
+// U1.3 Context-Aware Suppression Signals
+// =====================
+// Detects labeled steppers, strong headings near CTAs, and single-primary-CTA patterns
+// to suppress generic CTA labels when context makes the action clear.
+
+interface U13ContextResult {
+  hasLabeledStepper: boolean;
+  hasStrongNearbyHeading: (btnOffset: number) => boolean;
+  isSinglePrimaryCTA: boolean;
+  contextSignals: string[];
+}
+
+function detectU13ContextSignals(
+  content: string,
+  allButtons: ButtonUsage[],
+  buttonImpl: { filePath: string; config: CvaVariantConfig } | null,
+): U13ContextResult {
+  const contextSignals: string[] = [];
+
+  // (A) Labeled stepper detection
+  // Look for 3+ step items with visible text labels and an active step indicator
+  let hasLabeledStepper = false;
+
+  // Pattern 1: Step/Stepper components with labeled items
+  const stepItemRe = /<(?:Step|StepItem|StepTrigger|StepperItem|StepLabel)\b[^>]*>([^<]{2,})<\//gi;
+  const stepItemMatches = content.match(stepItemRe);
+  if (stepItemMatches && stepItemMatches.length >= 3) {
+    // Check for active step indicator
+    const hasActiveStep = /(?:aria-current\s*=\s*["']step["']|data-state\s*=\s*["']active["']|isActive|currentStep|activeStep|step\s*===?\s*\d|className\s*=\s*[^>]*(?:active|current|selected))/i.test(content);
+    if (hasActiveStep) {
+      hasLabeledStepper = true;
+      contextSignals.push('stepper_labels');
+      contextSignals.push('active_step_indicator');
+    }
+  }
+
+  // Pattern 2: Steps defined as array with label/title properties
+  const stepsArrayRe = /(?:const|let)\s+\w*[Ss]teps\w*\s*=\s*\[([^\]]{20,})\]/s;
+  const stepsArrayMatch = content.match(stepsArrayRe);
+  if (stepsArrayMatch) {
+    const arrayContent = stepsArrayMatch[1];
+    const labelEntries = arrayContent.match(/(?:label|title|name)\s*:\s*["'][^"']+["']/gi);
+    if (labelEntries && labelEntries.length >= 3) {
+      const hasStepTracking = /(?:currentStep|activeStep|step\s*===?\s*\d|setStep|useState.*step)/i.test(content);
+      if (hasStepTracking) {
+        hasLabeledStepper = true;
+        contextSignals.push('stepper_array_labels');
+        contextSignals.push('step_state_tracking');
+      }
+    }
+  }
+
+  // Pattern 3: Stepper/Progress component usage with step count
+  const stepperComponentRe = /<(?:Stepper|Steps|ProgressSteps|StepWizard)\b[^>]*>/i;
+  if (stepperComponentRe.test(content)) {
+    const stepChildRe = /<(?:Step|StepItem)\b/gi;
+    const stepChildren = content.match(stepChildRe);
+    if (stepChildren && stepChildren.length >= 3) {
+      hasLabeledStepper = true;
+      contextSignals.push('stepper_component');
+    }
+  }
+
+  // (B) Strong nearby heading detection
+  // Find all heading positions in the content
+  const headingPositions: Array<{ offset: number; text: string }> = [];
+  // Semantic headings
+  const headingRe = /<(?:h[1-3])\b[^>]*>([^<]+)</gi;
+  let hMatch;
+  while ((hMatch = headingRe.exec(content)) !== null) {
+    const text = hMatch[1].trim();
+    if (text.length >= 5) { // meaningful heading text
+      headingPositions.push({ offset: hMatch.index, text });
+    }
+  }
+  // Heading-like typography (text-2xl+ with font-bold/semibold)
+  const typoHeadingRe = /<(?:p|span|div)\b[^>]*className\s*=\s*["'][^"']*\b(?:text-(?:2xl|3xl|4xl|5xl))\b[^"']*\b(?:font-(?:bold|semibold))\b[^"']*["'][^>]*>([^<]+)</gi;
+  while ((hMatch = typoHeadingRe.exec(content)) !== null) {
+    const text = hMatch[1].trim();
+    if (text.length >= 5) {
+      headingPositions.push({ offset: hMatch.index, text });
+    }
+  }
+  // Also match reversed order (font-bold before text-2xl)
+  const typoHeadingRe2 = /<(?:p|span|div)\b[^>]*className\s*=\s*["'][^"']*\b(?:font-(?:bold|semibold))\b[^"']*\b(?:text-(?:2xl|3xl|4xl|5xl))\b[^"']*["'][^>]*>([^<]+)</gi;
+  while ((hMatch = typoHeadingRe2.exec(content)) !== null) {
+    const text = hMatch[1].trim();
+    if (text.length >= 5 && !headingPositions.some(h => h.offset === hMatch!.index)) {
+      headingPositions.push({ offset: hMatch.index, text });
+    }
+  }
+
+  const HEADING_PROXIMITY_CHARS = 2000; // ~25 lines
+  const hasStrongNearbyHeading = (btnOffset: number): boolean => {
+    return headingPositions.some(h => {
+      const dist = btnOffset - h.offset;
+      return dist >= 0 && dist <= HEADING_PROXIMITY_CHARS;
+    });
+  };
+  if (headingPositions.length > 0) contextSignals.push('nearby_heading');
+
+  // (C) Single primary CTA detection
+  let highEmphasisCount = 0;
+  for (const btn of allButtons) {
+    const emph = buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)
+      ? classifyButtonEmphasis({
+          resolvedVariant: btn.variant || buttonImpl.config.defaultVariant || 'default',
+          variantConfig: buttonImpl.config,
+          instanceClassName: btn.className,
+        }).emphasis
+      : classifyTailwindEmphasis(btn.className);
+    if (emph === 'high') highEmphasisCount++;
+  }
+  const isSinglePrimaryCTA = highEmphasisCount <= 1;
+  if (isSinglePrimaryCTA) contextSignals.push('single_primary_cta');
+
+  return { hasLabeledStepper, hasStrongNearbyHeading, isSinglePrimaryCTA, contextSignals };
 }
 
 
