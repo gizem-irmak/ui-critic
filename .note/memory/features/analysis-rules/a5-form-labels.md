@@ -27,15 +27,31 @@ Maps React component names to implied control types:
 - RadioGroupItem → radio
 - Slider → slider (role=slider)
 
+### Component-Aware Label Resolution (Wrapper `label` Prop)
+For wrapper components (Input, Textarea, etc.), the detector checks for a `label` prop in addition to standard labeling methods:
+- `label="Email"` (static string) → treated as programmatically labeled → **PASS, no A5 finding**
+- `label={t('email')}` (dynamic/runtime value) → cannot be statically verified → **Potential (borderline, confidence 0.50)**
+- No `label` prop and no other labeling → standard A5 detection applies
+
+This prevents false positives when custom wrapper components (e.g., `<Input label="Email" />`) internally render `<label htmlFor={id}>` + `<input id={id}>`.
+
+### Internal Component Suppression
+Files matching `components/ui/` are excluded from A5 scanning entirely. This prevents flagging internal `<input>` elements inside wrapper components that handle label association internally via generated ids (e.g., `useId()`).
+
+### Dynamic ID Handling
+- If `id` prop is present but dynamic (e.g., `id={id}`, `id={useId()}`), the report shows `id=(dynamic)` instead of `id: (none)`
+- Static `id` values are shown as-is: `id="email"`
+
 ### Prop Parsing (supports JSX expression syntax)
-Props (aria-label, aria-labelledby, id, name, placeholder) on wrapper components are parsed identically to native elements. Both static (`aria-label="X"`) and JSX expression (`aria-label={"X"}`, `aria-label={'X'}`) syntax are recognized. A `<Input aria-label="X" />` is treated as labeled.
+Props (aria-label, aria-labelledby, id, name, placeholder, label) on wrapper components are parsed identically to native elements. Both static (`aria-label="X"`) and JSX expression (`aria-label={"X"}`, `aria-label={'X'}`) syntax are recognized. A `<Input aria-label="X" />` is treated as labeled.
 
 ### Confirmed sub-checks (no confidence score)
-- **A5.1**: Missing accessible label (no `<label>`, `aria-label`, or `aria-labelledby`). Title-only inputs remain A5.1.
+- **A5.1**: Missing accessible label (no `<label>`, `aria-label`, `aria-labelledby`, or wrapper `label` prop). Title-only inputs remain A5.1.
 - **A5.2**: Placeholder used as only label source.
 - **A5.3**: Broken label associations (mismatched `for`/`id`, duplicate IDs, or orphan labels).
 
 ### Potential sub-checks (with confidence score)
+- **A5.1 (dynamic label)**: Wrapper component has `label` prop with dynamic value — confidence 0.50 (borderline)
 - **A5.4**: Generic label text ("Field", "Input", etc.) — confidence 0.88
 - **A5.5**: Duplicate label text across controls in same file — confidence 0.90
 - **A5.6**: Noisy `aria-labelledby` (>60 chars or advisory tokens) — confidence 0.82
@@ -44,6 +60,7 @@ Props (aria-label, aria-labelledby, id, name, placeholder) on wrapper components
 - **`<label htmlFor>` / `<Label htmlFor>`**: Both lowercase and uppercase Label components with `htmlFor`/`for` props are recognized.
 - **shadcn FormLabel/FormControl**: Controls inside `<FormControl>` within a `<FormItem>` that also contains `<FormLabel>` are treated as labeled.
 - **Wrapped in label/Label**: Controls wrapped in `<label>` or `<Label>` are recognized.
+- **Wrapper `label` prop**: Static `label="..."` on wrapper components is treated as labeled.
 - **`data-testid` exclusion**: The `id` attribute regex uses negative lookbehind to prevent `data-testid`, `data-id`, etc. from being matched as `id`.
 - **aria-describedby**: Does NOT count as a label (supporting evidence only).
 
@@ -55,8 +72,8 @@ Props (aria-label, aria-labelledby, id, name, placeholder) on wrapper components
 - `wcagCriteria: string[]` — always includes `["1.3.1", "3.3.2"]`, ARIA roles add `"4.1.2"`
 - `confidence` is ONLY present on potential findings — confirmed items must NOT include it
 - `selectorHints: string[]` — e.g., `['id="email"', 'name="email"', 'aria-label="Search"']`
-- `controlId?: string` — the actual `id` prop if present
-- `labelingMethod?: string` — includes evidence, e.g., `aria-label="Search patients"`, `label[htmlFor="foo"]`, `none`
+- `controlId?: string` — the actual `id` prop if present; `"(dynamic)"` if dynamic
+- `labelingMethod?: string` — includes evidence, e.g., `label prop (wrapper)`, `aria-label="Search patients"`, `label[htmlFor="foo"]`, `label prop (dynamic — not verified)`, `none`
 
 ## Suppression
 - A5.3 (broken label) suppresses A5.1 (missing label) in the same file

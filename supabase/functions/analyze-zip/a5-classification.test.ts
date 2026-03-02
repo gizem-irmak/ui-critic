@@ -421,7 +421,19 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const controlId = (controlIdParsed.isNonEmpty && !controlIdParsed.isDynamic && controlIdParsed.value)
         ? controlIdParsed.value
         : null;
+      const hasDynamicId = controlIdParsed.isNonEmpty && controlIdParsed.isDynamic;
       const hasExplicitLabel = !!controlId && labelForTargets.has(controlId);
+
+      // Component-aware label resolution: check for `label` prop on wrapper components
+      let hasLabelProp = false;
+      let labelPropIsDynamic = false;
+      if (isReactComponent && A5_WRAPPER_COMPONENT_MAP[tag]) {
+        const labelPropParsed = parseA5AttributeFromTag(fullMatch, 'label');
+        if (labelPropParsed.present && labelPropParsed.isNonEmpty) {
+          hasLabelProp = true;
+          labelPropIsDynamic = labelPropParsed.isDynamic;
+        }
+      }
 
       const beforeControl = content.slice(Math.max(0, index - 500), index);
       const lastLabelOpen = Math.max(beforeControl.lastIndexOf('<label'), beforeControl.lastIndexOf('<Label'));
@@ -430,7 +442,8 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
 
       const isInFormControl = formControlRanges.some(r => index >= r.start && index <= r.end);
 
-      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl;
+      const hasValidLabel = hasAriaLabel || hasAriaLabelledBy || hasExplicitLabel || isWrappedInLabel || isInFormControl || (hasLabelProp && !labelPropIsDynamic);
+      const hasDynamicLabelOnly = hasLabelProp && labelPropIsDynamic && !hasAriaLabel && !hasAriaLabelledBy && !hasExplicitLabel && !isWrappedInLabel && !isInFormControl;
 
       const placeholderMatch = attrs.match(/placeholder\s*=\s*(?:"([^"]+)"|'([^']+)')/);
       const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2];
@@ -441,6 +454,27 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       const label = placeholder || elementName || `<${displayTag}> control`;
 
       if (hasValidLabel) continue;
+
+      // Dynamic label prop on wrapper → downgrade to Potential
+      if (hasDynamicLabelOnly) {
+        const dedupeKey = `A5.1|${filePath}|${tag}|${label}|${lineNumber}|dynamic-label`;
+        if (!seenKeys.has(dedupeKey)) {
+          seenKeys.add(dedupeKey);
+          findings.push({
+            elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
+            elementLabel: label, elementType: displayTag, sourceLabel: label, filePath,
+            subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'potential',
+            detection: `<${displayTag}> has label prop but value is dynamic`,
+            evidence: `label prop present but runtime-dependent`,
+            explanation: `Wrapper has dynamic label prop that cannot be statically verified.`,
+            wcagCriteria: ['1.3.1', '3.3.2'],
+            deduplicationKey: dedupeKey,
+            startLine: lineNumber,
+            endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
+          });
+        }
+        continue;
+      }
 
       if (hasPlaceholder && !hasValidLabel) {
         const dedupeKey = `A5.2|${filePath}|${tag}|${label}|${lineNumber}`;
@@ -1474,4 +1508,63 @@ Deno.test("A5 renders without crash when startLine is undefined", () => {
   assert(orphan !== undefined, "Should find orphan label");
   // startLine may or may not be set for orphan labels — just ensure no crash
   assert(orphan.startLine === undefined || typeof orphan.startLine === 'number', "startLine should be undefined or number");
+});
+
+// ===== WRAPPER COMPONENT LABEL PROP TESTS =====
+
+Deno.test("A5: <Input label='Email' /> with static label prop = PASS (no A5)", () => {
+  const files = new Map([["src/SignIn.tsx", `
+    import { Input } from "@/components/ui/input";
+    export function SignIn() {
+      return <Input label="Email" type="email" placeholder="Enter email" />;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Input with static label prop should be considered labeled");
+});
+
+Deno.test("A5: <Input label={t('email')} /> with dynamic label prop = Potential", () => {
+  const files = new Map([["src/SignIn.tsx", `
+    import { Input } from "@/components/ui/input";
+    export function SignIn() {
+      return <Input label={t('email')} type="email" />;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 1, "Input with dynamic label prop should produce one finding");
+  assertEquals(results[0].classification, "potential", "Dynamic label prop should be classified as potential");
+});
+
+Deno.test("A5: <Input type='email' /> with NO label prop = Confirmed", () => {
+  const files = new Map([["src/SignIn.tsx", `
+    import { Input } from "@/components/ui/input";
+    export function SignIn() {
+      return <Input type="email" />;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 1, "Input with no label prop should produce one finding");
+  assertEquals(results[0].classification, "confirmed", "Missing label should be classified as confirmed");
+});
+
+Deno.test("A5: raw <input type='email' /> with no label = Confirmed", () => {
+  const files = new Map([["src/Page.tsx", `
+    export function Page() {
+      return <input type="email" name="email" />;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 1, "Raw input with no label should be flagged");
+  assertEquals(results[0].classification, "confirmed");
+});
+
+Deno.test("A5: <Input label='Password' aria-label='Password' /> with both = PASS", () => {
+  const files = new Map([["src/SignUp.tsx", `
+    import { Input } from "@/components/ui/input";
+    export function SignUp() {
+      return <Input label="Password" aria-label="Password" type="password" />;
+    }
+  `]]);
+  const results = detectA5FormLabels(files);
+  assertEquals(results.length, 0, "Input with label prop and aria-label should be fully labeled");
 });
