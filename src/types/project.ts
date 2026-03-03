@@ -546,13 +546,15 @@ export interface U3ElementSubItem {
   detection?: string;
   evidence?: string;
   textPreview?: string; // First 80-120 chars of truncated content, or "(dynamic text: varName)" for expressions
-  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4' | 'U3.D5' | 'U3.D6';
+  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4' | 'U3.D5' | 'U3.D6' | 'U3.D7';
   subCheckLabel: string;
   confidence: number;
   advisoryGuidance?: string;
   deduplicationKey: string;
   // Element metadata
-  truncationType?: string; // truncate, line-clamp, hidden, overflow-clip, nowrap, scroll-trap
+  truncationKind?: 'css' | 'programmatic'; // CSS class vs code-based truncation
+  truncationType?: string; // truncate, line-clamp, hidden, overflow-clip, nowrap, scroll-trap, slice
+  sliceLength?: number; // For programmatic: the N in .slice(0, N)
   textLength?: number | 'dynamic'; // static char count or 'dynamic'
   triggerReason?: string; // why NOT suppressed
   expandDetected?: boolean; // whether expand/tooltip/toggle was found nearby
