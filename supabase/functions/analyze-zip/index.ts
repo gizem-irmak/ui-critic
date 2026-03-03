@@ -1120,6 +1120,35 @@ const U3_HEADER_STYLE_RE = /\b(?:uppercase|tracking-wide|tracking-wider|text-xs|
 // Icon component names — skip these as carrier/report elements
 const U3_ICON_COMPONENT_RE = /^(?:Icon|[A-Z][a-zA-Z]*Icon|Lucide[A-Z]|ChevronRight|ChevronLeft|ChevronDown|ChevronUp|ArrowLeft|ArrowRight|Check|X|Plus|Minus|Search|Loader2?|Spinner|Eye|EyeOff|Mail|Phone|Calendar|Clock|User|Users|Star|Heart|Bell|Settings|Menu|MoreHorizontal|MoreVertical|Trash|Edit|Copy|Download|Upload|ExternalLink|Link|Info|AlertCircle|AlertTriangle|HelpCircle|Filter|SortAsc|SortDesc|Grip|GripVertical|Dot|Circle|Square|Badge|Shield|Lock|Unlock|Globe|Map|MapPin|Home|Building|Briefcase|Book|FileText|File|Folder|Image|Camera|Video|Mic|Volume|Play|Pause|SkipForward|SkipBack|RefreshCw|RotateCw|ZoomIn|ZoomOut|Maximize|Minimize|Sun|Moon|Cloud|Zap|Activity|TrendingUp|TrendingDown|BarChart|PieChart|Hash|AtSign|Paperclip|Send|MessageSquare|MessageCircle|Inbox|Archive|Bookmark|Flag|Tag|Terminal|Code|Database|Server|Wifi|Bluetooth|Monitor|Smartphone|Tablet|Watch|Cpu|HardDrive|Package|Box|Gift|ShoppingCart|ShoppingBag|CreditCard|DollarSign|Percent|Award|Trophy|Target|Crosshair|Navigation|Compass|Layers|Layout|Grid|List|Columns|Rows|Sidebar|PanelLeft|PanelRight|SplitSquare)$/;
 
+// Tags that render text — only these are eligible for U3 (case-insensitive HTML, case-sensitive React)
+const U3_TEXT_TAG_RE = /^(?:p|span|td|th|a|button|label|h[1-6]|li|div|section|article|main|header|footer|aside|figcaption|blockquote|pre|code|em|strong|small|dt|dd|summary|caption|TableCell|TableHead|CardTitle|CardDescription|Badge|Text|Paragraph|Title|Description|Heading|Label)$/;
+// Tags that NEVER render text — always ineligible
+const U3_NON_TEXT_TAG_RE = /^(?:svg|path|circle|rect|line|polyline|polygon|ellipse|g|defs|clipPath|mask|use|symbol|img|video|audio|source|track|canvas|iframe|br|hr|input|meta|link)$/i;
+
+/** Check if a carrier tag is a text-rendering element eligible for U3 */
+function u3IsTextElement(tag: string): boolean {
+  if (U3_NON_TEXT_TAG_RE.test(tag)) return false;
+  if (U3_ICON_COMPONENT_RE.test(tag)) return false;
+  if (U3_TEXT_TAG_RE.test(tag)) return true;
+  // Unknown React component — allow if not an icon (might render text)
+  return /^[A-Z]/.test(tag);
+}
+
+/** Check if a carrier has a strong truncation signal in its OWN className */
+function u3CarrierHasTruncSignal(carrierClasses: string): boolean {
+  return /\btruncate\b|\bline-clamp-\d+\b|\btext-ellipsis\b/.test(carrierClasses)
+    || (/\boverflow-hidden\b/.test(carrierClasses) && /\bwhitespace-nowrap\b/.test(carrierClasses));
+}
+
+/** Check if content preview is empty/whitespace — ineligible for U3 */
+function u3IsEmptyContent(textPreview: string | undefined): boolean {
+  if (!textPreview) return true;
+  const stripped = textPreview.replace(/\(dynamic text:.*?\)/g, '').trim();
+  // If there's a dynamic text marker, it's not empty
+  if (/\(dynamic text:/.test(textPreview)) return false;
+  return stripped.length === 0;
+}
+
 /** Gate 1: Content risk assessment — does this content have meaningful truncation risk? */
 function u3ContentRiskGate(content: string, pos: number, textPreview: string | undefined, context: string): {
   pass: boolean;
@@ -1358,7 +1387,17 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
 
         const carrier = u3FindCarrierElement(content, pos);
+
+        // ── TEXT-ELEMENT GATE: carrier must be a text-rendering element ──
+        if (carrier && !u3IsTextElement(carrier.tag)) continue;
+
+        // ── SAME-NODE GATE: truncation signal must be on the carrier's OWN className ──
+        if (carrier && !carrier.className.includes(m[0])) continue;
+
         const textPreview = extractU3CarrierContentPreview(content, pos, carrier);
+
+        // ── EMPTY CONTENT GATE ──
+        if (u3IsEmptyContent(textPreview)) continue;
 
         // ── GATE 2 (first): Header/label row suppression ──
         if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
@@ -1384,9 +1423,9 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         }
         if (u3HasExpandMechanism(content, pos, 20)) continue;
 
+        // Extract tokens ONLY from carrier className — never from context
         const carrierClasses = carrier ? carrier.className : '';
-        // Extract tokens from carrier className first; fall back to context only if carrier has none
-        const truncationTokens = u3ExtractTruncationTokens(carrierClasses || context);
+        const truncationTokens = u3ExtractTruncationTokens(carrierClasses);
         if (truncationTokens.length === 0) truncationTokens.push(m[0]);
 
         const confidence = u3ComputeConfidence({
@@ -1466,12 +1505,22 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
     while ((nwm = nowrapRe.exec(content)) !== null) {
       const pos = nwm.index;
       const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
-      if (!/overflow-hidden\b/.test(context)) continue;
-      // Strict: nowrap + overflow-hidden alone is weak — require width constraint too
-      if (!/\bw-\d+\b|\bmax-w-\S+\b/.test(context)) continue;
 
       const nwCarrier = u3FindCarrierElement(content, pos);
+
+      // ── TEXT-ELEMENT GATE ──
+      if (nwCarrier && !u3IsTextElement(nwCarrier.tag)) continue;
+
+      // ── SAME-NODE GATE: both whitespace-nowrap AND overflow-hidden must be on the carrier's OWN className ──
+      const nwCarrierClasses = nwCarrier ? nwCarrier.className : '';
+      if (!(/\bwhitespace-nowrap\b/.test(nwCarrierClasses) && /\boverflow-hidden\b/.test(nwCarrierClasses))) continue;
+      // Also require width constraint on the SAME node
+      if (!/\bw-\d+\b|\bmax-w-\S+\b/.test(nwCarrierClasses)) continue;
+
       const textPreview = extractU3CarrierContentPreview(content, pos, nwCarrier);
+
+      // ── EMPTY CONTENT GATE ──
+      if (u3IsEmptyContent(textPreview)) continue;
 
       // ── GATE 2 (first): Header suppression ──
       if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
@@ -1500,7 +1549,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
-      const truncationTokens = u3ExtractTruncationTokens(context);
+      // Extract tokens ONLY from carrier className
+      const truncationTokens = u3ExtractTruncationTokens(nwCarrierClasses);
       if (truncationTokens.length === 0) truncationTokens.push('whitespace-nowrap', 'overflow-hidden');
 
       const confidence = u3ComputeConfidence({
@@ -1558,12 +1608,23 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
     while ((wcm = widthConstraintRe.exec(content)) !== null) {
       const pos = wcm.index;
       const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
-      if (!/overflow-hidden\b/.test(context)) continue;
-      // Skip if already has truncate/line-clamp (handled by D1 main)
-      if (/\btruncate\b|\bline-clamp-\d+\b|\btext-ellipsis\b/.test(context)) continue;
 
       const wcCarrier = u3FindCarrierElement(content, pos);
+
+      // ── TEXT-ELEMENT GATE ──
+      if (wcCarrier && !u3IsTextElement(wcCarrier.tag)) continue;
+
+      // ── SAME-NODE GATE: width constraint AND overflow-hidden must be on carrier's OWN className ──
+      const wcCarrierClasses = wcCarrier ? wcCarrier.className : '';
+      if (!wcCarrierClasses.includes(wcm[0])) continue;
+      if (!/\boverflow-hidden\b/.test(wcCarrierClasses)) continue;
+      // Skip if already has truncate/line-clamp (handled by D1 main)
+      if (/\btruncate\b|\bline-clamp-\d+\b|\btext-ellipsis\b/.test(wcCarrierClasses)) continue;
+
       const textPreview = extractU3CarrierContentPreview(content, pos, wcCarrier);
+
+      // ── EMPTY CONTENT GATE ──
+      if (u3IsEmptyContent(textPreview)) continue;
 
       // ── GATE 2 (first): Header suppression ──
       if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
@@ -1591,7 +1652,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
-      const truncationTokens = u3ExtractTruncationTokens(context);
+      // Extract tokens ONLY from carrier className
+      const truncationTokens = u3ExtractTruncationTokens(wcCarrierClasses);
       if (truncationTokens.length === 0) truncationTokens.push(wcm[0], 'overflow-hidden');
 
       const confidence = u3ComputeConfidence({
@@ -1659,24 +1721,33 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const isMapContext = /\.map\s*\(\s*\(?[a-zA-Z_][\w,\s{}:]*\)?\s*=>/s.test(before600);
         if (!isTableContext && !isMapContext) continue;
 
-        // Skip if already handled by D1 (has explicit truncate/line-clamp/text-ellipsis)
-        if (/\btruncate\b|\bline-clamp-\d+\b|\btext-ellipsis\b/.test(context)) continue;
+        const d6Carrier = u3FindCarrierElement(content, pos);
 
-        // B) Must have overflow-hidden or overflow-clip (or table-fixed on parent)
-        const hasOverflowClip = /\boverflow-hidden\b|\boverflow-clip\b/.test(context);
+        // ── TEXT-ELEMENT GATE ──
+        if (d6Carrier && !u3IsTextElement(d6Carrier.tag)) continue;
+
+        // ── SAME-NODE GATE: width constraint must be on carrier's OWN className ──
+        const d6CarrierClasses = d6Carrier ? d6Carrier.className : '';
+        if (!d6CarrierClasses.includes(d6m[0])) continue;
+
+        // Skip if already handled by D1 (has explicit truncate/line-clamp/text-ellipsis on same node)
+        if (/\btruncate\b|\bline-clamp-\d+\b|\btext-ellipsis\b/.test(d6CarrierClasses)) continue;
+
+        // B) Must have overflow-hidden or overflow-clip ON THE SAME NODE (or table-fixed on parent)
+        const hasOverflowClip = /\boverflow-hidden\b|\boverflow-clip\b/.test(d6CarrierClasses);
         const hasTableFixed = /\btable-fixed\b/.test(content.slice(Math.max(0, pos - 1000), pos));
         if (!hasOverflowClip && !hasTableFixed) continue;
 
         // C) Text overflow symptom: no explicit wrapping allowed
-        const hasWrap = /\bwhitespace-normal\b|\bbreak-words\b|\bbreak-all\b|\bword-break\b/.test(context);
+        const hasWrap = /\bwhitespace-normal\b|\bbreak-words\b|\bbreak-all\b|\bword-break\b/.test(d6CarrierClasses);
         if (hasWrap) continue;
-        // Must have nowrap or no wrapping directive (default table cell behavior with width constraint clips)
-        const hasNowrap = /\bwhitespace-nowrap\b/.test(context);
-        // If no nowrap AND no table-fixed, require overflow-hidden specifically on the cell
+        const hasNowrap = /\bwhitespace-nowrap\b/.test(d6CarrierClasses);
         if (!hasNowrap && !hasTableFixed && !hasOverflowClip) continue;
 
-        const d6Carrier = u3FindCarrierElement(content, pos);
         const textPreview = extractU3CarrierContentPreview(content, pos, d6Carrier);
+
+        // ── EMPTY CONTENT GATE ──
+        if (u3IsEmptyContent(textPreview)) continue;
 
         // Gate 2: Header suppression (first)
         if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
@@ -1686,8 +1757,9 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         if (!contentGate.pass) continue;
         if (contentGate.contentKind !== 'dynamic' && contentGate.contentKind !== 'list_mapped') continue;
 
-        // E) Gate 3: Recovery
+        // E) Gate 3: Recovery — full suppress if ANY recovery exists
         const recoverySignals = u3DetectRecoverySignals(content, pos, context);
+        if (recoverySignals.length > 0) continue;
         if ((contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped') && textPreview) {
           const dynVarMatch = textPreview.match(/\(dynamic text: ([^)]+)\)/);
           if (dynVarMatch) {
@@ -1697,17 +1769,14 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         }
         if (u3HasExpandMechanism(content, pos, 20)) continue;
 
-        // Full suppress if strong recovery exists
-        if (recoverySignals.some(s => ['title_attr', 'tooltip_component', 'hover_card_component', 'popover_component'].includes(s))) continue;
-
         const lineNumber = content.slice(0, pos).split('\n').length;
         const columnLabel = u3FindColumnLabel(content, pos);
         const dedupeKey = `U3.D6|${filePath}|${lineNumber}|${columnLabel || ''}`;
         if (seenKeys.has(dedupeKey)) continue;
         seenKeys.add(dedupeKey);
 
-        const d6CarrierClasses = d6Carrier ? d6Carrier.className : '';
-        const truncationTokens = u3ExtractTruncationTokens(d6CarrierClasses || context);
+        // Extract tokens ONLY from carrier className
+        const truncationTokens = u3ExtractTruncationTokens(d6CarrierClasses);
         if (truncationTokens.length === 0) truncationTokens.push(d6m[0]);
         if (hasOverflowClip && !truncationTokens.includes('overflow-hidden')) truncationTokens.push('overflow-hidden');
         if (hasNowrap && !truncationTokens.includes('whitespace-nowrap')) truncationTokens.push('whitespace-nowrap');
