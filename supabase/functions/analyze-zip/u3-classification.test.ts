@@ -967,3 +967,58 @@ Deno.test("U3 CONTENT BINDING: self-closing element returns undefined (no childr
   const preview = extractPreviewFromElement(elementContent);
   assertEquals(preview, undefined, "Self-closing with no children → undefined");
 });
+
+// ═══════════════════════════════════════════════════
+// U3.D7 — Programmatic truncation with ellipsis
+// ═══════════════════════════════════════════════════
+
+Deno.test("U3.D7: .slice(0, 8) + '...' triggers detection", () => {
+  const code = `<TableCell>{a.patient_id?.slice(0, 8)}...</TableCell>`;
+  // Must match: dynamic var + .slice(0, N) + ellipsis after }
+  assert(/\.(?:slice|substring|substr)\s*\(\s*0\s*,\s*\d+\s*\)/.test(code), "Has slice pattern");
+  assert(/\.\.\./.test(code), "Has ellipsis");
+});
+
+Deno.test("U3.D7: .slice without ellipsis does NOT trigger", () => {
+  const code = `<TableCell>{a.patient_id?.slice(0, 8)}</TableCell>`;
+  assert(/\.slice\s*\(\s*0\s*,\s*8\s*\)/.test(code), "Has slice");
+  // No ellipsis adjacent → should not trigger
+  const afterBrace = code.slice(code.indexOf('}') + 1, code.indexOf('}') + 10);
+  assert(!/^\.\.\./.test(afterBrace), "No ellipsis after closing brace");
+  assert(!/["'`]\.\.\./.test(code.slice(code.indexOf('.slice'))), "No ellipsis in expression");
+});
+
+Deno.test("U3.D7: inline ellipsis concat triggers", () => {
+  const code = `<span>{user.name.slice(0, 20) + "..."}</span>`;
+  assert(/\.slice\s*\(\s*0\s*,\s*20\s*\)/.test(code), "Has slice(0, 20)");
+  assert(/\+\s*["'`]\.\.\.["'`]/.test(code), "Has concat ellipsis");
+});
+
+Deno.test("U3.D7: ID field lowers confidence", () => {
+  const varName = "a.patient_id";
+  const isIdField = /(?:_id|\.id|uuid|token|hash|key)$/i.test(varName.toLowerCase());
+  assert(isIdField, "patient_id should be detected as ID field");
+  // Base 0.45 + 0.10 (ellipsis) - 0.20 (ID) = 0.35
+  let confidence = Math.round((0.45 + 0.10 - 0.20) * 100) / 100;
+  assertEquals(confidence, 0.35, "ID field confidence should be lowered");
+});
+
+Deno.test("U3.D7: non-ID field in map gets higher confidence", () => {
+  const varName = "msg.subject";
+  const isIdField = /(?:_id|\.id|uuid|token|hash|key)$/i.test(varName.toLowerCase());
+  assert(!isIdField, "subject should NOT be detected as ID field");
+  // Base 0.45 + 0.15 (map) + 0.10 (ellipsis) = 0.70
+  let confidence = 0.45 + 0.15 + 0.10;
+  assertEquals(confidence, 0.70, "Non-ID in map should get full confidence");
+});
+
+Deno.test("U3.D7: title attr suppresses finding", () => {
+  const code = `<td title={a.patient_id}>{a.patient_id?.slice(0, 8)}...</td>`;
+  assert(/title\s*=/.test(code), "Has title attribute → recovery signal");
+});
+
+Deno.test("U3.D7: .substring(0, N) also triggers", () => {
+  const code = `<span>{item.description.substring(0, 50)}...</span>`;
+  assert(/\.(?:slice|substring|substr)\s*\(\s*0\s*,\s*\d+\s*\)/.test(code), "substring triggers same pattern");
+  assert(/\.\.\./.test(code), "Has ellipsis");
+});

@@ -1776,6 +1776,104 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       }
     }
 
+    // --- U3.D7: Programmatic truncation with ellipsis ---
+    // Detects .slice(0,N)/.substring(0,N)/.substr(0,N) + "..." in JSX text nodes
+    {
+      const progTruncRe = /\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\.(?:slice|substring|substr)\s*\(\s*0\s*,\s*(\d+)\s*\)([^{}]*)\}/g;
+      let ptm;
+      while ((ptm = progTruncRe.exec(content)) !== null) {
+        const fullExpr = ptm[0];
+        const varPart = ptm[1].trim();
+        const sliceLen = parseInt(ptm[2], 10);
+        const afterSlice = ptm[3];
+        const pos = ptm.index;
+
+        // Must have ellipsis adjacent: inside the expression or immediately after the closing }
+        const hasEllipsisInExpr = /["'`]\.\.\.|["'`]…|\.\.\.["'`]|…["'`]|\+\s*["'`]\.\.\.["'`]|\+\s*["'`]…["'`]/.test(afterSlice);
+        const afterBrace = content.slice(pos + fullExpr.length, pos + fullExpr.length + 10);
+        const hasEllipsisAfter = /^\.\.\./.test(afterBrace) || /^…/.test(afterBrace);
+        if (!hasEllipsisInExpr && !hasEllipsisAfter) continue;
+
+        // Must be inside JSX (not in a comment or non-rendering context)
+        const before100 = content.slice(Math.max(0, pos - 100), pos);
+        if (/\/\/[^\n]*$/.test(before100)) continue;
+        if (/\/\*/.test(before100) && !/\*\//.test(before100)) continue;
+
+        const lineNumber = content.slice(0, pos).split('\n').length;
+        const context = content.slice(Math.max(0, pos - 300), Math.min(content.length, pos + 400));
+
+        // Header suppression
+        if (u3IsHeaderRow(content, pos, context, undefined)) continue;
+
+        // Build content preview from the exact expression
+        const cleanVar = varPart.replace(/^\(/, '').replace(/\)$/, '');
+        const contentPreview = `{${ptm[0].slice(1, -1)}${hasEllipsisAfter ? '...' : ''}}`;
+
+        // Recovery detection
+        const recoverySignals = u3DetectRecoverySignals(content, pos, context);
+        if (u3HasExpandMechanism(content, pos, 20)) continue;
+        if (recoverySignals.some(s => ['title_attr', 'tooltip_component', 'hover_card_component', 'popover_component'].includes(s))) continue;
+
+        // ID/token sensitivity detection
+        const varLower = cleanVar.toLowerCase();
+        const isIdField = /(?:_id|\.id|uuid|token|hash|key)$/i.test(varLower) || /\bid\b/.test((varLower.split('.').pop() || ''));
+
+        // Confidence scoring
+        let confidence = 0.45;
+        const before600 = content.slice(Math.max(0, pos - 600), pos);
+        if (/\.map\s*\(\s*\(?[a-zA-Z_][\w,\s{}:]*\)?\s*=>/s.test(before600)) confidence += 0.15;
+        if (hasEllipsisInExpr || hasEllipsisAfter) confidence += 0.10;
+        if (isIdField) confidence -= 0.20;
+        if (recoverySignals.length > 0) confidence -= 0.20;
+        confidence = Math.round(Math.max(0.15, Math.min(0.90, confidence)) * 100) / 100;
+
+        const columnLabel = u3FindColumnLabel(content, pos);
+        const dedupeKey = `U3.D7|${filePath}|${lineNumber}|${columnLabel || ''}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        const carrier = u3FindCarrierElement(content, pos);
+        const elementTag = carrier?.tag && !U3_ICON_COMPONENT_RE.test(carrier.tag) ? carrier.tag : undefined;
+
+        const idNote = isIdField ? ' (intentional ID shortening — verify user can access full value where needed)' : '';
+        const evidenceStr = columnLabel
+          ? `Column "${columnLabel}" cell uses .slice(0, ${sliceLen}) + ellipsis on ${cleanVar}${idNote}`
+          : `.slice(0, ${sliceLen}) + ellipsis on ${cleanVar} at ${fileName}:${lineNumber}${idNote}`;
+
+        findings.push({
+          subCheck: 'U3.D7',
+          subCheckLabel: 'Programmatic truncation with ellipsis',
+          classification: 'potential',
+          elementLabel: columnLabel ? `Truncated "${columnLabel}" cell (slice)` : 'Programmatic text truncation',
+          elementType: 'text',
+          filePath,
+          detection: `.slice(0, ${sliceLen}) + "..."${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
+          evidence: evidenceStr,
+          explanation: `Dynamic text is programmatically truncated to ${sliceLen} characters with ellipsis, but no mechanism to reveal the full value was detected.`,
+          confidence,
+          textPreview: `(dynamic text: ${cleanVar})`,
+          advisoryGuidance: 'Add a title attribute, tooltip, copy-to-clipboard, or link to a detail view to reveal the full value.',
+          deduplicationKey: dedupeKey,
+          truncationKind: 'programmatic',
+          truncationType: 'slice',
+          sliceLength: sliceLen,
+          textLength: 'dynamic',
+          triggerReason: `Programmatic .slice(0, ${sliceLen}) + ellipsis on ${cleanVar}`,
+          expandDetected: false,
+          elementTag,
+          varName: cleanVar.split('.').pop(),
+          lineNumber,
+          startLine: lineNumber,
+          endLine: lineNumber,
+          contentKind: 'dynamic',
+          recoverySignals: recoverySignals.length > 0 ? recoverySignals : undefined,
+          truncationTokens: [`.slice(0, ${sliceLen})`, '...'],
+          columnLabel: columnLabel || undefined,
+          contentPreview: contentPreview,
+        });
+      }
+    }
+
     // Only match heights that are realistically large enough to clip content (h-12+, max-h-*)
     // Small heights like h-4, h-5, h-6, h-8, h-10 are icon/label sizing, not content containers
     const heightPatterns = /\b(?:max-h-\d+|h-(?:1[2-9]|[2-9]\d|\d{3,}))\b/g;

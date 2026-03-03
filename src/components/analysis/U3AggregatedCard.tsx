@@ -17,8 +17,9 @@ function U3ElementItem({ element, compact = false }: {
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
-  // Title: "Truncated "Reason" cell (truncate)" or "Truncated text (truncate)"
+  // Title: "Truncated "Reason" cell (truncate)" or "Truncated text (slice)"
   const truncType = element.truncationType || 'truncate';
+  const truncKind = element.truncationKind || 'css';
   const displayLabel = element.columnLabel
     ? `Truncated "${element.columnLabel}" cell (${truncType})`
     : `Truncated text (${truncType})`;
@@ -89,6 +90,16 @@ function U3ElementItem({ element, compact = false }: {
               <FieldRow>
                 <FieldLabel>Tokens:</FieldLabel>
                 <FieldValue mono>{element.truncationTokens.join(', ')}</FieldValue>
+              </FieldRow>
+            )}
+
+            {(truncKind === 'programmatic' || element.sliceLength != null) && (
+              <FieldRow>
+                <FieldLabel>Truncation kind:</FieldLabel>
+                <FieldValue mono>
+                  {truncKind === 'programmatic' ? 'Programmatic' : 'CSS'}
+                  {element.sliceLength != null && ` (slice to ${element.sliceLength} chars)`}
+                </FieldValue>
               </FieldRow>
             )}
 
