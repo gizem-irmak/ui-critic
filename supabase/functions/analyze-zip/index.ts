@@ -6914,7 +6914,7 @@ function extractE1FrictionMechanisms(text: string): string[] {
   return mechanisms;
 }
 
-// Detect confirmation gates in a file: AlertDialog, confirm(), two-step state, etc.
+// Detect confirmation gates in a file: AlertDialog, confirm(), two-step state, disabled-until-confirm, etc.
 function detectE1ConfirmationGate(content: string): { hasGate: boolean; gateType: string } {
   const confirmMatch = content.match(E1_CONFIRMATION_PATTERNS);
   if (confirmMatch) {
@@ -6925,6 +6925,17 @@ function detectE1ConfirmationGate(content: string): { hasGate: boolean; gateType
   }
   if (/\bwindow\.confirm\s*\(/i.test(content) || /\bconfirm\s*\(\s*["'`]/i.test(content)) {
     return { hasGate: true, gateType: 'window.confirm' };
+  }
+  // Disabled-until-confirm gate: button disabled={!confirmState} or disabled={confirmState === false}
+  // Only match when the state variable name implies confirmation intent
+  const disabledConfirmMatch = content.match(/disabled=\{!(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\}/i)
+    || content.match(/disabled=\{(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*===\s*false\}/i);
+  if (disabledConfirmMatch) {
+    return { hasGate: true, gateType: `disabled-until-confirm (${disabledConfirmMatch[1]})` };
+  }
+  // Conditional execution gated by confirm state: confirmState && deleteAction()
+  if (/\b(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*&&\s*\w*(?:delete|remove|destroy)\w*\s*[.(]/i.test(content)) {
+    return { hasGate: true, gateType: 'conditional-confirm-gate' };
   }
   return { hasGate: false, gateType: '' };
 }
@@ -7391,8 +7402,8 @@ function shouldSuppressE1Bundle(opts: {
     if (frictionMechanisms.length > 0) {
       return { suppressed: true, reason: `${confirmGate.gateType} + friction (${frictionMechanisms.join(', ')}) in local scope` };
     }
-    // Destructive label + explicit confirmation pattern in LOCAL region = suppress
-    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state/i.test(confirmGate.gateType)) {
+   // Destructive label + explicit confirmation pattern in LOCAL region = suppress
+    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state|disabled-until-confirm|conditional-confirm-gate/i.test(confirmGate.gateType)) {
       return { suppressed: true, reason: `destructive label + ${confirmGate.gateType} in local scope` };
     }
   }
