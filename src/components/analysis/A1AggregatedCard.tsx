@@ -1,4 +1,4 @@
-import { AlertTriangle, AlertCircle, ShieldCheck, Info } from 'lucide-react';
+import { AlertTriangle, AlertCircle, ShieldCheck } from 'lucide-react';
 import { LocationBadge } from './LocationBadge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -10,7 +10,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import {
   RuleIdBadge, RuleHeader, ElementCountBadge, CardDescription,
   ComponentTitle, ElementItemWrapper, DetailContainer,
-  FieldRow, FieldLabel, FieldValue,
+  FieldRow, FieldLabel, FieldValue, AdvisoryBlock,
 } from './CardTypography';
 
 interface A1AggregatedCardProps {
@@ -365,15 +365,9 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           (!e.foreground?.resolved || !e.background?.resolved || e.backgroundStatus === 'uncertain' || e.backgroundStatus === 'unmeasurable' || e.contrastNotMeasurable) &&
           e.contrastRatio === undefined && !e.contrastRange
         ) && (
-          <div className={cn(
-            'rounded-lg bg-muted/50 border border-border mt-3',
-            compact ? 'p-2' : 'p-3'
-          )}>
-            <p className="text-sm text-muted-foreground italic flex items-start gap-1.5">
-              <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
-              <span><span className="font-medium not-italic">Advisory:</span> Background color could not be resolved through static analysis. Provide a rendered screenshot or enable runtime contrast sampling to compute effective contrast.</span>
-            </p>
-          </div>
+          <AdvisoryBlock compact={compact}>
+            Background color could not be resolved through static analysis. Provide a rendered screenshot or enable runtime contrast sampling to compute effective contrast.
+          </AdvisoryBlock>
         )}
         
       </CardContent>
