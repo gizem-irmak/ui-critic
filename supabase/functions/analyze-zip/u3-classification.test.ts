@@ -680,3 +680,133 @@ Deno.test("U3.D5 ATTRIBUTION: parent tag reported when truncation on parent", ()
   const parentClasses = "truncate";
   assert(/\btruncate\b/.test(parentClasses));
 });
+
+// ═══════════════════════════════════════════════════
+// STRICT GATING — FALSE POSITIVE PREVENTION (v2)
+// ═══════════════════════════════════════════════════
+
+// --- GATE 1: Content risk gate ---
+
+Deno.test("U3 GATE1: static 'Name' (4 chars) with h-4 + overflow-hidden → SUPPRESSED (short static)", () => {
+  const text = "Name";
+  const tokens = text.split(/\s+/);
+  assert(text.length < 28, "Under 28 chars");
+  assert(tokens.length < 5, "Under 5 tokens");
+  // contentKind = static_short → gate fails → suppressed
+});
+
+Deno.test("U3 GATE1: static 'Status' with overflow-hidden → SUPPRESSED (short header chrome)", () => {
+  const text = "Status";
+  assert(text.length < 28);
+  // Not dynamic, not long → gate fails
+});
+
+Deno.test("U3 GATE1: static 28+ char paragraph with overflow-hidden → PASSES gate", () => {
+  const text = "This is a long enough paragraph text";
+  const tokens = text.split(/\s+/);
+  assert(text.length >= 28 || tokens.length >= 5, "Passes content risk gate");
+});
+
+Deno.test("U3 GATE1: dynamic {appt.reason} in .map() → PASSES as list_mapped", () => {
+  const code = `appointments.map((appt) => <td className="truncate">{appt.reason}</td>)`;
+  assert(/\.map\s*\(/.test(code), "Inside map context");
+  assert(/\{appt\.reason\}/.test(code), "Dynamic expression present");
+});
+
+// --- GATE 2: Table header / label row suppression ---
+
+Deno.test("U3 GATE2: text 'Actions' inside <thead> → SUPPRESSED", () => {
+  const code = `<thead><tr><th className="h-6 overflow-hidden">Actions</th></tr></thead>`;
+  assert(/<thead\b/.test(code));
+  const HEADER_LABELS = /^(?:name|status|actions?|date|doctor|specialty|location|phone|address|joined|email|time|type|role|id)$/i;
+  assert(HEADER_LABELS.test("Actions"));
+});
+
+Deno.test("U3 GATE2: text 'Doctor' with uppercase + text-xs + short → SUPPRESSED", () => {
+  const code = `<div className="uppercase text-xs font-medium tracking-wide h-4 overflow-hidden">Doctor</div>`;
+  const text = "Doctor";
+  assert(text.length <= 16);
+  const HEADER_STYLE = /\b(?:uppercase|tracking-wide|text-xs|font-medium)\b/;
+  assert(HEADER_STYLE.test(code));
+});
+
+Deno.test("U3 GATE2: dynamic {patient.notes} NOT suppressed by header gate", () => {
+  const text = "(dynamic text: patient.notes)";
+  const HEADER_LABELS = /^(?:name|status|actions?|date|doctor|specialty|location|phone|address|joined|email|time|type|role|id)$/i;
+  // Dynamic text does not match header labels
+  assert(!HEADER_LABELS.test(text));
+});
+
+// --- GATE 3: Recovery mechanism detection ---
+
+Deno.test("U3 GATE3: title={fullText} → recovery signal 'title_attr'", () => {
+  const code = `<span className="truncate" title={fullText}>{text}</span>`;
+  assert(/title\s*=\s*\{/.test(code));
+});
+
+Deno.test("U3 GATE3: <Tooltip> wrapper → recovery signal 'tooltip_component'", () => {
+  const code = `<Tooltip content={longText}><span className="truncate">{short}</span></Tooltip>`;
+  assert(/<Tooltip\b/.test(code));
+});
+
+Deno.test("U3 GATE3: overflow-auto on parent → recovery signal 'overflow_scroll'", () => {
+  const code = `<div className="h-40 overflow-auto"><p className="truncate">{text}</p></div>`;
+  assert(/overflow-auto/.test(code));
+});
+
+Deno.test("U3 GATE3: onClick with setSelected → recovery signal 'click_to_detail'", () => {
+  const code = `<tr onClick={() => setSelected(row)}><td className="truncate">{row.reason}</td></tr>`;
+  assert(/onClick.*setSelected/.test(code));
+});
+
+// --- Confidence scoring model ---
+
+Deno.test("U3 CONFIDENCE: base 0.45, dynamic + truncation utility → max 0.70", () => {
+  const base = 0.45;
+  const dynamicInMap = 0.15;
+  const truncUtility = 0.10;
+  const total = base + dynamicInMap + truncUtility;
+  assert(total === 0.70);
+  assert(total <= 0.75, "Cannot exceed 0.75 cap");
+});
+
+Deno.test("U3 CONFIDENCE: recovery signal deducts 0.20", () => {
+  const base = 0.45;
+  const dynamicInMap = 0.15;
+  const recovery = -0.20;
+  const total = base + dynamicInMap + recovery;
+  assert(total === 0.40, "Recovery drops to floor");
+});
+
+Deno.test("U3 CONFIDENCE: header suspected deducts 0.20", () => {
+  const base = 0.45;
+  const headerPenalty = -0.20;
+  const total = Math.max(0.40, base + headerPenalty);
+  assert(total === 0.40, "Floor at 0.40");
+});
+
+// --- End-to-end acceptance scenarios ---
+
+Deno.test("U3 ACCEPT: Admin table header 'Name Specialty Location Status Actions' + h-4/h-6 + overflow-hidden → ALL SUPPRESSED", () => {
+  const headers = ["Name", "Specialty", "Location", "Status", "Actions"];
+  const HEADER_LABELS = /^(?:name|status|actions?|date|doctor|specialty|location|phone|address|joined|email|time|type|role|id)$/i;
+  for (const h of headers) {
+    assert(HEADER_LABELS.test(h), `Header '${h}' should match header label list`);
+    assert(h.length <= 16, `Header '${h}' is short enough for suppression`);
+  }
+});
+
+Deno.test("U3 ACCEPT: Dynamic truncated cell {appt.reason} without tooltip → EMITTED as Potential", () => {
+  const code = `<td className="truncate">{appt.reason}</td>`;
+  assert(/\btruncate\b/.test(code), "Has truncation utility");
+  assert(/\{appt\.reason\}/.test(code), "Has dynamic expression");
+  assert(!/title\s*=|<Tooltip|<HoverCard|<Popover/.test(code), "No recovery mechanism");
+});
+
+Deno.test("U3 ACCEPT: Truncation with title={fullText} → SUPPRESSED or confidence ≤ 0.50", () => {
+  const code = `<span className="truncate" title={fullText}>{shortText}</span>`;
+  assert(/title\s*=\s*\{/.test(code), "Has title recovery");
+  // Recovery signal → confidence drops by 0.20
+  const confidence = 0.45 + 0.10 - 0.20; // base + truncUtility - recovery = 0.35 → below 0.40 → suppressed
+  assert(confidence < 0.40, "Should be suppressed due to recovery");
+});

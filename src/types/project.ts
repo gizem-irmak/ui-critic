@@ -546,7 +546,7 @@ export interface U3ElementSubItem {
   detection?: string;
   evidence?: string;
   textPreview?: string; // First 80-120 chars of truncated content, or "(dynamic text: varName)" for expressions
-  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4';
+  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4' | 'U3.D5';
   subCheckLabel: string;
   confidence: number;
   advisoryGuidance?: string;
@@ -557,6 +557,12 @@ export interface U3ElementSubItem {
   triggerReason?: string; // why NOT suppressed
   expandDetected?: boolean; // whether expand/tooltip/toggle was found nearby
   elementTag?: string; // HTML/JSX tag name
+  // Enhanced metadata (v2)
+  startLine?: number | null;
+  endLine?: number | null;
+  contentKind?: 'static_short' | 'static_long' | 'dynamic' | 'list_mapped';
+  recoverySignals?: string[]; // e.g., ['title_attr', 'tooltip_component', 'overflow_scroll']
+  truncationTokens?: string[]; // exact classes found: ['h-6', 'overflow-hidden', 'truncate']
 }
 
 // U4 Element sub-item for aggregated recognition-to-recall reporting
