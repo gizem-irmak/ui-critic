@@ -242,3 +242,85 @@ Deno.test("A1: alpha composite contrast — text-gray-900/80 on white still pass
   // gray-900 at 80% on white should still have decent contrast
   assertEquals(ratio! >= 4.5, true, `gray-900/80 on white should pass, got ${ratio!.toFixed(2)}`);
 });
+
+// ========== A1.3 Theme-Dependent / Opacity-Reduced Text Detection ==========
+
+// --- Helper: mirrors A1.3 detection patterns ---
+const A1_3_THEME_CLASSES = [
+  /\btext-muted\b/,
+  /\btext-muted-foreground\b/,
+  /\btext-foreground\b/,
+  /\btext-primary\b/,
+  /\btext-secondary\b/,
+  /\btext-accent\b/,
+];
+
+const A1_3_OPACITY_CLASSES = [
+  /\bopacity-(?:50|60|70)\b/,
+  /\btext-opacity-\d+\b/,
+];
+
+const A1_3_CSS_VAR = /(?:color|--[\w-]+)\s*:\s*(?:var\(--[\w-]*(?:foreground|muted|primary|secondary|accent)[\w-]*\)|hsl\(var\(--[\w-]+\)\))/;
+
+function matchesA1_3(tagContent: string): boolean {
+  for (const pat of A1_3_THEME_CLASSES) if (pat.test(tagContent)) return true;
+  for (const pat of A1_3_OPACITY_CLASSES) if (pat.test(tagContent)) return true;
+  if (A1_3_CSS_VAR.test(tagContent)) return true;
+  return false;
+}
+
+Deno.test("A1.3: text-muted-foreground triggers theme-dependent detection", () => {
+  const tag = `<p className="text-sm text-muted-foreground">Description text</p>`;
+  assertEquals(matchesA1_3(tag), true);
+});
+
+Deno.test("A1.3: text-foreground triggers theme-dependent detection", () => {
+  const tag = `<span className="text-foreground">Label</span>`;
+  assertEquals(matchesA1_3(tag), true);
+});
+
+Deno.test("A1.3: opacity-50 triggers opacity-reduced detection", () => {
+  const tag = `<p className="text-gray-600 opacity-50">Faded text</p>`;
+  assertEquals(matchesA1_3(tag), true);
+});
+
+Deno.test("A1.3: text-opacity-60 triggers opacity-reduced detection", () => {
+  const tag = `<span className="text-gray-800 text-opacity-60">Faded</span>`;
+  assertEquals(matchesA1_3(tag), true);
+});
+
+Deno.test("A1.3: CSS variable color triggers detection", () => {
+  const tag = `<p style="color: var(--muted-foreground)">Theme text</p>`;
+  assertEquals(matchesA1_3(tag), true);
+});
+
+Deno.test("A1.3: hsl(var(--foreground)) triggers detection", () => {
+  const tag = `<span style="color: hsl(var(--foreground))">Themed</span>`;
+  assertEquals(matchesA1_3(tag), true);
+});
+
+Deno.test("A1.3: standard Tailwind text-blue-600 does NOT trigger A1.3", () => {
+  const tag = `<p className="text-blue-600 bg-white">Normal</p>`;
+  assertEquals(matchesA1_3(tag), false);
+});
+
+Deno.test("A1.3: opacity-80 does NOT trigger (only 50/60/70 are flagged)", () => {
+  const tag = `<p className="text-gray-600 opacity-80">Slight fade</p>`;
+  assertEquals(matchesA1_3(tag), false);
+});
+
+// --- Suppression tests ---
+Deno.test("A1.3: disabled button should be suppressed", () => {
+  const tag = `<button className="text-muted-foreground" disabled>Disabled</button>`;
+  assertEquals(/\bdisabled\b/.test(tag), true, 'Suppression pattern should match');
+});
+
+Deno.test("A1.3: aria-hidden='true' should be suppressed", () => {
+  const tag = `<span className="text-muted" aria-hidden="true">Hidden</span>`;
+  assertEquals(/aria-hidden\s*=\s*["']true["']/.test(tag), true, 'Suppression pattern should match');
+});
+
+Deno.test("A1.3: plain text-red-500 with no theme/opacity does not trigger", () => {
+  const tag = `<span className="text-red-500">Error</span>`;
+  assertEquals(matchesA1_3(tag), false);
+});
