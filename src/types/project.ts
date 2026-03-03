@@ -547,6 +547,7 @@ export interface U3ElementSubItem {
   evidence?: string;
   textPreview?: string; // First 80-120 chars of truncated content, or "(dynamic text: varName)" for expressions
   subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4' | 'U3.D5' | 'U3.D6' | 'U3.D7';
+  classification?: 'confirmed' | 'potential';
   subCheckLabel: string;
   confidence: number;
   advisoryGuidance?: string;

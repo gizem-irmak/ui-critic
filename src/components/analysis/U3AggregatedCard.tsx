@@ -17,14 +17,15 @@ function U3ElementItem({ element, compact = false }: {
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
+  const isConfirmed = element.classification === 'confirmed';
+
   // Title: "Truncated "Reason" cell (truncate)" or "Truncated text (slice)"
   const truncType = element.truncationType || 'truncate';
-  const truncKind = element.truncationKind || 'css';
   const displayLabel = element.columnLabel
     ? `Truncated "${element.columnLabel}" cell (${truncType})`
     : `Truncated text (${truncType})`;
 
-  // Compact element summary: <Tag> • contentKind • truncationType • expand status
+  // Compact element summary
   const tagStr = element.elementTag ? `<${element.elementTag}>` : '<element>';
   const kindStr = element.contentKind === 'dynamic' ? 'dynamic'
     : element.contentKind === 'list_mapped' ? 'dynamic(list)'
@@ -46,10 +47,15 @@ function U3ElementItem({ element, compact = false }: {
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <ElementItemWrapper isConfirmed={false} compact={compact}>
+      <ElementItemWrapper isConfirmed={isConfirmed} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
-            <ComponentTitle>{displayLabel}</ComponentTitle>
+            <div className="flex items-center gap-2">
+              <ComponentTitle>{displayLabel}</ComponentTitle>
+              {isConfirmed && (
+                <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Confirmed</Badge>
+              )}
+            </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
@@ -93,11 +99,11 @@ function U3ElementItem({ element, compact = false }: {
               </FieldRow>
             )}
 
-            {(truncKind === 'programmatic' || element.sliceLength != null) && (
+            {(element.truncationKind === 'programmatic' || element.sliceLength != null) && (
               <FieldRow>
                 <FieldLabel>Truncation kind:</FieldLabel>
                 <FieldValue mono>
-                  {truncKind === 'programmatic' ? 'Programmatic' : 'CSS'}
+                  {element.truncationKind === 'programmatic' ? 'Programmatic' : 'CSS'}
                   {element.sliceLength != null && ` (slice to ${element.sliceLength} chars)`}
                 </FieldValue>
               </FieldRow>
@@ -147,16 +153,21 @@ export function U3AggregatedCard({ violation, compact = false }: U3AggregatedCar
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
 
+  const hasConfirmed = elements.some(el => el.classification === 'confirmed');
+  const cardBorderClass = hasConfirmed ? 'border border-destructive/40' : 'border border-warning/30';
+
   return (
-    <Card className="border border-warning/30">
+    <Card className={cardBorderClass}>
       <CardHeader className={compact ? 'pb-2' : 'pb-3'}>
         <CardTitle className="flex items-center gap-2 flex-wrap">
-          <RuleIdBadge ruleId="U3" isConfirmed={false} categoryClass="category-usability" />
+          <RuleIdBadge ruleId="U3" isConfirmed={hasConfirmed} categoryClass="category-usability" />
           <RuleHeader ruleId="U3" title="Truncated or Inaccessible Content" />
-          <ElementCountBadge count={elements.length} isConfirmed={false} />
+          <ElementCountBadge count={elements.length} isConfirmed={hasConfirmed} />
         </CardTitle>
         <CardDescription compact={compact}>
-          Static analysis flagged potential content truncation; verify in context.
+          {hasConfirmed
+            ? 'CSS truncation detected without accessible recovery mechanism.'
+            : 'Static analysis flagged potential content truncation; verify in context.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
