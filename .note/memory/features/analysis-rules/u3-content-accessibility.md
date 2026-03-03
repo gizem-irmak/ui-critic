@@ -3,33 +3,34 @@ Updated: now
 
 Rule U3 (Truncated or Inaccessible Content) evaluates content visibility via hybrid detection, reported as Potential only.
 
-## Strict Three-Gate Architecture (v2)
-All U3 sub-checks (D1–D5) must pass three deterministic gates before emitting a finding:
+## Cell-Level Reporting (v3)
+U3 findings target DATA CELLS, not headers. Each finding includes `columnLabel` (resolved from nearest `<thead>`) for actionable context (e.g., "Column: Reason").
 
+## Header Suppression (strengthened)
+Suppress when element is inside `<thead>`/`<th>`/`<TableHead>`, has role="columnheader", matches known header labels ≤20 chars, has header styling on short text, or is purely static short text (≤20 chars) with no dynamic expression in context.
+
+## Three-Gate Architecture
 **Gate 1 — Content Risk**: Only emit when content has meaningful truncation risk:
 - Dynamic expression `{…}` present, OR inside `.map()` list rendering (contentKind: dynamic/list_mapped)
 - Static text ≥ 28 chars OR ≥ 5 tokens (contentKind: static_long)
-- Short static UI chrome ("Name", "Status", "Actions") is suppressed (contentKind: static_short)
+- Short static UI chrome suppressed (contentKind: static_short)
 
-**Gate 2 — Header/Label Suppression**: Suppress if element is inside `<thead>`/`<th>`, has role="columnheader", matches known header labels (Name, Status, Actions, Date, Doctor, etc.) with ≤16 chars, or has header styling (uppercase, tracking-wide, text-xs, font-medium) on short text.
+**Gate 2 — Header/Label Suppression**: See above.
 
-**Gate 3 — Recovery Mechanism**: Detect title attributes, Tooltip/Popover/HoverCard/Dialog wrappers, overflow-scroll, aria-describedby, "Show more" links, click-to-detail handlers. Recovery signals lower confidence by 0.20.
+**Gate 3 — Recovery Mechanism**: Detect title attributes, Tooltip/Popover/HoverCard/Dialog wrappers, overflow-scroll, aria-describedby, "Show more" links, click-to-detail handlers. Recovery signals suppress or lower confidence.
 
-## Confidence Scoring (Revised)
-- Base: 0.45
-- +0.15 if dynamic in list/map AND truncation utility
-- +0.10 if truncation utility (truncate/line-clamp)
-- +0.05 if field label suggests long values (address, reason, notes, etc.)
-- -0.20 if header suspected
-- -0.20 if recovery signal detected
-- Capped to [0.40, 0.75]
+## Column Label Mapping
+For table structures, headers are extracted from `<th>`/`<TableHead>` in order. Cell index is computed by counting `<td>`/`<TableCell>` siblings before the finding position. The resolved `columnLabel` appears in elementLabel, evidence, and a dedicated "Column" row in the UI card.
+
+## Evidence Format (v3)
+Evidence now reads: `Column "Reason" cell uses \`truncate\` on {appt.reason} with no tooltip/expand` — providing column context, truncation mechanism, and dynamic expression in one line.
 
 ## Sub-checks
-- U3.D1: Line-clamp/truncate/text-ellipsis/whitespace-nowrap+overflow-hidden
-- U3.D2: Fixed-height (h-*, max-h-*) + overflow-hidden without scroll
+- U3.D1: Line-clamp/truncate/text-ellipsis/whitespace-nowrap+overflow-hidden, overflow-hidden+width-constraint
+- U3.D2: Fixed-height (h-12+, max-h-*) + overflow-hidden without scroll
 - U3.D3: Nested scroll traps
-- U3.D4: Hidden content without control (excludes responsive variants, aria-hidden)
-- U3.D5: Unbroken text overflow risk (carrier element scoping, semantic risk tiers)
+- U3.D4: Hidden content without control
+- U3.D5: Unbroken text overflow risk
 
-## Enhanced Metadata (v2)
-Each finding includes: contentKind, recoverySignals[], truncationTokens[], startLine/endLine for precise source attribution.
+## Enhanced Metadata (v3)
+Each finding includes: contentKind, recoverySignals[], truncationTokens[], startLine/endLine, columnLabel, contentPreview.
