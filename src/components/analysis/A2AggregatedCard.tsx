@@ -11,12 +11,48 @@ import {
   RuleIdBadge, RuleHeader, ElementCountBadge, CardDescription,
   ComponentTitle, ElementItemWrapper, DetailContainer,
   FieldRow, FieldLabel, FieldValue, CodeTag,
-  ConfidenceValue, MethodBadge, AdvisoryBlock,
 } from './CardTypography';
 
 interface A2AggregatedCardProps {
   violation: Violation;
   compact?: boolean;
+}
+
+/* ─── Build a single concise detection sentence ─── */
+function buildDetectionSentence(element: A2ElementSubItem): string {
+  const parts: string[] = [];
+  const classes = (element.focusClasses || []).join(' ');
+
+  // Outline removal
+  if (/outline-none|outline-0/.test(classes)) parts.push('Outline removed');
+  else if (/ring-0/.test(classes)) parts.push('Ring reset');
+
+  // Replacement description
+  const hasFocusBg = /focus:bg-|data-\[.*\]:bg-/.test(classes);
+  const hasFocusText = /focus:text-|data-\[.*\]:text-/.test(classes);
+  const hasFocusRing = /focus:ring-|focus:border-|focus:shadow-|focus:outline-/.test(classes);
+
+  if (hasFocusRing) {
+    parts.push('has ring/border replacement');
+  } else if (hasFocusBg || hasFocusText) {
+    const signals: string[] = [];
+    if (hasFocusBg) signals.push('bg');
+    if (hasFocusText) signals.push('text');
+    parts.push(`uses ${signals.join('/')} change — perceptibility not statically verifiable`);
+  } else {
+    parts.push('no visible focus indicator detected');
+  }
+
+  return parts.join('; ');
+}
+
+/* ─── Extract matched tokens (minimal trigger set) ─── */
+function getMatchedTokens(element: A2ElementSubItem): string[] {
+  if (!element.focusClasses || element.focusClasses.length === 0) return [];
+  // Return only classes relevant to focus/outline — the trigger set
+  return element.focusClasses.filter(cls =>
+    /outline|ring|focus:|data-\[.*\]:|border-0/.test(cls)
+  );
 }
 
 function A2ElementItem({ element, isConfirmed, compact = false }: {
@@ -25,6 +61,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
   const elementIsConfirmed = element.classification
     ? element.classification === 'confirmed'
     : isConfirmed;
@@ -34,6 +71,12 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
   const elementSubtype = (element as any).elementSubtype;
   const isBorderline = element.potentialSubtype === 'borderline';
   const effectiveFilePath = element.filePath || element.location;
+  const matchedTokens = getMatchedTokens(element);
+  const detectionSentence = buildDetectionSentence(element);
+  const rawClassName = (element as any).rawClassName;
+
+  // Confidence as small badge value
+  const confidencePct = element.confidence != null ? Math.round(element.confidence * 100) : null;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -69,6 +112,10 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               {element.potentialSubtype === 'accuracy' && (
                 <PotentialSubtypeBadge subtype="accuracy" compact={compact} />
               )}
+              {/* Inline confidence badge for potential items */}
+              {!elementIsConfirmed && confidencePct != null && (
+                <span className="text-xs font-mono font-medium text-warning">{confidencePct}%</span>
+              )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={effectiveFilePath} compact={compact} startLine={element.startLine} endLine={element.endLine} />
@@ -82,216 +129,86 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
         </CollapsibleTrigger>
 
         <CollapsibleContent>
-          {isConfirmed ? (
-            <DetailContainer>
-              {/* Element metadata */}
+          <DetailContainer>
+            {/* Element (compact single line) */}
+            <FieldRow>
+              <FieldLabel>Element:</FieldLabel>
+              <FieldValue mono>
+                {element.elementName && element.elementName !== 'unknown'
+                  ? element.elementName
+                  : (element.elementTag || element.elementType || 'unknown')}
+                {element.elementSource === 'html_tag_fallback' && ' (fallback)'}
+                {element.selectorHints && element.selectorHints.length > 0 ? ` — ${element.selectorHints.join(' — ')}` : ''}
+                {' • Focusable: '}
+                {element.focusable === 'yes' ? 'Yes' : element.focusable === 'no' ? 'No' : 'Unknown'}
+              </FieldValue>
+            </FieldRow>
+
+            {/* Affected components (when grouped) */}
+            {element.affectedComponents && element.affectedComponents.length > 1 && (
               <FieldRow>
-                <FieldLabel>Element:</FieldLabel>
-                <FieldValue mono>
-                  {element.elementName && element.elementName !== 'unknown'
-                    ? element.elementName
-                    : (element.elementTag || element.elementType || 'unknown')}
-                  {element.elementSource === 'html_tag_fallback' && ' (fallback)'}
-                  {element.sourceLabel && element.sourceLabel !== element.elementLabel && element.sourceLabel !== element.elementName ? ` (${element.sourceLabel})` : ''}
-                  {element.selectorHints && element.selectorHints.length > 0 ? ` — ${element.selectorHints.join(' — ')}` : ''}
-                  {' — Focusable: '}
-                  {element.focusable === 'yes' ? 'Yes' : element.focusable === 'no' ? 'No' : 'Unknown'}
-                </FieldValue>
+                <FieldLabel>Components:</FieldLabel>
+                <FieldValue mono>{element.affectedComponents.join(', ')}</FieldValue>
               </FieldRow>
+            )}
 
-              {/* Affected components (when grouped) */}
-              {element.affectedComponents && element.affectedComponents.length > 1 && (
-                <FieldRow>
-                  <FieldLabel>Components:</FieldLabel>
-                  <FieldValue mono>{element.affectedComponents.join(', ')}</FieldValue>
-                </FieldRow>
-              )}
+            {/* Detection: single concise sentence */}
+            <FieldRow>
+              <FieldLabel>Detection:</FieldLabel>
+              <FieldValue>{detectionSentence}</FieldValue>
+            </FieldRow>
 
+            {/* Matched tokens (compact chips) */}
+            {matchedTokens.length > 0 && (
               <FieldRow>
-                <FieldLabel>Detection:</FieldLabel>
-                <div className="flex flex-col gap-0.5">
-                  {(element.detection || '').split('\n').filter(Boolean).map((line, i) => (
-                    <span key={i} className="text-sm font-mono text-foreground">{line}</span>
+                <FieldLabel>Tokens:</FieldLabel>
+                <div className="flex flex-wrap gap-1">
+                  {matchedTokens.map((cls, i) => (
+                    <CodeTag key={i}>{cls}</CodeTag>
                   ))}
                 </div>
               </FieldRow>
+            )}
 
-              {element.focusClasses && element.focusClasses.length > 0 && (
-                <FieldRow>
-                  <FieldLabel>Classes:</FieldLabel>
-                  <div className="flex flex-wrap gap-1">
-                    {element.focusClasses.map((cls, i) => (
-                      <CodeTag key={i}>{cls}</CodeTag>
-                    ))}
-                  </div>
-                </FieldRow>
-              )}
-
-              {(element as any).rawClassName && (
-                <FieldRow>
-                  <FieldLabel>Class Raw:</FieldLabel>
-                  <FieldValue mono>{(element as any).rawClassName}</FieldValue>
-                </FieldRow>
-              )}
-
-              {/* Requirement */}
+            {/* Source */}
+            {effectiveFilePath && (
               <FieldRow>
-                <FieldLabel>Requirement:</FieldLabel>
-                <FieldValue>WCAG 2.4.7 Focus Visible</FieldValue>
-              </FieldRow>
-
-              {/* Source location */}
-              {effectiveFilePath && (
-                <FieldRow>
-                  <FieldLabel>Source:</FieldLabel>
-                  <FieldValue mono>
-                    {(() => {
-                      const fp = effectiveFilePath;
-                      const basename = fp.replace(/\\/g, '/').split('/').pop() || fp;
-                      if (element.startLine != null) {
-                        const end = element.endLine != null && element.endLine !== element.startLine
-                          ? `–${element.endLine}` : '';
-                        return `${basename}:${element.startLine}${end}`;
-                      }
-                      return basename;
-                    })()}
-                  </FieldValue>
-                </FieldRow>
-              )}
-            </DetailContainer>
-          ) : (
-            <DetailContainer>
-              {/* Element metadata */}
-              <FieldRow>
-                <FieldLabel>Element:</FieldLabel>
+                <FieldLabel>Source:</FieldLabel>
                 <FieldValue mono>
-                  {element.elementName && element.elementName !== 'unknown'
-                    ? element.elementName
-                    : (element.elementTag || element.elementType || 'unknown')}
-                  {element.elementSource === 'html_tag_fallback' && ' (fallback)'}
-                  {element.sourceLabel && element.sourceLabel !== element.elementLabel && element.sourceLabel !== element.elementName ? ` (${element.sourceLabel})` : ''}
-                  {element.selectorHints && element.selectorHints.length > 0 ? ` — ${element.selectorHints.join(' — ')}` : ''}
-                  {' — Focusable: '}
-                  {element.focusable === 'yes' ? 'Yes' : element.focusable === 'no' ? 'No' : 'Unknown'}
+                  {(() => {
+                    const fp = effectiveFilePath;
+                    const basename = fp.replace(/\\/g, '/').split('/').pop() || fp;
+                    if (element.startLine != null) {
+                      const end = element.endLine != null && element.endLine !== element.startLine
+                        ? `–${element.endLine}` : '';
+                      return `${basename}:${element.startLine}${end}`;
+                    }
+                    return basename;
+                  })()}
                 </FieldValue>
               </FieldRow>
+            )}
 
-              {/* Detection */}
-              {element.detection && (
-                <FieldRow>
-                  <FieldLabel>Detection:</FieldLabel>
-                  <div className="flex flex-col gap-0.5">
-                    {element.detection.split('\n').filter(Boolean).map((line, i) => (
-                      <span key={i} className="text-sm font-mono text-foreground">{line}</span>
-                    ))}
-                  </div>
-                </FieldRow>
-              )}
-
-              {/* Borderline reason */}
-              {isBorderline && element.focusClasses && element.focusClasses.length > 0 && (() => {
-                const classes = element.focusClasses.join(' ');
-                const hasOutlineRemoval = /outline-none|ring-0|border-0/.test(classes);
-                const hasRing1 = /ring-1\b/.test(classes);
-                const hasMutedColor = /ring-(?:gray|slate|zinc)-(?:100|200)/.test(classes);
-                const hasNoOffset = !/ring-offset-[1-9]/.test(classes) || /ring-offset-0/.test(classes);
-                
-                if (hasOutlineRemoval && (hasRing1 || hasMutedColor)) {
-                  const parts: string[] = [];
-                  if (hasOutlineRemoval) parts.push('outline removed');
-                  if (hasRing1) parts.push('ring-1');
-                  if (hasMutedColor) parts.push('muted color');
-                  if (hasNoOffset && (hasRing1 || hasMutedColor)) parts.push('no ring-offset');
-                  
-                  return (
+            {/* Optional expandable raw class */}
+            {rawClassName && (
+              <div>
+                <button
+                  onClick={() => setShowRaw(!showRaw)}
+                  className="text-xs text-muted-foreground hover:text-foreground underline"
+                >
+                  {showRaw ? 'Hide details' : 'Show details'}
+                </button>
+                {showRaw && (
+                  <div className="mt-1">
                     <FieldRow>
-                      <FieldLabel>Reason:</FieldLabel>
-                      <span className="text-sm text-warning">{parts.join(' + ')}</span>
+                      <FieldLabel>Class Raw:</FieldLabel>
+                      <FieldValue mono>{rawClassName}</FieldValue>
                     </FieldRow>
-                  );
-                }
-                return null;
-              })()}
-
-              {/* Focus classes */}
-              {element.focusClasses && element.focusClasses.length > 0 && (
-                <FieldRow>
-                  <FieldLabel>Classes:</FieldLabel>
-                  <div className="flex flex-wrap gap-1">
-                    {element.focusClasses.map((cls, i) => (
-                      <CodeTag key={i}>{cls}</CodeTag>
-                    ))}
                   </div>
-                </FieldRow>
-              )}
-
-              {/* Confidence */}
-              <FieldRow>
-                <FieldLabel>Confidence:</FieldLabel>
-                <ConfidenceValue value={element.confidence} />
-              </FieldRow>
-
-              {/* Method */}
-              <FieldRow>
-                <FieldLabel>Method:</FieldLabel>
-                <MethodBadge method={element.detectionMethod || 'deterministic'} />
-              </FieldRow>
-
-              {/* Requirement */}
-              <FieldRow>
-                <FieldLabel>Requirement:</FieldLabel>
-                <FieldValue>WCAG 2.4.7 Focus Visible</FieldValue>
-              </FieldRow>
-
-              {/* Source location */}
-              {effectiveFilePath && (
-                <FieldRow>
-                  <FieldLabel>Source:</FieldLabel>
-                  <FieldValue mono>
-                    {(() => {
-                      const fp = effectiveFilePath;
-                      const basename = fp.replace(/\\/g, '/').split('/').pop() || fp;
-                      if (element.startLine != null) {
-                        const end = element.endLine != null && element.endLine !== element.startLine
-                          ? `–${element.endLine}` : '';
-                        return `${basename}:${element.startLine}${end}`;
-                      }
-                      return basename;
-                    })()}
-                  </FieldValue>
-                </FieldRow>
-              )}
-
-              {/* Potential reason */}
-              {element.potentialReason && (
-                <FieldRow>
-                  <FieldLabel>Reason:</FieldLabel>
-                  <span className="text-sm text-warning italic">{element.potentialReason}</span>
-                </FieldRow>
-              )}
-
-              {/* Explanation */}
-              <div className="pt-1">
-                {element.explanation.includes('Issue reason:') && element.explanation.includes('Recommended fix:') ? (
-                  <>
-                    {element.explanation.split('\n').filter(Boolean).map((line, i) => {
-                      const isLabel = /^(Issue reason|Recommended fix):/.test(line.trim());
-                      return (
-                        <p key={i} className={cn(
-                          'text-sm leading-relaxed',
-                          isLabel ? 'font-medium text-foreground' : 'text-foreground'
-                        )}>
-                          {line.trim()}
-                        </p>
-                      );
-                    })}
-                  </>
-                ) : (
-                  <p className="text-sm text-foreground leading-relaxed">{element.explanation}</p>
                 )}
               </div>
-            </DetailContainer>
-          )}
+            )}
+          </DetailContainer>
         </CollapsibleContent>
       </ElementItemWrapper>
     </Collapsible>
@@ -324,10 +241,16 @@ export function A2AggregatedCard({ violation, compact = false }: A2AggregatedCar
           <RuleIdBadge ruleId="A2" isConfirmed={isConfirmed} categoryClass="category-accessibility" />
           <RuleHeader ruleId="A2" title="Poor Focus Visibility" />
           <ElementCountBadge count={elements.length} isConfirmed={isConfirmed} />
+          <Badge variant="outline" className="text-xs font-medium border-muted-foreground/40 text-muted-foreground">
+            WCAG 2.4.7
+          </Badge>
+          <Badge variant="outline" className="text-xs font-medium border-blue-500/50 text-blue-600">
+            Deterministic
+          </Badge>
         </CardTitle>
         <CardDescription compact={compact}>
           {isConfirmed
-            ? 'Elements remove the default focus outline. Flag as a violation only if no visible focus indicator (ring/border/outline/shadow) is provided.'
+            ? 'Elements remove the default focus outline with no visible replacement indicator.'
             : violation.diagnosis}
         </CardDescription>
       </CardHeader>
