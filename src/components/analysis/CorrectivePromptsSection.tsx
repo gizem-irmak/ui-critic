@@ -126,7 +126,7 @@ function buildU1PromptBody(el: U1ElementSubItem): { issueReason: string; recomme
 function buildU3PromptBody(el: U3ElementSubItem): { issueReason: string; recommendedFix: string } {
   const truncType = el.truncationType || 'truncate';
   const issueReason = `Content is truncated using CSS (${truncType}) and no accessible recovery mechanism is provided.`;
-  const recommendedFix = 'Provide a recovery mechanism such as a tooltip (title attribute), expandable row, modal, accordion, or remove forced truncation for critical content.';
+  const recommendedFix = 'Provide a recovery mechanism (e.g., tooltip via title attribute, expandable row, modal, or accordion) for this element and ensure consistent recovery behavior for all truncated dynamic content across the application. Alternatively, avoid forced truncation for critical user-facing content.';
   return { issueReason, recommendedFix };
 }
 
