@@ -1314,21 +1314,19 @@ function u3FindColumnLabel(content: string, pos: number): string | undefined {
   return colIdx < headerTexts.length ? headerTexts[colIdx] : undefined;
 }
 
-/** Compute U3 confidence using the revised scoring model */
+/** Compute U3 confidence using the revised scoring model (v2: recovery = full suppress, not deduction) */
 function u3ComputeConfidence(opts: {
   contentKind: string;
   hasTruncationUtility: boolean;
   fieldLabel?: string;
   isHeaderSuspected: boolean;
-  recoverySignals: string[];
 }): number {
-  let conf = 0.45;
+  let conf = 0.55; // base raised since only dynamic content reaches here now
   if ((opts.contentKind === 'dynamic' || opts.contentKind === 'list_mapped') && opts.hasTruncationUtility) conf += 0.15;
   else if (opts.contentKind === 'dynamic' || opts.contentKind === 'list_mapped') conf += 0.10;
-  if (opts.hasTruncationUtility) conf += 0.10;
+  if (opts.hasTruncationUtility) conf += 0.05;
   if (opts.fieldLabel && /\b(?:address|reason|notes|description|message|bio|comment|details|body|content|summary)\b/i.test(opts.fieldLabel)) conf += 0.05;
   if (opts.isHeaderSuspected) conf -= 0.20;
-  if (opts.recoverySignals.length > 0) conf -= 0.20;
   return Math.max(0.40, Math.min(0.75, Math.round(conf * 100) / 100));
 }
 
@@ -1365,22 +1363,19 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         // ── GATE 2 (first): Header/label row suppression ──
         if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
 
-        // ── GATE 1: Content risk ──
+        // ── GATE 1: Content risk — require dynamic text binding ──
         const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
         if (!contentGate.pass) continue;
-        // In table/list contexts, static_long alone is not enough — require dynamic/list_mapped
-        if (contentGate.contentKind === 'static_long') {
-          const before500 = content.slice(Math.max(0, pos - 500), pos);
-          const isInTableOrList = /<(?:tr|td|th|table|Table|TableCell|TableRow|TableHead|TableBody|TableHeader)\b/i.test(before500) || /\.map\s*\(/s.test(before500);
-          if (isInTableOrList) continue;
-        }
+        // Strict: only dynamic/list_mapped content triggers U3 (static_long suppressed everywhere)
+        if (contentGate.contentKind !== 'dynamic' && contentGate.contentKind !== 'list_mapped') continue;
 
-        // ── GATE 3: Recovery mechanism ──
+        // ── GATE 3: Recovery mechanism — full suppress if ANY recovery exists ──
         const recoverySignals = u3DetectRecoverySignals(content, pos, context);
+        if (recoverySignals.length > 0) continue;
 
         // Component-level expand for dynamic text — full suppress
         let expandDetected = false;
-        if ((contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped') && textPreview) {
+        if (textPreview) {
           const dynVarMatch = textPreview.match(/\(dynamic text: ([^)]+)\)/);
           if (dynVarMatch) {
             const expandCheck = u3HasComponentExpandForVar(content, dynVarMatch[1], pos);
@@ -1399,7 +1394,6 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           hasTruncationUtility: true,
           fieldLabel: contentGate.fieldLabel,
           isHeaderSuspected: false,
-          recoverySignals,
         });
         if (confidence < 0.40) continue;
 
@@ -1473,6 +1467,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       const pos = nwm.index;
       const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
       if (!/overflow-hidden\b/.test(context)) continue;
+      // Strict: nowrap + overflow-hidden alone is weak — require width constraint too
+      if (!/\bw-\d+\b|\bmax-w-\S+\b/.test(context)) continue;
 
       const nwCarrier = u3FindCarrierElement(content, pos);
       const textPreview = extractU3CarrierContentPreview(content, pos, nwCarrier);
@@ -1480,20 +1476,16 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       // ── GATE 2 (first): Header suppression ──
       if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
 
-      // ── GATE 1: Content risk ──
+      // ── GATE 1: Content risk — require dynamic text binding ──
       const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
       if (!contentGate.pass) continue;
-      // In table/list contexts, static_long alone is not enough
-      if (contentGate.contentKind === 'static_long') {
-        const before500nw = content.slice(Math.max(0, pos - 500), pos);
-        const isInTableOrList = /<(?:tr|td|th|table|Table|TableCell|TableRow|TableHead|TableBody|TableHeader)\b/i.test(before500nw) || /\.map\s*\(/s.test(before500nw);
-        if (isInTableOrList) continue;
-      }
+      if (contentGate.contentKind !== 'dynamic' && contentGate.contentKind !== 'list_mapped') continue;
 
-      // ── GATE 3 ──
+      // ── GATE 3: Full suppress if ANY recovery exists ──
       const recoverySignals = u3DetectRecoverySignals(content, pos, context);
+      if (recoverySignals.length > 0) continue;
 
-      if ((contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped') && textPreview) {
+      if (textPreview) {
         const dynVarMatch = textPreview.match(/\(dynamic text: ([^)]+)\)/);
         if (dynVarMatch) {
           const expandCheck = u3HasComponentExpandForVar(content, dynVarMatch[1], pos);
@@ -1516,7 +1508,6 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         hasTruncationUtility: true,
         fieldLabel: contentGate.fieldLabel,
         isHeaderSuspected: false,
-        recoverySignals,
       });
       if (confidence < 0.40) continue;
 
@@ -1577,19 +1568,16 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       // ── GATE 2 (first): Header suppression ──
       if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
 
-      // ── GATE 1: Content risk ──
+      // ── GATE 1: Content risk — require dynamic text binding ──
       const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
       if (!contentGate.pass) continue;
-      if (contentGate.contentKind === 'static_long') {
-        const before500wc = content.slice(Math.max(0, pos - 500), pos);
-        const isInTableOrList = /<(?:tr|td|th|table|Table|TableCell|TableRow|TableHead|TableBody|TableHeader)\b/i.test(before500wc) || /\.map\s*\(/s.test(before500wc);
-        if (isInTableOrList) continue;
-      }
+      if (contentGate.contentKind !== 'dynamic' && contentGate.contentKind !== 'list_mapped') continue;
 
-      // ── GATE 3 ──
+      // ── GATE 3: Full suppress if ANY recovery exists ──
       const recoverySignals = u3DetectRecoverySignals(content, pos, context);
+      if (recoverySignals.length > 0) continue;
       if (u3HasExpandMechanism(content, pos, 20)) continue;
-      if ((contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped') && textPreview) {
+      if (textPreview) {
         const dynVarMatch = textPreview.match(/\(dynamic text: ([^)]+)\)/);
         if (dynVarMatch) {
           const expandCheck = u3HasComponentExpandForVar(content, dynVarMatch[1], pos);
@@ -1611,7 +1599,6 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         hasTruncationUtility: true,
         fieldLabel: contentGate.fieldLabel,
         isHeaderSuspected: false,
-        recoverySignals,
       });
       if (confidence < 0.40) continue;
 
@@ -1730,7 +1717,6 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           hasTruncationUtility: false,
           fieldLabel: contentGate.fieldLabel,
           isHeaderSuspected: false,
-          recoverySignals,
         });
         if (confidence < 0.40) continue;
 
@@ -1890,17 +1876,14 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       // ── GATE 2 (first): Header suppression ──
       if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
 
-      // ── GATE 1: Content risk ──
+      // ── GATE 1: Content risk — require dynamic text binding ──
       const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
       if (!contentGate.pass) continue;
-      if (contentGate.contentKind === 'static_long') {
-        const before500d2 = content.slice(Math.max(0, pos - 500), pos);
-        const isInTableOrList = /<(?:tr|td|th|table|Table|TableCell|TableRow|TableHead|TableBody|TableHeader)\b/i.test(before500d2) || /\.map\s*\(/s.test(before500d2);
-        if (isInTableOrList) continue;
-      }
+      if (contentGate.contentKind !== 'dynamic' && contentGate.contentKind !== 'list_mapped') continue;
 
-      // ── GATE 3: Recovery ──
+      // ── GATE 3: Full suppress if ANY recovery exists ──
       const recoverySignals = u3DetectRecoverySignals(content, pos, context);
+      if (recoverySignals.length > 0) continue;
       if (u3HasExpandMechanism(content, pos, 20)) continue;
 
       const truncationTokens = u3ExtractTruncationTokens(context);
@@ -1911,7 +1894,6 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         hasTruncationUtility: false,
         fieldLabel: contentGate.fieldLabel,
         isHeaderSuspected: false,
-        recoverySignals,
       });
       if (confidence < 0.40) continue;
 
@@ -2146,8 +2128,9 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const d5Context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
         if (u3IsHeaderRow(content, pos, d5Context, `(dynamic text: ${varName})`)) continue;
 
-        // ── GATE 3: Recovery / expand detection ──
+        // ── GATE 3: Recovery / expand — full suppress if ANY recovery exists ──
         const recoverySignals = u3DetectRecoverySignals(content, pos, d5Context);
+        if (recoverySignals.length > 0) continue;
         const expandCheck = u3HasComponentExpandForVar(content, varName, pos);
         const hasLocalExpand = u3HasExpandMechanism(content, pos, 20);
 
@@ -2165,7 +2148,6 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           hasTruncationUtility: hasTruncUtility,
           fieldLabel: lastSeg,
           isHeaderSuspected: false,
-          recoverySignals,
         });
         if (confidence < 0.40) continue;
 
