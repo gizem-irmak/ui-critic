@@ -50,6 +50,7 @@ Key format: `U3.{subCheck}|{filePath}|{lineNumber}|{columnLabel}` — includes c
 - U3.D3: Nested scroll traps
 - U3.D4: Hidden content without control
 - U3.D5: Unbroken text overflow risk
+- U3.D6: Column-constrained cell clipping — width constraint (max-w-*/w-*/min-w-0/basis-*) + overflow-hidden/table-fixed in table/list context, dynamic content only, no explicit truncate required. High-precision: requires table context + dynamic content + no wrapping classes + no recovery.
 
 ## Enhanced Metadata (v3)
 Each finding includes: contentKind, recoverySignals[], truncationTokens[], startLine/endLine, columnLabel, contentPreview.

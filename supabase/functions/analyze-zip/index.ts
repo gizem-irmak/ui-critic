@@ -754,7 +754,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
 // =====================
 
 interface U3Finding {
-  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4' | 'U3.D5';
+  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4' | 'U3.D5' | 'U3.D6';
   subCheckLabel: string;
   classification: 'potential';
   elementLabel: string;
@@ -1518,7 +1518,126 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       });
     }
 
-    // --- U3.D2: Overflow clipping with fixed height ---
+    // --- U3.D6: Column-constrained cell clipping (no explicit truncate) ---
+    // High-precision path: detects cells where width constraints + nowrap may clip dynamic content
+    // even without explicit `truncate` or `text-ellipsis` classes.
+    {
+      // Scan for width constraints in table/list contexts
+      const d6WidthRe = /\b(?:max-w-\S+|w-\d+|min-w-0|basis-\S+)\b/g;
+      let d6m;
+      while ((d6m = d6WidthRe.exec(content)) !== null) {
+        const pos = d6m.index;
+        const context = content.slice(Math.max(0, pos - 300), Math.min(content.length, pos + 400));
+
+        // A) Table-like context required
+        const before600 = content.slice(Math.max(0, pos - 600), pos);
+        const isTableContext = /<(?:table|tr|td|th|TableRow|TableCell|TableHead)\b/i.test(before600);
+        const isMapContext = /\.map\s*\(\s*\(?[a-zA-Z_][\w,\s{}:]*\)?\s*=>/s.test(before600);
+        if (!isTableContext && !isMapContext) continue;
+
+        // Skip if already handled by D1 (has explicit truncate/line-clamp/text-ellipsis)
+        if (/\btruncate\b|\bline-clamp-\d+\b|\btext-ellipsis\b/.test(context)) continue;
+
+        // B) Must have overflow-hidden or overflow-clip (or table-fixed on parent)
+        const hasOverflowClip = /\boverflow-hidden\b|\boverflow-clip\b/.test(context);
+        const hasTableFixed = /\btable-fixed\b/.test(content.slice(Math.max(0, pos - 1000), pos));
+        if (!hasOverflowClip && !hasTableFixed) continue;
+
+        // C) Text overflow symptom: no explicit wrapping allowed
+        const hasWrap = /\bwhitespace-normal\b|\bbreak-words\b|\bbreak-all\b|\bword-break\b/.test(context);
+        if (hasWrap) continue;
+        // Must have nowrap or no wrapping directive (default table cell behavior with width constraint clips)
+        const hasNowrap = /\bwhitespace-nowrap\b/.test(context);
+        // If no nowrap AND no table-fixed, require overflow-hidden specifically on the cell
+        if (!hasNowrap && !hasTableFixed && !hasOverflowClip) continue;
+
+        const textPreview = extractU3TextPreview(content, pos);
+
+        // Gate 2: Header suppression (first)
+        if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
+
+        // D) Content risk: must be dynamic/list_mapped
+        const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
+        if (!contentGate.pass) continue;
+        if (contentGate.contentKind !== 'dynamic' && contentGate.contentKind !== 'list_mapped') continue;
+
+        // E) Gate 3: Recovery
+        const recoverySignals = u3DetectRecoverySignals(content, pos, context);
+        if ((contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped') && textPreview) {
+          const dynVarMatch = textPreview.match(/\(dynamic text: ([^)]+)\)/);
+          if (dynVarMatch) {
+            const expandCheck = u3HasComponentExpandForVar(content, dynVarMatch[1], pos);
+            if (expandCheck.hasExpand) continue;
+          }
+        }
+        if (u3HasExpandMechanism(content, pos, 20)) continue;
+
+        // Full suppress if strong recovery exists
+        if (recoverySignals.some(s => ['title_attr', 'tooltip_component', 'hover_card_component', 'popover_component'].includes(s))) continue;
+
+        const lineNumber = content.slice(0, pos).split('\n').length;
+        const columnLabel = u3FindColumnLabel(content, pos);
+        const dedupeKey = `U3.D6|${filePath}|${lineNumber}|${columnLabel || ''}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        const truncationTokens = u3ExtractTruncationTokens(context);
+        if (truncationTokens.length === 0) truncationTokens.push(d6m[0]);
+        if (hasOverflowClip) truncationTokens.push('overflow-hidden');
+        if (hasNowrap) truncationTokens.push('whitespace-nowrap');
+
+        const confidence = u3ComputeConfidence({
+          contentKind: contentGate.contentKind,
+          hasTruncationUtility: false,
+          fieldLabel: contentGate.fieldLabel,
+          isHeaderSuspected: false,
+          recoverySignals,
+        });
+        if (confidence < 0.40) continue;
+
+        const d6VarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
+        const d6VarName = d6VarMatch ? d6VarMatch[1].split('.').pop() : undefined;
+        const d6ContentPreview = d6VarMatch ? `{${d6VarMatch[1]}}` : textPreview;
+
+        const carrier = u3FindCarrierElement(content, pos);
+        const elementTag = carrier?.tag && !U3_ICON_COMPONENT_RE.test(carrier.tag) ? carrier.tag : undefined;
+
+        const d6EvidenceStr = columnLabel
+          ? `Column "${columnLabel}" cell constrained by ${d6m[0]}${hasNowrap ? ' + nowrap' : ''} (no tooltip/expand) on ${d6ContentPreview || 'dynamic content'}`
+          : `Cell constrained by ${d6m[0]}${hasOverflowClip ? ' + overflow-hidden' : ''} at ${fileName}:${lineNumber}`;
+
+        findings.push({
+          subCheck: 'U3.D6',
+          subCheckLabel: 'Column-constrained cell clipping',
+          classification: 'potential',
+          elementLabel: columnLabel ? `Constrained "${columnLabel}" cell` : 'Column-constrained cell',
+          elementType: 'text',
+          filePath,
+          detection: `${d6m[0]}${hasOverflowClip ? ' + overflow-hidden' : ''}${hasNowrap ? ' + nowrap' : ''}${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
+          evidence: d6EvidenceStr,
+          explanation: 'Cell has a width constraint that may clip dynamic content without wrapping or a tooltip to reveal full text.',
+          confidence,
+          textPreview,
+          advisoryGuidance: 'Add a title attribute, tooltip, or allow text wrapping to ensure content is accessible.',
+          deduplicationKey: dedupeKey,
+          truncationType: 'column-constraint',
+          textLength: 'dynamic',
+          triggerReason: 'Column constrained cell may clip dynamic content without wrap/tooltip',
+          expandDetected: false,
+          elementTag,
+          varName: d6VarName,
+          lineNumber,
+          startLine: lineNumber,
+          endLine: lineNumber,
+          contentKind: contentGate.contentKind,
+          recoverySignals: recoverySignals.length > 0 ? recoverySignals : undefined,
+          truncationTokens,
+          columnLabel: columnLabel || undefined,
+          contentPreview: d6ContentPreview || undefined,
+        });
+      }
+    }
+
     // Only match heights that are realistically large enough to clip content (h-12+, max-h-*)
     // Small heights like h-4, h-5, h-6, h-8, h-10 are icon/label sizing, not content containers
     const heightPatterns = /\b(?:max-h-\d+|h-(?:1[2-9]|[2-9]\d|\d{3,}))\b/g;
