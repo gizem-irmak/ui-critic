@@ -29,6 +29,9 @@ E1 now covers ALL deletion flows across the app using three detection channels:
 - Type-to-confirm friction: `type "DELETE" to confirm`
 - Checkbox acknowledgement: `<Checkbox>` with "understand"/"irreversible"/"permanent"
 - Double-confirm patterns: "Are you sure?", "This will permanently..."
+- **Disabled-until-confirm**: `disabled={!confirmState}`, `disabled={!deleteConfirm || isPending}`, `disabled={confirmState === false}` — variable name must imply confirmation intent (confirm, acknowledge, accept, agreed, checked, consent)
+- **Checkbox-confirm-gate**: `onCheckedChange={setDeleteConfirm}` or `onChange` updating a confirmation state variable
+- **Conditional-confirm-gate**: `confirmState && deleteMutation.mutate()`
 
 **NOTE**: Bare `Dialog` is intentionally excluded from confirmation patterns — too broad (matches add/edit dialogs).
 
