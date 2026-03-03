@@ -25,6 +25,9 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
+  const elementIsConfirmed = element.classification
+    ? element.classification === 'confirmed'
+    : isConfirmed;
   const displayLabel = element.elementName && element.elementName !== 'unknown'
     ? element.elementName
     : (element.sourceLabel || element.elementLabel);
@@ -34,7 +37,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <ElementItemWrapper isConfirmed={isConfirmed} compact={compact}>
+      <ElementItemWrapper isConfirmed={elementIsConfirmed} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
@@ -42,6 +45,17 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               {elementSubtype && elementSubtype !== element.elementTag && (
                 <span className="text-xs text-muted-foreground font-mono">({elementSubtype})</span>
               )}
+              <Badge
+                variant="outline"
+                className={cn(
+                  'text-xs font-medium',
+                  elementIsConfirmed
+                    ? 'border-destructive/50 text-destructive'
+                    : 'border-warning/50 text-warning'
+                )}
+              >
+                {elementIsConfirmed ? 'Confirmed' : 'Potential'}
+              </Badge>
               {element.affectedComponents && element.affectedComponents.length > 1 && (
                 <Badge variant="outline" className="text-xs font-medium border-muted-foreground/40 text-muted-foreground">
                   {element.affectedComponents.length} components
@@ -101,6 +115,24 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
                   ))}
                 </div>
               </FieldRow>
+
+              {element.focusClasses && element.focusClasses.length > 0 && (
+                <FieldRow>
+                  <FieldLabel>Classes:</FieldLabel>
+                  <div className="flex flex-wrap gap-1">
+                    {element.focusClasses.map((cls, i) => (
+                      <CodeTag key={i}>{cls}</CodeTag>
+                    ))}
+                  </div>
+                </FieldRow>
+              )}
+
+              {(element as any).rawClassName && (
+                <FieldRow>
+                  <FieldLabel>Class Raw:</FieldLabel>
+                  <FieldValue mono>{(element as any).rawClassName}</FieldValue>
+                </FieldRow>
+              )}
 
               {/* Requirement */}
               <FieldRow>
