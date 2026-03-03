@@ -774,8 +774,8 @@ Deno.test("U3 CONFIDENCE: recovery signal deducts 0.20", () => {
   const base = 0.45;
   const dynamicInMap = 0.15;
   const recovery = -0.20;
-  const total = base + dynamicInMap + recovery;
-  assert(total === 0.40, "Recovery drops to floor");
+  const total = Math.round((base + dynamicInMap + recovery) * 100) / 100;
+  assert(total === 0.40, `Recovery drops to floor, got ${total}`);
 });
 
 Deno.test("U3 CONFIDENCE: header suspected deducts 0.20", () => {

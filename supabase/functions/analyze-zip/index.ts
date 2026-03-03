@@ -1050,6 +1050,15 @@ function u3ContentRiskGate(content: string, pos: number, textPreview: string | u
   return { pass: false, contentKind: 'static_short' };
 }
 
+// Multi-token header label list for robust detection (lowercase)
+const U3_HEADER_LABEL_TOKENS = new Set([
+  'patient','doctor','reason','status','date','actions','action','name','specialty',
+  'location','time','phone','address','joined','email','type','role','id','created',
+  'updated','price','amount','category','priority','description','notes','view',
+  'edit','delete','details','select','options','settings','sort','filter','search',
+  'total','count','#','no.','appointment','schedule','duration','provider','service',
+]);
+
 /** Gate 2: Table header / label row suppression */
 function u3IsHeaderRow(content: string, pos: number, context: string, textPreview: string | undefined): boolean {
   // Inside <thead>, <th>, or <TableHead>
@@ -1067,13 +1076,23 @@ function u3IsHeaderRow(content: string, pos: number, context: string, textPrevie
   // role="columnheader"
   if (/role\s*=\s*["']columnheader["']/i.test(context)) return true;
 
-  // Short static text (no dynamic expression) that is a known header label or ≤20 chars
   if (textPreview && !u3IsDynamic(textPreview)) {
     const staticText = textPreview.replace(/…$/, '').trim();
+
+    // Multi-token header detection: if text contains >= 3 known header labels, suppress
+    // This catches concatenated header strings like "Patient Doctor Reason Status Date Actions"
+    const words = staticText.toLowerCase().split(/\s+/);
+    const headerHits = words.filter(w => U3_HEADER_LABEL_TOKENS.has(w)).length;
+    if (headerHits >= 3) return true;
+
+    // Single short label checks
     if (staticText.length <= 20 && U3_HEADER_LABELS.test(staticText)) return true;
     if (staticText.length <= 20 && U3_HEADER_STYLE_RE.test(context)) return true;
     // Pure short static label with no dynamic content — not a data cell
     if (staticText.length <= 20 && !/\{/.test(context.slice(context.indexOf(staticText)))) return true;
+
+    // Header styling on any-length static text without dynamic content
+    if (U3_HEADER_STYLE_RE.test(context) && !/\{/.test(context)) return true;
   }
 
   return false;
@@ -1208,12 +1227,18 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
         const textPreview = extractU3TextPreview(content, pos);
 
+        // ── GATE 2 (first): Header/label row suppression ──
+        if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
+
         // ── GATE 1: Content risk ──
         const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
         if (!contentGate.pass) continue;
-
-        // ── GATE 2: Header/label row suppression ──
-        if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
+        // In table/list contexts, static_long alone is not enough — require dynamic/list_mapped
+        if (contentGate.contentKind === 'static_long') {
+          const before500 = content.slice(Math.max(0, pos - 500), pos);
+          const isInTableOrList = /<(?:tr|td|TableCell|TableRow)\b/i.test(before500) || /\.map\s*\(/s.test(before500);
+          if (isInTableOrList) continue;
+        }
 
         // ── GATE 3: Recovery mechanism ──
         const recoverySignals = u3DetectRecoverySignals(content, pos, context);
@@ -1243,7 +1268,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         });
         if (confidence < 0.40) continue;
 
-        const dedupeKey = `U3.D1|${filePath}|${lineNumber}`;
+        const columnLabel = u3FindColumnLabel(content, pos);
+        const dedupeKey = `U3.D1|${filePath}|${lineNumber}|${columnLabel || ''}`;
         if (seenKeys.has(dedupeKey)) continue;
         seenKeys.add(dedupeKey);
 
@@ -1260,7 +1286,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
         const d1VarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
         const d1VarName = d1VarMatch ? d1VarMatch[1].split('.').pop() : undefined;
-        const columnLabel = u3FindColumnLabel(content, pos);
+        // columnLabel already resolved above for dedup
 
         const isDynamic = contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped';
         const staticLen = u3StaticTextLength(textPreview);
@@ -1315,12 +1341,18 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
       const textPreview = extractU3TextPreview(content, pos);
 
-      // ── GATE 1 ──
+      // ── GATE 2 (first): Header suppression ──
+      if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
+
+      // ── GATE 1: Content risk ──
       const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
       if (!contentGate.pass) continue;
-
-      // ── GATE 2 ──
-      if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
+      // In table/list contexts, static_long alone is not enough
+      if (contentGate.contentKind === 'static_long') {
+        const before500nw = content.slice(Math.max(0, pos - 500), pos);
+        const isInTableOrList = /<(?:tr|td|TableCell|TableRow)\b/i.test(before500nw) || /\.map\s*\(/s.test(before500nw);
+        if (isInTableOrList) continue;
+      }
 
       // ── GATE 3 ──
       const recoverySignals = u3DetectRecoverySignals(content, pos, context);
@@ -1335,7 +1367,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (u3HasExpandMechanism(content, pos, 20)) continue;
 
       const lineNumber = content.slice(0, pos).split('\n').length;
-      const dedupeKey = `U3.D1|${filePath}|${lineNumber}`;
+      const nwColumnLabel = u3FindColumnLabel(content, pos);
+      const dedupeKey = `U3.D1|${filePath}|${lineNumber}|${nwColumnLabel || ''}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
@@ -1356,7 +1389,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       const nwVarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
       const nwVarName = nwVarMatch ? nwVarMatch[1].split('.').pop() : undefined;
 
-      const nwColumnLabel = u3FindColumnLabel(content, pos);
+      // nwColumnLabel already resolved above for dedup
       const nwContentPreview = isDynamic && nwVarMatch ? `{${nwVarMatch[1]}}` : textPreview;
       const nwEvidenceStr = nwColumnLabel
         ? `Column "${nwColumnLabel}" cell uses nowrap + overflow-hidden on ${nwContentPreview || 'dynamic content'} with no tooltip/expand`
@@ -1403,10 +1436,20 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (/\btruncate\b|\bline-clamp-\d+\b|\btext-ellipsis\b/.test(context)) continue;
 
       const textPreview = extractU3TextPreview(content, pos);
-      const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
-      if (!contentGate.pass) continue;
+
+      // ── GATE 2 (first): Header suppression ──
       if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
 
+      // ── GATE 1: Content risk ──
+      const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
+      if (!contentGate.pass) continue;
+      if (contentGate.contentKind === 'static_long') {
+        const before500wc = content.slice(Math.max(0, pos - 500), pos);
+        const isInTableOrList = /<(?:tr|td|TableCell|TableRow)\b/i.test(before500wc) || /\.map\s*\(/s.test(before500wc);
+        if (isInTableOrList) continue;
+      }
+
+      // ── GATE 3 ──
       const recoverySignals = u3DetectRecoverySignals(content, pos, context);
       if (u3HasExpandMechanism(content, pos, 20)) continue;
       if ((contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped') && textPreview) {
@@ -1418,7 +1461,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       }
 
       const lineNumber = content.slice(0, pos).split('\n').length;
-      const dedupeKey = `U3.D1|${filePath}|${lineNumber}`;
+      const columnLabel = u3FindColumnLabel(content, pos);
+      const dedupeKey = `U3.D1|${filePath}|${lineNumber}|${columnLabel || ''}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
@@ -1488,12 +1532,17 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
       const textPreview = extractU3TextPreview(content, pos);
 
+      // ── GATE 2 (first): Header suppression ──
+      if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
+
       // ── GATE 1: Content risk ──
       const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
       if (!contentGate.pass) continue;
-
-      // ── GATE 2: Header suppression ──
-      if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
+      if (contentGate.contentKind === 'static_long') {
+        const before500d2 = content.slice(Math.max(0, pos - 500), pos);
+        const isInTableOrList = /<(?:tr|td|TableCell|TableRow)\b/i.test(before500d2) || /\.map\s*\(/s.test(before500d2);
+        if (isInTableOrList) continue;
+      }
 
       // ── GATE 3: Recovery ──
       const recoverySignals = u3DetectRecoverySignals(content, pos, context);
@@ -1511,11 +1560,10 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       });
       if (confidence < 0.40) continue;
 
-      const dedupeKey = `U3.D2|${filePath}|${lineNumber}`;
+      const columnLabel = u3FindColumnLabel(content, pos);
+      const dedupeKey = `U3.D2|${filePath}|${lineNumber}|${columnLabel || ''}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
-
-      const columnLabel = u3FindColumnLabel(content, pos);
 
       findings.push({
         subCheck: 'U3.D2',
