@@ -843,6 +843,105 @@ function extractU3TextPreview(content: string, pos: number): string | undefined 
   return undefined;
 }
 
+/**
+ * Extract content preview scoped to the carrier element's own subtree.
+ * Finds the carrier element's opening tag, then scans only within its
+ * children (up to closing tag) for dynamic expressions or text content.
+ * Falls back to extractU3TextPreview if carrier can't be bounded.
+ */
+function extractU3CarrierContentPreview(content: string, pos: number, carrier: { tag: string; tagStart: number; fullTag: string } | null): string | undefined {
+  if (!carrier) return extractU3TextPreview(content, pos);
+
+  const tagEnd = carrier.tagStart + carrier.fullTag.length;
+
+  // Find the closing tag for this carrier element
+  // Use a simple scan: track depth for same-name nested tags
+  const tag = carrier.tag;
+  const closeTag = `</${tag}`;
+  const openTagRe = new RegExp(`<${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g');
+  let depth = 1;
+  let searchPos = tagEnd;
+  let closingPos = -1;
+  const maxSearch = Math.min(content.length, tagEnd + 2000);
+
+  while (searchPos < maxSearch && depth > 0) {
+    const nextOpen = content.indexOf(`<${tag}`, searchPos);
+    const nextClose = content.indexOf(closeTag, searchPos);
+
+    if (nextClose < 0) break; // no closing tag found
+
+    if (nextOpen >= 0 && nextOpen < nextClose) {
+      // Check it's actually an opening tag (not e.g., <TableCellX)
+      const charAfterTag = content[nextOpen + tag.length + 1];
+      if (charAfterTag && /[\s>\/]/.test(charAfterTag)) {
+        depth++;
+      }
+      searchPos = nextOpen + tag.length + 1;
+    } else {
+      depth--;
+      if (depth === 0) {
+        closingPos = nextClose;
+      }
+      searchPos = nextClose + closeTag.length;
+    }
+  }
+
+  // If we found closing tag, extract content from element subtree only
+  if (closingPos > 0) {
+    const elementContent = content.slice(tagEnd, closingPos);
+
+    const cap = (s: string): string => s.length > 120 ? s.slice(0, 117) + '…' : s;
+
+    // Look for dynamic expressions: >{expr}<
+    const dynChildRe = />\s*\{([^}]{1,80})\}\s*</g;
+    let dm;
+    const dynExprs: string[] = [];
+    while ((dm = dynChildRe.exec(elementContent)) !== null) {
+      const expr = dm[1].trim();
+      if (/^(className|style|key|ref|id|onClick|onChange|onSubmit|disabled|checked|value|type|src|href|alt)$/.test(expr)) continue;
+      if (/className|style|onClick/i.test(expr) && !/\.\w+/.test(expr)) continue;
+      dynExprs.push(expr);
+    }
+
+    // Also check for direct expressions: {expr} as children (no wrapping tags)
+    const directDynRe = /\{([a-zA-Z_][\w.?]*(?:\s*\|\|\s*["'][^"']*["'])?)\}/g;
+    let ddm;
+    while ((ddm = directDynRe.exec(elementContent)) !== null) {
+      const expr = ddm[1].trim();
+      if (/^(className|style|key|ref|id|onClick|onChange|onSubmit|disabled|checked|value|type|src|href|alt)$/.test(expr)) continue;
+      if (!dynExprs.includes(expr)) dynExprs.push(expr);
+    }
+
+    if (dynExprs.length > 0) {
+      // Prefer expressions with dot notation (e.g., appt.reason)
+      const meaningful = dynExprs.find(e => /[a-zA-Z_]\w*\.[a-zA-Z_]/.test(e));
+      if (meaningful) {
+        // Clean up: extract the core variable path
+        const coreVar = meaningful.match(/([a-zA-Z_][\w.?]*)/);
+        return `(dynamic text: ${coreVar ? coreVar[1] : meaningful})`;
+      }
+      return `(dynamic text: ${dynExprs[0]})`;
+    }
+
+    // Static text children
+    const textParts: string[] = [];
+    const jsxTextRe = />([^<>{]+)</g;
+    let tm;
+    while ((tm = jsxTextRe.exec(elementContent)) !== null) {
+      const raw = tm[1].trim();
+      if (raw.length < 3) continue;
+      if (!/[a-zA-Z]/.test(raw)) continue;
+      textParts.push(raw);
+    }
+    if (textParts.length > 0) {
+      return cap(textParts.join(' ').trim());
+    }
+  }
+
+  // Fallback to original forward scan
+  return extractU3TextPreview(content, pos);
+}
+
 /** Determine if text preview indicates dynamic content */
 function u3IsDynamic(preview: string | undefined): boolean {
   if (!preview) return false;
@@ -1061,9 +1160,10 @@ const U3_HEADER_LABEL_TOKENS = new Set([
 
 /** Gate 2: Table header / label row suppression */
 function u3IsHeaderRow(content: string, pos: number, context: string, textPreview: string | undefined): boolean {
-  // Inside <thead>, <th>, or <TableHead>
+  // Inside <thead>, <th>, <TableHead>, or <TableHeader>
   const before300 = content.slice(Math.max(0, pos - 300), pos);
   if (/<thead\b/i.test(before300) && !/<\/thead\b/i.test(before300)) return true;
+  if (/<TableHeader\b/.test(before300) && !/<\/TableHeader\b/.test(before300)) return true;
   // Check unclosed <th> or <TableHead>
   for (const tag of ['<th', '<TableHead']) {
     const lastIdx = before300.lastIndexOf(tag);
@@ -1137,13 +1237,32 @@ function u3ExtractTruncationTokens(classStr: string): string[] {
   const tokenPatterns = [
     /\btruncate\b/, /\bline-clamp-\d+\b/, /\btext-ellipsis\b/,
     /\bwhitespace-nowrap\b/, /\boverflow-hidden\b/, /\boverflow-clip\b/,
-    /\bh-\d+\b/, /\bmax-h-\d+\b/, /\bmin-h-\d+\b/,
-    /\bmax-w-\S+/, /\bw-\d+\b/,
+    /\bh-\d+\b/, /\bmax-h-\d+\b/,
+    /\bmin-h-\d+\b/, /\bmin-w-\d+\b/, /\bmin-w-0\b/,
+    /\bmax-w-\S+/,
+    /\bbasis-\S+/,
   ];
   for (const p of tokenPatterns) {
     const m = classStr.match(p);
     if (m) tokens.push(m[0]);
   }
+  // Match w-N but NOT inside min-w-N or max-w-N (use negative lookbehind workaround)
+  const wMatches = classStr.match(/\bw-\d+\b/g);
+  if (wMatches) {
+    for (const wm of wMatches) {
+      const idx = classStr.indexOf(wm);
+      const before = idx > 0 ? classStr.slice(Math.max(0, idx - 4), idx) : '';
+      if (/min-$/.test(before) || /max-$/.test(before)) continue;
+      tokens.push(wm);
+      break; // only first
+    }
+  }
+  // Match w-[...] bracket notation
+  const wBracketMatch = classStr.match(/\bw-\[[^\]]+\]/);
+  if (wBracketMatch) tokens.push(wBracketMatch[0]);
+  // Match max-w-[...] bracket notation
+  const maxWBracketMatch = classStr.match(/\bmax-w-\[[^\]]+\]/);
+  if (maxWBracketMatch && !tokens.includes(maxWBracketMatch[0])) tokens.push(maxWBracketMatch[0]);
   return tokens;
 }
 
@@ -1153,13 +1272,13 @@ function u3FindColumnLabel(content: string, pos: number): string | undefined {
   // then read the corresponding <th>/<TableHead> header text.
   const before = content.slice(Math.max(0, pos - 3000), pos);
   
-  // Find <thead>...</thead> block
-  const theadMatch = before.match(/<thead[\s\S]*?<\/thead>/i);
+  // Find <thead>...</thead> or <TableHeader>...</TableHeader> block
+  const theadMatch = before.match(/<(?:thead|TableHeader)\b[\s\S]*?<\/(?:thead|TableHeader)>/i);
   if (!theadMatch) return undefined;
   
   // Extract header texts from <th> or <TableHead>
   const headerTexts: string[] = [];
-  const thRe = /<(?:th|TableHead)\b[^>]*>([^<]*(?:<[^>]*>[^<]*)*)<\/(?:th|TableHead)>/gi;
+  const thRe = /<(?:th|TableHead)\b[^>]*>([\s\S]*?)<\/(?:th|TableHead)>/gi;
   let thm;
   while ((thm = thRe.exec(theadMatch[0])) !== null) {
     // Strip inner tags to get text
@@ -1170,7 +1289,9 @@ function u3FindColumnLabel(content: string, pos: number): string | undefined {
   
   // Count which <td>/<TableCell> this position is in within its row
   // Find the start of the current row
-  const rowStart = before.lastIndexOf('<tr') !== -1 ? before.lastIndexOf('<tr') : before.lastIndexOf('<TableRow');
+  const trIdx = before.lastIndexOf('<tr');
+  const tableRowIdx = before.lastIndexOf('<TableRow');
+  const rowStart = Math.max(trIdx, tableRowIdx);
   if (rowStart < 0) return undefined;
   const rowSlice = before.slice(rowStart, before.length);
   const cellCount = (rowSlice.match(/<(?:td|TableCell)\b/gi) || []).length;
@@ -1225,7 +1346,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const lineNumber = content.slice(0, pos).split('\n').length;
         const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
 
-        const textPreview = extractU3TextPreview(content, pos);
+        const carrier = u3FindCarrierElement(content, pos);
+        const textPreview = extractU3CarrierContentPreview(content, pos, carrier);
 
         // ── GATE 2 (first): Header/label row suppression ──
         if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
@@ -1236,7 +1358,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         // In table/list contexts, static_long alone is not enough — require dynamic/list_mapped
         if (contentGate.contentKind === 'static_long') {
           const before500 = content.slice(Math.max(0, pos - 500), pos);
-          const isInTableOrList = /<(?:tr|td|TableCell|TableRow)\b/i.test(before500) || /\.map\s*\(/s.test(before500);
+          const isInTableOrList = /<(?:tr|td|th|table|Table|TableCell|TableRow|TableHead|TableBody|TableHeader)\b/i.test(before500) || /\.map\s*\(/s.test(before500);
           if (isInTableOrList) continue;
         }
 
@@ -1254,7 +1376,6 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         }
         if (u3HasExpandMechanism(content, pos, 20)) continue;
 
-        const carrier = u3FindCarrierElement(content, pos);
         const carrierClasses = carrier ? carrier.className : '';
         const truncationTokens = u3ExtractTruncationTokens(carrierClasses + ' ' + context);
         if (truncationTokens.length === 0) truncationTokens.push(m[0]);
@@ -1339,7 +1460,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
       if (!/overflow-hidden\b/.test(context)) continue;
 
-      const textPreview = extractU3TextPreview(content, pos);
+      const nwCarrier = u3FindCarrierElement(content, pos);
+      const textPreview = extractU3CarrierContentPreview(content, pos, nwCarrier);
 
       // ── GATE 2 (first): Header suppression ──
       if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
@@ -1350,7 +1472,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       // In table/list contexts, static_long alone is not enough
       if (contentGate.contentKind === 'static_long') {
         const before500nw = content.slice(Math.max(0, pos - 500), pos);
-        const isInTableOrList = /<(?:tr|td|TableCell|TableRow)\b/i.test(before500nw) || /\.map\s*\(/s.test(before500nw);
+        const isInTableOrList = /<(?:tr|td|th|table|Table|TableCell|TableRow|TableHead|TableBody|TableHeader)\b/i.test(before500nw) || /\.map\s*\(/s.test(before500nw);
         if (isInTableOrList) continue;
       }
 
@@ -1435,7 +1557,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       // Skip if already has truncate/line-clamp (handled by D1 main)
       if (/\btruncate\b|\bline-clamp-\d+\b|\btext-ellipsis\b/.test(context)) continue;
 
-      const textPreview = extractU3TextPreview(content, pos);
+      const wcCarrier = u3FindCarrierElement(content, pos);
+      const textPreview = extractU3CarrierContentPreview(content, pos, wcCarrier);
 
       // ── GATE 2 (first): Header suppression ──
       if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
@@ -1445,7 +1568,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (!contentGate.pass) continue;
       if (contentGate.contentKind === 'static_long') {
         const before500wc = content.slice(Math.max(0, pos - 500), pos);
-        const isInTableOrList = /<(?:tr|td|TableCell|TableRow)\b/i.test(before500wc) || /\.map\s*\(/s.test(before500wc);
+        const isInTableOrList = /<(?:tr|td|th|table|Table|TableCell|TableRow|TableHead|TableBody|TableHeader)\b/i.test(before500wc) || /\.map\s*\(/s.test(before500wc);
         if (isInTableOrList) continue;
       }
 
@@ -1531,7 +1654,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
         // A) Table-like context required
         const before600 = content.slice(Math.max(0, pos - 600), pos);
-        const isTableContext = /<(?:table|tr|td|th|TableRow|TableCell|TableHead)\b/i.test(before600);
+        const isTableContext = /<(?:table|tr|td|th|Table|TableHeader|TableBody|TableRow|TableCell|TableHead)\b/i.test(before600);
         const isMapContext = /\.map\s*\(\s*\(?[a-zA-Z_][\w,\s{}:]*\)?\s*=>/s.test(before600);
         if (!isTableContext && !isMapContext) continue;
 
@@ -1551,7 +1674,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         // If no nowrap AND no table-fixed, require overflow-hidden specifically on the cell
         if (!hasNowrap && !hasTableFixed && !hasOverflowClip) continue;
 
-        const textPreview = extractU3TextPreview(content, pos);
+        const d6Carrier = u3FindCarrierElement(content, pos);
+        const textPreview = extractU3CarrierContentPreview(content, pos, d6Carrier);
 
         // Gate 2: Header suppression (first)
         if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
@@ -1599,8 +1723,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const d6VarName = d6VarMatch ? d6VarMatch[1].split('.').pop() : undefined;
         const d6ContentPreview = d6VarMatch ? `{${d6VarMatch[1]}}` : textPreview;
 
-        const carrier = u3FindCarrierElement(content, pos);
-        const elementTag = carrier?.tag && !U3_ICON_COMPONENT_RE.test(carrier.tag) ? carrier.tag : undefined;
+        const elementTag = d6Carrier?.tag && !U3_ICON_COMPONENT_RE.test(d6Carrier.tag) ? d6Carrier.tag : undefined;
 
         const d6EvidenceStr = columnLabel
           ? `Column "${columnLabel}" cell constrained by ${d6m[0]}${hasNowrap ? ' + nowrap' : ''} (no tooltip/expand) on ${d6ContentPreview || 'dynamic content'}`
@@ -1659,7 +1782,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (!contentGate.pass) continue;
       if (contentGate.contentKind === 'static_long') {
         const before500d2 = content.slice(Math.max(0, pos - 500), pos);
-        const isInTableOrList = /<(?:tr|td|TableCell|TableRow)\b/i.test(before500d2) || /\.map\s*\(/s.test(before500d2);
+        const isInTableOrList = /<(?:tr|td|th|table|Table|TableCell|TableRow|TableHead|TableBody|TableHeader)\b/i.test(before500d2) || /\.map\s*\(/s.test(before500d2);
         if (isInTableOrList) continue;
       }
 
