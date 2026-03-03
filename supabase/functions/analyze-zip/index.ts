@@ -754,9 +754,9 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
 // =====================
 
 interface U3Finding {
-  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4' | 'U3.D5' | 'U3.D6';
+  subCheck: 'U3.D1' | 'U3.D2' | 'U3.D3' | 'U3.D4' | 'U3.D5' | 'U3.D6' | 'U3.D7';
   subCheckLabel: string;
-  classification: 'potential';
+  classification: 'potential' | 'confirmed';
   elementLabel: string;
   elementType: string;
   filePath: string;
@@ -1343,14 +1343,26 @@ function u3FindColumnLabel(content: string, pos: number): string | undefined {
   return colIdx < headerTexts.length ? headerTexts[colIdx] : undefined;
 }
 
-/** Compute U3 confidence using the revised scoring model (v2: recovery = full suppress, not deduction) */
+/** Compute U3 confidence using the revised scoring model.
+ * For confirmed (explicit truncate/line-clamp without recovery): 0.80–0.90
+ * For potential (implicit clipping signals): 0.55–0.75 */
 function u3ComputeConfidence(opts: {
   contentKind: string;
   hasTruncationUtility: boolean;
+  hasExplicitTruncation?: boolean; // truncate / line-clamp-* (deterministic)
   fieldLabel?: string;
   isHeaderSuspected: boolean;
 }): number {
-  let conf = 0.55; // base raised since only dynamic content reaches here now
+  // Confirmed path: explicit truncation tokens
+  if (opts.hasExplicitTruncation) {
+    let conf = 0.82;
+    if ((opts.contentKind === 'dynamic' || opts.contentKind === 'list_mapped')) conf += 0.05;
+    if (opts.fieldLabel && /\b(?:address|reason|notes|description|message|bio|comment|details|body|content|summary)\b/i.test(opts.fieldLabel)) conf += 0.03;
+    if (opts.isHeaderSuspected) conf -= 0.15;
+    return Math.max(0.80, Math.min(0.90, Math.round(conf * 100) / 100));
+  }
+  // Potential path: implicit clipping signals
+  let conf = 0.55;
   if ((opts.contentKind === 'dynamic' || opts.contentKind === 'list_mapped') && opts.hasTruncationUtility) conf += 0.15;
   else if (opts.contentKind === 'dynamic' || opts.contentKind === 'list_mapped') conf += 0.10;
   if (opts.hasTruncationUtility) conf += 0.05;
@@ -1428,9 +1440,12 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const truncationTokens = u3ExtractTruncationTokens(carrierClasses);
         if (truncationTokens.length === 0) truncationTokens.push(m[0]);
 
+        // Explicit truncation tokens (truncate, line-clamp-*, text-ellipsis) → Confirmed
+        const isExplicitTruncation = /\b(truncate|line-clamp-\d+|text-ellipsis)\b/.test(m[0]);
         const confidence = u3ComputeConfidence({
           contentKind: contentGate.contentKind,
           hasTruncationUtility: true,
+          hasExplicitTruncation: isExplicitTruncation,
           fieldLabel: contentGate.fieldLabel,
           isHeaderSuspected: false,
         });
@@ -1454,7 +1469,6 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
         const d1VarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
         const d1VarName = d1VarMatch ? d1VarMatch[1].split('.').pop() : undefined;
-        // columnLabel already resolved above for dedup
 
         const isDynamic = contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped';
         const staticLen = u3StaticTextLength(textPreview);
@@ -1467,10 +1481,15 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           ? `Column "${columnLabel}" cell (${elementTag || 'element'}) uses \`${label}\` on ${contentPreview || 'dynamic content'} with no tooltip/expand`
           : `${label} on ${contentPreview || 'content'} at ${fileName}:${lineNumber}`;
 
+        const classification: 'confirmed' | 'potential' = isExplicitTruncation ? 'confirmed' : 'potential';
+        const advisoryText = isExplicitTruncation
+          ? 'Content is truncated by CSS and no accessible recovery is provided.'
+          : 'Static analysis suggests possible clipping; verify in rendered UI.';
+
         findings.push({
           subCheck: 'U3.D1',
           subCheckLabel: 'Line clamp / ellipsis truncation',
-          classification: 'potential',
+          classification,
           elementLabel: columnLabel ? `Truncated "${columnLabel}" cell (${label})` : `Truncated text (${label})`,
           elementType: 'text',
           filePath,
@@ -1479,7 +1498,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           explanation: `Text is truncated using ${label} without a visible mechanism to reveal full content.`,
           confidence,
           textPreview,
-          advisoryGuidance: 'Ensure truncated content has an accessible expand mechanism (title, tooltip, or expand action).',
+          advisoryGuidance: advisoryText,
           deduplicationKey: dedupeKey,
           truncationType: label,
           textLength: isDynamic ? 'dynamic' : (staticLen >= 0 ? staticLen : undefined),
@@ -2321,11 +2340,12 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
     capped.push(...fileFindgs.slice(0, 5));
   }
 
-  // Confidence adjustment: base + 0.03 per additional sub-check, cap 0.75
+  // Confidence adjustment: base + 0.03 per additional sub-check, cap 0.90 for confirmed, 0.75 for potential
   const subChecks = new Set(capped.map(f => f.subCheck));
   const bonus = Math.min((subChecks.size - 1) * 0.03, 0.09);
   for (const f of capped) {
-    f.confidence = Math.min(f.confidence + bonus, 0.75);
+    const cap = f.classification === 'confirmed' ? 0.90 : 0.75;
+    f.confidence = Math.min(f.confidence + bonus, cap);
   }
 
   console.log(`[U3] Detection: ${findings.length} raw → ${mergedFindings.length} after merge → ${capped.length} after capping (${subChecks.size} sub-checks)`);
@@ -10335,6 +10355,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           textPreview: f.textPreview,
           subCheck: f.subCheck, subCheckLabel: f.subCheckLabel,
           confidence: f.confidence,
+          classification: f.classification, // confirmed | potential
           advisoryGuidance: f.advisoryGuidance, deduplicationKey: f.deduplicationKey,
           truncationType: f.truncationType, textLength: f.textLength,
           triggerReason: f.triggerReason, expandDetected: f.expandDetected,
@@ -10347,15 +10368,24 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           truncationTokens: f.truncationTokens,
         }));
 
+        const hasConfirmed = u3Findings.some(f => f.classification === 'confirmed');
+        const confirmedCount = u3Findings.filter(f => f.classification === 'confirmed').length;
+        const potentialCount = u3Findings.length - confirmedCount;
         const overallConfidence = Math.max(...u3Findings.map(f => f.confidence));
+        const statusLabel = hasConfirmed ? 'confirmed' : 'potential';
+        const diagParts: string[] = [];
+        if (confirmedCount > 0) diagParts.push(`${confirmedCount} confirmed`);
+        if (potentialCount > 0) diagParts.push(`${potentialCount} potential`);
         aggregatedU3List.push({
           ruleId: 'U3', ruleName: 'Truncated or inaccessible content', category: 'usability',
-          status: 'potential',
-          blocksConvergence: false,
+          status: statusLabel,
+          blocksConvergence: false, // Usability rules never block convergence
           inputType: 'zip', isU3Aggregated: true, u3Elements, evaluationMethod: 'deterministic_structural',
-          diagnosis: `Content accessibility issues: ${u3Findings.length} potential risk(s) detected via structural analysis.`,
+          diagnosis: `Content accessibility issues: ${diagParts.join(', ')} risk(s) detected via structural analysis.`,
           contextualHint: 'Ensure all meaningful text is fully visible or has an accessible expand mechanism.',
-          advisoryGuidance: 'Ensure important content is fully visible or provide an accessible expand mechanism.',
+          advisoryGuidance: hasConfirmed
+            ? 'Content is truncated by CSS and no accessible recovery is provided.'
+            : 'Static analysis suggests possible clipping; verify in rendered UI.',
           confidence: Math.round(overallConfidence * 100) / 100,
         });
 
