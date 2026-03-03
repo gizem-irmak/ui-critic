@@ -3751,121 +3751,277 @@ interface A2Finding {
   elementLabel: string;
   elementType: string;
   elementTag: string; // actual HTML tag: input, div, button, a, etc.
-  elementName: string; // Human-readable element name (e.g., "SelectItem", "CommandPrimitive.Item")
+  elementName: string; // Human-readable element name (e.g., "CommandInput", "CommandItem")
+  elementSubtype?: string; // e.g., input[type="text"], div role="option" / aria-selected
   elementSource: 'jsx_tag' | 'wrapper_component' | 'html_tag_fallback' | 'unknown';
   sourceLabel: string;
   filePath: string;
   lineNumber: number;
   lineEnd?: number;
+  rawClassName?: string;
   componentName: string;
   classification: 'confirmed' | 'potential' | 'not_applicable';
   detection: string;
   explanation: string;
   confidence: number;
   focusClasses: string[];
+  triggerTokens: string[];
+  alternativeIndicatorTokens: string[];
   correctivePrompt?: string;
   potentialSubtype?: 'borderline';
   potentialReason?: string;
   deduplicationKey: string;
   // Element metadata
   focusable: 'yes' | 'no' | 'unknown';
-  selectorHints: string[]; // e.g., ['id="email"', 'role="menuitem"']
+  selectorHints: string[]; // e.g., ['type="text"', 'role="menuitem"']
   _a2Debug: {
     outlineRemoved: boolean;
     hasStrongReplacement: boolean;
+    hasStateDrivenIndicator: boolean;
     hasWeakFocusStyling: boolean;
+    hasWrapperIndicator: boolean;
     matchedTokens: string[];
+    triggerTokens: string[];
     focusable: string;
   };
 }
 
-// Build a lightweight symbol table of wrapper component definitions in a file
-function buildComponentSymbolTable(content: string): Array<{ name: string; startLine: number; endLine: number }> {
-  const symbols: Array<{ name: string; startLine: number; endLine: number }> = [];
-  const lines = content.split('\n');
-  // Match: const X = React.forwardRef(...) / const X = forwardRef(...)
-  // Match: const X = (...) => { / const X = (...) => (
-  // Match: function X(...)
-  // Match: export const X = ...
-  const defRegex = /^(?:export\s+)?(?:const|let|var)\s+([A-Z][A-Za-z0-9_.]*)\s*=\s*(?:React\.)?(?:forwardRef|memo)?\s*[(<]/;
-  const fnDefRegex = /^(?:export\s+)?(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)\s*[(<]/;
-
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trimStart();
-    let name: string | null = null;
-    const m1 = trimmed.match(defRegex);
-    if (m1) name = m1[1];
-    if (!name) {
-      const m2 = trimmed.match(fnDefRegex);
-      if (m2) name = m2[1];
-    }
-    if (name) {
-      // Find the end: scan forward for balanced braces/parens until we hit the next top-level definition or EOF
-      let depth = 0;
-      let endLine = i;
-      for (let j = i; j < lines.length; j++) {
-        for (const ch of lines[j]) {
-          if (ch === '{' || ch === '(') depth++;
-          else if (ch === '}' || ch === ')') depth--;
-        }
-        endLine = j;
-        if (depth <= 0 && j > i) break;
-      }
-      symbols.push({ name, startLine: i + 1, endLine: endLine + 1 }); // 1-indexed
-    }
-  }
-  return symbols;
+interface A2ClassSegment {
+  raw: string;
+  tokens: string[];
+  startLine: number;
+  endLine: number;
+  absoluteStart: number;
 }
 
-// Resolve the best human-readable element name for an A2 finding
-function resolveA2ElementName(
-  content: string,
-  classStrPos: number,
-  line: number,
-  tagMatch: RegExpMatchArray | null,
-  elementTag: string,
-  symbolTable: Array<{ name: string; startLine: number; endLine: number }>,
-  fileComponentName: string,
-): { elementName: string; elementSource: 'jsx_tag' | 'wrapper_component' | 'html_tag_fallback' | 'unknown' } {
-  // Strategy 1: JSX tag name (if capitalized or dotted — e.g., SelectItem, CommandPrimitive.Item)
-  if (tagMatch) {
-    const rawTag = tagMatch[1];
-    // Check for dotted names: <CommandPrimitive.Item className=...>
-    // Re-match from the context to get the full dotted name
-    const contextStart = Math.max(0, classStrPos - 500);
-    const contextBefore = content.slice(contextStart, classStrPos);
-    const dottedMatch = contextBefore.match(/<([A-Z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*)(?:\s|$)[^>]*$/);
-    if (dottedMatch) {
-      return { elementName: dottedMatch[1], elementSource: 'jsx_tag' };
+function getLineAtIndex(content: string, index: number): number {
+  return content.slice(0, Math.max(0, index)).split('\n').length;
+}
+
+function tokenizeClassString(classStr: string): string[] {
+  return classStr
+    .split(/\s+/)
+    .map(t => t.trim())
+    .filter(Boolean);
+}
+
+function extractStringLiteralsFromExpression(expression: string): Array<{ value: string; offset: number }> {
+  const literals: Array<{ value: string; offset: number }> = [];
+  let i = 0;
+
+  while (i < expression.length) {
+    const ch = expression[i];
+    if (ch !== '"' && ch !== "'" && ch !== '`') {
+      i++;
+      continue;
     }
-    if (/^[A-Z]/.test(rawTag)) {
-      return { elementName: rawTag, elementSource: 'jsx_tag' };
+
+    const quote = ch;
+    const valueStart = i + 1;
+    i++;
+    let value = '';
+
+    while (i < expression.length) {
+      const curr = expression[i];
+
+      if (curr === '\\' && i + 1 < expression.length) {
+        value += expression.slice(i, i + 2);
+        i += 2;
+        continue;
+      }
+
+      // Handle template interpolation in backticks
+      if (quote === '`' && curr === '$' && expression[i + 1] === '{') {
+        i += 2;
+        let braceDepth = 1;
+        while (i < expression.length && braceDepth > 0) {
+          const interpChar = expression[i];
+          if (interpChar === '\\' && i + 1 < expression.length) {
+            i += 2;
+            continue;
+          }
+          if (interpChar === '{') braceDepth++;
+          if (interpChar === '}') braceDepth--;
+          i++;
+        }
+        continue;
+      }
+
+      if (curr === quote) break;
+      value += curr;
+      i++;
+    }
+
+    literals.push({ value, offset: valueStart });
+    i++; // consume closing quote
+  }
+
+  return literals;
+}
+
+function extractA2ClassSegmentsFromTag(fullTag: string, tagStartIndex: number, content: string): A2ClassSegment[] {
+  const segments: A2ClassSegment[] = [];
+  const attrRegex = /\b(className|class)\s*=/g;
+  let attrMatch: RegExpExecArray | null;
+
+  while ((attrMatch = attrRegex.exec(fullTag)) !== null) {
+    let cursor = attrMatch.index + attrMatch[0].length;
+    while (cursor < fullTag.length && /\s/.test(fullTag[cursor])) cursor++;
+    if (cursor >= fullTag.length) continue;
+
+    const firstChar = fullTag[cursor];
+
+    if (firstChar === '"' || firstChar === "'") {
+      const quote = firstChar;
+      const valueStart = cursor + 1;
+      let end = valueStart;
+      while (end < fullTag.length) {
+        if (fullTag[end] === quote && fullTag[end - 1] !== '\\') break;
+        end++;
+      }
+      const raw = fullTag.slice(valueStart, end);
+      const tokens = tokenizeClassString(raw);
+      if (tokens.length > 0) {
+        const absoluteStart = tagStartIndex + valueStart;
+        const absoluteEnd = tagStartIndex + Math.max(valueStart, end - 1);
+        segments.push({
+          raw,
+          tokens,
+          startLine: getLineAtIndex(content, absoluteStart),
+          endLine: getLineAtIndex(content, absoluteEnd),
+          absoluteStart,
+        });
+      }
+      continue;
+    }
+
+    if (firstChar === '{') {
+      let end = cursor;
+      let depth = 0;
+      let inString: string | null = null;
+      let inTemplateLiteral = false;
+
+      while (end < fullTag.length) {
+        const ch = fullTag[end];
+
+        if (inString) {
+          if (ch === inString && fullTag[end - 1] !== '\\') inString = null;
+          end++;
+          continue;
+        }
+
+        if (inTemplateLiteral) {
+          if (ch === '`' && fullTag[end - 1] !== '\\') inTemplateLiteral = false;
+          end++;
+          continue;
+        }
+
+        if (ch === '"' || ch === "'") {
+          inString = ch;
+          end++;
+          continue;
+        }
+
+        if (ch === '`') {
+          inTemplateLiteral = true;
+          end++;
+          continue;
+        }
+
+        if (ch === '{') {
+          depth++;
+          end++;
+          continue;
+        }
+
+        if (ch === '}') {
+          depth--;
+          end++;
+          if (depth === 0) break;
+          continue;
+        }
+
+        end++;
+      }
+
+      const exprStart = cursor + 1;
+      const exprEnd = Math.max(exprStart, end - 1);
+      const expression = fullTag.slice(exprStart, exprEnd);
+      const expressionAbsStart = tagStartIndex + exprStart;
+
+      const literals = extractStringLiteralsFromExpression(expression);
+      for (const lit of literals) {
+        const raw = lit.value;
+        const tokens = tokenizeClassString(raw);
+        if (tokens.length === 0) continue;
+        const absoluteStart = expressionAbsStart + lit.offset;
+        const absoluteEnd = absoluteStart + Math.max(raw.length - 1, 0);
+        segments.push({
+          raw,
+          tokens,
+          startLine: getLineAtIndex(content, absoluteStart),
+          endLine: getLineAtIndex(content, absoluteEnd),
+          absoluteStart,
+        });
+      }
+      continue;
+    }
+
+    // Bare attribute fallback
+    let end = cursor;
+    while (end < fullTag.length && !/[\s>]/.test(fullTag[end])) end++;
+    const raw = fullTag.slice(cursor, end);
+    const tokens = tokenizeClassString(raw);
+    if (tokens.length > 0) {
+      const absoluteStart = tagStartIndex + cursor;
+      const absoluteEnd = tagStartIndex + Math.max(cursor, end - 1);
+      segments.push({
+        raw,
+        tokens,
+        startLine: getLineAtIndex(content, absoluteStart),
+        endLine: getLineAtIndex(content, absoluteEnd),
+        absoluteStart,
+      });
     }
   }
 
-  // Strategy 2: Which wrapper component definition contains this line?
-  for (const sym of symbolTable) {
-    if (line >= sym.startLine && line <= sym.endLine) {
-      return { elementName: sym.name, elementSource: 'wrapper_component' };
+  return segments;
+}
+
+function extractA2ParentIndicatorTokens(content: string, elementIndex: number): string[] {
+  const contextStart = Math.max(0, elementIndex - 700);
+  const context = content.slice(contextStart, elementIndex);
+  const classAttrRegex = /className\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([\s\S]{0,400}?)\})/g;
+  const matches = Array.from(context.matchAll(classAttrRegex));
+  if (matches.length === 0) return [];
+
+  const last = matches[matches.length - 1];
+  const literalClasses = (last[1] || last[2] || '').trim();
+  const expression = (last[3] || '').trim();
+
+  const tokens = new Set<string>();
+  tokenizeClassString(literalClasses).forEach(t => tokens.add(t));
+
+  if (expression) {
+    const literals = extractStringLiteralsFromExpression(expression);
+    for (const lit of literals) {
+      tokenizeClassString(lit.value).forEach(t => tokens.add(t));
     }
   }
 
-  // Strategy 3: HTML tag fallback with role/data-state annotation
-  if (elementTag && elementTag !== 'unknown') {
-    return { elementName: elementTag, elementSource: 'html_tag_fallback' };
-  }
-
-  // Strategy 4: File-level component name
-  if (fileComponentName) {
-    return { elementName: fileComponentName, elementSource: 'wrapper_component' };
-  }
-
-  return { elementName: 'unknown', elementSource: 'unknown' };
+  return Array.from(tokens).filter(t =>
+    /^(?:focus-within|group-focus|group-focus-visible|peer-focus|peer-focus-visible):(?:ring-|border-|outline-|shadow-|bg-|text-|underline)/i.test(t)
+  );
 }
 
 function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
   const findings: A2Finding[] = [];
   const seenKeys = new Set<string>();
+
+  const FOCUSABLE_ROLES = new Set([
+    'button', 'link', 'menuitem', 'option', 'combobox', 'tab', 'checkbox', 'radio',
+    'switch', 'listbox', 'slider', 'treeitem', 'gridcell',
+  ]);
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
@@ -3873,298 +4029,238 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
     if (filePath.includes('node_modules/')) continue;
 
-    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js)$/i, '') || '';
+    let componentName = filePath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js|html|htm)$/i, '') || '';
     const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
     const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
     const fileName = filePath.split('/').pop() || filePath;
-
-    // Build symbol table for wrapper component resolution
     const symbolTable = buildComponentSymbolTable(content);
 
-    // Find all className attributes in the file
-    const classNameRegex = /className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[^}]*(?:`([^`]+)`|["']([^"']+)["'])[^}]*\})/g;
-    // Also find class= for HTML files
-    const classRegex = /\bclass\s*=\s*(?:"([^"]+)"|'([^']+)')/g;
-    // Also find cva/cn base strings
-    const cvaBaseRegex = /(?:cva|cn)\(\s*["'`]([^"'`]+)["'`]/g;
+    const jsxNodes = extractJsxOpeningTags(content, '[A-Za-z][A-Za-z0-9_.]*');
 
-    const classStrings: Array<{ classStr: string; line: number }> = [];
+    for (const node of jsxNodes) {
+      const classSegments = extractA2ClassSegmentsFromTag(node.fullMatch, node.index, content);
+      if (classSegments.length === 0) continue;
 
-    // Collect all class strings with their line numbers
-    let match;
-    while ((match = classNameRegex.exec(content)) !== null) {
-      const classStr = match[1] || match[2] || match[3] || match[4] || '';
-      if (!classStr) continue;
-      const line = content.slice(0, match.index).split('\n').length;
-      classStrings.push({ classStr, line });
-    }
-    while ((match = classRegex.exec(content)) !== null) {
-      const classStr = match[1] || match[2] || '';
-      if (!classStr) continue;
-      const line = content.slice(0, match.index).split('\n').length;
-      classStrings.push({ classStr, line });
-    }
-    while ((match = cvaBaseRegex.exec(content)) !== null) {
-      const classStr = match[1] || '';
-      if (!classStr) continue;
-      const line = content.slice(0, match.index).split('\n').length;
-      classStrings.push({ classStr, line });
-    }
+      const allTokens = Array.from(new Set(classSegments.flatMap(segment => segment.tokens)));
 
-    for (const { classStr, line } of classStrings) {
-      // Split into tokens
-      const tokens = classStr.split(/\s+/).filter(Boolean);
-
-      // STEP 1: Check outline removal
-      const outlineRemovalTokens = tokens.filter(t =>
+      const outlineRemovalTokens = allTokens.filter(t =>
         t === 'outline-none' ||
         t === 'focus:outline-none' ||
         t === 'focus-visible:outline-none'
       );
-      const outlineRemoved = outlineRemovalTokens.length > 0;
-      if (!outlineRemoved) continue;
+      if (outlineRemovalTokens.length === 0) continue;
 
-      // STEP 2: Check strong replacement (focus-scoped only)
-      const strongReplacementTokens = tokens.filter(t =>
+      const outlineSegments = classSegments.filter(segment =>
+        segment.tokens.some(token =>
+          token === 'outline-none' || token === 'focus:outline-none' || token === 'focus-visible:outline-none'
+        )
+      );
+
+      const lineStart = Math.min(...outlineSegments.map(s => s.startLine));
+      const lineEnd = Math.max(...outlineSegments.map(s => s.endLine));
+      const rawClassName = outlineSegments.map(s => s.raw).join(' | ');
+
+      const parserPos = outlineSegments[0]?.absoluteStart ?? node.index;
+      const syntheticTagMatch = `<${node.tag}`.match(/<([A-Za-z0-9_.]+)/);
+      const inferredTag = node.tag.includes('.')
+        ? node.tag.split('.').pop()?.toLowerCase() || 'unknown'
+        : node.tag.toLowerCase();
+
+      const resolved = resolveA2ElementName(
+        content,
+        parserPos,
+        lineStart,
+        syntheticTagMatch,
+        inferredTag,
+        symbolTable,
+        componentName,
+      );
+
+      const wrapperSymbol = symbolTable.find(sym => lineStart >= sym.startLine && lineStart <= sym.endLine);
+      const elementName = wrapperSymbol?.name || resolved.elementName;
+      const elementSource = wrapperSymbol ? 'wrapper_component' as const : resolved.elementSource;
+
+      const roleParsed = parseA5AttributeFromTag(node.fullMatch, 'role');
+      const typeParsed = parseA5AttributeFromTag(node.fullMatch, 'type');
+      const tabIndexParsed = parseA5AttributeFromTag(node.fullMatch, 'tabIndex');
+      const idParsed = parseA5AttributeFromTag(node.fullMatch, 'id');
+      const nameParsed = parseA5AttributeFromTag(node.fullMatch, 'name');
+      const ariaLabelParsed = parseA5AttributeFromTag(node.fullMatch, 'aria-label');
+      const ariaSelectedParsed = parseA5AttributeFromTag(node.fullMatch, 'aria-selected');
+
+      const parsedRole = roleParsed.isNonEmpty && roleParsed.value ? roleParsed.value.toLowerCase() : '';
+      const parsedType = typeParsed.isNonEmpty && typeParsed.value ? typeParsed.value.toLowerCase() : null;
+      const parsedTabIndex = tabIndexParsed.isNonEmpty && tabIndexParsed.value && /^-?\d+$/.test(tabIndexParsed.value)
+        ? parseInt(tabIndexParsed.value, 10)
+        : null;
+
+      const elementTag = (() => {
+        if (/CommandInput/i.test(elementName)) return 'input';
+        if (/CommandItem/i.test(elementName)) return 'div';
+        if (node.tag.includes('.')) {
+          const last = node.tag.split('.').pop() || '';
+          if (/^Input$/i.test(last)) return 'input';
+          if (/^Item$/i.test(last)) return 'div';
+          return last.toLowerCase();
+        }
+        return node.tag.toLowerCase();
+      })();
+
+      const strongReplacementTokens = allTokens.filter(t =>
         /^focus(?:-visible)?:ring-(?!0$)/i.test(t) ||
         /^focus(?:-visible)?:border-(?!0$|none$)/i.test(t) ||
         /^focus(?:-visible)?:shadow-(?!none$)/i.test(t) ||
-        /^focus(?:-visible)?:outline-(?!none$)/i.test(t)
+        /^focus(?:-visible)?:outline-(?!none$)/i.test(t) ||
+        /^focus-visible:underline$/i.test(t)
       );
-      const hasStrongReplacement = strongReplacementTokens.length > 0;
 
-      if (hasStrongReplacement) {
-        console.log(`A2 PASS (deterministic): ${filePath}:${line} — strong replacement [${strongReplacementTokens.join(', ')}]`);
+      if (strongReplacementTokens.length > 0) {
+        console.log(`A2 PASS (deterministic): ${filePath}:${lineStart} — strong replacement [${strongReplacementTokens.join(', ')}]`);
         continue;
       }
 
-      // STEP 2b: Check focus-within wrapper indicators
-      const hasFocusWithinIndicator = tokens.some(t =>
-        /^focus-within:ring-(?!0$)/i.test(t) ||
-        /^focus-within:border-(?!0$|none$)/i.test(t) ||
-        /^focus-within:shadow-(?!none$)/i.test(t)
-      );
-      if (hasFocusWithinIndicator) {
-        console.log(`A2 PASS (deterministic): ${filePath}:${line} — focus-within wrapper indicator`);
-        continue;
-      }
-
-      // STEP 2c: Check state-driven highlight patterns (Radix/CMDK/listbox/menu)
-      // These patterns provide visible selection/highlight feedback managed by the component library
-      const hasStateDrivenIndicator = tokens.some(t =>
+      const stateDrivenTokens = allTokens.filter(t =>
         /^data-\[selected(?:=true|='true')?\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
         /^data-\[highlighted(?:=true|='true')?\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
         /^aria-selected:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
-        /^data-\[state=active\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
-        /^data-\[state=open\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t)
+        /^data-\[state=active\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t)
       );
-      if (hasStateDrivenIndicator) {
-        console.log(`A2 PASS (deterministic): ${filePath}:${line} — state-driven focus/selection indicator`);
-        continue;
-      }
 
-      // STEP 2d: Check if wrapper element (one hop up) has focus-within indicator
-      // Look at the surrounding JSX context for a parent with focus-within styles
-      const wrapperContextStart = Math.max(0, content.indexOf(classStr) - 800);
-      const wrapperContextBefore = content.slice(wrapperContextStart, content.indexOf(classStr));
-      // Find a parent className in the preceding context that has focus-within
-      const parentClassMatch = wrapperContextBefore.match(/className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[^}]*(?:`([^`]+)`|["']([^"']+)["'])[^}]*\})(?:[^<]*<[^/]){0,2}[^<]*$/);
-      if (parentClassMatch) {
-        const parentClasses = (parentClassMatch[1] || parentClassMatch[2] || parentClassMatch[3] || parentClassMatch[4] || '');
-        const parentTokens = parentClasses.split(/\s+/).filter(Boolean);
-        const parentHasFocusWithin = parentTokens.some(t =>
-          /^focus-within:ring-(?!0$)/i.test(t) ||
-          /^focus-within:border-(?!0$|none$)/i.test(t) ||
-          /^focus-within:shadow-(?!none$)/i.test(t)
-        );
-        if (parentHasFocusWithin) {
-          console.log(`A2 PASS (deterministic): ${filePath}:${line} — parent wrapper has focus-within indicator`);
-          continue;
-        }
-      }
-
-      // STEP 3: Check weak focus styling (focus-scoped only)
-      const weakFocusTokens = tokens.filter(t =>
+      const weakFocusTokens = allTokens.filter(t =>
         /^focus(?:-visible)?:bg-/i.test(t) ||
         /^focus(?:-visible)?:text-/i.test(t) ||
         /^focus(?:-visible)?:underline$/i.test(t) ||
         /^focus(?:-visible)?:opacity-/i.test(t) ||
-        /^focus(?:-visible)?:font-/i.test(t)
+        /^focus(?:-visible)?:font-/i.test(t) ||
+        /^(?:group-focus|group-focus-visible|peer-focus|peer-focus-visible):(?:bg-|text-|ring-|border-|outline-|shadow-|underline)/i.test(t)
       );
+
+      const wrapperIndicatorTokens = extractA2ParentIndicatorTokens(content, node.index);
+      const isCmdkItem = /Command(?:Primitive\.)?Item|CommandItem/i.test(node.tag) || /CommandItem/i.test(elementName) || stateDrivenTokens.some(t => /^data-\[selected/.test(t));
+
+      const hasStateDrivenIndicator = stateDrivenTokens.length > 0 || ariaSelectedParsed.present;
       const hasWeakFocusStyling = weakFocusTokens.length > 0;
+      const hasWrapperIndicator = wrapperIndicatorTokens.length > 0;
 
-      // ── Extract element tag and attributes from surrounding JSX context ──
-      const classStrPos = content.indexOf(classStr, 0);
-      // Walk backward to find the opening < tag
-      const lineStart = content.lastIndexOf('\n', classStrPos) + 1;
-      // Grab a wider window: up to 5 lines before className match
-      const contextStart = Math.max(0, classStrPos - 500);
-      const contextBefore = content.slice(contextStart, classStrPos);
-      // Find the nearest opening tag
-      const tagMatch = contextBefore.match(/<(\w+)(?:\s|$)[^>]*$/);
-      const rawTagName = tagMatch ? tagMatch[1] : '';
-      const elementTag = rawTagName ? rawTagName.toLowerCase() : 'unknown';
-      // Resolve human-readable element name
-      const { elementName, elementSource } = resolveA2ElementName(content, classStrPos, line, tagMatch, elementTag, symbolTable, componentName);
-      // Get the full tag opening (up to 1000 chars after < to find >)
-      const tagOpenStart = contextBefore.lastIndexOf('<');
-      const fullTagRegion = content.slice(contextStart + (tagOpenStart >= 0 ? tagOpenStart : 0), classStrPos + classStr.length + 200);
-      
-      // Extract selector hints
-      const selectorHints: string[] = [];
-      const idMatch = fullTagRegion.match(/\bid\s*=\s*["']([^"']+)["']/);
-      if (idMatch) selectorHints.push(`id="${idMatch[1]}"`);
-      const nameMatch = fullTagRegion.match(/\bname\s*=\s*["']([^"']+)["']/);
-      if (nameMatch) selectorHints.push(`name="${nameMatch[1]}"`);
-      const ariaLabelMatch = fullTagRegion.match(/\baria-label\s*=\s*["']([^"']+)["']/);
-      if (ariaLabelMatch) selectorHints.push(`aria-label="${ariaLabelMatch[1]}"`);
-      const roleMatch = fullTagRegion.match(/\brole\s*=\s*["']([^"']+)["']/);
-      if (roleMatch) selectorHints.push(`role="${roleMatch[1]}"`);
-      const tabIndexMatch = fullTagRegion.match(/\btabIndex\s*=\s*\{?\s*(-?\d+)\s*\}?/);
-      if (tabIndexMatch) selectorHints.push(`tabIndex=${tabIndexMatch[1]}`);
-      const hrefMatch = fullTagRegion.match(/\bhref\s*=/);
-      if (hrefMatch) selectorHints.push(`href`);
-      const contentEditableMatch = fullTagRegion.match(/\bcontentEditable/i);
-      if (contentEditableMatch) selectorHints.push(`contentEditable`);
+      const alternativeIndicatorTokens = Array.from(new Set([
+        ...stateDrivenTokens,
+        ...weakFocusTokens,
+        ...wrapperIndicatorTokens,
+      ]));
 
-      // Determine element type (human-friendly)
-      let elementType = 'interactive element';
-      if (/\bbutton\b|<button|<Button/i.test(contextBefore)) elementType = 'button';
-      else if (/\binput\b|<input|<Input/i.test(contextBefore)) elementType = 'input';
-      else if (/\bselect\b|<select|<Select/i.test(contextBefore)) elementType = 'select';
-      else if (/\btextarea\b|<textarea|<Textarea/i.test(contextBefore)) elementType = 'textarea';
-      else if (/\bmenuitem|MenuItem|DropdownMenu|ContextMenu/i.test(contextBefore)) elementType = 'menuitem';
-      else if (/\btab\b|<Tab/i.test(contextBefore)) elementType = 'tab';
-      else if (/\ba\b|<a\b|<Link/i.test(contextBefore)) elementType = 'link';
-
-      // ── Determine focusable status ──
-      const INHERENTLY_FOCUSABLE = /^(input|textarea|select|button|a)$/;
-      const FOCUSABLE_ROLES = /^(button|link|menuitem|option|combobox|tab|checkbox|radio|switch|listbox|slider|treeitem|gridcell)$/;
-      const parsedRole = roleMatch ? roleMatch[1].toLowerCase() : '';
-      const parsedTabIndex = tabIndexMatch ? parseInt(tabIndexMatch[1], 10) : null;
-
+      // Focusability gate — emit only for focusable targets
       let focusable: 'yes' | 'no' | 'unknown' = 'unknown';
-      if (INHERENTLY_FOCUSABLE.test(elementTag)) {
-        focusable = 'yes';
-      } else if (parsedTabIndex !== null && parsedTabIndex >= 0) {
-        focusable = 'yes';
-      } else if (contentEditableMatch) {
-        focusable = 'yes';
-      } else if (FOCUSABLE_ROLES.test(parsedRole)) {
-        focusable = 'yes';
-      } else if (/^(div|span|p|section|article|header|footer|aside|nav|figure|main)$/.test(elementTag)) {
-        focusable = parsedTabIndex !== null && parsedTabIndex < 0 ? 'no' : (parsedTabIndex === null ? 'no' : 'yes');
-      }
-      // Component wrappers (capitalized tag) → check against known lists
-      const jsxTagName = tagMatch?.[1] || '';
-      const isCapitalized = /^[A-Z]/.test(jsxTagName);
+      const hasHref = /\bhref\s*=/.test(node.fullMatch);
 
-      // ── Non-focusable wrapper/content suppression list ──
-      const NON_FOCUSABLE_WRAPPER_RE = /^(?:HoverCard|HoverCardContent|Popover|PopoverContent|DropdownMenuContent|ContextMenuContent|MenubarContent|DialogContent|SheetContent|DrawerContent|TooltipContent|AlertDialogContent|Portal|Viewport)$|Content$/;
-      // ── Known interactive Radix/shadcn primitives ──
-      const KNOWN_INTERACTIVE_RE = /(?:Trigger|Item|Button|Link|Tab|Checkbox|Switch|Radio|Slider|Toggle)$/;
-
-      if (isCapitalized || elementTag === 'unknown') {
-        // Check wrapper suppression first
-        if (NON_FOCUSABLE_WRAPPER_RE.test(jsxTagName)) {
-          // Wrapper/content component — suppress unless explicitly focusable via tabIndex/role
-          if (parsedTabIndex === null || parsedTabIndex < 0) {
-            if (!FOCUSABLE_ROLES.test(parsedRole)) {
-              focusable = 'no';
-            }
-          }
-        } else if (KNOWN_INTERACTIVE_RE.test(jsxTagName)) {
-          // Known interactive primitive — treat as focusable
-          focusable = 'yes';
-        } else if (/input|button|select|textarea|command/i.test(componentName)) {
-          focusable = 'yes';
-        } else if (/content|wrapper|container|card|popover|hover/i.test(componentName)) {
-          focusable = parsedTabIndex !== null && parsedTabIndex >= 0 ? 'yes' : 'no';
-        }
-        // else: remains 'unknown'
+      if (/^(input|textarea|select|button)$/.test(elementTag)) {
+        focusable = 'yes';
+      } else if (elementTag === 'a') {
+        focusable = hasHref || (parsedTabIndex !== null && parsedTabIndex >= 0) ? 'yes' : 'no';
+      } else if (parsedTabIndex !== null) {
+        focusable = parsedTabIndex >= 0 ? 'yes' : 'no';
+      } else if (parsedRole && FOCUSABLE_ROLES.has(parsedRole)) {
+        focusable = 'yes';
+      } else if (/^[A-Z]/.test(node.tag) || node.tag.includes('.')) {
+        focusable = /(Input|Item|Button|Link|Trigger|Tab|Checkbox|Switch|Radio|Slider|Option)$/i.test(elementName || node.tag)
+          ? 'yes'
+          : 'unknown';
+      } else {
+        focusable = 'no';
       }
 
-      // ── Focusable target gate: suppress unknown-focusable component wrappers ──
-      // Only emit A2 if we have evidence of focusability
-      if (focusable === 'unknown' && isCapitalized && !hasWeakFocusStyling) {
-        // Unknown component with no weak focus styling → suppress (no evidence of keyboard focus target)
-        console.log(`A2 SUPPRESSED (deterministic): ${filePath}:${line} — unknown focusability on component ${jsxTagName}, no evidence of keyboard target`);
+      if (focusable !== 'yes') {
         continue;
       }
 
-      // ── Estimate line range ──
-      const lineEnd = Math.min(line + 5, content.split('\n').length);
-
-      // ── Classification with focusable gate ──
-      const isBorderline = hasWeakFocusStyling;
-      const allMatchedTokens = [...outlineRemovalTokens, ...(isBorderline ? weakFocusTokens : [])];
-
-      let classification: 'confirmed' | 'potential' | 'not_applicable';
-      if (focusable === 'no') {
-        classification = 'not_applicable';
-        console.log(`A2 NOT_APPLICABLE (deterministic): ${filePath}:${line} — non-focusable ${jsxTagName || elementTag}`);
-      } else if (isBorderline) {
-        classification = 'potential';
-      } else if (focusable === 'yes') {
-        classification = 'confirmed';
-      } else {
-        // focusable === 'unknown' (only reached if hasWeakFocusStyling was true above)
+      let classification: 'confirmed' | 'potential' | 'not_applicable' = 'confirmed';
+      if (hasStateDrivenIndicator || hasWeakFocusStyling || hasWrapperIndicator || isCmdkItem) {
         classification = 'potential';
       }
 
-      const dedupeKey = `${filePath}|${componentName}|${line}`;
+      let elementSubtype = elementTag;
+      if (elementTag === 'input') {
+        elementSubtype = `input[type="${parsedType || 'text'}"]`;
+      } else if (parsedRole) {
+        elementSubtype = `${elementTag} role="${parsedRole}"`;
+      } else if (parsedTabIndex !== null) {
+        elementSubtype = `${elementTag} tabIndex=${parsedTabIndex}`;
+      }
+      if ((hasStateDrivenIndicator || isCmdkItem) && !/aria-selected/.test(elementSubtype)) {
+        elementSubtype = `${elementSubtype} / aria-selected`;
+      }
+
+      const selectorHints: string[] = [];
+      if (parsedType) selectorHints.push(`type="${parsedType}"`);
+      if (parsedRole) selectorHints.push(`role="${parsedRole}"`);
+      if (parsedTabIndex !== null) selectorHints.push(`tabIndex=${parsedTabIndex}`);
+      if (idParsed.isNonEmpty && idParsed.value) selectorHints.push(`id="${idParsed.value}"`);
+      if (nameParsed.isNonEmpty && nameParsed.value) selectorHints.push(`name="${nameParsed.value}"`);
+      if (ariaLabelParsed.isNonEmpty && ariaLabelParsed.value) selectorHints.push(`aria-label="${ariaLabelParsed.value}"`);
+      if (hasStateDrivenIndicator || isCmdkItem) selectorHints.push('aria-selected');
+
+      const dedupeKey = `A2|${filePath}|${lineStart}|${elementName}|${outlineRemovalTokens.join(',')}|${alternativeIndicatorTokens.join(',')}`;
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
-      if (classification === 'not_applicable') continue; // suppress entirely
+      const detection = alternativeIndicatorTokens.length > 0
+        ? `outline removed via "${outlineRemovalTokens.join(', ')}"\nalternative indicator detected: ${alternativeIndicatorTokens.join(', ')}`
+        : `outline removed via "${outlineRemovalTokens.join(', ')}"\nno visible focus indicator detected`;
 
-      let detection: string;
-      if (isBorderline) {
-        const details = [...outlineRemovalTokens, ...weakFocusTokens].join(', ');
-        detection = `Focus indicated only by background/text color change (${details}) after outline removal — contrast not verifiable statically`;
-      } else {
-        detection = `Focus indicator removed (${outlineRemovalTokens.join(', ')}) without visible replacement`;
-      }
+      const explanation = classification === 'confirmed'
+        ? 'Element removes the default browser outline without providing a visible focus replacement.'
+        : 'Outline is removed, but focus feedback appears state-driven or subtle; perceptibility cannot be statically verified.';
 
-      const explanation = isBorderline
-        ? 'Issue reason: Outline removed; focus relies only on bg/text change; contrast can\'t be verified statically.\n\nRecommended fix: Add a clear focus-visible indicator (e.g., focus-visible:ring-2 + focus-visible:ring-offset-2) or restore outline.'
-        : 'Element removes the default browser outline without providing a visible focus replacement.';
+      const potentialReason = classification === 'potential'
+        ? (hasStateDrivenIndicator || isCmdkItem
+            ? 'Focus relies on state-driven background/text change; perceptibility not statically verifiable.'
+            : 'Focus relies on subtle or wrapper-driven styling; perceptibility cannot be statically verified.')
+        : undefined;
 
-      const confidence = isBorderline ? 0.68 : (focusable === 'yes' ? 0.92 : 0.75);
-      const sourceLabel = elementName !== 'unknown' ? elementName : (componentName || fileName.replace(/\.\w+$/, ''));
+      const sourceLabel = elementName !== 'unknown'
+        ? elementName
+        : (componentName || fileName.replace(/\.\w+$/, ''));
 
-      console.log(`A2 ${classification.toUpperCase()} (deterministic): ${filePath}:${line} tag=${elementTag} name=${elementName} focusable=${focusable} tokens=[${allMatchedTokens.join(',')}]`);
+      console.log(`A2 ${classification.toUpperCase()} (deterministic): ${filePath}:${lineStart}-${lineEnd} name=${elementName} subtype=${elementSubtype} focusable=${focusable} outline=[${outlineRemovalTokens.join(',')}] alt=[${alternativeIndicatorTokens.join(',')}]`);
 
       findings.push({
         elementLabel: sourceLabel,
-        elementType,
+        elementType: parsedRole || elementTag,
         elementTag,
         elementName,
+        elementSubtype,
         elementSource,
         sourceLabel,
         filePath,
-        lineNumber: line,
+        lineNumber: lineStart,
         lineEnd,
+        rawClassName,
         componentName,
         classification,
         detection,
         explanation,
-        confidence,
-        focusClasses: allMatchedTokens,
-        correctivePrompt: classification === 'confirmed' ? `[${sourceLabel} ${elementType}] — ${filePath}\n\nIssue reason:\nFocus indicator is removed (${outlineRemovalTokens.join(', ')}) without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2) and apply consistently across all instances.` : undefined,
+        confidence: classification === 'confirmed' ? 0.92 : 0.72,
+        focusClasses: Array.from(new Set([...outlineRemovalTokens, ...alternativeIndicatorTokens])),
+        triggerTokens: outlineRemovalTokens,
+        alternativeIndicatorTokens,
+        correctivePrompt: classification === 'confirmed'
+          ? `[${sourceLabel} ${elementSubtype}] — ${filePath}:${lineStart}${lineEnd !== lineStart ? `-${lineEnd}` : ''}\n\nIssue reason:\nFocus indicator is removed (${outlineRemovalTokens.join(', ')}) without a visible replacement.\n\nRecommended fix:\nAdd a visible keyboard focus style using :focus-visible (e.g., focus-visible:ring-2 focus-visible:ring-offset-2) and apply consistently across all instances.`
+          : undefined,
         potentialSubtype: classification === 'potential' ? 'borderline' : undefined,
-        potentialReason: classification === 'potential' ? (isBorderline ? 'Custom focus styles exist but perceptibility cannot be statically verified.' : 'Element focusability could not be deterministically confirmed (component wrapper or unknown tag).') : undefined,
+        potentialReason,
         deduplicationKey: dedupeKey,
         focusable,
         selectorHints,
         _a2Debug: {
-          outlineRemoved,
-          hasStrongReplacement,
+          outlineRemoved: true,
+          hasStrongReplacement: false,
+          hasStateDrivenIndicator,
           hasWeakFocusStyling,
-          matchedTokens: allMatchedTokens,
+          hasWrapperIndicator,
+          matchedTokens: Array.from(new Set([...outlineRemovalTokens, ...alternativeIndicatorTokens])),
+          triggerTokens: outlineRemovalTokens,
           focusable,
         },
       });
@@ -8559,29 +8655,29 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       });
 
     // ========== A2 Focus Visibility — Fully Deterministic ==========
-    // Group by file + focus-class pattern signature, then split confirmed/potential
-     const aggregatedA2List: any[] = [];
+    // Emit per-element findings with exact subtype + source location.
+    const aggregatedA2List: any[] = [];
     if (selectedRulesSet.has('A2')) {
       const a2Findings = detectA2FocusVisibility(allFiles);
       if (a2Findings.length > 0) {
-        // ── Per-element reporting (no pattern grouping) ──
         const mapA2Finding = (f: A2Finding) => {
-          // Build element subtype annotation (e.g., "input[type=\"text\"]", "div role=\"option\"")
-          let elementSubtype = f.elementTag || 'element';
           const roleHint = f.selectorHints.find(h => h.startsWith('role='));
           const typeHint = f.selectorHints.find(h => h.startsWith('type='));
-          if (typeHint) elementSubtype = `${f.elementTag}[${typeHint}]`;
-          else if (roleHint) elementSubtype = `${f.elementTag} ${roleHint.replace(/"/g, '')}`;
+          const elementSubtype = f.elementSubtype || (() => {
+            if (typeHint && (f.elementTag || '').toLowerCase() === 'input') {
+              return `input[${typeHint}]`;
+            }
+            if (roleHint) {
+              return `${f.elementTag || 'element'} ${roleHint}`;
+            }
+            return f.elementTag || f.elementType || 'element';
+          })();
 
-          // Build structured detection evidence
-          const outlineTokens = f.focusClasses.filter(t => /outline-none/i.test(t));
-          const replacementTokens = f.focusClasses.filter(t => !/outline-none/i.test(t));
-          let structuredDetection: string;
-          if (replacementTokens.length > 0) {
-            structuredDetection = `outline removed via "${outlineTokens.join(', ')}"\nalternative indicator detected: ${replacementTokens.join(', ')}`;
-          } else {
-            structuredDetection = `outline removed via "${outlineTokens.join(', ')}"\nno visible focus indicator detected`;
-          }
+          const triggerTokens = f.triggerTokens || f.focusClasses.filter(t => /outline-none/i.test(t));
+          const alternativeTokens = f.alternativeIndicatorTokens || f.focusClasses.filter(t => !/outline-none/i.test(t));
+          const structuredDetection = alternativeTokens.length > 0
+            ? `outline removed via "${triggerTokens.join(', ')}"\nalternative indicator detected: ${alternativeTokens.join(', ')}`
+            : `outline removed via "${triggerTokens.join(', ')}"\nno visible focus indicator detected`;
 
           return {
             elementLabel: f.elementName !== 'unknown' ? f.elementName : f.sourceLabel,
@@ -8611,6 +8707,8 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
             startLine: f.lineNumber,
             endLine: f.lineEnd ?? null,
             filePath: f.filePath,
+            rawClassName: f.rawClassName,
+            triggerTokens,
             _a2Debug: f._a2Debug,
           };
         };
