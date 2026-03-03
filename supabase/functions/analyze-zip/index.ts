@@ -7270,6 +7270,13 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
 
     // ── DETECTION D (network): DELETE request with handler not gated ──
     if (hasNetworkDelete && /\.(tsx|jsx)$/.test(filePath)) {
+      // FILE-LEVEL non-modal gate check: for network channel, confirmation gates
+      // (disabled-until-confirm, checkbox, conditional) may be in JSX far from handler.
+      // These are inherently linked to the same deletion flow within the same component file.
+      const fileLevelGate = detectE1ConfirmationGate(content);
+      const fileLevelIsNonModalGate = fileLevelGate.hasGate &&
+        /disabled-until-confirm|checkbox-confirm-gate|conditional-confirm-gate|two-step-state/i.test(fileLevelGate.gateType);
+
       const deleteHandlerRe = /(?:const|function)\s+(handle(?:Delete|Remove|Destroy)|(?:delete|remove|destroy)\w+)\s*=\s*(?:async\s*)?\(?/gi;
       let dhm;
       while ((dhm = deleteHandlerRe.exec(content)) !== null) {
@@ -7310,9 +7317,15 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
         const localDisclosure = extractE1DisclosureTerms(handlerRegion);
         const localFriction = extractE1FrictionMechanisms(handlerRegion);
 
+        // For network channel: use file-level non-modal gate as fallback when flow-local doesn't find it
+        const effectiveGate = localConfirmGate.hasGate ? localConfirmGate
+          : fileLevelIsNonModalGate ? fileLevelGate
+          : localConfirmGate;
+        const effectiveDisclosure = localDisclosure.length > 0 ? localDisclosure : extractE1DisclosureTerms(content);
+
         const suppressResult = shouldSuppressE1Bundle({
-          label: inferredLabel, filePath, content, confirmGate: localConfirmGate, recovery: localRecovery,
-          hasStrongDisclosure: localDisclosure.length > 0, disclosureTermsFound: localDisclosure, frictionMechanisms: localFriction,
+          label: inferredLabel, filePath, content, confirmGate: effectiveGate, recovery: localRecovery,
+          hasStrongDisclosure: effectiveDisclosure.length > 0, disclosureTermsFound: effectiveDisclosure, frictionMechanisms: localFriction,
           handlerName,
         });
         if (suppressResult.suppressed) {
@@ -7407,8 +7420,12 @@ function shouldSuppressE1Bundle(opts: {
     if (frictionMechanisms.length > 0) {
       return { suppressed: true, reason: `${confirmGate.gateType} + friction (${frictionMechanisms.join(', ')}) in local scope` };
     }
-   // Destructive label + explicit confirmation pattern in LOCAL region = suppress
-    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state|disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate/i.test(confirmGate.gateType)) {
+   // Non-modal gate types always suppress when present (they are inherently linked to the deletion flow)
+    if (/disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate/i.test(confirmGate.gateType)) {
+      return { suppressed: true, reason: `non-modal confirmation gate: ${confirmGate.gateType}` };
+    }
+    // Destructive label + explicit confirmation pattern in LOCAL region = suppress
+    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state/i.test(confirmGate.gateType)) {
       return { suppressed: true, reason: `destructive label + ${confirmGate.gateType} in local scope` };
     }
   }
