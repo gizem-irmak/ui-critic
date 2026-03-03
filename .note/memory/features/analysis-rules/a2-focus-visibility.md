@@ -1,30 +1,25 @@
 # Memory: features/analysis-rules/a2-focus-visibility
 Updated: now
 
-Rule A2 (Poor Focus Visibility) uses strength-based classification with per-element reporting.
+Rule A2 (Poor Focus Visibility) identifies accessibility failures where focus indicators are removed or insufficient.
 
-## Strength-Based Classification (v2)
-- **Suppress (PASS)**: Outline removed + strong replacement tokens:
-  - `focus(-visible)?:ring-*`, `focus(-visible)?:border-*`, `focus(-visible)?:shadow-*`, `focus(-visible)?:outline-*`
-  - `focus-within:ring-*`, `focus-within:border-*`, `focus-within:shadow-*`
-  - State-driven strong: `data-[selected]:ring-*`, `data-[highlighted]:border-*`, `data-[state=active]:shadow-*`, etc.
-- **Potential (Borderline)** (confidence 0.60–0.75): Outline removed + only weak replacement tokens:
-  - `focus(-visible)?:bg-*`, `focus(-visible)?:text-*`, `focus(-visible)?:underline`, `focus(-visible)?:opacity-*`
-  - State-driven weak: `data-[selected]:bg-*`, `data-[highlighted]:bg-*`, `data-[state=open]:bg-*`, `aria-selected:bg-*`, etc.
-- **Confirmed** (confidence 0.92): Outline removed + no replacement tokens at all.
-- **Not applicable**: Element is non-focusable (focusable=no).
+## Per-Element Reporting (v2)
+- **No pattern-signature grouping**: Each focusable element is reported individually with its own line range, element name, and subtype annotation.
+- **Element subtype annotation**: Each finding includes `elementSubtype` (e.g., `input[type="text"]`, `div role=option`) derived from detected role/type attributes.
+- **Structured detection evidence**: Multi-line detection strings: first line describes outline removal, second line describes replacement status (e.g., "no visible focus indicator detected" or "alternative indicator detected: focus:bg-accent").
 
-## Outline Removal Tokens
-`outline-none`, `focus:outline-none`, `focus-visible:outline-none`, `[&]:outline-none`
+## Classification
+- **Confirmed** (confidence 0.92): Native interactive elements (button, input, etc.) or elements with `focusable=yes` where outline is removed without any strong or state-driven replacement.
+- **Potential** (confidence 0.68–0.75): Elements with weak focus styling (focus:bg-*, focus:text-*, focus:underline) or unknown focusability.
+- **Pass**: Strong replacement (focus:ring-*, focus:border-*, focus:shadow-*, focus:outline-*), focus-within wrapper indicators, or state-driven patterns (data-[selected], data-[highlighted], aria-selected, data-[state=active/open]).
+- **Suppressed**: Non-focusable wrappers (HoverCardContent, PopoverContent, etc.), non-interactive elements (focusable=no).
 
-## Focusable Inference
-- **Yes**: Native interactive elements (button, input, textarea, select), `<a>` with href, elements with tabIndex≥0, interactive ARIA roles (button, link, menuitem, option, etc.), elements with onClick/onKeyDown/onSelect, PascalCase components ending in Input/Item/Button/Link/Trigger/Tab/Checkbox/Switch/Radio/Slider/Option.
-- **No**: Non-interactive HTML elements without interactive attributes, `<a>` without href, tabIndex<0.
-- **Unknown**: PascalCase components not matching known interactive patterns.
-- Only focusable=yes elements are reported.
+## Source Location
+- Each finding includes `startLine`, `endLine`, `filePath` for precise code attribution.
+- Findings are sorted by file path (alphabetical) then line number (ascending).
 
-## Deduplication
-Key: `filePath + startLine + elementName + outlineRemovalTokens + alternativeIndicatorTokens`
-
-## Per-Element Reporting
-Each finding includes componentName, elementName, elementSubtype, selectorHints, startLine/endLine, filePath, rawClassName, focusClasses, detection string.
+## Element Name Resolution (4-tier)
+1. JSX Tag Name (e.g., `<CommandInput>`, `<SelectItem>`)
+2. Wrapper Component Scope (via symbol table)
+3. HTML Tag Fallback (e.g., `button`, `input`)
+4. Unknown
