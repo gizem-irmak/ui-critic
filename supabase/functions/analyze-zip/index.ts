@@ -8560,71 +8560,65 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
 
     // ========== A2 Focus Visibility — Fully Deterministic ==========
     // Group by file + focus-class pattern signature, then split confirmed/potential
-    const aggregatedA2List: any[] = [];
+     const aggregatedA2List: any[] = [];
     if (selectedRulesSet.has('A2')) {
       const a2Findings = detectA2FocusVisibility(allFiles);
       if (a2Findings.length > 0) {
-        // ── Pattern-signature grouping ──
-        // Key = filePath + sorted focusClasses → collapse duplicates
-        const groupByPattern = (list: typeof a2Findings) => {
-          const groups = new Map<string, { representative: typeof list[0]; occurrences: number; components: Set<string>; lines: number[] }>();
-          for (const f of list) {
-            const patternSig = [...f.focusClasses].sort().join(' ');
-            const groupKey = `${f.filePath}|${patternSig}`;
-            const existing = groups.get(groupKey);
-            if (existing) {
-              existing.occurrences++;
-              if (f.componentName) existing.components.add(f.componentName);
-              existing.lines.push(f.lineNumber);
-              if (f.confidence > existing.representative.confidence) {
-                existing.representative = f;
-              }
-            } else {
-              const components = new Set<string>();
-              if (f.componentName) components.add(f.componentName);
-              groups.set(groupKey, { representative: f, occurrences: 1, components, lines: [f.lineNumber] });
-            }
+        // ── Per-element reporting (no pattern grouping) ──
+        const mapA2Finding = (f: A2Finding) => {
+          // Build element subtype annotation (e.g., "input[type=\"text\"]", "div role=\"option\"")
+          let elementSubtype = f.elementTag || 'element';
+          const roleHint = f.selectorHints.find(h => h.startsWith('role='));
+          const typeHint = f.selectorHints.find(h => h.startsWith('type='));
+          if (typeHint) elementSubtype = `${f.elementTag}[${typeHint}]`;
+          else if (roleHint) elementSubtype = `${f.elementTag} ${roleHint.replace(/"/g, '')}`;
+
+          // Build structured detection evidence
+          const outlineTokens = f.focusClasses.filter(t => /outline-none/i.test(t));
+          const replacementTokens = f.focusClasses.filter(t => !/outline-none/i.test(t));
+          let structuredDetection: string;
+          if (replacementTokens.length > 0) {
+            structuredDetection = `outline removed via "${outlineTokens.join(', ')}"\nalternative indicator detected: ${replacementTokens.join(', ')}`;
+          } else {
+            structuredDetection = `outline removed via "${outlineTokens.join(', ')}"\nno visible focus indicator detected`;
           }
-          return Array.from(groups.values());
+
+          return {
+            elementLabel: f.elementName !== 'unknown' ? f.elementName : f.sourceLabel,
+            elementType: f.elementType,
+            elementTag: f.elementTag,
+            elementName: f.elementName,
+            elementSubtype,
+            elementSource: f.elementSource,
+            role: roleHint ? roleHint.replace(/^role=["']?|["']?$/g, '') : f.elementType,
+            accessibleName: '',
+            sourceLabel: f.sourceLabel,
+            selectorHint: `<${f.elementTag || f.elementType || 'element'}> in ${f.filePath}`,
+            selectorHints: f.selectorHints,
+            location: f.filePath,
+            lineRange: f.lineEnd ? `${f.lineNumber}–${f.lineEnd}` : `${f.lineNumber}`,
+            detection: structuredDetection,
+            detectionMethod: 'deterministic' as const,
+            focusClasses: f.focusClasses,
+            classification: f.classification as 'confirmed' | 'potential',
+            potentialSubtype: f.potentialSubtype,
+            potentialReason: f.potentialReason,
+            explanation: f.explanation,
+            confidence: f.confidence,
+            correctivePrompt: f.correctivePrompt,
+            deduplicationKey: f.deduplicationKey,
+            focusable: f.focusable,
+            startLine: f.lineNumber,
+            endLine: f.lineEnd ?? null,
+            filePath: f.filePath,
+            _a2Debug: f._a2Debug,
+          };
         };
 
         const confirmedFindings = a2Findings.filter(f => f.classification === 'confirmed');
         const potentialFindings = a2Findings.filter(f => f.classification === 'potential');
 
-        const confirmedGroups = groupByPattern(confirmedFindings);
-        const potentialGroups = groupByPattern(potentialFindings);
-
-        const mapA2Groups = (groups: ReturnType<typeof groupByPattern>) => groups.map(g => ({
-          elementLabel: g.representative.sourceLabel,
-          elementType: g.representative.elementType,
-          elementTag: g.representative.elementTag,
-          elementName: g.representative.elementName,
-          elementSource: g.representative.elementSource,
-          role: g.representative.elementType,
-          accessibleName: '',
-          sourceLabel: g.representative.sourceLabel,
-          selectorHint: `<${g.representative.elementTag || g.representative.elementType || 'element'}> in ${g.representative.filePath}`,
-          selectorHints: g.representative.selectorHints,
-          location: g.representative.filePath,
-          lineRange: g.lines.length > 1 ? `${Math.min(...g.lines)}–${Math.max(...g.lines)}` : (g.representative.lineEnd ? `${g.representative.lineNumber}–${g.representative.lineEnd}` : `${g.representative.lineNumber}`),
-          detection: g.representative.detection + (g.occurrences > 1 ? ` (${g.occurrences} occurrences)` : ''),
-          detectionMethod: 'deterministic' as const,
-          focusClasses: g.representative.focusClasses,
-          classification: g.representative.classification as 'confirmed' | 'potential',
-          potentialSubtype: g.representative.potentialSubtype,
-          potentialReason: g.representative.potentialReason,
-          explanation: g.representative.explanation,
-          confidence: g.representative.confidence,
-          correctivePrompt: g.representative.correctivePrompt,
-          deduplicationKey: g.representative.deduplicationKey,
-          focusable: g.representative.focusable,
-          occurrences: g.occurrences,
-          affectedComponents: Array.from(g.components),
-          _a2Debug: g.representative._a2Debug,
-        }));
-
-        if (confirmedGroups.length > 0) {
-          const totalConfirmed = confirmedGroups.reduce((s, g) => s + g.occurrences, 0);
+        if (confirmedFindings.length > 0) {
           aggregatedA2List.push({
             ruleId: 'A2',
             ruleName: 'Poor focus visibility',
@@ -8633,17 +8627,16 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
             blocksConvergence: true,
             inputType: 'zip',
             isA2Aggregated: true,
-            a2Elements: mapA2Groups(confirmedGroups),
+            a2Elements: confirmedFindings.map(mapA2Finding),
             evaluationMethod: 'deterministic',
-            diagnosis: `Focus visibility issues detected: ${confirmedGroups.length} pattern(s) across ${totalConfirmed} occurrence(s). Elements remove the default focus outline without any visible replacement.`,
+            diagnosis: `Focus visibility issues detected: ${confirmedFindings.length} element(s). Elements remove the default focus outline without any visible replacement.`,
             contextualHint: 'Interactive elements remove the default focus outline without a visible replacement indicator.',
             correctivePrompt: 'Add a visible focus indicator (focus ring, border change, shadow, or distinct background change) for interactive elements that remove the default outline.',
-            confidence: Math.max(...confirmedGroups.map(g => g.representative.confidence)),
+            confidence: Math.max(...confirmedFindings.map(f => f.confidence)),
           });
         }
 
-        if (potentialGroups.length > 0) {
-          const totalPotential = potentialGroups.reduce((s, g) => s + g.occurrences, 0);
+        if (potentialFindings.length > 0) {
           aggregatedA2List.push({
             ruleId: 'A2',
             ruleName: 'Poor focus visibility',
@@ -8653,18 +8646,16 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
             blocksConvergence: false,
             inputType: 'zip',
             isA2Aggregated: true,
-            a2Elements: mapA2Groups(potentialGroups),
+            a2Elements: potentialFindings.map(mapA2Finding),
             evaluationMethod: 'deterministic',
-            diagnosis: `Focus visibility issues detected: ${potentialGroups.length} pattern(s) across ${totalPotential} occurrence(s). Elements have weak focus styling that may not be sufficiently visible.`,
+            diagnosis: `Focus visibility issues detected: ${potentialFindings.length} element(s). Elements have weak focus styling that may not be sufficiently visible.`,
             contextualHint: 'Interactive elements have subtle focus indicators — verify visibility manually.',
             advisoryGuidance: 'Focus styling exists but may be too subtle. Consider using a clearer focus-visible indicator.',
-            confidence: Math.max(...potentialGroups.map(g => g.representative.confidence)),
+            confidence: Math.max(...potentialFindings.map(f => f.confidence)),
           });
         }
 
-        const totalRaw = a2Findings.length;
-        const totalGrouped = confirmedGroups.length + potentialGroups.length;
-        console.log(`A2 deterministic: ${totalRaw} raw findings → ${totalGrouped} grouped items → ${aggregatedA2List.length} violation object(s) (${confirmedGroups.length} confirmed groups, ${potentialGroups.length} borderline groups)`);
+        console.log(`A2 deterministic: ${a2Findings.length} raw findings → ${aggregatedA2List.length} violation object(s) (${confirmedFindings.length} confirmed, ${potentialFindings.length} potential)`);
       } else {
         console.log('A2 deterministic: No violations found');
       }

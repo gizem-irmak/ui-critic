@@ -1,40 +1,25 @@
 # Memory: features/analysis-rules/a2-focus-visibility
 Updated: now
 
-Rule A2 (Poor Focus Visibility) evaluates WCAG 2.4.7 — fully deterministic (no LLM dependency).
+Rule A2 (Poor Focus Visibility) identifies accessibility failures where focus indicators are removed or insufficient.
 
-## Focusability Gate (CRITICAL)
-- **Confirmed** requires `focusable === 'yes'` (deterministically focusable):
-  - `<button>`, `<a href>`, `<input>`, `<select>`, `<textarea>`
-  - OR `tabIndex >= 0`
-  - OR `role="button"/"link"/etc.` with keyboard handlers
-- **focusable === 'unknown'** (component wrappers, unresolved tags) → **Potential** (confidence 0.75)
-- **focusable === 'no'** (plain div/span without tabIndex) → **not_applicable** (suppressed)
+## Per-Element Reporting (v2)
+- **No pattern-signature grouping**: Each focusable element is reported individually with its own line range, element name, and subtype annotation.
+- **Element subtype annotation**: Each finding includes `elementSubtype` (e.g., `input[type="text"]`, `div role=option`) derived from detected role/type attributes.
+- **Structured detection evidence**: Multi-line detection strings: first line describes outline removal, second line describes replacement status (e.g., "no visible focus indicator detected" or "alternative indicator detected: focus:bg-accent").
 
-## Classification Logic
+## Classification
+- **Confirmed** (confidence 0.92): Native interactive elements (button, input, etc.) or elements with `focusable=yes` where outline is removed without any strong or state-driven replacement.
+- **Potential** (confidence 0.68–0.75): Elements with weak focus styling (focus:bg-*, focus:text-*, focus:underline) or unknown focusability.
+- **Pass**: Strong replacement (focus:ring-*, focus:border-*, focus:shadow-*, focus:outline-*), focus-within wrapper indicators, or state-driven patterns (data-[selected], data-[highlighted], aria-selected, data-[state=active/open]).
+- **Suppressed**: Non-focusable wrappers (HoverCardContent, PopoverContent, etc.), non-interactive elements (focusable=no).
 
-**Pass (No violation):**
-- No outline suppression detected (browser defaults preserved)
-- OR outline removed + ANY focus-scoped strong replacement token:
-  - `focus:ring-*` / `focus-visible:ring-*` (not ring-0)
-  - `focus:border-*` / `focus-visible:border-*` (not border-0/none)
-  - `focus:shadow-*` / `focus-visible:shadow-*` (not shadow-none)
-  - `focus:outline-*` / `focus-visible:outline-*` (not outline-none)
-- OR `focus-within:ring-*` / `focus-within:border-*` / `focus-within:shadow-*` (wrapper indicator)
-- OR state-driven highlight patterns (Radix/CMDK/listbox/menu):
-  - `data-[selected=true]:bg-*` / `data-[highlighted=true]:bg-*`
-  - `aria-selected:bg-*` / `data-[state=active]:bg-*` / `data-[state=open]:bg-*`
-  - (requires at least one visual change: bg-/text-/ring-/border-/outline-/shadow-)
-- OR parent wrapper (one hop up) has `focus-within:ring-*` / `focus-within:border-*` / `focus-within:shadow-*`
+## Source Location
+- Each finding includes `startLine`, `endLine`, `filePath` for precise code attribution.
+- Findings are sorted by file path (alphabetical) then line number (ascending).
 
-**Potential (Borderline):**
-- Outline removed + ONLY focus-scoped weak styling (focus:bg-*, focus:text-*, focus:underline, focus:opacity-*, focus:font-*) — confidence 0.68
-- OR outline removed + no replacement + focusable=unknown — confidence 0.75
-
-**Confirmed (Blocking):**
-- Outline removed + NO focus-scoped replacement + NO state-driven indicator + focusable=yes — confidence 0.92
-
-## CRITICAL: Focus-Scoped Only
-- Only tokens starting with `focus:` or `focus-visible:` count as direct replacements
-- Bare `ring-*`, `border-*`, `shadow-*`, `bg-*`, `text-*` are NOT focus indicators
-- State-driven tokens (`data-[selected]`, `data-[highlighted]`, `aria-selected`, `data-[state=active/open]`) ARE valid indicators when they change bg/text/ring/border/outline/shadow
+## Element Name Resolution (4-tier)
+1. JSX Tag Name (e.g., `<CommandInput>`, `<SelectItem>`)
+2. Wrapper Component Scope (via symbol table)
+3. HTML Tag Fallback (e.g., `button`, `input`)
+4. Unknown
