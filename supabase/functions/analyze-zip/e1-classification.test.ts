@@ -34,10 +34,14 @@ function detectConfirmationGate(region: string): { hasGate: boolean; gateType: s
   if (confirmMatch) return { hasGate: true, gateType: confirmMatch[1] || 'confirmation-dialog' };
   if (E1_TWO_STEP_STATE_RE.test(region)) return { hasGate: true, gateType: 'two-step-state' };
   if (/\bwindow\.confirm\s*\(/i.test(region)) return { hasGate: true, gateType: 'window.confirm' };
-  // Disabled-until-confirm gate
-  const disabledConfirmMatch = region.match(/disabled=\{!(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\}/i)
-    || region.match(/disabled=\{(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*===\s*false\}/i);
+  // Disabled-until-confirm gate (supports compound: disabled={!confirm || isPending})
+  const disabledConfirmMatch = region.match(/disabled=\{[^}]*!(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)[^}]*\}/i)
+    || region.match(/disabled=\{[^}]*(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*===\s*false[^}]*\}/i);
   if (disabledConfirmMatch) return { hasGate: true, gateType: `disabled-until-confirm (${disabledConfirmMatch[1]})` };
+  // Checkbox/toggle updating confirmation state
+  if (/(?:onCheckedChange|onChange)[=\s{]*(?:set\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)/i.test(region)) {
+    return { hasGate: true, gateType: 'checkbox-confirm-gate' };
+  }
   // Conditional execution gated by confirm state
   if (/\b(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*&&\s*\w*(?:delete|remove|destroy)\w*\s*[.(]/i.test(region)) {
     return { hasGate: true, gateType: 'conditional-confirm-gate' };
@@ -108,7 +112,7 @@ function shouldSuppressE1(opts: {
     if (friction.length > 0) {
       return { suppressed: true, reason: `${gate.gateType} + friction (${friction.join(', ')}) in local scope` };
     }
-    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state|disabled-until-confirm|conditional-confirm-gate/i.test(gate.gateType)) {
+    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state|disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate/i.test(gate.gateType)) {
       return { suppressed: true, reason: `destructive label + ${gate.gateType} in local scope` };
     }
   }
@@ -448,4 +452,60 @@ Deno.test("E1: conditional confirm gate (confirmChecked && delete) → SUPPRESSE
     localRegion, fullContent: localRegion,
   });
   assertEquals(result.suppressed, true, `Expected suppression via conditional-confirm-gate`);
+});
+
+// ── Test 29: disabled={!deleteConfirm || isPending} → SUPPRESSED (compound condition) ──
+Deno.test("E1: compound disabled={!deleteConfirm || isPending} is a valid gate", () => {
+  const localRegion = `<Button disabled={!deleteConfirm || isPending} onClick={() => deleteMutation.mutate()}>Delete Account</Button>`;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/Settings.tsx", label: "Delete Account",
+    localRegion, fullContent: localRegion,
+  });
+  assertEquals(result.suppressed, true, `Expected suppression via disabled-until-confirm compound`);
+});
+
+// ── Test 30: Checkbox onCheckedChange={setDeleteConfirm} → SUPPRESSED ──
+Deno.test("E1: Checkbox updating confirm state is a valid gate", () => {
+  const localRegion = `
+    <Checkbox onCheckedChange={setDeleteConfirm} />
+    <Button disabled={!deleteConfirm} onClick={() => deleteMutation.mutate()}>Delete Account</Button>
+  `;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/Settings.tsx", label: "Delete Account",
+    localRegion, fullContent: localRegion,
+  });
+  assertEquals(result.suppressed, true, `Expected suppression via checkbox-confirm-gate or disabled-until-confirm`);
+});
+
+// ── Test 31: Full settings.tsx pattern with useState + Checkbox + disabled button ──
+Deno.test("E1 REGRESSION: settings.tsx full checkbox-gated delete flow → SUPPRESSED", () => {
+  const fullContent = `
+    const [deleteConfirm, setDeleteConfirm] = useState(false);
+    const deleteMutation = useMutation({ mutationFn: () => apiRequest("DELETE", "/api/account") });
+    <Checkbox onCheckedChange={(checked) => setDeleteConfirm(!!checked)} />
+    <span>I understand this action cannot be undone</span>
+    <Button disabled={!deleteConfirm || deleteMutation.isPending} onClick={() => deleteMutation.mutate()}>Delete Account</Button>
+  `;
+  const localRegion = fullContent; // entire component is the region
+  const result = shouldSuppressE1({
+    filePath: "src/pages/Settings.tsx", label: "Delete Account",
+    localRegion, fullContent,
+  });
+  assertEquals(result.suppressed, true, `Full settings.tsx checkbox-gated delete must be suppressed`);
+});
+
+// ── Test 32: doctors.tsx ungated delete → NOT suppressed ──
+Deno.test("E1 REGRESSION: doctors.tsx ungated delete still flagged", () => {
+  const localRegion = `<Button variant="ghost" onClick={() => deleteMutation.mutate(doctor.id)}><Trash2 className="h-4 w-4" /></Button>`;
+  const fullContent = `
+    import { Dialog } from "@/components/ui/dialog";
+    const deleteMutation = useMutation({ mutationFn: (id) => apiRequest("DELETE", \`/api/doctors/\${id}\`) });
+    <Dialog><DialogContent>Add Doctor Form</DialogContent></Dialog>
+    ${localRegion}
+  `;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/admin/doctors.tsx", label: "Delete",
+    localRegion, fullContent,
+  });
+  assertEquals(result.suppressed, false, "doctors.tsx ungated delete must NOT be suppressed");
 });

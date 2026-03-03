@@ -6927,11 +6927,16 @@ function detectE1ConfirmationGate(content: string): { hasGate: boolean; gateType
     return { hasGate: true, gateType: 'window.confirm' };
   }
   // Disabled-until-confirm gate: button disabled={!confirmState} or disabled={confirmState === false}
+  // Allow compound conditions like disabled={!confirmState || isPending}
   // Only match when the state variable name implies confirmation intent
-  const disabledConfirmMatch = content.match(/disabled=\{!(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\}/i)
-    || content.match(/disabled=\{(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*===\s*false\}/i);
+  const disabledConfirmMatch = content.match(/disabled=\{[^}]*!(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)[^}]*\}/i)
+    || content.match(/disabled=\{[^}]*(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*===\s*false[^}]*\}/i);
   if (disabledConfirmMatch) {
     return { hasGate: true, gateType: `disabled-until-confirm (${disabledConfirmMatch[1]})` };
+  }
+  // Checkbox/toggle that updates a confirmation state variable
+  if (/(?:onCheckedChange|onChange)[=\s{]*(?:set\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)/i.test(content)) {
+    return { hasGate: true, gateType: 'checkbox-confirm-gate' };
   }
   // Conditional execution gated by confirm state: confirmState && deleteAction()
   if (/\b(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*&&\s*\w*(?:delete|remove|destroy)\w*\s*[.(]/i.test(content)) {
@@ -7403,7 +7408,7 @@ function shouldSuppressE1Bundle(opts: {
       return { suppressed: true, reason: `${confirmGate.gateType} + friction (${frictionMechanisms.join(', ')}) in local scope` };
     }
    // Destructive label + explicit confirmation pattern in LOCAL region = suppress
-    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state|disabled-until-confirm|conditional-confirm-gate/i.test(confirmGate.gateType)) {
+    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state|disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate/i.test(confirmGate.gateType)) {
       return { suppressed: true, reason: `destructive label + ${confirmGate.gateType} in local scope` };
     }
   }
