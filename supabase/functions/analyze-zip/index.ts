@@ -892,31 +892,33 @@ function extractU3CarrierContentPreview(content: string, pos: number, carrier: {
 
     const cap = (s: string): string => s.length > 120 ? s.slice(0, 117) + '…' : s;
 
-    // Look for dynamic expressions: >{expr}<
-    const dynChildRe = />\s*\{([^}]{1,80})\}\s*</g;
+    // Scan for ALL {expr} in elementContent (we're already past the opening tag,
+    // so these are children, not attributes).
+    const allDynRe = /\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g;
     let dm;
     const dynExprs: string[] = [];
-    while ((dm = dynChildRe.exec(elementContent)) !== null) {
+    const ATTR_NAMES = /^(className|style|key|ref|id|onClick|onChange|onSubmit|disabled|checked|value|type|src|href|alt|htmlFor|role|aria-\w+)$/;
+    while ((dm = allDynRe.exec(elementContent)) !== null) {
       const expr = dm[1].trim();
-      if (/^(className|style|key|ref|id|onClick|onChange|onSubmit|disabled|checked|value|type|src|href|alt)$/.test(expr)) continue;
-      if (/className|style|onClick/i.test(expr) && !/\.\w+/.test(expr)) continue;
-      dynExprs.push(expr);
-    }
-
-    // Also check for direct expressions: {expr} as children (no wrapping tags)
-    const directDynRe = /\{([a-zA-Z_][\w.?]*(?:\s*\|\|\s*["'][^"']*["'])?)\}/g;
-    let ddm;
-    while ((ddm = directDynRe.exec(elementContent)) !== null) {
-      const expr = ddm[1].trim();
-      if (/^(className|style|key|ref|id|onClick|onChange|onSubmit|disabled|checked|value|type|src|href|alt)$/.test(expr)) continue;
+      if (!expr || expr.length > 120) continue;
+      // Skip pure attribute-value expressions (only if they look like a prop assignment)
+      if (ATTR_NAMES.test(expr)) continue;
+      // Skip className/style helpers
+      if (/^cn\(|^clsx\(|^classNames?\(/i.test(expr)) continue;
+      // Skip pure callbacks like () => ... or function refs without dot access
+      if (/^(?:\(\)\s*=>|function\b)/.test(expr) && !/\.\w+/.test(expr)) continue;
       if (!dynExprs.includes(expr)) dynExprs.push(expr);
     }
 
     if (dynExprs.length > 0) {
-      // Prefer expressions with dot notation (e.g., appt.reason)
-      const meaningful = dynExprs.find(e => /[a-zA-Z_]\w*\.[a-zA-Z_]/.test(e));
+      // Prefer expressions with dot notation (e.g., appt.reason, (appt as any).doctors?.name)
+      const meaningful = dynExprs.find(e => /[a-zA-Z_]\w*[\s)]*\.[\w?]/.test(e));
       if (meaningful) {
-        // Clean up: extract the core variable path
+        // Extract core variable path, supporting cast expressions like (appt as any).doctors?.name
+        const castMatch = meaningful.match(/\((\w+)\s+as\s+\w+\)\.\s*([\w?.]+)/);
+        if (castMatch) {
+          return `(dynamic text: (${castMatch[1]} as any).${castMatch[2]})`;
+        }
         const coreVar = meaningful.match(/([a-zA-Z_][\w.?]*)/);
         return `(dynamic text: ${coreVar ? coreVar[1] : meaningful})`;
       }
