@@ -28,6 +28,7 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
   const displayLabel = element.elementName && element.elementName !== 'unknown'
     ? element.elementName
     : (element.sourceLabel || element.elementLabel);
+  const elementSubtype = (element as any).elementSubtype;
   const isBorderline = element.potentialSubtype === 'borderline';
   const effectiveFilePath = element.filePath || element.location;
 
@@ -38,6 +39,9 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
           <div className="flex items-center justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2 flex-wrap text-left">
               <ComponentTitle>{displayLabel}</ComponentTitle>
+              {elementSubtype && elementSubtype !== element.elementTag && (
+                <span className="text-xs text-muted-foreground font-mono">({elementSubtype})</span>
+              )}
               {element.affectedComponents && element.affectedComponents.length > 1 && (
                 <Badge variant="outline" className="text-xs font-medium border-muted-foreground/40 text-muted-foreground">
                   {element.affectedComponents.length} components
@@ -91,18 +95,10 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
 
               <FieldRow>
                 <FieldLabel>Detection:</FieldLabel>
-                <div className="flex flex-wrap gap-1">
-                  {(() => {
-                    if (element.focusClasses && element.focusClasses.length > 0) {
-                      return element.focusClasses.map((cls, i) => (
-                        <CodeTag key={i}>{cls}</CodeTag>
-                      ));
-                    }
-                    const det = element.detection || '';
-                    const match = det.match(/\(([^)]+)\)/);
-                    const chip = match ? match[1] : (det || 'outline suppressed');
-                    return <CodeTag>{chip}</CodeTag>;
-                  })()}
+                <div className="flex flex-col gap-0.5">
+                  {(element.detection || '').split('\n').filter(Boolean).map((line, i) => (
+                    <span key={i} className="text-sm font-mono text-foreground">{line}</span>
+                  ))}
                 </div>
               </FieldRow>
 
@@ -152,7 +148,11 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               {element.detection && (
                 <FieldRow>
                   <FieldLabel>Detection:</FieldLabel>
-                  <FieldValue mono>{element.detection}</FieldValue>
+                  <div className="flex flex-col gap-0.5">
+                    {element.detection.split('\n').filter(Boolean).map((line, i) => (
+                      <span key={i} className="text-sm font-mono text-foreground">{line}</span>
+                    ))}
+                  </div>
                 </FieldRow>
               )}
 

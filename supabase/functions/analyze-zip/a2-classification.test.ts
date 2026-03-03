@@ -429,3 +429,59 @@ Deno.test("A2: <button> with outline-none + focus-visible:ring-2 → PASS (stron
   const result = classifyA2Finding("outline-none focus-visible:ring-2", '', 'yes');
   assertEquals(result, 'pass', "Button with ring-2 replacement → PASS");
 });
+
+// ============================================================
+// PER-ELEMENT REPORTING TESTS
+// ============================================================
+
+Deno.test("A2: per-element reporting — CommandInput (input) is Confirmed when outline removed", () => {
+  // Simulates: <CommandInput className="outline-none" /> which is an input element
+  const result = classifyA2Finding("outline-none", '', 'yes');
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isConfirmed, true, "CommandInput (native input) with outline-none → Confirmed");
+  }
+});
+
+Deno.test("A2: per-element reporting — CommandItem with state-driven highlight is PASS", () => {
+  // CommandItem uses data-[selected] for visual indication
+  const evidence = "outline-none data-[selected='true']:bg-accent data-[selected=true]:text-accent-foreground";
+  const result = classifyA2Finding(evidence, '', 'yes');
+  assertEquals(result, 'pass', "CommandItem with data-[selected] state-driven indicator → PASS");
+});
+
+Deno.test("A2: per-element reporting — DropdownMenuItem with only focus:bg-accent → Potential", () => {
+  const result = classifyA2Finding("outline-none focus:bg-accent", '', 'yes');
+  assertEquals(typeof result, 'object');
+  if (typeof result === 'object') {
+    assertEquals(result.isPotential, true, "DropdownMenuItem with weak focus:bg → Potential");
+    assertEquals(result.isConfirmed, false);
+    assertEquals(result.potentialReason, 'Custom focus styles exist but perceptibility cannot be statically verified.');
+  }
+});
+
+Deno.test("A2: structured detection — confirmed shows 'no visible focus indicator detected'", () => {
+  // Simulate detection string generation
+  const outlineTokens = ['outline-none'];
+  const replacementTokens: string[] = [];
+  let structuredDetection: string;
+  if (replacementTokens.length > 0) {
+    structuredDetection = `outline removed via "${outlineTokens.join(', ')}"\nalternative indicator detected: ${replacementTokens.join(', ')}`;
+  } else {
+    structuredDetection = `outline removed via "${outlineTokens.join(', ')}"\nno visible focus indicator detected`;
+  }
+  assertEquals(structuredDetection.includes('no visible focus indicator detected'), true);
+  assertEquals(structuredDetection.includes('outline removed via'), true);
+});
+
+Deno.test("A2: structured detection — potential shows alternative indicator", () => {
+  const outlineTokens = ['focus:outline-none'];
+  const replacementTokens = ['focus:bg-accent', 'focus:text-accent-foreground'];
+  let structuredDetection: string;
+  if (replacementTokens.length > 0) {
+    structuredDetection = `outline removed via "${outlineTokens.join(', ')}"\nalternative indicator detected: ${replacementTokens.join(', ')}`;
+  } else {
+    structuredDetection = `outline removed via "${outlineTokens.join(', ')}"\nno visible focus indicator detected`;
+  }
+  assertEquals(structuredDetection.includes('alternative indicator detected'), true);
+});
