@@ -239,6 +239,7 @@ interface A5Finding {
   advisoryGuidance?: string;
   deduplicationKey: string;
   potentialSubtype?: 'accuracy' | 'borderline';
+  labelingMethod?: string;
   startLine?: number;
   endLine?: number;
 }
@@ -495,17 +496,27 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         continue;
       }
 
+      // Epistemic safety: React wrapper components are library abstractions → Potential
+      const isAmbiguousControl = isReactComponent;
       const dedupeKey = `A5.1|${filePath}|${tag}|${label}|${lineNumber}`;
       if (!seenKeys.has(dedupeKey)) {
         seenKeys.add(dedupeKey);
         findings.push({
           elementKey: makeA5ElementKey(tag, controlId || '', elementName, inputSubtype || tag, filePath, lineNumber),
           elementLabel: label, elementType: displayTag, sourceLabel: label, filePath,
-          subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
-          detection: `<${tag}> no label`, evidence: `no label source`,
-          explanation: `No accessible name.`,
+          subCheck: 'A5.1', subCheckLabel: 'Missing label association',
+          classification: isAmbiguousControl ? 'potential' : 'confirmed',
+          detection: isAmbiguousControl
+            ? `<${displayTag}> — no explicit programmatic label detected. Accessible name may rely on rendered text content.`
+            : `<${displayTag}> no label`,
+          evidence: isAmbiguousControl ? `no explicit label; library abstraction` : `no label source`,
+          explanation: isAmbiguousControl
+            ? `No explicit programmatic label detected for <${displayTag}>. Library component may internally render an accessible name.`
+            : `No accessible name.`,
           wcagCriteria: ['1.3.1', '3.3.2'],
+          ...(isAmbiguousControl ? { confidence: 0.70, potentialSubtype: 'accuracy' as const } : {}),
           deduplicationKey: dedupeKey,
+          labelingMethod: isAmbiguousControl ? 'no explicit label detected' : 'none',
           startLine: lineNumber,
           endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
         });
@@ -535,11 +546,15 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       findings.push({
         elementKey: makeA5ElementKey(tag, '', '', role, filePath, lineNumber),
         elementLabel: label, elementType: tag, sourceLabel: label, filePath,
-        subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
-        detection: `<${tag} role="${role}"> no label`, evidence: `no programmatic label`,
-        explanation: `Custom input (role="${role}") has no accessible name.`,
+        subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'potential',
+        detection: `<${tag} role="${role}"> — no explicit programmatic label detected. Accessible name may rely on rendered text content.`,
+        evidence: `no explicit label; may contain children providing accessible name`,
+        explanation: `No explicit programmatic label detected for <${tag} role="${role}">.`,
         wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
+        confidence: 0.70,
+        potentialSubtype: 'accuracy' as const,
         deduplicationKey: dedupeKey,
+        labelingMethod: 'no explicit label detected',
         startLine: lineNumber,
       });
     }
@@ -565,11 +580,15 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       findings.push({
         elementKey: makeA5ElementKey(tag, '', '', 'contenteditable', filePath, lineNumber2),
         elementLabel: label2, elementType: tag, sourceLabel: label2, filePath,
-        subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'confirmed',
-        detection: `<${tag} contenteditable="true"> no label`, evidence: `no programmatic label`,
-        explanation: `Contenteditable element has no accessible name.`,
+        subCheck: 'A5.1', subCheckLabel: 'Missing label association', classification: 'potential',
+        detection: `<${tag} contenteditable="true"> — no explicit programmatic label detected. Accessible name may rely on rendered text content.`,
+        evidence: `no explicit label; may contain text providing accessible name`,
+        explanation: `No explicit programmatic label detected for contenteditable element.`,
         wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
+        confidence: 0.70,
+        potentialSubtype: 'accuracy' as const,
         deduplicationKey: dedupeKey,
+        labelingMethod: 'no explicit label detected',
         startLine: lineNumber2,
       });
     }
@@ -918,12 +937,13 @@ Deno.test("Contenteditable with aria-label is valid", () => {
   assertEquals(results.length, 0);
 });
 
-Deno.test("role=listbox without label triggers A5.1", () => {
+Deno.test("role=listbox without label triggers A5.1 as Potential (epistemic safety)", () => {
   const files = new Map([["src/Dropdown.tsx", `<div role="listbox"></div>`]]);
   const results = detectA5FormLabels(files);
   assert(results.length >= 1);
   assertEquals(results[0].subCheck, "A5.1");
-  assertEquals(results[0].classification, "confirmed");
+  assertEquals(results[0].classification, "potential", "ARIA role elements should be Potential — may have children providing accessible name");
+  assert(results[0].confidence! <= 0.70, "Confidence should be ≤ 0.70 for ambiguous controls");
   assert(results[0].wcagCriteria.includes("4.1.2"), "ARIA roles should include 4.1.2");
 });
 
@@ -1535,7 +1555,7 @@ Deno.test("A5: <Input label={t('email')} /> with dynamic label prop = Potential"
   assertEquals(results[0].classification, "potential", "Dynamic label prop should be classified as potential");
 });
 
-Deno.test("A5: <Input type='email' /> with NO label prop = Confirmed", () => {
+Deno.test("A5: <Input type='email' /> with NO label prop = Potential (epistemic safety — library abstraction)", () => {
   const files = new Map([["src/SignIn.tsx", `
     import { Input } from "@/components/ui/input";
     export function SignIn() {
@@ -1544,7 +1564,45 @@ Deno.test("A5: <Input type='email' /> with NO label prop = Confirmed", () => {
   `]]);
   const results = detectA5FormLabels(files);
   assertEquals(results.length, 1, "Input with no label prop should produce one finding");
-  assertEquals(results[0].classification, "confirmed", "Missing label should be classified as confirmed");
+  assertEquals(results[0].classification, "potential", "Library component should be Potential — may internally render accessible name");
+  assert(results[0].confidence! <= 0.70, "Confidence should be ≤ 0.70 for library abstractions");
+});
+
+Deno.test("A5 epistemic safety: native <input> stays Confirmed, React <Input> is Potential", () => {
+  const nativeFiles = new Map([["src/Page.tsx", `<input type="text" name="email" />`]]);
+  const nativeResults = detectA5FormLabels(nativeFiles);
+  assertEquals(nativeResults.length, 1);
+  assertEquals(nativeResults[0].classification, "confirmed", "Native <input> — deterministically provable, must be Confirmed");
+
+  const reactFiles = new Map([["src/Page.tsx", `
+    import { Input } from "@/components/ui/input";
+    <Input type="text" />
+  `]]);
+  const reactResults = detectA5FormLabels(reactFiles);
+  assertEquals(reactResults.length, 1);
+  assertEquals(reactResults[0].classification, "potential", "React <Input> — library abstraction, must be Potential");
+  assert(reactResults[0].confidence !== undefined, "Potential findings must have confidence");
+  assert(reactResults[0].confidence! <= 0.70, "Confidence must be ≤ 0.70");
+});
+
+Deno.test("A5 epistemic safety: contenteditable is Potential", () => {
+  const files = new Map([["src/Editor.tsx", `<div contenteditable="true" role="textbox"></div>`]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1);
+  assertEquals(results[0].classification, "potential", "Contenteditable — may have text children, must be Potential");
+  assert(results[0].confidence! <= 0.70);
+});
+
+Deno.test("A5 epistemic safety: labelingMethod uses epistemic wording for Potential", () => {
+  const files = new Map([["src/Page.tsx", `
+    import { Switch } from "@/components/ui/switch";
+    <Switch />
+  `]]);
+  const results = detectA5FormLabels(files);
+  assert(results.length >= 1);
+  assertEquals(results[0].classification, "potential");
+  assert(results[0].labelingMethod !== 'none', "Potential findings must NOT say 'none'");
+  assert(results[0].labelingMethod === 'no explicit label detected', "Should use epistemic wording");
 });
 
 Deno.test("A5: raw <input type='email' /> with no label = Confirmed", () => {

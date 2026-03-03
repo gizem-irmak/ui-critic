@@ -60,13 +60,17 @@ function A5ElementItem({ element, isConfirmed, compact = false }: {
                 <FieldLabel>Labeling:</FieldLabel>
                 <span className={cn(
                   'font-mono text-xs',
-                  element.labelingMethod === 'none' || element.labelingMethod?.startsWith('none')
+                  element.labelingMethod === 'none'
                     ? 'text-destructive'
-                    : element.labelingMethod?.startsWith('broken')
+                    : element.labelingMethod?.startsWith('broken') || element.labelingMethod?.startsWith('none (')
                       ? 'text-destructive'
-                      : 'text-muted-foreground'
+                      : element.labelingMethod === 'no explicit label detected'
+                        ? 'text-warning'
+                        : 'text-muted-foreground'
                 )}>
-                  {element.labelingMethod}
+                  {element.labelingMethod === 'no explicit label detected'
+                    ? 'No explicit programmatic label detected (label, aria-label, aria-labelledby). Accessible name may rely on rendered text content.'
+                    : element.labelingMethod}
                 </span>
               </FieldRow>
             )}
