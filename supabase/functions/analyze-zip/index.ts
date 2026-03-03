@@ -8324,27 +8324,52 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
       }
 
       // A5.1: Missing accessible label entirely
+      // Epistemic safety: React wrapper components are library abstractions
+      // that may internally provide accessible names → classify as Potential
+      const isAmbiguousControl = isReactComponent;
       const dedupeKey = `A5.1|${filePath}|${tag}|${label}|${lineNumber}`;
       if (!seenKeys.has(dedupeKey)) {
         seenKeys.add(dedupeKey);
-        findings.push({
-          elementKey: makeA5ElementKey(tag, controlId || '', elementNameAttr, inputSubtype || tag, filePath, lineNumber),
-          elementLabel: label, elementType: displayTag, elementName: elementNameVal, controlType: controlTypeVal,
-          inputSubtype, sourceLabel: label, filePath, componentName,
-          subCheck: 'A5.1', subCheckLabel: 'Missing label association',
-          classification: 'confirmed',
-          detection: `<${displayTag}> has no label, aria-label, or aria-labelledby`,
-          evidence: `<${displayTag}> at ${filePath}:${lineNumber} — no programmatic label source found`,
-          explanation: `Form control <${displayTag}> has no accessible name. Screen readers cannot identify what this control is for.`,
-          wcagCriteria: ['1.3.1', '3.3.2'],
-          correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nThis form control has no programmatic label (no <label>, aria-label, or aria-labelledby).\n\nRecommended fix:\nAdd a visible <label> associated with this input using for + id, or provide an accessible name via aria-label or aria-labelledby.`,
-          deduplicationKey: dedupeKey,
-          selectorHints,
-          controlId: controlId || (hasDynamicId ? '(dynamic)' : undefined),
-          labelingMethod: 'none',
-          startLine: lineNumber,
-          endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
-        });
+        if (isAmbiguousControl) {
+          findings.push({
+            elementKey: makeA5ElementKey(tag, controlId || '', elementNameAttr, inputSubtype || tag, filePath, lineNumber),
+            elementLabel: label, elementType: displayTag, elementName: elementNameVal, controlType: controlTypeVal,
+            inputSubtype, sourceLabel: label, filePath, componentName,
+            subCheck: 'A5.1', subCheckLabel: 'Missing label association',
+            classification: 'potential',
+            detection: `<${displayTag}> — no explicit programmatic label detected (label, aria-label, aria-labelledby). Accessible name may rely on rendered text content, which cannot be fully verified statically.`,
+            evidence: `<${displayTag}> at ${filePath}:${lineNumber} — no explicit label source detected; library abstraction may provide accessible name internally`,
+            explanation: `No explicit programmatic label detected for <${displayTag}>. As a library component, it may internally render an accessible name that cannot be verified statically.`,
+            wcagCriteria: ['1.3.1', '3.3.2'],
+            confidence: 0.70,
+            potentialSubtype: 'accuracy',
+            deduplicationKey: dedupeKey,
+            selectorHints,
+            controlId: controlId || (hasDynamicId ? '(dynamic)' : undefined),
+            labelingMethod: 'no explicit label detected',
+            startLine: lineNumber,
+            endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
+          });
+        } else {
+          findings.push({
+            elementKey: makeA5ElementKey(tag, controlId || '', elementNameAttr, inputSubtype || tag, filePath, lineNumber),
+            elementLabel: label, elementType: displayTag, elementName: elementNameVal, controlType: controlTypeVal,
+            inputSubtype, sourceLabel: label, filePath, componentName,
+            subCheck: 'A5.1', subCheckLabel: 'Missing label association',
+            classification: 'confirmed',
+            detection: `<${displayTag}> has no label, aria-label, or aria-labelledby`,
+            evidence: `<${displayTag}> at ${filePath}:${lineNumber} — no programmatic label source found`,
+            explanation: `Form control <${displayTag}> has no accessible name. Screen readers cannot identify what this control is for.`,
+            wcagCriteria: ['1.3.1', '3.3.2'],
+            correctivePrompt: `[${label} (${displayTag})] — ${fileName}\n\nIssue reason:\nThis form control has no programmatic label (no <label>, aria-label, or aria-labelledby).\n\nRecommended fix:\nAdd a visible <label> associated with this input using for + id, or provide an accessible name via aria-label or aria-labelledby.`,
+            deduplicationKey: dedupeKey,
+            selectorHints,
+            controlId: controlId || (hasDynamicId ? '(dynamic)' : undefined),
+            labelingMethod: 'none',
+            startLine: lineNumber,
+            endLine: endLineNumber !== lineNumber ? endLineNumber : undefined,
+          });
+        }
       }
     }
 
@@ -8377,13 +8402,15 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         elementKey: makeA5ElementKey(tag, '', '', role, filePath, lineNumber),
         elementLabel: label, elementType: tag, role, sourceLabel: label, filePath, componentName,
         subCheck: 'A5.1', subCheckLabel: 'Missing label association',
-        classification: 'confirmed',
-        detection: `<${tag} role="${role}"> has no aria-label or aria-labelledby`,
-        evidence: `<${tag} role="${role}"> at ${filePath}:${lineNumber} — no programmatic label`,
-        explanation: `Custom input (role="${role}") has no accessible name. Screen readers cannot identify what this control is for.`,
+        classification: 'potential',
+        detection: `<${tag} role="${role}"> — no explicit programmatic label detected (aria-label, aria-labelledby). Accessible name may rely on rendered text content, which cannot be fully verified statically.`,
+        evidence: `<${tag} role="${role}"> at ${filePath}:${lineNumber} — no explicit label source; element may contain children providing accessible name`,
+        explanation: `No explicit programmatic label detected for <${tag} role="${role}">. The element may contain text content or child components that provide an accessible name at runtime.`,
         wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
-        correctivePrompt: `[${label}] — ${fileName}\n\nIssue reason:\nCustom input with role="${role}" has no programmatic label.\n\nRecommended fix:\nAdd aria-label or aria-labelledby to provide an accessible name for this control.`,
+        confidence: 0.70,
+        potentialSubtype: 'accuracy',
         deduplicationKey: dedupeKey,
+        labelingMethod: 'no explicit label detected',
         startLine: lineNumber,
       });
     }
@@ -8415,13 +8442,15 @@ function detectA5FormLabels(allFiles: Map<string, string>): A5Finding[] {
         elementKey: makeA5ElementKey(tag, '', '', 'contenteditable', filePath, lineNumber2),
         elementLabel: label2, elementType: tag, role, sourceLabel: label2, filePath, componentName,
         subCheck: 'A5.1', subCheckLabel: 'Missing label association',
-        classification: 'confirmed',
-        detection: `<${tag} contenteditable="true"> has no aria-label or aria-labelledby`,
-        evidence: `<${tag} contenteditable="true"> at ${filePath}:${lineNumber2} — no programmatic label`,
-        explanation: `Contenteditable element (role="${role}") has no accessible name.`,
+        classification: 'potential',
+        detection: `<${tag} contenteditable="true"> — no explicit programmatic label detected (aria-label, aria-labelledby). Accessible name may rely on rendered text content, which cannot be fully verified statically.`,
+        evidence: `<${tag} contenteditable="true"> at ${filePath}:${lineNumber2} — no explicit label source; element may contain text providing accessible name`,
+        explanation: `No explicit programmatic label detected for contenteditable element. The element may contain text content that provides an accessible name at runtime.`,
         wcagCriteria: ['1.3.1', '3.3.2', '4.1.2'],
-        correctivePrompt: `[${label2}] — ${fileName2}\n\nIssue reason:\nContenteditable element has no programmatic label.\n\nRecommended fix:\nAdd aria-label or aria-labelledby.`,
+        confidence: 0.70,
+        potentialSubtype: 'accuracy',
         deduplicationKey: dedupeKey,
+        labelingMethod: 'no explicit label detected',
         startLine: lineNumber2,
       });
     }
