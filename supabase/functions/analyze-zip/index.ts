@@ -449,9 +449,6 @@ function hasPrimaryActionContext(content: string): boolean {
   return false;
 }
 
-// Config flag for optional LLM tie-breaker (OFF by default)
-const U1_LLM_TIEBREAK_ENABLED = false;
-
 interface U1Finding {
   subCheck: 'U1.1' | 'U1.2' | 'U1.3';
   subCheckLabel: string;
@@ -465,11 +462,6 @@ interface U1Finding {
   confidence: number;
   advisoryGuidance?: string;
   deduplicationKey: string;
-  // Enhanced evidence fields
-  contextSignalsFound?: string[];
-  ambiguitySignalsFound?: string[];
-  suppressionReason?: string; // internal debug only (not surfaced)
-  ctaHierarchyDetails?: Array<{ label: string; hierarchy: string; cue: string }>;
 }
 
 function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
@@ -529,7 +521,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     return scopes.some(s => offset >= s.start && offset <= s.end);
   };
 
-  // === U1.2 & U1.3: Competing CTAs and generic labels (AST-lite + scoring model) ===
+  // === U1.2 & U1.3: Competing CTAs and generic labels ===
   const resolveKnownButtonImpl = (): { filePath: string; config: CvaVariantConfig } | null => {
     const candidates = [
       'src/components/ui/button.tsx', 'src/components/ui/button.ts',
@@ -546,7 +538,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
 
   const buttonImpl = resolveKnownButtonImpl();
   const seenU12Groups = new Set<string>();
-  const GENERIC_LABELS = new Set(['continue', 'next', 'submit', 'proceed', 'confirm', 'done', 'ok', 'save']);
+  const GENERIC_LABELS = new Set(['continue', 'next', 'submit', 'save', 'confirm', 'ok']);
 
   for (const [filePathRaw, content] of allFiles.entries()) {
     const filePath = normalizePath(filePathRaw);
@@ -554,12 +546,12 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     if (filePath.includes('components/ui/button')) continue;
     if (filePath.includes('components/ui/')) continue;
     if (/\.(test|spec)\.(tsx?|jsx?)$/.test(filePath)) continue;
-    // U1 NAV/CHROME GATE
+    // U1 NAV/CHROME GATE: skip nav/layout files for U1.2/U1.3
     if (isNavOrChromeFile(filePath, content)) {
       console.log(`[U1] nav/chrome gate: skipping ${filePath}`);
       continue;
     }
-    // U1 PRIMARY-ACTION CONTEXT GATE
+    // U1 PRIMARY-ACTION CONTEXT GATE: only analyze files with task-oriented context
     if (!hasPrimaryActionContext(content)) {
       console.log(`[U1] context gate: skipping ${filePath} (no form/dialog/CTA context)`);
       continue;
@@ -582,13 +574,9 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
 
-    // Build UIContextSnapshot for this file
-    const actionGroups = extractActionGroups(content, buttonLocalNames);
-    const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
-    const snapshot = buildUIContextSnapshot(content, allButtons, buttonImpl, actionGroups);
-
-    // U1.2: Hierarchy-based competing CTA detection
+    // U1.2: Check action groups for competing primaries (tool-agnostic)
     const u12SuppressedLabels = new Set<string>();
+    const actionGroups = extractActionGroups(content, buttonLocalNames);
     const coveredOffsets = new Set<number>();
 
     const processU12Region = (
@@ -597,41 +585,37 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
       regionType: 'container' | 'line-window',
       regionOffset: number,
     ) => {
-      // Build classified CTAs for this region
-      const regionCTAs: ClassifiedCTA[] = ctaUsages.map(btn => {
-        const { emphasis, cue } = classifyCTAEmphasis({
+      const ctas: Array<{ label: string; emphasis: Emphasis; cue: string }> = [];
+      for (const btn of ctaUsages) {
+        const result = classifyCTAEmphasis({
           variant: btn.variant,
           variantConfig: buttonImpl?.config || null,
           className: btn.className,
         });
-        const variantLower = (btn.variant || '').toLowerCase();
-        const classLower = (btn.className || '').toLowerCase();
-        let hierarchy: ClassifiedCTA['hierarchy'] = 'unknown';
-        if (variantLower === 'destructive' || /\b(destructive|bg-red-|bg-destructive)\b/.test(classLower)) hierarchy = 'destructive';
-        else if (emphasis === 'high') hierarchy = 'primary';
-        else if (emphasis === 'medium') hierarchy = 'secondary';
-        else if (emphasis === 'low') hierarchy = 'tertiary';
-        return { label: btn.label, hierarchy, emphasis, cue, offset: btn.offset, containerKey: regionLabel, variant: btn.variant, className: btn.className };
-      });
+        ctas.push({ label: btn.label, emphasis: result.emphasis, cue: result.cue });
+      }
 
-      console.log(`[U1.2] region "${regionLabel}" (${regionType}) in ${filePath}, CTAs = [${regionCTAs.map(c => `${c.label}:${c.hierarchy}(${c.cue})`).join(', ')}]`);
+      console.log(`[U1.2] region "${regionLabel}" (${regionType}) in ${filePath}, CTAs = ${ctas.length}, emphasis = [${ctas.map(c => `${c.label}:${c.emphasis}(${c.cue})`).join(', ')}]`);
 
-      // Use hierarchy classifier
-      const ambiguity = evaluateU12Hierarchy(regionCTAs);
-      if (!ambiguity.isAmbiguous) return;
+      const highs = ctas.filter(c => c.emphasis === 'high');
+      if (highs.length < 2) return;
 
       const groupKey = `${filePath}|${regionLabel}`;
       if (seenU12Groups.has(groupKey)) return;
       seenU12Groups.add(groupKey);
 
-      const labels = regionCTAs.map(c => c.label);
-      console.log(`[U1.2] fired: ${regionLabel} in ${filePath} — ${ambiguity.reason}`);
+      const labels = ctas.map(c => c.label);
+      const cueList = highs.map(h => h.cue).join(', ');
+      console.log(`[U1.2] fired: ${regionLabel} in ${filePath} — ${highs.length} HIGH CTAs [${cueList}]`);
 
-      // Confidence scoring per spec
-      let u12Confidence = 0.55; // base
-      u12Confidence += ambiguity.confidenceAdjustment;
-      if (regionType === 'container') u12Confidence += 0.05;
-      u12Confidence = Math.max(0.45, Math.min(u12Confidence, 0.75));
+      // Signal-based confidence
+      let u12Confidence = 0.60;
+      if (regionType === 'container') u12Confidence += 0.10;
+      const strongCues = highs.filter(h => /variant=|bg-\w+-[6-8]00|bg-primary|btn-primary|semantic:/.test(h.cue));
+      if (strongCues.length === highs.length) u12Confidence += 0.10;
+      const offsets = ctaUsages.map(b => b.offset);
+      if (offsets.length >= 2 && Math.max(...offsets) - Math.min(...offsets) < 500) u12Confidence += 0.05;
+      u12Confidence = Math.min(u12Confidence, 0.90);
 
       findings.push({
         subCheck: 'U1.2',
@@ -640,15 +624,14 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
         elementLabel: `${componentName} — ${regionLabel}`,
         elementType: 'button group',
         filePath,
-        detection: `Hierarchy ambiguity: ${ambiguity.reason}`,
-        evidence: `${labels.join(', ')} — hierarchy: [${ambiguity.ctaDetails.map(d => `${d.label}:${d.hierarchy}`).join(', ')}] (${regionType === 'container' ? regionLabel : 'line-window proximity'})`,
-        explanation: `CTA buttons have ambiguous visual hierarchy in the same UI region: ${ambiguity.reason}`,
+        detection: `${highs.length}+ equivalent high-emphasis CTAs in the same region`,
+        evidence: `${labels.join(', ')} — emphasis cues: [${cueList}] (${regionType === 'container' ? regionLabel : 'line-window proximity'})`,
+        explanation: `${highs.length} CTA buttons share equivalent high-emphasis styling in the same UI region, making the primary action unclear.`,
         confidence: u12Confidence,
         advisoryGuidance: 'Visually distinguish the primary action and demote secondary actions to outline/ghost/link variants.',
         deduplicationKey: `U1.2|${filePath}|${regionLabel}`,
-        ctaHierarchyDetails: ambiguity.ctaDetails,
       });
-      for (const cta of regionCTAs) {
+      for (const cta of ctas) {
         u12SuppressedLabels.add(cta.label.trim().toLowerCase());
       }
     };
@@ -663,7 +646,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
       processU12Region(group.buttons, group.containerType, 'container', group.offset);
     }
 
-    // Line-window fallback for orphaned CTAs
+    // Line-window fallback: group orphaned CTAs by proximity (±40 lines ≈ ±1600 chars)
     const LINE_WINDOW_CHARS = 1600;
     const allCTAsInFile = extractCTAElements(content, buttonLocalNames);
     const orphanedCTAs = allCTAsInFile.filter(c => !coveredOffsets.has(c.offset));
@@ -687,59 +670,79 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
       }
     }
 
-    // U1.3: Generic CTA labels with context-aware suppression + scoring model
+    // U1.3: Generic CTA labels (suppressed if label already covered by U1.2 in same file)
+    // Context-aware suppression: detect stepper, strong headings, single primary CTA
+    const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
+
+    // Pre-compute context signals for U1.3 suppression
+    const u13ContextSignals = detectU13ContextSignals(content, allButtons, buttonImpl);
+
     for (const btn of allButtons) {
       const labelLower = btn.label.trim().toLowerCase();
-      if (!GENERIC_LABELS.has(labelLower)) continue;
+      if (GENERIC_LABELS.has(labelLower)) {
+        // Scoped suppression: skip if this button is inside a U1.1 form
+        if (isInsideU11Form(filePath, btn.offset)) {
+          console.log(`[U1.3] suppressed: "${btn.label}" at offset ${btn.offset} is inside U1.1 form scope in ${filePath}`);
+          continue;
+        }
+        // Skip if this label was part of a U1.2 competing-CTAs group in this file
+        if (u12SuppressedLabels.has(labelLower)) {
+          console.log(`[U1.3] suppressed: "${btn.label}" covered by U1.2 in same container`);
+          continue;
+        }
+        const dedupeKey = `U1.3|${filePath}|${labelLower}`;
+        if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
 
-      // Scoped suppression: skip if inside U1.1 form
-      if (isInsideU11Form(filePath, btn.offset)) {
-        console.log(`[U1.3] suppressed: "${btn.label}" at offset ${btn.offset} is inside U1.1 form scope in ${filePath}`);
-        continue;
+        // Context-aware suppression: suppress if labeled stepper or strong heading present
+        if (u13ContextSignals.hasLabeledStepper || u13ContextSignals.hasStrongNearbyHeading(btn.offset)) {
+          console.log(`[U1.3] context-suppressed: "${btn.label}" in ${filePath} — stepper=${u13ContextSignals.hasLabeledStepper}, heading=${u13ContextSignals.hasStrongNearbyHeading(btn.offset)}`);
+          continue;
+        }
+
+        // Signal-based confidence for U1.3
+        const HIGH_RISK_GENERICS = new Set(['continue', 'next', 'submit', 'save', 'confirm', 'ok']);
+        let u13Confidence = 0.40; // lowered base from 0.55
+        // +0.10 if label is in high-risk generic set AND no context
+        if (HIGH_RISK_GENERICS.has(labelLower)) {
+          u13Confidence += 0.10;
+        }
+        // +0.05 if no contextual heading or nearby descriptive text detected
+        const hasNearbyHeading = /<(?:h[1-6]|label|legend)\b[^>]*>/.test(content);
+        if (!hasNearbyHeading) {
+          u13Confidence += 0.10;
+        }
+        // +0.05 if button is visually emphasized (high-emphasis styling)
+        const btnEmphasis = buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)
+          ? classifyButtonEmphasis({
+              resolvedVariant: btn.variant || buttonImpl.config.defaultVariant || 'default',
+              variantConfig: buttonImpl.config,
+              instanceClassName: btn.className,
+            }).emphasis
+          : classifyTailwindEmphasis(btn.className);
+        if (btnEmphasis === 'high') {
+          u13Confidence += 0.05;
+        }
+        // +0.05 if single primary CTA (no competing buttons → less ambiguity, but still generic)
+        if (!u13ContextSignals.isSinglePrimaryCTA) {
+          u13Confidence += 0.05;
+        }
+        u13Confidence = Math.min(u13Confidence, 0.75);
+
+        findings.push({
+          subCheck: 'U1.3',
+          subCheckLabel: 'Ambiguous CTA label',
+          classification: 'potential',
+          elementLabel: `"${btn.label}" button`,
+          elementType: 'button',
+          filePath,
+          detection: `Generic label: "${btn.label}"`,
+          evidence: `CTA labeled "${btn.label}" in ${componentName} — generic label without context`,
+          explanation: `The CTA label "${btn.label}" is generic and does not communicate the specific action.`,
+          confidence: u13Confidence,
+          advisoryGuidance: 'Use specific, action-oriented labels (e.g., "Save changes" instead of "Save", "Create account" instead of "Submit").',
+          deduplicationKey: dedupeKey,
+        });
       }
-      // Skip if covered by U1.2
-      if (u12SuppressedLabels.has(labelLower)) {
-        console.log(`[U1.3] suppressed: "${btn.label}" covered by U1.2 in same container`);
-        continue;
-      }
-      const dedupeKey = `U1.3|${filePath}|${labelLower}`;
-      if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
-
-      // Context-aware suppression using snapshot
-      const suppression = evaluateU13Suppression(btn.offset, btn.label, snapshot);
-
-      if (suppression.suppressed) {
-        console.log(`[U1.3] context-suppressed: "${btn.label}" in ${filePath} — reason: ${suppression.suppressionReason}, signals: [${suppression.contextSignalsFound.join(', ')}]`);
-        continue;
-      }
-
-      // Confidence scoring per spec
-      let u13Confidence = 0.45; // base for generic CTA
-      u13Confidence += suppression.confidenceAdjustment;
-      u13Confidence = Math.max(0.40, Math.min(u13Confidence, 0.70));
-
-      // Optional LLM tie-breaker (OFF by default)
-      if (U1_LLM_TIEBREAK_ENABLED && u13Confidence >= 0.50 && u13Confidence <= 0.62) {
-        console.log(`[U1.3] LLM tie-breaker zone: "${btn.label}" confidence=${u13Confidence.toFixed(2)} — would call LLM if enabled`);
-        // LLM tie-breaker would go here — suppress if YES, keep if NO
-      }
-
-      findings.push({
-        subCheck: 'U1.3',
-        subCheckLabel: 'Ambiguous CTA label',
-        classification: 'potential',
-        elementLabel: `"${btn.label}" button`,
-        elementType: 'button',
-        filePath,
-        detection: `Generic label: "${btn.label}"`,
-        evidence: `CTA labeled "${btn.label}" in ${componentName} — context signals: [${suppression.contextSignalsFound.join(', ')}], ambiguity: [${suppression.ambiguitySignalsFound.join(', ')}]`,
-        explanation: `The CTA label "${btn.label}" is generic and does not communicate the specific action. ${suppression.ambiguitySignalsFound.length > 0 ? 'Ambiguity signals: ' + suppression.ambiguitySignalsFound.join(', ') + '.' : ''}`,
-        confidence: u13Confidence,
-        advisoryGuidance: 'Use specific, action-oriented labels (e.g., "Save changes" instead of "Save", "Continue to Review" instead of "Next").',
-        deduplicationKey: dedupeKey,
-        contextSignalsFound: suppression.contextSignalsFound,
-        ambiguitySignalsFound: suppression.ambiguitySignalsFound,
-      });
     }
   }
 
@@ -1546,416 +1549,123 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 }
 
 // =====================
-// U1 AST-Lite UIContextSnapshot
+// U1.3 Context-Aware Suppression Signals
 // =====================
-// Structured parsing of headings, buttons, steppers, action areas for context-aware U1 detection.
+// Detects labeled steppers, strong headings near CTAs, and single-primary-CTA patterns
+// to suppress generic CTA labels when context makes the action clear.
 
-interface HeadingInfo {
-  text: string;
-  lineStart: number; // character offset
-  strengthScore: number; // 0-1: semantic h1-h3 = 1.0, heading-like typography = 0.7
+interface U13ContextResult {
+  hasLabeledStepper: boolean;
+  hasStrongNearbyHeading: (btnOffset: number) => boolean;
+  isSinglePrimaryCTA: boolean;
+  contextSignals: string[];
 }
 
-interface StepperInfo {
-  stepCount: number;
-  hasLabels: boolean;
-  activeIndexKnown: boolean;
-  nextStepLabel: string | null; // label of step after active, null if unknown
-  lineRange: { start: number; end: number };
-  containerKey: string;
-  stepLabels: string[]; // all step labels
-}
-
-interface ClassifiedCTA {
-  label: string;
-  hierarchy: 'primary' | 'secondary' | 'tertiary' | 'destructive' | 'unknown';
-  emphasis: Emphasis;
-  cue: string;
-  offset: number;
-  containerKey: string;
-  variant: string | null;
-  className: string;
-}
-
-interface UIContextSnapshot {
-  headings: HeadingInfo[];
-  steppers: StepperInfo[];
-  classifiedCTAs: ClassifiedCTA[];
-  actionAreas: Map<string, ClassifiedCTA[]>; // containerKey → CTAs
-}
-
-// Task verb set for heading strength evaluation
-const TASK_VERBS = /\b(select|choose|enter|review|confirm|book|schedule|add|create|update|edit|delete|remove|upload|download|set|pick|configure|manage|assign|verify|complete|fill|provide|specify|customize)\b/i;
-
-function buildUIContextSnapshot(
+function detectU13ContextSignals(
   content: string,
   allButtons: ButtonUsage[],
   buttonImpl: { filePath: string; config: CvaVariantConfig } | null,
-  actionGroups: ActionGroup[],
-): UIContextSnapshot {
-  // (A) Headings
-  const headings: HeadingInfo[] = [];
+): U13ContextResult {
+  const contextSignals: string[] = [];
 
-  // Semantic headings h1-h3
+  // (A) Labeled stepper detection
+  // Look for 3+ step items with visible text labels and an active step indicator
+  let hasLabeledStepper = false;
+
+  // Pattern 1: Step/Stepper components with labeled items
+  const stepItemRe = /<(?:Step|StepItem|StepTrigger|StepperItem|StepLabel)\b[^>]*>([^<]{2,})<\//gi;
+  const stepItemMatches = content.match(stepItemRe);
+  if (stepItemMatches && stepItemMatches.length >= 3) {
+    // Check for active step indicator
+    const hasActiveStep = /(?:aria-current\s*=\s*["']step["']|data-state\s*=\s*["']active["']|isActive|currentStep|activeStep|step\s*===?\s*\d|className\s*=\s*[^>]*(?:active|current|selected))/i.test(content);
+    if (hasActiveStep) {
+      hasLabeledStepper = true;
+      contextSignals.push('stepper_labels');
+      contextSignals.push('active_step_indicator');
+    }
+  }
+
+  // Pattern 2: Steps defined as array with label/title properties
+  const stepsArrayRe = /(?:const|let)\s+\w*[Ss]teps\w*\s*=\s*\[([^\]]{20,})\]/s;
+  const stepsArrayMatch = content.match(stepsArrayRe);
+  if (stepsArrayMatch) {
+    const arrayContent = stepsArrayMatch[1];
+    const labelEntries = arrayContent.match(/(?:label|title|name)\s*:\s*["'][^"']+["']/gi);
+    if (labelEntries && labelEntries.length >= 3) {
+      const hasStepTracking = /(?:currentStep|activeStep|step\s*===?\s*\d|setStep|useState.*step)/i.test(content);
+      if (hasStepTracking) {
+        hasLabeledStepper = true;
+        contextSignals.push('stepper_array_labels');
+        contextSignals.push('step_state_tracking');
+      }
+    }
+  }
+
+  // Pattern 3: Stepper/Progress component usage with step count
+  const stepperComponentRe = /<(?:Stepper|Steps|ProgressSteps|StepWizard)\b[^>]*>/i;
+  if (stepperComponentRe.test(content)) {
+    const stepChildRe = /<(?:Step|StepItem)\b/gi;
+    const stepChildren = content.match(stepChildRe);
+    if (stepChildren && stepChildren.length >= 3) {
+      hasLabeledStepper = true;
+      contextSignals.push('stepper_component');
+    }
+  }
+
+  // (B) Strong nearby heading detection
+  // Find all heading positions in the content
+  const headingPositions: Array<{ offset: number; text: string }> = [];
+  // Semantic headings
   const headingRe = /<(?:h[1-3])\b[^>]*>([^<]+)</gi;
   let hMatch;
   while ((hMatch = headingRe.exec(content)) !== null) {
     const text = hMatch[1].trim();
-    if (text.length >= 3) {
-      headings.push({ text, lineStart: hMatch.index, strengthScore: TASK_VERBS.test(text) ? 1.0 : 0.7 });
+    if (text.length >= 5) { // meaningful heading text
+      headingPositions.push({ offset: hMatch.index, text });
     }
   }
   // Heading-like typography (text-2xl+ with font-bold/semibold)
-  const typoPatterns = [
-    /<(?:p|span|div)\b[^>]*className\s*=\s*["'][^"']*\b(?:text-(?:2xl|3xl|4xl|5xl))\b[^"']*\b(?:font-(?:bold|semibold))\b[^"']*["'][^>]*>([^<]+)</gi,
-    /<(?:p|span|div)\b[^>]*className\s*=\s*["'][^"']*\b(?:font-(?:bold|semibold))\b[^"']*\b(?:text-(?:2xl|3xl|4xl|5xl))\b[^"']*["'][^>]*>([^<]+)</gi,
-  ];
-  const seenHeadingOffsets = new Set(headings.map(h => h.lineStart));
-  for (const re of typoPatterns) {
-    while ((hMatch = re.exec(content)) !== null) {
-      if (seenHeadingOffsets.has(hMatch.index)) continue;
-      seenHeadingOffsets.add(hMatch.index);
-      const text = hMatch[1].trim();
-      if (text.length >= 3) {
-        headings.push({ text, lineStart: hMatch.index, strengthScore: TASK_VERBS.test(text) ? 0.8 : 0.5 });
-      }
+  const typoHeadingRe = /<(?:p|span|div)\b[^>]*className\s*=\s*["'][^"']*\b(?:text-(?:2xl|3xl|4xl|5xl))\b[^"']*\b(?:font-(?:bold|semibold))\b[^"']*["'][^>]*>([^<]+)</gi;
+  while ((hMatch = typoHeadingRe.exec(content)) !== null) {
+    const text = hMatch[1].trim();
+    if (text.length >= 5) {
+      headingPositions.push({ offset: hMatch.index, text });
+    }
+  }
+  // Also match reversed order (font-bold before text-2xl)
+  const typoHeadingRe2 = /<(?:p|span|div)\b[^>]*className\s*=\s*["'][^"']*\b(?:font-(?:bold|semibold))\b[^"']*\b(?:text-(?:2xl|3xl|4xl|5xl))\b[^"']*["'][^>]*>([^<]+)</gi;
+  while ((hMatch = typoHeadingRe2.exec(content)) !== null) {
+    const text = hMatch[1].trim();
+    if (text.length >= 5 && !headingPositions.some(h => h.offset === hMatch!.index)) {
+      headingPositions.push({ offset: hMatch.index, text });
     }
   }
 
-  // (B) Steppers
-  const steppers: StepperInfo[] = [];
-
-  // Pattern 1: Steps array with label/title/name properties
-  const stepsArrayRe = /(?:const|let)\s+(\w*[Ss]teps\w*)\s*=\s*\[([^\]]{20,})\]/gs;
-  let saMatch;
-  while ((saMatch = stepsArrayRe.exec(content)) !== null) {
-    const arrayContent = saMatch[2];
-    const labelEntries = arrayContent.match(/(?:label|title|name)\s*:\s*["']([^"']+)["']/gi);
-    if (labelEntries && labelEntries.length >= 3) {
-      const stepLabels = labelEntries.map(e => {
-        const m = e.match(/["']([^"']+)["']/);
-        return m ? m[1] : '';
-      }).filter(Boolean);
-
-      const hasStepTracking = /(?:currentStep|activeStep|step\s*===?\s*\d|setStep|useState.*step)/i.test(content);
-
-      // Try to determine active index and next step label
-      let activeIndexKnown = false;
-      let nextStepLabel: string | null = null;
-      if (hasStepTracking) {
-        activeIndexKnown = true;
-        // If there's a currentStep/activeStep state, the next label is stepLabels[currentStep+1]
-        // We can't resolve runtime value, but the existence of tracking means UI shows progress
-        if (stepLabels.length > 1) {
-          nextStepLabel = stepLabels[1]; // conservative: first non-initial step
-        }
-      }
-
-      steppers.push({
-        stepCount: stepLabels.length,
-        hasLabels: true,
-        activeIndexKnown,
-        nextStepLabel,
-        lineRange: { start: saMatch.index, end: saMatch.index + saMatch[0].length },
-        containerKey: `stepper_array_${saMatch[1]}`,
-        stepLabels,
-      });
-    }
-  }
-
-  // Pattern 2: Step/Stepper components with labeled items
-  const stepItemRe = /<(?:Step|StepItem|StepTrigger|StepperItem|StepLabel)\b[^>]*>([^<]{2,})<\//gi;
-  const stepItemMatches = [...content.matchAll(stepItemRe)];
-  if (stepItemMatches.length >= 3) {
-    const stepLabels = stepItemMatches.map(m => m[1].trim());
-    const hasActiveStep = /(?:aria-current\s*=\s*["']step["']|data-state\s*=\s*["']active["']|isActive|currentStep|activeStep|step\s*===?\s*\d|className\s*=\s*[^>]*(?:bg-primary|text-primary|ring-primary|active|current|selected))/i.test(content);
-
-    // Find active step index to get next step label
-    let activeIndex = -1;
-    let nextStepLabel: string | null = null;
-    for (let i = 0; i < stepItemMatches.length; i++) {
-      const matchStart = stepItemMatches[i].index!;
-      const matchEnd = matchStart + stepItemMatches[i][0].length;
-      const surrounding = content.slice(Math.max(0, matchStart - 100), matchEnd + 50);
-      if (/aria-current\s*=\s*["']step["']|data-state\s*=\s*["']active["']|isActive\b/.test(surrounding)) {
-        activeIndex = i;
-        break;
-      }
-    }
-    if (activeIndex >= 0 && activeIndex < stepLabels.length - 1) {
-      nextStepLabel = stepLabels[activeIndex + 1];
-    }
-
-    const firstOffset = stepItemMatches[0].index!;
-    const lastOffset = stepItemMatches[stepItemMatches.length - 1].index! + stepItemMatches[stepItemMatches.length - 1][0].length;
-    
-    // Don't add duplicate if already captured by array pattern
-    if (!steppers.some(s => Math.abs(s.lineRange.start - firstOffset) < 500)) {
-      steppers.push({
-        stepCount: stepLabels.length,
-        hasLabels: true,
-        activeIndexKnown: hasActiveStep,
-        nextStepLabel,
-        lineRange: { start: firstOffset, end: lastOffset },
-        containerKey: 'stepper_component',
-        stepLabels,
-      });
-    }
-  }
-
-  // Pattern 3: Stepper/Progress component with Step children (no visible labels)
-  const stepperComponentRe = /<(?:Stepper|Steps|ProgressSteps|StepWizard)\b[^>]*>/gi;
-  let scMatch;
-  while ((scMatch = stepperComponentRe.exec(content)) !== null) {
-    const stepChildRe = /<(?:Step|StepItem)\b/gi;
-    const stepChildren = content.match(stepChildRe);
-    if (stepChildren && stepChildren.length >= 3 && !steppers.some(s => Math.abs(s.lineRange.start - scMatch!.index) < 500)) {
-      steppers.push({
-        stepCount: stepChildren.length,
-        hasLabels: false,
-        activeIndexKnown: false,
-        nextStepLabel: null,
-        lineRange: { start: scMatch.index, end: scMatch.index + 200 },
-        containerKey: 'stepper_unlabeled',
-        stepLabels: [],
-      });
-    }
-  }
-
-  // Pattern 4: Conditional step rendering (step === 0/1/2)
-  const stepConditionalRe = /(?:step|currentStep|activeStep)\s*===?\s*(\d+)/gi;
-  const stepCondMatches = [...content.matchAll(stepConditionalRe)];
-  if (stepCondMatches.length >= 3 && steppers.length === 0) {
-    const indices = stepCondMatches.map(m => parseInt(m[1]));
-    const stepCount = Math.max(...indices) + 1;
-    steppers.push({
-      stepCount,
-      hasLabels: false,
-      activeIndexKnown: true,
-      nextStepLabel: null,
-      lineRange: { start: stepCondMatches[0].index!, end: stepCondMatches[stepCondMatches.length - 1].index! + 20 },
-      containerKey: 'stepper_conditional',
-      stepLabels: [],
+  const HEADING_PROXIMITY_CHARS = 2000; // ~25 lines
+  const hasStrongNearbyHeading = (btnOffset: number): boolean => {
+    return headingPositions.some(h => {
+      const dist = btnOffset - h.offset;
+      return dist >= 0 && dist <= HEADING_PROXIMITY_CHARS;
     });
-  }
-
-  // (C) Classify CTAs
-  const classifiedCTAs: ClassifiedCTA[] = [];
-  const actionAreas = new Map<string, ClassifiedCTA[]>();
-
-  for (const btn of allButtons) {
-    const { emphasis, cue } = classifyCTAEmphasis({
-      variant: btn.variant,
-      variantConfig: buttonImpl?.config || null,
-      className: btn.className,
-    });
-
-    // Hierarchy classification
-    let hierarchy: ClassifiedCTA['hierarchy'] = 'unknown';
-    const variantLower = (btn.variant || '').toLowerCase();
-    const classLower = (btn.className || '').toLowerCase();
-    
-    if (variantLower === 'destructive' || /\b(destructive|bg-red-|bg-destructive)\b/.test(classLower)) {
-      hierarchy = 'destructive';
-    } else if (emphasis === 'high') {
-      hierarchy = 'primary';
-    } else if (emphasis === 'medium') {
-      hierarchy = 'secondary';
-    } else if (emphasis === 'low') {
-      hierarchy = 'tertiary';
-    }
-
-    // Find container key
-    let containerKey = 'orphaned';
-    for (const group of actionGroups) {
-      if (btn.offset >= group.offset && btn.offset <= group.containerEnd) {
-        containerKey = `${group.containerType}@${group.offset}`;
-        break;
-      }
-    }
-
-    const cta: ClassifiedCTA = { label: btn.label, hierarchy, emphasis, cue, offset: btn.offset, containerKey, variant: btn.variant, className: btn.className };
-    classifiedCTAs.push(cta);
-
-    if (!actionAreas.has(containerKey)) actionAreas.set(containerKey, []);
-    actionAreas.get(containerKey)!.push(cta);
-  }
-
-  return { headings, steppers, classifiedCTAs, actionAreas };
-}
-
-// =====================
-// U1.3 Context-Aware Suppression (deterministic scoring + suppression model)
-// =====================
-
-interface U13SuppressionResult {
-  suppressed: boolean;
-  suppressionReason: string | null;
-  confidenceAdjustment: number; // negative = reduce, 0 = no change
-  contextSignalsFound: string[];
-  ambiguitySignalsFound: string[];
-}
-
-const HEADING_PROXIMITY_CHARS = 2500; // ~30 lines
-
-function evaluateU13Suppression(
-  btnOffset: number,
-  btnLabel: string,
-  snapshot: UIContextSnapshot,
-): U13SuppressionResult {
-  const contextSignalsFound: string[] = [];
-  const ambiguitySignalsFound: string[] = [];
-  let confidenceAdjustment = 0;
-
-  // Evaluate stepper context
-  const stepperDetected = snapshot.steppers.length > 0;
-  const labeledStepper = snapshot.steppers.find(s => s.hasLabels && s.stepCount >= 3);
-  const activeStepKnown = snapshot.steppers.some(s => s.activeIndexKnown);
-  const nextStepLabel = snapshot.steppers.find(s => s.nextStepLabel)?.nextStepLabel || null;
-  const unlabeledStepper = snapshot.steppers.some(s => !s.hasLabels);
-
-  if (stepperDetected) contextSignalsFound.push('stepper_detected');
-  if (labeledStepper) contextSignalsFound.push(`stepper_labeled(${labeledStepper.stepCount} steps)`);
-  if (activeStepKnown) contextSignalsFound.push('active_step_known');
-  if (nextStepLabel) contextSignalsFound.push(`next_step_label: "${nextStepLabel}"`);
-
-  // Evaluate heading context
-  const nearbyHeading = snapshot.headings.find(h => {
-    const dist = btnOffset - h.lineStart;
-    return dist >= 0 && dist <= HEADING_PROXIMITY_CHARS;
-  });
-  const headingDetected = nearbyHeading != null;
-  const headingStrong = nearbyHeading != null && nearbyHeading.strengthScore >= 0.7;
-
-  if (headingDetected) contextSignalsFound.push(`heading_detected: "${nearbyHeading!.text}"`);
-  if (headingStrong) contextSignalsFound.push('heading_strong');
-
-  // Evaluate single primary CTA
-  const primaryCTAs = snapshot.classifiedCTAs.filter(c => c.hierarchy === 'primary');
-  const isSinglePrimary = primaryCTAs.length <= 1;
-  if (isSinglePrimary) contextSignalsFound.push('single_primary_cta');
-
-  // Check for keyword overlap between heading and step labels
-  let headingMatchesStepLabels = false;
-  if (nearbyHeading && labeledStepper) {
-    const headingWords = new Set(nearbyHeading.text.toLowerCase().split(/\s+/));
-    for (const stepLabel of labeledStepper.stepLabels) {
-      const stepWords = stepLabel.toLowerCase().split(/\s+/);
-      if (stepWords.some(w => w.length > 3 && headingWords.has(w))) {
-        headingMatchesStepLabels = true;
-        break;
-      }
-    }
-    if (headingMatchesStepLabels) contextSignalsFound.push('heading_matches_step_labels');
-  }
-
-  // ==========================================
-  // S1: Labeled stepper + active step + destination inference
-  // ==========================================
-  if (labeledStepper && labeledStepper.stepCount >= 3 && activeStepKnown && nextStepLabel) {
-    return {
-      suppressed: true,
-      suppressionReason: `stepper_destination_inferred: "${nextStepLabel}"`,
-      confidenceAdjustment: 0,
-      contextSignalsFound,
-      ambiguitySignalsFound,
-    };
-  }
-
-  // ==========================================
-  // S2: Strong contextual heading tied to CTA
-  // ==========================================
-  if (headingStrong || headingMatchesStepLabels) {
-    return {
-      suppressed: true,
-      suppressionReason: `strong_heading_near_cta: "${nearbyHeading!.text}"`,
-      confidenceAdjustment: 0,
-      contextSignalsFound,
-      ambiguitySignalsFound,
-    };
-  }
-
-  // ==========================================
-  // S3: Single dominant CTA in a step flow
-  // ==========================================
-  if (isSinglePrimary && (stepperDetected || headingDetected)) {
-    return {
-      suppressed: true,
-      suppressionReason: `single_dominant_cta_in_context`,
-      confidenceAdjustment: 0,
-      contextSignalsFound,
-      ambiguitySignalsFound,
-    };
-  }
-
-  // Not suppressed — compute ambiguity signals
-  if (!stepperDetected && !headingDetected) ambiguitySignalsFound.push('no_context');
-  if (unlabeledStepper && !headingDetected) ambiguitySignalsFound.push('unlabeled_stepper');
-  if (!isSinglePrimary) ambiguitySignalsFound.push('competing_ctas');
-
-  // Confidence adjustments
-  if (stepperDetected) confidenceAdjustment -= 0.15;
-  if (headingDetected) confidenceAdjustment -= 0.15;
-  if (!stepperDetected && !headingDetected) confidenceAdjustment += 0.10;
-  if (!isSinglePrimary) confidenceAdjustment += 0.10;
-
-  return {
-    suppressed: false,
-    suppressionReason: null,
-    confidenceAdjustment,
-    contextSignalsFound,
-    ambiguitySignalsFound,
   };
-}
+  if (headingPositions.length > 0) contextSignals.push('nearby_heading');
 
-// =====================
-// U1.2 Hierarchy Ambiguity Evaluation
-// =====================
-
-interface U12AmbiguityResult {
-  isAmbiguous: boolean;
-  reason: string;
-  confidenceAdjustment: number;
-  ctaDetails: Array<{ label: string; hierarchy: string; cue: string }>;
-}
-
-function evaluateU12Hierarchy(ctas: ClassifiedCTA[]): U12AmbiguityResult {
-  const primaries = ctas.filter(c => c.hierarchy === 'primary');
-  const destructives = ctas.filter(c => c.hierarchy === 'destructive');
-  const secondaries = ctas.filter(c => c.hierarchy === 'secondary');
-  const tertiaries = ctas.filter(c => c.hierarchy === 'tertiary');
-  const ctaDetails = ctas.map(c => ({ label: c.label, hierarchy: c.hierarchy, cue: c.cue }));
-
-  // Clear hierarchy: one primary + rest are secondary/tertiary → no ambiguity
-  if (primaries.length === 1 && (secondaries.length > 0 || tertiaries.length > 0) && destructives.length === 0) {
-    return { isAmbiguous: false, reason: 'clear_hierarchy', confidenceAdjustment: -0.10, ctaDetails };
+  // (C) Single primary CTA detection
+  let highEmphasisCount = 0;
+  for (const btn of allButtons) {
+    const emph = buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)
+      ? classifyButtonEmphasis({
+          resolvedVariant: btn.variant || buttonImpl.config.defaultVariant || 'default',
+          variantConfig: buttonImpl.config,
+          instanceClassName: btn.className,
+        }).emphasis
+      : classifyTailwindEmphasis(btn.className);
+    if (emph === 'high') highEmphasisCount++;
   }
+  const isSinglePrimaryCTA = highEmphasisCount <= 1;
+  if (isSinglePrimaryCTA) contextSignals.push('single_primary_cta');
 
-  // 2+ primary in same action area → ambiguous
-  if (primaries.length >= 2) {
-    let adj = 0.10;
-    // Check equal width/placement signals
-    const offsets = primaries.map(p => p.offset);
-    if (offsets.length >= 2 && Math.max(...offsets) - Math.min(...offsets) < 500) adj += 0.10;
-    return { isAmbiguous: true, reason: `${primaries.length} primary CTAs with equal emphasis`, confidenceAdjustment: adj, ctaDetails };
-  }
-
-  // Primary + destructive prominent → ambiguous
-  if (primaries.length >= 1 && destructives.length >= 1) {
-    // Check if destructive has high emphasis styling
-    const destructiveHigh = destructives.some(d => d.emphasis === 'high');
-    if (destructiveHigh) {
-      return { isAmbiguous: true, reason: 'primary + destructive both prominent', confidenceAdjustment: 0.05, ctaDetails };
-    }
-  }
-
-  // Multiple unknown hierarchy → ambiguous
-  const unknowns = ctas.filter(c => c.hierarchy === 'unknown');
-  if (unknowns.length >= 2) {
-    return { isAmbiguous: true, reason: `${unknowns.length} CTAs with unresolvable hierarchy`, confidenceAdjustment: 0, ctaDetails };
-  }
-
-  return { isAmbiguous: false, reason: 'clear_hierarchy', confidenceAdjustment: -0.10, ctaDetails };
+  return { hasLabeledStepper, hasStrongNearbyHeading, isSinglePrimaryCTA, contextSignals };
 }
 
 

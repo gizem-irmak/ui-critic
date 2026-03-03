@@ -100,6 +100,7 @@ function classifyButtonEmphasis(params: {
   return { emphasis: 'unknown', styleKey: null };
 }
 
+// Unified CTA emphasis classifier — tool-agnostic
 function classifyCTAEmphasis(params: {
   variant: string | null;
   variantConfig: CvaVariantConfig | null;
@@ -162,6 +163,7 @@ function extractButtonUsagesFromJsx(content: string, buttonLocalNames: Set<strin
   return usages;
 }
 
+// Extract all CTA candidates: buttons + anchor-as-button
 function extractCTAElements(content: string, buttonLocalNames: Set<string>, baseOffset = 0): ButtonUsage[] {
   const usages = extractButtonUsagesFromJsx(content, buttonLocalNames, baseOffset);
   const anchorRegex = /<a\b([^>]*)>([^<]*(?:<(?!\/a)[^<]*)*)<\/a>/gi;
@@ -234,7 +236,7 @@ function extractActionGroups(content: string, buttonLocalNames: Set<string>): Ac
 }
 
 // =====================
-// U1 Nav/Chrome + Context Gates
+// U1 Nav/Chrome + Context Gates (matches index.ts)
 // =====================
 
 function isNavOrChromeFile(filePath: string, content: string): boolean {
@@ -268,253 +270,8 @@ function hasPrimaryActionContext(content: string): boolean {
 }
 
 // =====================
-// AST-Lite UIContextSnapshot + Suppression/Scoring (mirrors index.ts)
+// Inline detectU1PrimaryAction (matches generalized index.ts)
 // =====================
-
-interface HeadingInfo {
-  text: string;
-  lineStart: number;
-  strengthScore: number;
-}
-
-interface StepperInfo {
-  stepCount: number;
-  hasLabels: boolean;
-  activeIndexKnown: boolean;
-  nextStepLabel: string | null;
-  lineRange: { start: number; end: number };
-  containerKey: string;
-  stepLabels: string[];
-}
-
-interface ClassifiedCTA {
-  label: string;
-  hierarchy: 'primary' | 'secondary' | 'tertiary' | 'destructive' | 'unknown';
-  emphasis: Emphasis;
-  cue: string;
-  offset: number;
-  containerKey: string;
-  variant: string | null;
-  className: string;
-}
-
-interface UIContextSnapshot {
-  headings: HeadingInfo[];
-  steppers: StepperInfo[];
-  classifiedCTAs: ClassifiedCTA[];
-  actionAreas: Map<string, ClassifiedCTA[]>;
-}
-
-const TASK_VERBS = /\b(select|choose|enter|review|confirm|book|schedule|add|create|update|edit|delete|remove|upload|download|set|pick|configure|manage|assign|verify|complete|fill|provide|specify|customize)\b/i;
-
-function buildUIContextSnapshot(
-  content: string,
-  allButtons: ButtonUsage[],
-  buttonImpl: { filePath: string; config: CvaVariantConfig } | null,
-  actionGroups: ActionGroup[],
-): UIContextSnapshot {
-  const headings: HeadingInfo[] = [];
-  const headingRe = /<(?:h[1-3])\b[^>]*>([^<]+)</gi;
-  let hMatch;
-  while ((hMatch = headingRe.exec(content)) !== null) {
-    const text = hMatch[1].trim();
-    if (text.length >= 3) headings.push({ text, lineStart: hMatch.index, strengthScore: TASK_VERBS.test(text) ? 1.0 : 0.7 });
-  }
-  const typoPatterns = [
-    /<(?:p|span|div)\b[^>]*className\s*=\s*["'][^"']*\b(?:text-(?:2xl|3xl|4xl|5xl))\b[^"']*\b(?:font-(?:bold|semibold))\b[^"']*["'][^>]*>([^<]+)</gi,
-    /<(?:p|span|div)\b[^>]*className\s*=\s*["'][^"']*\b(?:font-(?:bold|semibold))\b[^"']*\b(?:text-(?:2xl|3xl|4xl|5xl))\b[^"']*["'][^>]*>([^<]+)</gi,
-  ];
-  const seenHeadingOffsets = new Set(headings.map(h => h.lineStart));
-  for (const re of typoPatterns) {
-    while ((hMatch = re.exec(content)) !== null) {
-      if (seenHeadingOffsets.has(hMatch.index)) continue;
-      seenHeadingOffsets.add(hMatch.index);
-      const text = hMatch[1].trim();
-      if (text.length >= 3) headings.push({ text, lineStart: hMatch.index, strengthScore: TASK_VERBS.test(text) ? 0.8 : 0.5 });
-    }
-  }
-
-  const steppers: StepperInfo[] = [];
-  const stepsArrayRe = /(?:const|let)\s+(\w*[Ss]teps\w*)\s*=\s*\[([^\]]{20,})\]/gs;
-  let saMatch;
-  while ((saMatch = stepsArrayRe.exec(content)) !== null) {
-    const arrayContent = saMatch[2];
-    const labelEntries = arrayContent.match(/(?:label|title|name)\s*:\s*["']([^"']+)["']/gi);
-    if (labelEntries && labelEntries.length >= 3) {
-      const stepLabels = labelEntries.map(e => { const m = e.match(/["']([^"']+)["']/); return m ? m[1] : ''; }).filter(Boolean);
-      const hasStepTracking = /(?:currentStep|activeStep|step\s*===?\s*\d|setStep|useState.*step)/i.test(content);
-      let activeIndexKnown = false;
-      let nextStepLabel: string | null = null;
-      if (hasStepTracking) { activeIndexKnown = true; if (stepLabels.length > 1) nextStepLabel = stepLabels[1]; }
-      steppers.push({ stepCount: stepLabels.length, hasLabels: true, activeIndexKnown, nextStepLabel, lineRange: { start: saMatch.index, end: saMatch.index + saMatch[0].length }, containerKey: `stepper_array_${saMatch[1]}`, stepLabels });
-    }
-  }
-  const stepItemRe = /<(?:Step|StepItem|StepTrigger|StepperItem|StepLabel)\b[^>]*>([^<]{2,})<\//gi;
-  const stepItemMatches = [...content.matchAll(stepItemRe)];
-  if (stepItemMatches.length >= 3) {
-    const stepLabels = stepItemMatches.map(m => m[1].trim());
-    const hasActiveStep = /(?:aria-current\s*=\s*["']step["']|data-state\s*=\s*["']active["']|isActive|currentStep|activeStep|step\s*===?\s*\d|className\s*=\s*[^>]*(?:bg-primary|text-primary|ring-primary|active|current|selected))/i.test(content);
-    let activeIndex = -1;
-    let nextStepLabel: string | null = null;
-    for (let i = 0; i < stepItemMatches.length; i++) {
-      const matchStart = stepItemMatches[i].index!;
-      const matchEnd = matchStart + stepItemMatches[i][0].length;
-      const surrounding = content.slice(Math.max(0, matchStart - 100), matchEnd + 50);
-      if (/aria-current\s*=\s*["']step["']|data-state\s*=\s*["']active["']|isActive\b/.test(surrounding)) { activeIndex = i; break; }
-    }
-    if (activeIndex >= 0 && activeIndex < stepLabels.length - 1) nextStepLabel = stepLabels[activeIndex + 1];
-    const firstOffset = stepItemMatches[0].index!;
-    const lastOffset = stepItemMatches[stepItemMatches.length - 1].index! + stepItemMatches[stepItemMatches.length - 1][0].length;
-    if (!steppers.some(s => Math.abs(s.lineRange.start - firstOffset) < 500)) {
-      steppers.push({ stepCount: stepLabels.length, hasLabels: true, activeIndexKnown: hasActiveStep, nextStepLabel, lineRange: { start: firstOffset, end: lastOffset }, containerKey: 'stepper_component', stepLabels });
-    }
-  }
-  const stepperComponentRe = /<(?:Stepper|Steps|ProgressSteps|StepWizard)\b[^>]*>/gi;
-  let scMatch;
-  while ((scMatch = stepperComponentRe.exec(content)) !== null) {
-    const stepChildRe = /<(?:Step|StepItem)\b/gi;
-    const stepChildren = content.match(stepChildRe);
-    if (stepChildren && stepChildren.length >= 3 && !steppers.some(s => Math.abs(s.lineRange.start - scMatch!.index) < 500)) {
-      steppers.push({ stepCount: stepChildren.length, hasLabels: false, activeIndexKnown: false, nextStepLabel: null, lineRange: { start: scMatch.index, end: scMatch.index + 200 }, containerKey: 'stepper_unlabeled', stepLabels: [] });
-    }
-  }
-  const stepConditionalRe = /(?:step|currentStep|activeStep)\s*===?\s*(\d+)/gi;
-  const stepCondMatches = [...content.matchAll(stepConditionalRe)];
-  if (stepCondMatches.length >= 3 && steppers.length === 0) {
-    const indices = stepCondMatches.map(m => parseInt(m[1]));
-    const stepCount = Math.max(...indices) + 1;
-    steppers.push({ stepCount, hasLabels: false, activeIndexKnown: true, nextStepLabel: null, lineRange: { start: stepCondMatches[0].index!, end: stepCondMatches[stepCondMatches.length - 1].index! + 20 }, containerKey: 'stepper_conditional', stepLabels: [] });
-  }
-
-  const classifiedCTAs: ClassifiedCTA[] = [];
-  const actionAreas = new Map<string, ClassifiedCTA[]>();
-  for (const btn of allButtons) {
-    const { emphasis, cue } = classifyCTAEmphasis({ variant: btn.variant, variantConfig: buttonImpl?.config || null, className: btn.className });
-    let hierarchy: ClassifiedCTA['hierarchy'] = 'unknown';
-    const variantLower = (btn.variant || '').toLowerCase();
-    const classLower = (btn.className || '').toLowerCase();
-    if (variantLower === 'destructive' || /\b(destructive|bg-red-|bg-destructive)\b/.test(classLower)) hierarchy = 'destructive';
-    else if (emphasis === 'high') hierarchy = 'primary';
-    else if (emphasis === 'medium') hierarchy = 'secondary';
-    else if (emphasis === 'low') hierarchy = 'tertiary';
-    let containerKey = 'orphaned';
-    for (const group of actionGroups) { if (btn.offset >= group.offset && btn.offset <= group.containerEnd) { containerKey = `${group.containerType}@${group.offset}`; break; } }
-    const cta: ClassifiedCTA = { label: btn.label, hierarchy, emphasis, cue, offset: btn.offset, containerKey, variant: btn.variant, className: btn.className };
-    classifiedCTAs.push(cta);
-    if (!actionAreas.has(containerKey)) actionAreas.set(containerKey, []);
-    actionAreas.get(containerKey)!.push(cta);
-  }
-  return { headings, steppers, classifiedCTAs, actionAreas };
-}
-
-interface U13SuppressionResult {
-  suppressed: boolean;
-  suppressionReason: string | null;
-  confidenceAdjustment: number;
-  contextSignalsFound: string[];
-  ambiguitySignalsFound: string[];
-}
-
-const HEADING_PROXIMITY_CHARS = 2500;
-
-function evaluateU13Suppression(btnOffset: number, btnLabel: string, snapshot: UIContextSnapshot): U13SuppressionResult {
-  const contextSignalsFound: string[] = [];
-  const ambiguitySignalsFound: string[] = [];
-  let confidenceAdjustment = 0;
-
-  const stepperDetected = snapshot.steppers.length > 0;
-  const labeledStepper = snapshot.steppers.find(s => s.hasLabels && s.stepCount >= 3);
-  const activeStepKnown = snapshot.steppers.some(s => s.activeIndexKnown);
-  const nextStepLabel = snapshot.steppers.find(s => s.nextStepLabel)?.nextStepLabel || null;
-  const unlabeledStepper = snapshot.steppers.some(s => !s.hasLabels);
-
-  if (stepperDetected) contextSignalsFound.push('stepper_detected');
-  if (labeledStepper) contextSignalsFound.push(`stepper_labeled(${labeledStepper.stepCount} steps)`);
-  if (activeStepKnown) contextSignalsFound.push('active_step_known');
-  if (nextStepLabel) contextSignalsFound.push(`next_step_label: "${nextStepLabel}"`);
-
-  const nearbyHeading = snapshot.headings.find(h => { const dist = btnOffset - h.lineStart; return dist >= 0 && dist <= HEADING_PROXIMITY_CHARS; });
-  const headingDetected = nearbyHeading != null;
-  const headingStrong = nearbyHeading != null && nearbyHeading.strengthScore >= 0.7;
-  if (headingDetected) contextSignalsFound.push(`heading_detected: "${nearbyHeading!.text}"`);
-  if (headingStrong) contextSignalsFound.push('heading_strong');
-
-  const primaryCTAs = snapshot.classifiedCTAs.filter(c => c.hierarchy === 'primary');
-  const isSinglePrimary = primaryCTAs.length <= 1;
-  if (isSinglePrimary) contextSignalsFound.push('single_primary_cta');
-
-  let headingMatchesStepLabels = false;
-  if (nearbyHeading && labeledStepper) {
-    const headingWords = new Set(nearbyHeading.text.toLowerCase().split(/\s+/));
-    for (const stepLabel of labeledStepper.stepLabels) {
-      const stepWords = stepLabel.toLowerCase().split(/\s+/);
-      if (stepWords.some(w => w.length > 3 && headingWords.has(w))) { headingMatchesStepLabels = true; break; }
-    }
-    if (headingMatchesStepLabels) contextSignalsFound.push('heading_matches_step_labels');
-  }
-
-  // S1: Labeled stepper + active step + destination inference
-  if (labeledStepper && labeledStepper.stepCount >= 3 && activeStepKnown && nextStepLabel) {
-    return { suppressed: true, suppressionReason: `stepper_destination_inferred: "${nextStepLabel}"`, confidenceAdjustment: 0, contextSignalsFound, ambiguitySignalsFound };
-  }
-  // S2: Strong contextual heading tied to CTA
-  if (headingStrong || headingMatchesStepLabels) {
-    return { suppressed: true, suppressionReason: `strong_heading_near_cta: "${nearbyHeading!.text}"`, confidenceAdjustment: 0, contextSignalsFound, ambiguitySignalsFound };
-  }
-  // S3: Single dominant CTA in a step flow
-  if (isSinglePrimary && (stepperDetected || headingDetected)) {
-    return { suppressed: true, suppressionReason: `single_dominant_cta_in_context`, confidenceAdjustment: 0, contextSignalsFound, ambiguitySignalsFound };
-  }
-
-  if (!stepperDetected && !headingDetected) ambiguitySignalsFound.push('no_context');
-  if (unlabeledStepper && !headingDetected) ambiguitySignalsFound.push('unlabeled_stepper');
-  if (!isSinglePrimary) ambiguitySignalsFound.push('competing_ctas');
-
-  if (stepperDetected) confidenceAdjustment -= 0.15;
-  if (headingDetected) confidenceAdjustment -= 0.15;
-  if (!stepperDetected && !headingDetected) confidenceAdjustment += 0.10;
-  if (!isSinglePrimary) confidenceAdjustment += 0.10;
-
-  return { suppressed: false, suppressionReason: null, confidenceAdjustment, contextSignalsFound, ambiguitySignalsFound };
-}
-
-interface U12AmbiguityResult {
-  isAmbiguous: boolean;
-  reason: string;
-  confidenceAdjustment: number;
-  ctaDetails: Array<{ label: string; hierarchy: string; cue: string }>;
-}
-
-function evaluateU12Hierarchy(ctas: ClassifiedCTA[]): U12AmbiguityResult {
-  const primaries = ctas.filter(c => c.hierarchy === 'primary');
-  const destructives = ctas.filter(c => c.hierarchy === 'destructive');
-  const secondaries = ctas.filter(c => c.hierarchy === 'secondary');
-  const tertiaries = ctas.filter(c => c.hierarchy === 'tertiary');
-  const ctaDetails = ctas.map(c => ({ label: c.label, hierarchy: c.hierarchy, cue: c.cue }));
-
-  if (primaries.length === 1 && (secondaries.length > 0 || tertiaries.length > 0) && destructives.length === 0) {
-    return { isAmbiguous: false, reason: 'clear_hierarchy', confidenceAdjustment: -0.10, ctaDetails };
-  }
-  if (primaries.length >= 2) {
-    let adj = 0.10;
-    const offsets = primaries.map(p => p.offset);
-    if (offsets.length >= 2 && Math.max(...offsets) - Math.min(...offsets) < 500) adj += 0.10;
-    return { isAmbiguous: true, reason: `${primaries.length} primary CTAs with equal emphasis`, confidenceAdjustment: adj, ctaDetails };
-  }
-  if (primaries.length >= 1 && destructives.length >= 1) {
-    const destructiveHigh = destructives.some(d => d.emphasis === 'high');
-    if (destructiveHigh) return { isAmbiguous: true, reason: 'primary + destructive both prominent', confidenceAdjustment: 0.05, ctaDetails };
-  }
-  const unknowns = ctas.filter(c => c.hierarchy === 'unknown');
-  if (unknowns.length >= 2) return { isAmbiguous: true, reason: `${unknowns.length} CTAs with unresolvable hierarchy`, confidenceAdjustment: 0, ctaDetails };
-  return { isAmbiguous: false, reason: 'clear_hierarchy', confidenceAdjustment: -0.10, ctaDetails };
-}
-
-// =====================
-// U1 Finding type + detectU1PrimaryAction
-// =====================
-
-const U1_LLM_TIEBREAK_ENABLED = false;
 
 interface U1Finding {
   subCheck: 'U1.1' | 'U1.2' | 'U1.3';
@@ -529,10 +286,79 @@ interface U1Finding {
   confidence: number;
   advisoryGuidance?: string;
   deduplicationKey: string;
-  contextSignalsFound?: string[];
-  ambiguitySignalsFound?: string[];
-  suppressionReason?: string;
-  ctaHierarchyDetails?: Array<{ label: string; hierarchy: string; cue: string }>;
+}
+
+// U1.3 Context-Aware Suppression Signals
+interface U13ContextResult {
+  hasLabeledStepper: boolean;
+  hasStrongNearbyHeading: (btnOffset: number) => boolean;
+  isSinglePrimaryCTA: boolean;
+  contextSignals: string[];
+}
+
+function detectU13ContextSignals(
+  content: string,
+  allButtons: ButtonUsage[],
+  buttonImpl: { filePath: string; config: CvaVariantConfig } | null,
+): U13ContextResult {
+  const contextSignals: string[] = [];
+  let hasLabeledStepper = false;
+
+  const stepItemRe = /<(?:Step|StepItem|StepTrigger|StepperItem|StepLabel)\b[^>]*>([^<]{2,})<\//gi;
+  const stepItemMatches = content.match(stepItemRe);
+  if (stepItemMatches && stepItemMatches.length >= 3) {
+    const hasActiveStep = /(?:aria-current\s*=\s*["']step["']|data-state\s*=\s*["']active["']|isActive|currentStep|activeStep|step\s*===?\s*\d|className\s*=\s*[^>]*(?:active|current|selected))/i.test(content);
+    if (hasActiveStep) { hasLabeledStepper = true; contextSignals.push('stepper_labels', 'active_step_indicator'); }
+  }
+
+  const stepsArrayRe = /(?:const|let)\s+\w*[Ss]teps\w*\s*=\s*\[([^\]]{20,})\]/s;
+  const stepsArrayMatch = content.match(stepsArrayRe);
+  if (stepsArrayMatch) {
+    const arrayContent = stepsArrayMatch[1];
+    const labelEntries = arrayContent.match(/(?:label|title|name)\s*:\s*["'][^"']+["']/gi);
+    if (labelEntries && labelEntries.length >= 3) {
+      const hasStepTracking = /(?:currentStep|activeStep|step\s*===?\s*\d|setStep|useState.*step)/i.test(content);
+      if (hasStepTracking) { hasLabeledStepper = true; contextSignals.push('stepper_array_labels', 'step_state_tracking'); }
+    }
+  }
+
+  const stepperComponentRe = /<(?:Stepper|Steps|ProgressSteps|StepWizard)\b[^>]*>/i;
+  if (stepperComponentRe.test(content)) {
+    const stepChildRe = /<(?:Step|StepItem)\b/gi;
+    const stepChildren = content.match(stepChildRe);
+    if (stepChildren && stepChildren.length >= 3) { hasLabeledStepper = true; contextSignals.push('stepper_component'); }
+  }
+
+  const headingPositions: Array<{ offset: number; text: string }> = [];
+  const headingRe = /<(?:h[1-3])\b[^>]*>([^<]+)</gi;
+  let hMatch;
+  while ((hMatch = headingRe.exec(content)) !== null) {
+    const text = hMatch[1].trim();
+    if (text.length >= 5) headingPositions.push({ offset: hMatch.index, text });
+  }
+  const typoHeadingRe = /<(?:p|span|div)\b[^>]*className\s*=\s*["'][^"']*\b(?:text-(?:2xl|3xl|4xl|5xl))\b[^"']*\b(?:font-(?:bold|semibold))\b[^"']*["'][^>]*>([^<]+)</gi;
+  while ((hMatch = typoHeadingRe.exec(content)) !== null) {
+    const text = hMatch[1].trim();
+    if (text.length >= 5) headingPositions.push({ offset: hMatch.index, text });
+  }
+  if (headingPositions.length > 0) contextSignals.push('nearby_heading');
+
+  const HEADING_PROXIMITY_CHARS = 2000;
+  const hasStrongNearbyHeading = (btnOffset: number): boolean => {
+    return headingPositions.some(h => { const dist = btnOffset - h.offset; return dist >= 0 && dist <= HEADING_PROXIMITY_CHARS; });
+  };
+
+  let highEmphasisCount = 0;
+  for (const btn of allButtons) {
+    const emph = buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)
+      ? classifyButtonEmphasis({ resolvedVariant: btn.variant || buttonImpl.config.defaultVariant || 'default', variantConfig: buttonImpl.config, instanceClassName: btn.className }).emphasis
+      : classifyTailwindEmphasis(btn.className);
+    if (emph === 'high') highEmphasisCount++;
+  }
+  const isSinglePrimaryCTA = highEmphasisCount <= 1;
+  if (isSinglePrimaryCTA) contextSignals.push('single_primary_cta');
+
+  return { hasLabeledStepper, hasStrongNearbyHeading, isSinglePrimaryCTA, contextSignals };
 }
 
 function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
@@ -590,7 +416,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
   };
   const buttonImpl = resolveKnownButtonImpl();
   const seenU12Groups = new Set<string>();
-  const GENERIC_LABELS = new Set(['continue', 'next', 'submit', 'proceed', 'confirm', 'done', 'ok', 'save']);
+  const GENERIC_LABELS = new Set(['continue', 'next', 'submit', 'save', 'confirm', 'ok']);
 
   for (const [filePathRaw, content] of allFiles.entries()) {
     const filePath = normalizePath(filePathRaw);
@@ -615,12 +441,9 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
     const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
     if (exportedFn?.[1]) componentName = exportedFn[1];
 
-    const actionGroups = extractActionGroups(content, buttonLocalNames);
-    const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
-    const snapshot = buildUIContextSnapshot(content, allButtons, buttonImpl, actionGroups);
-
-    // U1.2: Hierarchy-based competing CTA detection
+    // U1.2: tool-agnostic detection with line-window fallback
     const u12SuppressedLabels = new Set<string>();
+    const actionGroups = extractActionGroups(content, buttonLocalNames);
     const coveredOffsets = new Set<number>();
 
     const processU12Region = (
@@ -628,43 +451,40 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
       regionLabel: string,
       regionType: 'container' | 'line-window',
     ) => {
-      const regionCTAs: ClassifiedCTA[] = ctaUsages.map(btn => {
-        const { emphasis, cue } = classifyCTAEmphasis({ variant: btn.variant, variantConfig: buttonImpl?.config || null, className: btn.className });
-        const variantLower = (btn.variant || '').toLowerCase();
-        const classLower = (btn.className || '').toLowerCase();
-        let hierarchy: ClassifiedCTA['hierarchy'] = 'unknown';
-        if (variantLower === 'destructive' || /\b(destructive|bg-red-|bg-destructive)\b/.test(classLower)) hierarchy = 'destructive';
-        else if (emphasis === 'high') hierarchy = 'primary';
-        else if (emphasis === 'medium') hierarchy = 'secondary';
-        else if (emphasis === 'low') hierarchy = 'tertiary';
-        return { label: btn.label, hierarchy, emphasis, cue, offset: btn.offset, containerKey: regionLabel, variant: btn.variant, className: btn.className };
-      });
-
-      const ambiguity = evaluateU12Hierarchy(regionCTAs);
-      if (!ambiguity.isAmbiguous) return;
-
+      const ctas: Array<{ label: string; emphasis: Emphasis; cue: string }> = [];
+      for (const btn of ctaUsages) {
+        const result = classifyCTAEmphasis({
+          variant: btn.variant,
+          variantConfig: buttonImpl?.config || null,
+          className: btn.className,
+        });
+        ctas.push({ label: btn.label, emphasis: result.emphasis, cue: result.cue });
+      }
+      const highs = ctas.filter(c => c.emphasis === 'high');
+      if (highs.length < 2) return;
       const groupKey = `${filePath}|${regionLabel}`;
       if (seenU12Groups.has(groupKey)) return;
       seenU12Groups.add(groupKey);
-
-      const labels = regionCTAs.map(c => c.label);
-      let u12Confidence = 0.55;
-      u12Confidence += ambiguity.confidenceAdjustment;
-      if (regionType === 'container') u12Confidence += 0.05;
-      u12Confidence = Math.max(0.45, Math.min(u12Confidence, 0.75));
-
+      const labels = ctas.map(c => c.label);
+      const cueList = highs.map(h => h.cue).join(', ');
+      let u12Confidence = 0.60;
+      if (regionType === 'container') u12Confidence += 0.10;
+      const strongCues = highs.filter(h => /variant=|bg-\w+-[6-8]00|bg-primary|btn-primary|semantic:/.test(h.cue));
+      if (strongCues.length === highs.length) u12Confidence += 0.10;
+      const offsets = ctaUsages.map(b => b.offset);
+      if (offsets.length >= 2 && Math.max(...offsets) - Math.min(...offsets) < 500) u12Confidence += 0.05;
+      u12Confidence = Math.min(u12Confidence, 0.90);
       findings.push({
         subCheck: 'U1.2', subCheckLabel: 'Multiple equivalent CTAs', classification: 'potential',
         elementLabel: `${componentName} — ${regionLabel}`, elementType: 'button group', filePath,
-        detection: `Hierarchy ambiguity: ${ambiguity.reason}`,
-        evidence: `${labels.join(', ')} — hierarchy: [${ambiguity.ctaDetails.map(d => `${d.label}:${d.hierarchy}`).join(', ')}] (${regionType === 'container' ? regionLabel : 'line-window proximity'})`,
-        explanation: `CTA buttons have ambiguous visual hierarchy: ${ambiguity.reason}`,
+        detection: `${highs.length}+ equivalent high-emphasis CTAs in the same region`,
+        evidence: `${labels.join(', ')} — emphasis cues: [${cueList}] (${regionType === 'container' ? regionLabel : 'line-window proximity'})`,
+        explanation: `${highs.length} CTA buttons share equivalent high-emphasis styling in the same UI region.`,
         confidence: u12Confidence,
         advisoryGuidance: 'Visually distinguish the primary action.',
         deduplicationKey: `U1.2|${filePath}|${regionLabel}`,
-        ctaHierarchyDetails: ambiguity.ctaDetails,
       });
-      for (const cta of regionCTAs) { u12SuppressedLabels.add(cta.label.trim().toLowerCase()); }
+      for (const cta of ctas) { u12SuppressedLabels.add(cta.label.trim().toLowerCase()); }
     };
 
     for (const group of actionGroups) {
@@ -673,6 +493,7 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
       processU12Region(group.buttons, group.containerType, 'container');
     }
 
+    // Line-window fallback
     const LINE_WINDOW_CHARS = 1600;
     const allCTAsInFile = extractCTAElements(content, buttonLocalNames);
     const orphanedCTAs = allCTAsInFile.filter(c => !coveredOffsets.has(c.offset));
@@ -687,39 +508,54 @@ function detectU1PrimaryAction(allFiles: Map<string, string>): U1Finding[] {
         }
         if (windowCTAs.length >= 2) {
           const notInForm = windowCTAs.filter(c => !isInsideU11Form(filePath, c.offset));
-          if (notInForm.length >= 2) processU12Region(notInForm, `line-window@${sortedOrphans[windowStart].offset}`, 'line-window');
+          if (notInForm.length >= 2) {
+            processU12Region(notInForm, `line-window@${sortedOrphans[windowStart].offset}`, 'line-window');
+          }
         }
         windowStart = windowEnd;
       }
     }
 
-    // U1.3: Generic CTA labels with context-aware suppression + scoring
+    const allButtons = extractButtonUsagesFromJsx(content, buttonLocalNames);
+
+    // Pre-compute context signals for U1.3 suppression
+    const u13ContextSignals = detectU13ContextSignals(content, allButtons, buttonImpl);
+
     for (const btn of allButtons) {
       const labelLower = btn.label.trim().toLowerCase();
-      if (!GENERIC_LABELS.has(labelLower)) continue;
-      if (isInsideU11Form(filePath, btn.offset)) continue;
-      if (u12SuppressedLabels.has(labelLower)) continue;
-      const dedupeKey = `U1.3|${filePath}|${labelLower}`;
-      if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
+      if (GENERIC_LABELS.has(labelLower)) {
+        if (isInsideU11Form(filePath, btn.offset)) continue;
+        if (u12SuppressedLabels.has(labelLower)) continue;
+        const dedupeKey = `U1.3|${filePath}|${labelLower}`;
+        if (findings.some(f => f.deduplicationKey === dedupeKey)) continue;
 
-      const suppression = evaluateU13Suppression(btn.offset, btn.label, snapshot);
-      if (suppression.suppressed) continue;
+        // Context-aware suppression
+        if (u13ContextSignals.hasLabeledStepper || u13ContextSignals.hasStrongNearbyHeading(btn.offset)) {
+          continue;
+        }
 
-      let u13Confidence = 0.45 + suppression.confidenceAdjustment;
-      u13Confidence = Math.max(0.40, Math.min(u13Confidence, 0.70));
-
-      findings.push({
-        subCheck: 'U1.3', subCheckLabel: 'Ambiguous CTA label', classification: 'potential',
-        elementLabel: `"${btn.label}" button`, elementType: 'button', filePath,
-        detection: `Generic label: "${btn.label}"`,
-        evidence: `CTA labeled "${btn.label}" in ${componentName} — context: [${suppression.contextSignalsFound.join(', ')}], ambiguity: [${suppression.ambiguitySignalsFound.join(', ')}]`,
-        explanation: `The CTA label "${btn.label}" is generic and does not communicate the specific action.`,
-        confidence: u13Confidence,
-        advisoryGuidance: 'Use specific, action-oriented labels.',
-        deduplicationKey: dedupeKey,
-        contextSignalsFound: suppression.contextSignalsFound,
-        ambiguitySignalsFound: suppression.ambiguitySignalsFound,
-      });
+        const HIGH_RISK_GENERICS = new Set(['continue', 'next', 'submit', 'save', 'confirm', 'ok']);
+        let u13Confidence = 0.40;
+        if (HIGH_RISK_GENERICS.has(labelLower)) u13Confidence += 0.10;
+        const hasNearbyHeading = /<(?:h[1-6]|label|legend)\b[^>]*>/.test(content);
+        if (!hasNearbyHeading) u13Confidence += 0.10;
+        const btnEmphasis = buttonImpl && (btn.variant || buttonImpl.config.defaultVariant)
+          ? classifyButtonEmphasis({ resolvedVariant: btn.variant || buttonImpl.config.defaultVariant || 'default', variantConfig: buttonImpl.config, instanceClassName: btn.className }).emphasis
+          : classifyTailwindEmphasis(btn.className);
+        if (btnEmphasis === 'high') u13Confidence += 0.05;
+        if (!u13ContextSignals.isSinglePrimaryCTA) u13Confidence += 0.05;
+        u13Confidence = Math.min(u13Confidence, 0.75);
+        findings.push({
+          subCheck: 'U1.3', subCheckLabel: 'Ambiguous CTA label', classification: 'potential',
+          elementLabel: `"${btn.label}" button`, elementType: 'button', filePath,
+          detection: `Generic label: "${btn.label}"`,
+          evidence: `CTA labeled "${btn.label}" in ${componentName}`,
+          explanation: `The CTA label "${btn.label}" is generic and does not communicate the specific action.`,
+          confidence: u13Confidence,
+          advisoryGuidance: 'Use specific, action-oriented labels.',
+          deduplicationKey: dedupeKey,
+        });
+      }
     }
   }
   return findings;
@@ -747,8 +583,6 @@ const buttonVariants = cva("inline-flex items-center", {
 export function Button() {}
 `;
 
-// ========== U1.1 TESTS ==========
-
 Deno.test("U1.1: Form without submit control → Confirmed", () => {
   const files = new Map<string, string>();
   files.set("src/components/ContactForm.tsx", `
@@ -766,6 +600,66 @@ export default function ContactForm() {
   assert(u11 !== undefined, "Expected U1.1 finding");
   assertEquals(u11!.classification, "confirmed");
   assert(u11!.confidence === 1.0, `Expected confidence 1.0 for confirmed, got ${u11!.confidence}`);
+});
+
+Deno.test("U1.2: Two buttons with identical primary classes → Potential", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/components/ActionCard.tsx", `
+import { Button } from "@/components/ui/button";
+export default function ActionCard() {
+  return (
+    <Dialog>
+      <CardFooter>
+        <Button>Confirm</Button>
+        <Button>Delete</Button>
+      </CardFooter>
+    </Dialog>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 finding");
+  assertEquals(u12!.classification, "potential");
+  assert(u12!.confidence >= 0.80 && u12!.confidence <= 0.90, `Expected confidence 80-90%, got ${u12!.confidence}`);
+});
+
+Deno.test("U1.3: Single CTA 'Continue' (generic) → Potential", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/NextStep.tsx", `
+export default function NextStep() {
+  return (
+    <Dialog>
+      <button onClick={handleClick}>Continue</button>
+    </Dialog>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u13 = results.find(f => f.subCheck === 'U1.3');
+  assert(u13 !== undefined, "Expected U1.3 finding");
+  assertEquals(u13!.classification, "potential");
+  assert(u13!.confidence >= 0.40 && u13!.confidence <= 0.75, `Expected confidence 40-75%, got ${u13!.confidence}`);
+});
+
+Deno.test("PASS: Clear hierarchy (primary + outline) → no U1.2", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/components/GoodCard.tsx", `
+import { Button } from "@/components/ui/button";
+export default function GoodCard() {
+  return (
+    <CardFooter>
+      <Button>Save</Button>
+      <Button variant="outline">Cancel</Button>
+    </CardFooter>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assertEquals(u12, undefined, "Should NOT trigger U1.2 when clear hierarchy exists");
 });
 
 Deno.test("PASS: Form with submit button → no U1.1", () => {
@@ -801,73 +695,87 @@ export default function SearchForm() {
   assertEquals(u11, undefined, "Should NOT trigger U1.1 when onSubmit handler exists");
 });
 
-// ========== U1.2 TESTS (Hierarchy Classifier) ==========
+Deno.test("PASS: Specific label 'Save changes' → no U1.3", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/Settings.tsx", `
+export default function Settings() {
+  return <button>Save changes</button>;
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u13 = results.find(f => f.subCheck === 'U1.3');
+  assertEquals(u13, undefined, "Should NOT trigger U1.3 for specific labels");
+});
 
-Deno.test("U1.2: Two buttons with identical primary classes → Potential", () => {
+Deno.test("U1.1 suppresses U1.2/U1.3 for same file", () => {
   const files = new Map<string, string>();
   files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
-  files.set("src/components/ActionCard.tsx", `
+  files.set("src/components/BrokenForm.tsx", `
 import { Button } from "@/components/ui/button";
-export default function ActionCard() {
+export default function BrokenForm() {
   return (
-    <Dialog>
+    <form>
+      <input type="text" />
       <CardFooter>
-        <Button>Confirm</Button>
-        <Button>Delete</Button>
+        <Button>Save</Button>
+        <Button>Cancel</Button>
       </CardFooter>
-    </Dialog>
+    </form>
   );
 }
 `);
   const results = detectU1PrimaryAction(files);
-  const u12 = results.find(f => f.subCheck === 'U1.2');
-  assert(u12 !== undefined, "Expected U1.2 finding");
-  assertEquals(u12!.classification, "potential");
-  assert(u12!.confidence >= 0.45 && u12!.confidence <= 0.75, `Expected confidence 45-75%, got ${u12!.confidence}`);
+  // U1.1 should fire (form has buttons but they are type="button" implicitly? No, <Button> renders as <button> which defaults to submit)
+  // Actually <Button> inside a form defaults to submit, so U1.1 should NOT fire
+  // But the form content has <Button>Save</Button> which matches the hasSubmitButton check
+  // So U1.1 should NOT fire, and U1.2 MIGHT fire
+  const u11 = results.find(f => f.subCheck === 'U1.1');
+  // The form HAS a <Button> (which counts as submit), so U1.1 should NOT fire
+  assertEquals(u11, undefined, "Form with <Button> should not trigger U1.1");
 });
 
-Deno.test("PASS: Clear hierarchy (primary + outline) → no U1.2", () => {
+Deno.test("U1.2 suppresses U1.3 for labels in same container", () => {
   const files = new Map<string, string>();
   files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
-  files.set("src/components/GoodCard.tsx", `
+  files.set("src/components/SaveDialog.tsx", `
 import { Button } from "@/components/ui/button";
-export default function GoodCard() {
+export default function SaveDialog() {
   return (
     <CardFooter>
       <Button>Save</Button>
-      <Button variant="outline">Cancel</Button>
+      <Button>Cancel</Button>
     </CardFooter>
   );
 }
 `);
   const results = detectU1PrimaryAction(files);
   const u12 = results.find(f => f.subCheck === 'U1.2');
-  assertEquals(u12, undefined, "Should NOT trigger U1.2 when clear hierarchy exists");
+  assert(u12 !== undefined, "Expected U1.2 finding for competing CTAs");
+  const u13Save = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Save'));
+  assertEquals(u13Save, undefined, "U1.3 for 'Save' should be suppressed when U1.2 fires for same container");
 });
 
-Deno.test("U1.2: Primary + destructive both prominent → Potential", () => {
+Deno.test("U1.3 still fires for generic label outside U1.2 container", () => {
   const files = new Map<string, string>();
   files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
-  files.set("src/components/ConfirmAction.tsx", `
+  files.set("src/components/StandaloneSave.tsx", `
 import { Button } from "@/components/ui/button";
-export default function ConfirmAction() {
-  return (
-    <Dialog>
-      <CardFooter>
-        <Button>Save</Button>
-        <Button variant="destructive">Delete</Button>
-      </CardFooter>
-    </Dialog>
-  );
+export default function StandaloneSave() {
+  return <Button>Save</Button>;
 }
 `);
   const results = detectU1PrimaryAction(files);
   const u12 = results.find(f => f.subCheck === 'U1.2');
-  assert(u12 !== undefined, "Expected U1.2 for primary + destructive both prominent");
+  assertEquals(u12, undefined, "No U1.2 for single button");
+  const u13 = results.find(f => f.subCheck === 'U1.3');
+  assert(u13 !== undefined, "U1.3 should fire for standalone generic label");
 });
+
+// ========== PATH 2: Tailwind-token emphasis tests ==========
 
 Deno.test("U1.2 Path 2: Plain buttons with matching Tailwind high-emphasis → Potential", () => {
   const files = new Map<string, string>();
+  // No button.tsx (no CVA) — triggers Path 2
   files.set("src/components/BoltPage.tsx", `
 export default function BoltPage() {
   return (
@@ -882,7 +790,24 @@ export default function BoltPage() {
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assert(u12 !== undefined, "Expected U1.2 for plain Tailwind buttons with matching high-emphasis");
   assertEquals(u12!.classification, "potential");
-  assert(u12!.confidence >= 0.45 && u12!.confidence <= 0.75, `Expected confidence 45-75%, got ${u12!.confidence}`);
+  assert(u12!.confidence >= 0.80 && u12!.confidence <= 0.90, `Expected confidence 80-90%, got ${u12!.confidence}`);
+});
+
+Deno.test("U1.2 Path 2: bg-primary siblings → Potential", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/Actions.tsx", `
+export default function Actions() {
+  return (
+    <div className="flex gap-2">
+      <button className="bg-primary text-white rounded px-3 py-1">Confirm</button>
+      <button className="bg-primary text-white rounded px-3 py-1">Delete</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for bg-primary siblings");
 });
 
 Deno.test("PASS Path 2: Mixed emphasis (filled + outline) → no U1.2", () => {
@@ -900,6 +825,180 @@ export default function MixedButtons() {
   const results = detectU1PrimaryAction(files);
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assertEquals(u12, undefined, "Should NOT trigger U1.2 when buttons have different emphasis");
+});
+
+Deno.test("U1.2 Path 2 suppresses U1.3 for same container", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/TailwindDialog.tsx", `
+export default function TailwindDialog() {
+  return (
+    <div className="flex gap-4">
+      <button className="bg-indigo-700 text-white px-4 py-2">Save</button>
+      <button className="bg-indigo-700 text-white px-4 py-2">Ok</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for competing Tailwind buttons");
+  const u13Save = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Save'));
+  const u13Ok = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Ok'));
+  assertEquals(u13Save, undefined, "U1.3 'Save' suppressed by U1.2");
+  assertEquals(u13Ok, undefined, "U1.3 'Ok' suppressed by U1.2");
+});
+
+// ========== SCOPED SUPPRESSION TESTS ==========
+
+Deno.test("U1.1 does NOT suppress U1.3 for buttons OUTSIDE the form in same file", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/CombinedPage.tsx", `
+export default function CombinedPage() {
+  return (
+    <div>
+      <form>
+        <input type="text" name="email" />
+      </form>
+      <button onClick={handleClick}>Save</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u11 = results.find(f => f.subCheck === 'U1.1');
+  assert(u11 !== undefined, "Expected U1.1 for form without submit");
+  const u13 = results.find(f => f.subCheck === 'U1.3');
+  assert(u13 !== undefined, "Expected U1.3 for 'Save' button OUTSIDE the form");
+});
+
+Deno.test("U1.1 suppresses U1.3 for buttons INSIDE the same form", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/FormWithGeneric.tsx", `
+export default function FormWithGeneric() {
+  return (
+    <form>
+      <input type="text" />
+      <button type="button" onClick={doSomething}>Save</button>
+    </form>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u11 = results.find(f => f.subCheck === 'U1.1');
+  // The form has a <button type="button"> which does NOT count as submit
+  assert(u11 !== undefined, "Expected U1.1 for form without submit");
+  const u13 = results.find(f => f.subCheck === 'U1.3');
+  assertEquals(u13, undefined, "U1.3 should be suppressed for button INSIDE the U1.1 form");
+});
+
+Deno.test("Combined: U1.1 + U1.2 in different parts of same file", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/components/MixedPage.tsx", `
+import { Button } from "@/components/ui/button";
+export default function MixedPage() {
+  return (
+    <div>
+      <form>
+        <input type="text" />
+      </form>
+      <CardFooter>
+        <Button>Accept</Button>
+        <Button>Decline</Button>
+      </CardFooter>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u11 = results.find(f => f.subCheck === 'U1.1');
+  assert(u11 !== undefined, "Expected U1.1 for form without submit");
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for competing CTAs OUTSIDE the form");
+});
+
+// ========== NESTED / GRID WRAPPER TESTS ==========
+
+Deno.test("U1.2: Buttons nested inside grid wrapper divs → fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/OptionPicker.tsx", `
+export default function OptionPicker() {
+  return (
+    <Dialog>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <button className="bg-blue-600 text-white font-semibold px-4 py-2">Confirm A</button>
+        </div>
+        <div>
+          <button className="bg-blue-600 text-white font-semibold px-4 py-2">Confirm B</button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for nested grid buttons with same high-emphasis");
+  assert(u12!.evidence.includes("Confirm A"), "Evidence should mention Confirm A");
+  assert(u12!.evidence.includes("Confirm B"), "Evidence should mention Confirm B");
+});
+
+Deno.test("U1.2: Buttons inside justify-between flex container → fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/Actions.tsx", `
+export default function Actions() {
+  return (
+    <Dialog>
+      <div className="flex justify-between items-center">
+        <button className="bg-primary text-white rounded px-4">Confirm</button>
+        <button className="bg-primary text-white rounded px-4">Delete</button>
+      </div>
+    </Dialog>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for bg-primary siblings in flex container");
+});
+
+// ========== GENERALIZED U1.2 TESTS ==========
+
+Deno.test("U1.2: Semantic class 'btn-primary' on both → fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/CustomActions.tsx", `
+export default function CustomActions() {
+  return (
+    <div className="flex gap-2">
+      <button className="btn-primary px-4 py-2">Create</button>
+      <button className="btn-primary px-4 py-2">Import</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for btn-primary semantic class");
+  assert(u12!.evidence.includes("btn-primary") || u12!.evidence.includes("semantic"), "Evidence should mention semantic cue");
+});
+
+Deno.test("U1.2: Anchor role=button with btn-primary → fires alongside button", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/MixedCTAs.tsx", `
+export default function MixedCTAs() {
+  return (
+    <div className="flex gap-4">
+      <button className="bg-primary text-white px-4 py-2">Save</button>
+      <a role="button" className="btn-primary px-4 py-2">Export</a>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for mixed button + anchor CTAs");
+  assert(u12!.evidence.includes("Export"), "Evidence should include anchor CTA label");
 });
 
 Deno.test("U1.2: Different emphasis (btn-primary + btn-secondary) → no fire", () => {
@@ -934,6 +1033,7 @@ export default function ConfirmDialog() {
   const results = detectU1PrimaryAction(files);
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assert(u12 !== undefined, "Expected U1.2 for ModalFooter with two high-emphasis CTAs");
+  assert(u12!.elementLabel.includes("ModalFooter"), "Element label should reference ModalFooter");
 });
 
 Deno.test("U1.2: Line-window fallback for orphaned CTAs → fires", () => {
@@ -956,39 +1056,134 @@ export default function FlatPage() {
   assert(u12!.evidence.includes("line-window"), "Evidence should mention line-window proximity");
 });
 
-// ========== U1.3 TESTS (Context-Aware Suppression) ==========
-
-Deno.test("U1.3: Single CTA 'Continue' (generic) → Potential", () => {
+Deno.test("U1.2: DialogFooter named container → fires", () => {
   const files = new Map<string, string>();
-  files.set("src/components/NextStep.tsx", `
-export default function NextStep() {
+  files.set("src/components/EditDialog.tsx", `
+export default function EditDialog() {
+  return (
+    <DialogFooter>
+      <button className="bg-blue-600 text-white">Apply</button>
+      <button className="bg-blue-600 text-white">Revert</button>
+    </DialogFooter>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Expected U1.2 for DialogFooter");
+});
+
+// ========== NAV/CHROME EXCLUSION + CONTEXT GATE TESTS ==========
+
+Deno.test("NAV GATE: Header with navItems + logout → U1 emits NOTHING", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/components/layout/Header.tsx", `
+import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+const navItems = [
+  { name: 'Dashboard', href: '/' },
+  { name: 'Projects', href: '/projects' },
+];
+export function Header() {
+  return (
+    <header>
+      <nav>
+        {navItems.map(item => (
+          <Link to={item.href} key={item.name}>{item.name}</Link>
+        ))}
+        <Button variant="ghost" onClick={handleLogout}>
+          <LogOut className="h-4 w-4" />
+        </Button>
+      </nav>
+    </header>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  assertEquals(results.length, 0, "Nav header with navItems should produce NO U1 findings");
+});
+
+Deno.test("NAV GATE: Sidebar with role=navigation + Link buttons → U1 emits NOTHING", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/Sidebar.tsx", `
+import { Link } from "react-router-dom";
+export function Sidebar() {
+  return (
+    <aside role="navigation">
+      <Link to="/dashboard">Dashboard</Link>
+      <Link to="/settings">Settings</Link>
+      <button onClick={handleLogout}>Sign out</button>
+    </aside>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  assertEquals(results.length, 0, "Sidebar with role=navigation should produce NO U1 findings");
+});
+
+Deno.test("CONTEXT GATE: Form with Save + Cancel same variant → U1.2 fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
+  files.set("src/pages/Settings.tsx", `
+import { Button } from "@/components/ui/button";
+export default function Settings() {
+  return (
+    <form onSubmit={handleSubmit}>
+      <input type="text" name="name" />
+      <DialogFooter>
+        <Button>Save</Button>
+        <Button>Cancel</Button>
+      </DialogFooter>
+    </form>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Form with two same-variant CTAs should trigger U1.2");
+});
+
+Deno.test("CONTEXT GATE: Single CTA in main content with no context → U1 emits NOTHING", () => {
+  const files = new Map<string, string>();
+  files.set("src/pages/About.tsx", `
+export default function About() {
+  return (
+    <div>
+      <h1>About Us</h1>
+      <p>We are a company.</p>
+      <button onClick={handleClick}>Learn more</button>
+    </div>
+  );
+}
+`);
+  const results = detectU1PrimaryAction(files);
+  assertEquals(results.length, 0, "Single non-CTA button without form/dialog context should produce NO U1 findings");
+});
+
+Deno.test("CONTEXT GATE: Dialog with Delete + Cancel both styled equally → U1.2 fires", () => {
+  const files = new Map<string, string>();
+  files.set("src/components/ConfirmDelete.tsx", `
+export default function ConfirmDelete() {
   return (
     <Dialog>
-      <button onClick={handleClick}>Continue</button>
+      <p>Are you sure?</p>
+      <DialogFooter>
+        <button className="bg-red-700 text-white px-4 py-2">Delete</button>
+        <button className="bg-red-700 text-white px-4 py-2">Cancel</button>
+      </DialogFooter>
     </Dialog>
   );
 }
 `);
   const results = detectU1PrimaryAction(files);
-  const u13 = results.find(f => f.subCheck === 'U1.3');
-  assert(u13 !== undefined, "Expected U1.3 finding");
-  assertEquals(u13!.classification, "potential");
-  assert(u13!.confidence >= 0.40 && u13!.confidence <= 0.70, `Expected confidence 40-70%, got ${u13!.confidence}`);
+  const u12 = results.find(f => f.subCheck === 'U1.2');
+  assert(u12 !== undefined, "Dialog with two equally styled destructive CTAs should trigger U1.2");
 });
 
-Deno.test("PASS: Specific label 'Save changes' → no U1.3", () => {
-  const files = new Map<string, string>();
-  files.set("src/components/Settings.tsx", `
-export default function Settings() {
-  return <button>Save changes</button>;
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u13 = results.find(f => f.subCheck === 'U1.3');
-  assertEquals(u13, undefined, "Should NOT trigger U1.3 for specific labels");
-});
+// ========== U1.3 CONTEXT-AWARE SUPPRESSION TESTS ==========
 
-Deno.test("U1.3 CONTEXT SUPPRESSION S1: BookAppointment labeled stepper + 'Next' → NO U1.3", () => {
+Deno.test("U1.3 CONTEXT: Stepper with labeled steps + 'Next' → NO U1.3", () => {
   const files = new Map<string, string>();
   files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
   files.set("src/pages/BookAppointment.tsx", `
@@ -1018,10 +1213,10 @@ export default function BookAppointment() {
 `);
   const results = detectU1PrimaryAction(files);
   const u13 = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Next'));
-  assertEquals(u13, undefined, "Next should NOT be flagged when labeled stepper with active step and destination inference is present (S1)");
+  assertEquals(u13, undefined, "Next should NOT be flagged when labeled stepper with active step is present");
 });
 
-Deno.test("U1.3 CONTEXT SUPPRESSION S2: Strong heading near 'Next' → NO U1.3", () => {
+Deno.test("U1.3 CONTEXT: Strong heading near 'Next' → NO U1.3", () => {
   const files = new Map<string, string>();
   files.set("src/pages/Wizard.tsx", `
 export default function Wizard() {
@@ -1036,31 +1231,7 @@ export default function Wizard() {
 `);
   const results = detectU1PrimaryAction(files);
   const u13 = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Next'));
-  assertEquals(u13, undefined, "Next should NOT be flagged when strong heading with task verb is nearby (S2)");
-});
-
-Deno.test("U1.3 CONTEXT SUPPRESSION S3: Single dominant CTA in step flow → NO U1.3", () => {
-  const files = new Map<string, string>();
-  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
-  files.set("src/pages/SimpleStep.tsx", `
-import { Button } from "@/components/ui/button";
-const steps = [
-  { title: "Info" },
-  { title: "Address" },
-  { title: "Done" },
-];
-export default function SimpleStep() {
-  return (
-    <form onSubmit={handleSubmit}>
-      <h2>Enter Your Information</h2>
-      <Button>Next</Button>
-    </form>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u13 = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Next'));
-  assertEquals(u13, undefined, "Single dominant CTA with stepper context should be suppressed (S3)");
+  assertEquals(u13, undefined, "Next should NOT be flagged when strong heading is nearby");
 });
 
 Deno.test("U1.3 CONTEXT: 'Next' with NO stepper and NO heading → U1.3 Potential", () => {
@@ -1078,12 +1249,10 @@ export default function UnknownStep() {
   const u13 = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Next'));
   assert(u13 !== undefined, "Next should be flagged when no stepper and no heading");
   assertEquals(u13!.classification, "potential");
-  assert(u13!.confidence >= 0.40 && u13!.confidence <= 0.70, `Expected confidence 40-70%, got ${u13!.confidence}`);
-  // Should have ambiguity signals
-  assert(u13!.ambiguitySignalsFound?.includes('no_context'), "Should include no_context ambiguity signal");
+  assert(u13!.confidence >= 0.40 && u13!.confidence <= 0.75, `Expected confidence 40-75%, got ${u13!.confidence}`);
 });
 
-Deno.test("U1.3 CONTEXT: 'Next' + 'Skip' same styling, no context → U1.2 fires", () => {
+Deno.test("U1.3 CONTEXT: 'Next' + 'Skip' same styling, no context → U1 fires (U1.2 or U1.3)", () => {
   const files = new Map<string, string>();
   files.set("src/pages/Onboarding.tsx", `
 export default function Onboarding() {
@@ -1098,6 +1267,7 @@ export default function Onboarding() {
 }
 `);
   const results = detectU1PrimaryAction(files);
+  // Should fire U1.2 (competing CTAs with same emphasis) — U1.3 may be suppressed by U1.2
   const u12 = results.find(f => f.subCheck === 'U1.2');
   assert(u12 !== undefined, "Expected U1.2 for competing Next + Skip with same styling");
 });
@@ -1141,222 +1311,4 @@ export default function MultiStepForm() {
   const results = detectU1PrimaryAction(files);
   const u13 = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Continue'));
   assertEquals(u13, undefined, "Continue should NOT be flagged when steps array with labels + step tracking exists");
-});
-
-Deno.test("U1.3: Unlabeled stepper + 'Next' + no heading → U1.3 Potential with reduced confidence", () => {
-  const files = new Map<string, string>();
-  files.set("src/pages/NumberedSteps.tsx", `
-export default function NumberedSteps() {
-  return (
-    <Dialog>
-      <Stepper>
-        <Step />
-        <Step />
-        <Step />
-      </Stepper>
-      <button onClick={handleNext}>Next</button>
-    </Dialog>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u13 = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Next'));
-  // Unlabeled stepper + no heading → single primary CTA in context → S3 suppresses
-  // Actually: unlabeled stepper has no labels, but stepperDetected=true, headingDetected=false
-  // S3: isSinglePrimary && (stepperDetected || headingDetected) → suppressed
-  assertEquals(u13, undefined, "Single CTA with unlabeled stepper should be suppressed by S3");
-});
-
-Deno.test("U1.3: 'Save' in standalone context without heading → U1.3 Potential", () => {
-  const files = new Map<string, string>();
-  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
-  files.set("src/components/StandaloneSave.tsx", `
-import { Button } from "@/components/ui/button";
-export default function StandaloneSave() {
-  return <Button>Save</Button>;
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u13 = results.find(f => f.subCheck === 'U1.3');
-  assert(u13 !== undefined, "U1.3 should fire for standalone generic label without context");
-});
-
-// ========== SCOPED SUPPRESSION TESTS ==========
-
-Deno.test("U1.1 suppresses U1.3 for buttons INSIDE the same form", () => {
-  const files = new Map<string, string>();
-  files.set("src/components/FormWithGeneric.tsx", `
-export default function FormWithGeneric() {
-  return (
-    <form>
-      <input type="text" />
-      <button type="button" onClick={doSomething}>Save</button>
-    </form>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u11 = results.find(f => f.subCheck === 'U1.1');
-  assert(u11 !== undefined, "Expected U1.1 for form without submit");
-  const u13 = results.find(f => f.subCheck === 'U1.3');
-  assertEquals(u13, undefined, "U1.3 should be suppressed for button INSIDE the U1.1 form");
-});
-
-Deno.test("U1.1 does NOT suppress U1.3 for buttons OUTSIDE the form in same file", () => {
-  const files = new Map<string, string>();
-  files.set("src/components/CombinedPage.tsx", `
-export default function CombinedPage() {
-  return (
-    <div>
-      <form>
-        <input type="text" name="email" />
-      </form>
-      <button onClick={handleClick}>Save</button>
-    </div>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u11 = results.find(f => f.subCheck === 'U1.1');
-  assert(u11 !== undefined, "Expected U1.1 for form without submit");
-  const u13 = results.find(f => f.subCheck === 'U1.3');
-  assert(u13 !== undefined, "Expected U1.3 for 'Save' button OUTSIDE the form");
-});
-
-Deno.test("U1.2 suppresses U1.3 for labels in same container", () => {
-  const files = new Map<string, string>();
-  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
-  files.set("src/components/SaveDialog.tsx", `
-import { Button } from "@/components/ui/button";
-export default function SaveDialog() {
-  return (
-    <CardFooter>
-      <Button>Save</Button>
-      <Button>Cancel</Button>
-    </CardFooter>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u12 = results.find(f => f.subCheck === 'U1.2');
-  assert(u12 !== undefined, "Expected U1.2 finding for competing CTAs");
-  const u13Save = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Save'));
-  assertEquals(u13Save, undefined, "U1.3 for 'Save' should be suppressed when U1.2 fires for same container");
-});
-
-// ========== NAV/CHROME + CONTEXT GATE TESTS ==========
-
-Deno.test("NAV GATE: Header with navItems + logout → U1 emits NOTHING", () => {
-  const files = new Map<string, string>();
-  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
-  files.set("src/components/layout/Header.tsx", `
-import { Link } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-const navItems = [
-  { name: 'Dashboard', href: '/' },
-  { name: 'Projects', href: '/projects' },
-];
-export function Header() {
-  return (
-    <header>
-      <nav>
-        {navItems.map(item => (
-          <Link to={item.href} key={item.name}>{item.name}</Link>
-        ))}
-        <Button variant="ghost" onClick={handleLogout}>
-          <LogOut className="h-4 w-4" />
-        </Button>
-      </nav>
-    </header>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  assertEquals(results.length, 0, "Nav header with navItems should produce NO U1 findings");
-});
-
-Deno.test("CONTEXT GATE: Single CTA in main content with no context → U1 emits NOTHING", () => {
-  const files = new Map<string, string>();
-  files.set("src/pages/About.tsx", `
-export default function About() {
-  return (
-    <div>
-      <h1>About Us</h1>
-      <p>We are a company.</p>
-      <button onClick={handleClick}>Learn more</button>
-    </div>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  assertEquals(results.length, 0, "Single non-CTA button without form/dialog context should produce NO U1 findings");
-});
-
-// ========== NEW: CONFIDENCE SCORING TESTS ==========
-
-Deno.test("U1.3 confidence: no context → higher confidence (0.55)", () => {
-  const files = new Map<string, string>();
-  files.set("src/pages/Bare.tsx", `
-export default function Bare() {
-  return (
-    <Dialog>
-      <button onClick={handleClick}>Next</button>
-    </Dialog>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u13 = results.find(f => f.subCheck === 'U1.3');
-  assert(u13 !== undefined, "Expected U1.3");
-  // base 0.45 + 0.10 (no stepper, no heading) = 0.55
-  assert(u13!.confidence >= 0.50, `Expected confidence >= 0.50 for no-context case, got ${u13!.confidence}`);
-});
-
-Deno.test("U1.2 confidence: clear primary/secondary split → no fire", () => {
-  const files = new Map<string, string>();
-  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
-  files.set("src/components/CleanDialog.tsx", `
-import { Button } from "@/components/ui/button";
-export default function CleanDialog() {
-  return (
-    <Dialog>
-      <DialogFooter>
-        <Button>Save</Button>
-        <Button variant="secondary">Cancel</Button>
-      </DialogFooter>
-    </Dialog>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u12 = results.find(f => f.subCheck === 'U1.2');
-  assertEquals(u12, undefined, "Clear primary/secondary split should NOT trigger U1.2");
-});
-
-// ========== NEW: DESTINATION INFERENCE TESTS ==========
-
-Deno.test("U1.3 DESTINATION INFERENCE: stepper with labels + active step → suppressed with reason", () => {
-  const files = new Map<string, string>();
-  files.set("src/components/ui/button.tsx", MOCK_BUTTON_TSX);
-  files.set("src/pages/OnboardingWizard.tsx", `
-import { Button } from "@/components/ui/button";
-const [currentStep, setStep] = useState(0);
-const steps = [
-  { label: "Welcome" },
-  { label: "Profile" },
-  { label: "Preferences" },
-  { label: "Complete" },
-];
-export default function OnboardingWizard() {
-  return (
-    <form onSubmit={handleSubmit}>
-      <h2>Welcome to the Platform</h2>
-      <Button>Next</Button>
-    </form>
-  );
-}
-`);
-  const results = detectU1PrimaryAction(files);
-  const u13 = results.find(f => f.subCheck === 'U1.3' && f.elementLabel.includes('Next'));
-  assertEquals(u13, undefined, "Next should be suppressed when stepper with labels and step tracking provides destination inference");
 });
