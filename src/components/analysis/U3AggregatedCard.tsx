@@ -50,12 +50,7 @@ function U3ElementItem({ element, compact = false }: {
       <ElementItemWrapper isConfirmed={isConfirmed} compact={compact}>
         <CollapsibleTrigger className="w-full">
           <div className="flex items-center justify-between gap-2 cursor-pointer">
-            <div className="flex items-center gap-2">
-              <ComponentTitle>{displayLabel}</ComponentTitle>
-              {isConfirmed && (
-                <Badge variant="destructive" className="text-[10px] px-1.5 py-0">Confirmed</Badge>
-              )}
-            </div>
+            <ComponentTitle>{displayLabel}</ComponentTitle>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={element.location} compact={compact} />
               {isOpen ? (
@@ -154,7 +149,11 @@ export function U3AggregatedCard({ violation, compact = false }: U3AggregatedCar
       }];
 
   const hasConfirmed = elements.some(el => el.classification === 'confirmed');
+  const hasPotentialOnly = elements.some(el => el.classification !== 'confirmed');
   const cardBorderClass = hasConfirmed ? 'border border-destructive/40' : 'border border-warning/30';
+
+  // Advisory only for potential-only cards; confirmed cards get corrective prompts instead
+  const showAdvisory = !hasConfirmed && hasPotentialOnly && (violation.advisoryGuidance || violation.contextualHint);
 
   return (
     <Card className={cardBorderClass}>
@@ -179,7 +178,7 @@ export function U3AggregatedCard({ violation, compact = false }: U3AggregatedCar
           />
         ))}
 
-        {(violation.advisoryGuidance || violation.contextualHint) && (
+        {showAdvisory && (
           <AdvisoryBlock compact={compact}>{violation.advisoryGuidance || violation.contextualHint}</AdvisoryBlock>
         )}
       </CardContent>

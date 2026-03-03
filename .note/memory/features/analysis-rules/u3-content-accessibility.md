@@ -66,9 +66,15 @@ Recovery signals cause immediate suppression:
 - U3.D7: Programmatic truncation (.slice/.substring + "...") → **Potential**
 - U3.D5: Unbroken text overflow risk → **Potential**
 
-## UI Layout
-Concise 7-row layout (Column, Element, Content, Tokens, Recovery, Source, Confidence).
-Per-element "Confirmed" badge shown on confirmed items. Card border is destructive for confirmed, warning for potential-only.
+## UI Presentation
+- **Confirmed findings**: No per-item "Confirmed" badge. No advisory block. Corrective prompts appear in the global "Corrective Prompts" section following the same format as A2/A3/A4/A5/A6/U1.
+- **Potential-only cards**: Show advisory block. No corrective prompts.
+- Card border: destructive for confirmed, warning for potential-only.
+- Per-element layout: Concise 7-row (Column, Element, Content, Tokens, Recovery, Source, Confidence).
+
+## Corrective Prompt Format (Confirmed)
+- Issue reason: "Content is truncated using CSS ({truncationType}) and no accessible recovery mechanism is provided."
+- Recommended fix: "Provide a recovery mechanism such as a tooltip (title attribute), expandable row, modal, accordion, or remove forced truncation for critical content."
 
 ## Deduplication
 Key format: `U3.{subCheck}|{filePath}|{lineNumber}|{columnLabel}`

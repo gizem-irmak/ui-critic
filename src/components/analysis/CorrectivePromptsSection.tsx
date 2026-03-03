@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import type { Violation, A1ElementSubItem, A3ElementSubItem, A4ElementSubItem, A5ElementSubItem, A6ElementSubItem, U1ElementSubItem } from '@/types/project';
+import type { Violation, A1ElementSubItem, A3ElementSubItem, A4ElementSubItem, A5ElementSubItem, A6ElementSubItem, U1ElementSubItem, U3ElementSubItem } from '@/types/project';
 import { CorrectivePromptItem } from './CorrectivePromptItem';
 
 const categoryColors: Record<string, string> = {
@@ -123,6 +123,13 @@ function buildU1PromptBody(el: U1ElementSubItem): { issueReason: string; recomme
   return { issueReason: el.explanation, recommendedFix: el.advisoryGuidance || 'Ensure the primary action is clear and discoverable.' };
 }
 
+function buildU3PromptBody(el: U3ElementSubItem): { issueReason: string; recommendedFix: string } {
+  const truncType = el.truncationType || 'truncate';
+  const issueReason = `Content is truncated using CSS (${truncType}) and no accessible recovery mechanism is provided.`;
+  const recommendedFix = 'Provide a recovery mechanism such as a tooltip (title attribute), expandable row, modal, accordion, or remove forced truncation for critical content.';
+  return { issueReason, recommendedFix };
+}
+
 /** Extract file name only (not full path) from a location string */
 function extractFilePath(location?: string): string {
   if (!location) return 'Unknown';
@@ -226,6 +233,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       a5Items?: A5ElementSubItem[];
       a6Items?: A6ElementSubItem[];
       u1Items?: U1ElementSubItem[];
+      u3Items?: U3ElementSubItem[];
     }>();
 
     for (const v of confirmedViolations) {
@@ -416,6 +424,23 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
             group.u1Items!.push(el);
           }
         }
+      } else if (v.ruleId === 'U3' && v.isU3Aggregated && v.u3Elements) {
+        // U3 confirmed elements get corrective prompts
+        if (!ruleGroups.has('U3')) {
+          ruleGroups.set('U3', {
+            ruleId: 'U3',
+            ruleName: v.ruleName,
+            category: v.category,
+            prompts: [],
+            u3Items: [],
+          });
+        }
+        const group = ruleGroups.get('U3')!;
+        for (const el of v.u3Elements) {
+          if (el.classification === 'confirmed') {
+            group.u3Items!.push(el);
+          }
+        }
       } else if (v.correctivePrompt) {
         const key = v.ruleId;
         if (!ruleGroups.has(key)) {
@@ -437,7 +462,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
       }
     }
 
-    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a1Items && g.a1Items.length > 0) || (g.a3Items && g.a3Items.length > 0) || (g.a4Items && g.a4Items.length > 0) || (g.a5Items && g.a5Items.length > 0) || (g.a6Items && g.a6Items.length > 0) || (g.u1Items && g.u1Items.length > 0));
+    return Array.from(ruleGroups.values()).filter(g => g.prompts.length > 0 || (g.a1Items && g.a1Items.length > 0) || (g.a3Items && g.a3Items.length > 0) || (g.a4Items && g.a4Items.length > 0) || (g.a5Items && g.a5Items.length > 0) || (g.a6Items && g.a6Items.length > 0) || (g.u1Items && g.u1Items.length > 0) || (g.u3Items && g.u3Items.length > 0));
   })();
 
   const copyPrompt = async () => {
@@ -515,6 +540,16 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
               el.location
             );
             const { issueReason, recommendedFix } = buildU1PromptBody(el);
+            text += `\n${label} (${tag}) — ${filePath}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
+          }
+        } else if (ruleGroup.ruleId === 'U3' && ruleGroup.u3Items?.length) {
+          for (const el of ruleGroup.u3Items) {
+            const { label, tag, filePath } = extractLocationParts(
+              el.elementLabel || 'Content element',
+              el.elementTag || el.elementType || 'element',
+              el.location
+            );
+            const { issueReason, recommendedFix } = buildU3PromptBody(el);
             text += `\n${label} (${tag}) — ${filePath}\n\nIssue reason:\n${issueReason}\n\nRecommended fix:\n${recommendedFix}\n`;
           }
         } else {
@@ -700,6 +735,25 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
                     el.location
                   );
                   const { issueReason, recommendedFix } = buildU1PromptBody(el);
+                  return (
+                    <CorrectivePromptItem
+                      key={pIdx}
+                      elementLabel={label}
+                      roleOrTag={tag}
+                      fileName={filePath}
+                      issueReason={issueReason}
+                      recommendedFix={recommendedFix}
+                    />
+                  );
+                })
+              ) : group.ruleId === 'U3' && group.u3Items ? (
+                group.u3Items.map((el, pIdx) => {
+                  const { label, tag, filePath } = extractLocationParts(
+                    el.elementLabel || 'Content element',
+                    el.elementTag || el.elementType || 'element',
+                    el.location
+                  );
+                  const { issueReason, recommendedFix } = buildU3PromptBody(el);
                   return (
                     <CorrectivePromptItem
                       key={pIdx}
