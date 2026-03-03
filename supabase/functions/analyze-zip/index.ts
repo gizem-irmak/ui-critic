@@ -1116,12 +1116,46 @@ function u3ExtractTruncationTokens(classStr: string): string[] {
     /\btruncate\b/, /\bline-clamp-\d+\b/, /\btext-ellipsis\b/,
     /\bwhitespace-nowrap\b/, /\boverflow-hidden\b/, /\boverflow-clip\b/,
     /\bh-\d+\b/, /\bmax-h-\d+\b/, /\bmin-h-\d+\b/,
+    /\bmax-w-\S+/, /\bw-\d+\b/,
   ];
   for (const p of tokenPatterns) {
     const m = classStr.match(p);
     if (m) tokens.push(m[0]);
   }
   return tokens;
+}
+
+/** Find the nearest column header label for a table cell position */
+function u3FindColumnLabel(content: string, pos: number): string | undefined {
+  // Strategy: find the table structure, count which column this cell is in,
+  // then read the corresponding <th>/<TableHead> header text.
+  const before = content.slice(Math.max(0, pos - 3000), pos);
+  
+  // Find <thead>...</thead> block
+  const theadMatch = before.match(/<thead[\s\S]*?<\/thead>/i);
+  if (!theadMatch) return undefined;
+  
+  // Extract header texts from <th> or <TableHead>
+  const headerTexts: string[] = [];
+  const thRe = /<(?:th|TableHead)\b[^>]*>([^<]*(?:<[^>]*>[^<]*)*)<\/(?:th|TableHead)>/gi;
+  let thm;
+  while ((thm = thRe.exec(theadMatch[0])) !== null) {
+    // Strip inner tags to get text
+    const text = thm[1].replace(/<[^>]*>/g, '').trim();
+    if (text) headerTexts.push(text);
+  }
+  if (headerTexts.length === 0) return undefined;
+  
+  // Count which <td>/<TableCell> this position is in within its row
+  // Find the start of the current row
+  const rowStart = before.lastIndexOf('<tr') !== -1 ? before.lastIndexOf('<tr') : before.lastIndexOf('<TableRow');
+  if (rowStart < 0) return undefined;
+  const rowSlice = before.slice(rowStart, before.length);
+  const cellCount = (rowSlice.match(/<(?:td|TableCell)\b/gi) || []).length;
+  
+  // cellCount is 1-indexed (current cell), map to 0-indexed header
+  const colIdx = Math.max(0, cellCount - 1);
+  return colIdx < headerTexts.length ? headerTexts[colIdx] : undefined;
 }
 
 /** Compute U3 confidence using the revised scoring model */
@@ -1223,6 +1257,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
         const d1VarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
         const d1VarName = d1VarMatch ? d1VarMatch[1].split('.').pop() : undefined;
+        const columnLabel = u3FindColumnLabel(content, pos);
 
         const isDynamic = contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped';
         const staticLen = u3StaticTextLength(textPreview);
@@ -1234,7 +1269,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           subCheck: 'U3.D1',
           subCheckLabel: 'Line clamp / ellipsis truncation',
           classification: 'potential',
-          elementLabel: `Truncated text (${label})`,
+          elementLabel: columnLabel ? `Truncated "${columnLabel}" cell (${label})` : `Truncated text (${label})`,
           elementType: 'text',
           filePath,
           detection: `${m[0]} without expand mechanism${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
@@ -1339,8 +1374,85 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       });
     }
 
+    // --- U3.D1b: overflow-hidden + width constraint (max-w-* / w-*) in table/list cells ---
+    const widthConstraintRe = /\b(?:max-w-\S+|w-\d+)\b/g;
+    let wcm;
+    while ((wcm = widthConstraintRe.exec(content)) !== null) {
+      const pos = wcm.index;
+      const context = content.slice(Math.max(0, pos - 200), Math.min(content.length, pos + 300));
+      if (!/overflow-hidden\b/.test(context)) continue;
+      // Skip if already has truncate/line-clamp (handled by D1 main)
+      if (/\btruncate\b|\bline-clamp-\d+\b|\btext-ellipsis\b/.test(context)) continue;
+
+      const textPreview = extractU3TextPreview(content, pos);
+      const contentGate = u3ContentRiskGate(content, pos, textPreview, context);
+      if (!contentGate.pass) continue;
+      if (u3IsHeaderRow(content, pos, context, textPreview)) continue;
+
+      const recoverySignals = u3DetectRecoverySignals(content, pos, context);
+      if (u3HasExpandMechanism(content, pos, 20)) continue;
+      if ((contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped') && textPreview) {
+        const dynVarMatch = textPreview.match(/\(dynamic text: ([^)]+)\)/);
+        if (dynVarMatch) {
+          const expandCheck = u3HasComponentExpandForVar(content, dynVarMatch[1], pos);
+          if (expandCheck.hasExpand) continue;
+        }
+      }
+
+      const lineNumber = content.slice(0, pos).split('\n').length;
+      const dedupeKey = `U3.D1|${filePath}|${lineNumber}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      const truncationTokens = u3ExtractTruncationTokens(context);
+      if (truncationTokens.length === 0) truncationTokens.push(wcm[0], 'overflow-hidden');
+
+      const confidence = u3ComputeConfidence({
+        contentKind: contentGate.contentKind,
+        hasTruncationUtility: true,
+        fieldLabel: contentGate.fieldLabel,
+        isHeaderSuspected: false,
+        recoverySignals,
+      });
+      if (confidence < 0.40) continue;
+
+      const columnLabel = u3FindColumnLabel(content, pos);
+      const isDynamic = contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped';
+      const wcVarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
+      const wcVarName = wcVarMatch ? wcVarMatch[1].split('.').pop() : undefined;
+
+      findings.push({
+        subCheck: 'U3.D1',
+        subCheckLabel: 'Width-constrained overflow clipping',
+        classification: 'potential',
+        elementLabel: columnLabel ? `Clipped "${columnLabel}" cell (width constraint)` : 'Width-constrained overflow',
+        elementType: 'text',
+        filePath,
+        detection: `${wcm[0]} + overflow-hidden${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
+        evidence: `${wcm[0]} with overflow-hidden at ${fileName}:${lineNumber}`,
+        explanation: `Content is constrained by ${wcm[0]} with overflow-hidden, potentially clipping dynamic text.`,
+        confidence,
+        textPreview,
+        advisoryGuidance: 'Add a title attribute or tooltip to reveal full content on hover.',
+        deduplicationKey: dedupeKey,
+        truncationType: 'width-constraint',
+        textLength: isDynamic ? 'dynamic' : undefined,
+        triggerReason: `${contentGate.contentKind} content with ${wcm[0]} + overflow-hidden`,
+        expandDetected: false,
+        varName: wcVarName,
+        lineNumber,
+        startLine: lineNumber,
+        endLine: lineNumber,
+        contentKind: contentGate.contentKind,
+        recoverySignals: recoverySignals.length > 0 ? recoverySignals : undefined,
+        truncationTokens,
+      });
+    }
+
     // --- U3.D2: Overflow clipping with fixed height ---
-    const heightPatterns = /\b(?:max-h-\d+|h-\d+)\b/g;
+    // Only match heights that are realistically large enough to clip content (h-12+, max-h-*)
+    // Small heights like h-4, h-5, h-6, h-8, h-10 are icon/label sizing, not content containers
+    const heightPatterns = /\b(?:max-h-\d+|h-(?:1[2-9]|[2-9]\d|\d{3,}))\b/g;
     let hm;
     while ((hm = heightPatterns.exec(content)) !== null) {
       const pos = hm.index;
@@ -1378,11 +1490,13 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       if (seenKeys.has(dedupeKey)) continue;
       seenKeys.add(dedupeKey);
 
+      const columnLabel = u3FindColumnLabel(content, pos);
+
       findings.push({
         subCheck: 'U3.D2',
         subCheckLabel: 'Overflow clipping',
         classification: 'potential',
-        elementLabel: 'Fixed-height overflow container',
+        elementLabel: columnLabel ? `Clipped content (column "${columnLabel}")` : 'Fixed-height overflow container',
         elementType: 'container',
         filePath,
         detection: `${hm[0]} + overflow-hidden${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
