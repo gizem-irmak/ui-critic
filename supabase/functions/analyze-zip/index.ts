@@ -2964,10 +2964,14 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
   let hasMobileOnlyNavToggle = false;
   let hasDesktopNavHidden = false;
   let maxRouteDepth = 0;
-  // D2 NEW: active link styling signals
+  // D2: active link styling signals
   let hasActiveNavHighlight = false;
-  // D2 NEW: page heading in layout/page files (h1/h2 near top)
+  // D2: page heading in layout files only (not route pages)
   let hasPageHeadingInLayout = false;
+  // D2 NEW: page heading found in route pages rendered under layouts
+  let hasPageHeadingInRoutePages = false;
+  // Track route page file paths for post-scan heading verification
+  const routePageFiles: string[] = [];
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = normalizePath(filePathRaw);
@@ -3060,14 +3064,18 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
     if (/className\s*=.*(?:active|selected|current)/i.test(content) &&
         /nav|sidebar|menu|header|tab/i.test(filePath + content.slice(0, 200))) hasActiveNavHighlight = true;
 
-    // --- D2 NEW: Page heading in layout/page files ---
+    // --- D2: Page heading in layout files only ---
     if (/<h1\b/i.test(content) || /<h2\b/i.test(content)) {
-      // Check if this heading is in a layout/page file (not a card or list item)
-      if (/layout|page|view|screen|dashboard|detail/i.test(filePath) ||
-          // Or if the heading appears near the top of the component (first 500 chars of JSX)
-          /<(?:h1|h2)\b/i.test(content.slice(0, Math.min(content.length, 2000)))) {
+      if (/layout/i.test(filePath)) {
         hasPageHeadingInLayout = true;
       }
+    }
+
+    // --- Collect route page files (pages/views/screens rendered under layouts) ---
+    if (/page|view|screen|dashboard|detail|appointments|messages|patients|settings/i.test(filePath) &&
+        !/layout|component|ui\//i.test(filePath) &&
+        /\.(tsx|jsx)$/.test(filePath)) {
+      routePageFiles.push(filePath);
     }
 
     // h1 anywhere counts as visible page title
@@ -3111,6 +3119,17 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
 
   navPrimitiveCount = navPrimitivesFound.size;
 
+  // ===== POST-SCAN: Route-page heading verification (deterministic) =====
+  // Scan route page files for <h1> or role="heading" aria-level="1"
+  for (const rpFile of routePageFiles) {
+    const rpContent = allFiles.get(rpFile);
+    if (!rpContent) continue;
+    if (/<h1\b/i.test(rpContent) || /role\s*=\s*["']heading["'][^>]*aria-level\s*=\s*["']1["']/i.test(rpContent)) {
+      hasPageHeadingInRoutePages = true;
+      break;
+    }
+  }
+
   // ===== GLOBAL SUPPRESSION =====
   // 1. Simple app (≤2 routes) — no nav complexity
   if (routeCount <= 2) {
@@ -3137,8 +3156,8 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
     console.log('[U2] Suppressed: Drawer/Sheet with menu button');
     return [];
   }
-  // 6. Active nav highlight + visible page heading = strong wayfinding (even without breadcrumbs)
-  if (hasActiveNavHighlight && hasVisiblePageTitle) {
+  // 6. Active nav highlight + visible page heading (layout OR route pages) = strong wayfinding
+  if (hasActiveNavHighlight && (hasVisiblePageTitle || hasPageHeadingInRoutePages)) {
     console.log('[U2] Suppressed: active nav highlight + visible page heading');
     return [];
   }
@@ -3150,6 +3169,11 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
   // 8. Desktop-scope: mobile-only nav toggle without desktop hiding
   if (hasMobileOnlyNavToggle && !hasDesktopNavHidden) {
     console.log('[U2] Suppressed: mobile-only nav toggle (desktop nav assumed visible)');
+    return [];
+  }
+  // 9. NEW: Active nav highlight + route pages contain <h1> titles → suppress
+  if (hasActiveNavHighlight && hasPageHeadingInRoutePages) {
+    console.log('[U2] Suppressed: active nav highlight + route pages have <h1> headings');
     return [];
   }
 
@@ -3180,31 +3204,49 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
   }
 
   // ===== U2.D2 — Deep/nested pages without persistent "you are here" cues =====
-  // Trigger: deep routes exist AND missing ALL THREE: active highlight, page heading, breadcrumb
+  // Trigger: deep routes exist AND missing ALL wayfinding cues (including route-page headings)
   if (deepRouteFiles.length > 0) {
-    const hasAnyCue = hasActiveNavHighlight || hasPageHeadingInLayout || hasBreadcrumbRendered || hasBackControl || hasParentRouteLink;
+    const hasAnyCue = hasActiveNavHighlight || hasPageHeadingInLayout || hasPageHeadingInRoutePages || hasBreadcrumbRendered || hasBackControl || hasParentRouteLink;
     if (!hasAnyCue) {
       const dedupeKey = 'U2.D2|global';
       if (!seenKeys.has(dedupeKey)) {
         seenKeys.add(dedupeKey);
         const missingCues: string[] = [];
         if (!hasActiveNavHighlight) missingCues.push('no active nav highlight (aria-current/NavLink/isActive)');
-        if (!hasPageHeadingInLayout) missingCues.push('no page heading (<h1>/<h2>) at top');
+        if (!hasPageHeadingInLayout && !hasPageHeadingInRoutePages) missingCues.push('no page heading (<h1>) in layout or route pages');
         if (!hasBreadcrumbRendered) missingCues.push('no breadcrumb');
         if (!hasBackControl) missingCues.push('no back button');
-        const conf = Math.min(0.65 + (missingCues.length > 3 ? 0.10 : 0.05), 0.80);
+        // If route pages have headings but layout doesn't, reduce confidence significantly
+        let conf: number;
+        if (hasPageHeadingInRoutePages && !hasPageHeadingInLayout) {
+          // Route pages provide headings — layout-only concern, very low confidence
+          conf = 0.55;
+        } else {
+          conf = Math.min(0.65 + (missingCues.length > 3 ? 0.10 : 0.05), 0.80);
+        }
+        // Layout-scoped detection text — never claim "no page title" without verification
+        const layoutFile = deepRouteFiles.find(f => /layout/i.test(f)) || deepRouteFiles[0];
+        const isLayoutTriggered = /layout/i.test(layoutFile);
+        const detectionText = isLayoutTriggered
+          ? `Layout does not include breadcrumb structure or a persistent location indicator. Page-level headings were evaluated separately in route pages.`
+          : `Detail/nested views lack persistent wayfinding cues in the layout layer`;
+        const explanationText = isLayoutTriggered
+          ? `The layout component does not provide persistent wayfinding cues (breadcrumb, active highlight). ${hasPageHeadingInRoutePages ? 'Route pages include <h1> headings, but the layout itself lacks location indicators.' : 'Route pages were scanned but no <h1> headings were found.'}`
+          : 'Deep/nested pages exist but lack persistent wayfinding cues (active highlight, heading, breadcrumb) in the layout. Users may not know where they are.';
         findings.push({
           subCheck: 'U2.D2',
           subCheckLabel: 'Deep pages without "you are here" cues',
           classification: 'potential',
           elementLabel: 'Deep route navigation',
           elementType: 'navigation',
-          filePath: deepRouteFiles[0],
-          detection: `Detail/nested views lack persistent wayfinding cues`,
-          evidence: `Deep routes: ${deepRouteFiles.slice(0, 3).join(', ')}. Missing: ${missingCues.join('; ')}.`,
-          explanation: 'Deep/nested pages exist but lack all persistent wayfinding cues (active highlight, heading, breadcrumb). Users may not know where they are.',
+          filePath: layoutFile,
+          detection: detectionText,
+          evidence: `Deep routes: ${deepRouteFiles.slice(0, 3).join(', ')}. Missing: ${missingCues.join('; ')}.${hasPageHeadingInRoutePages ? ' Note: route pages DO contain <h1> headings.' : ''}`,
+          explanation: explanationText,
           confidence: conf,
-          advisoryGuidance: 'Add at least one persistent "you are here" cue: active nav highlight, page heading matching context, or breadcrumb trail.',
+          advisoryGuidance: hasPageHeadingInRoutePages
+            ? 'Optional: add breadcrumbs for deep navigation, but current pages already expose headings.'
+            : 'Add at least one persistent "you are here" cue: active nav highlight, page heading matching context, or breadcrumb trail.',
           deduplicationKey: dedupeKey,
         });
       }
@@ -3224,7 +3266,7 @@ function detectU2Navigation(allFiles: Map<string, string>): U2Finding[] {
     }
   }
 
-  console.log(`[U2] Detection: routes=${routeCount}, navComp=${hasNavComponentRendered}, navMapping=${hasNavItemsMapping}, layoutNav=${hasLayoutWithNav}, breadcrumb=${hasBreadcrumbRendered}, back=${hasBackControl}, deep=${deepRouteFiles.length}, maxDepth=${maxRouteDepth}, navPrimitives=${navPrimitiveCount}(${[...navPrimitivesFound].join(',')}), activeHighlight=${hasActiveNavHighlight}, pageHeading=${hasPageHeadingInLayout}, mobileOnly=${hasMobileOnlyNavToggle}, desktopHidden=${hasDesktopNavHidden}, findings=${findings.length}`);
+  console.log(`[U2] Detection: routes=${routeCount}, navComp=${hasNavComponentRendered}, navMapping=${hasNavItemsMapping}, layoutNav=${hasLayoutWithNav}, breadcrumb=${hasBreadcrumbRendered}, back=${hasBackControl}, deep=${deepRouteFiles.length}, maxDepth=${maxRouteDepth}, navPrimitives=${navPrimitiveCount}(${[...navPrimitivesFound].join(',')}), activeHighlight=${hasActiveNavHighlight}, pageHeadingLayout=${hasPageHeadingInLayout}, pageHeadingRoutes=${hasPageHeadingInRoutePages}, mobileOnly=${hasMobileOnlyNavToggle}, desktopHidden=${hasDesktopNavHidden}, findings=${findings.length}`);
 
   return findings;
 }
