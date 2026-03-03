@@ -215,14 +215,7 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
 
                 <FieldRow>
                   <FieldLabel>Background:</FieldLabel>
-                  {element.resolutionStatus?.bg === 'unresolved' ? (
-                    <span className="flex items-center gap-1 text-sm">
-                      <span className="text-muted-foreground italic">unresolved</span>
-                      <Badge variant="outline" className="text-xs font-medium border-amber-500/50 text-amber-600">
-                        context-dependent
-                      </Badge>
-                    </span>
-                  ) : element.backgroundHex ? (
+                  {element.backgroundHex ? (
                     <span className="flex items-center gap-1 text-sm">
                       <span className="font-mono">{element.backgroundHex}</span>
                       <span 
@@ -242,10 +235,8 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
 
                 <FieldRow>
                   <FieldLabel>Contrast:</FieldLabel>
-                  {element.resolutionStatus?.bg === 'unresolved' || element.contrastNotMeasurable ? (
-                    <span className="text-sm text-muted-foreground italic">
-                      not computed{element.unresolvedReason ? ` (${element.unresolvedReason})` : ' (background unresolved)'}
-                    </span>
+                  {element.contrastNotMeasurable ? (
+                    <span className="text-sm text-muted-foreground italic">not measurable</span>
                   ) : element.contrastRange ? (
                     <span className="text-sm">
                       <span className="font-mono font-medium text-warning">
@@ -275,29 +266,6 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                     WCAG 1.4.3 — {element.textType === 'large' ? 'Large text' : 'Normal text'} — {element.appliedThreshold || element.thresholdUsed}:1
                   </FieldValue>
                 </FieldRow>
-
-                {element.filePath && (
-                  <FieldRow>
-                    <FieldLabel>Source:</FieldLabel>
-                    <span className="flex items-center gap-1 text-sm">
-                      <LocationBadge filePath={element.filePath} startLine={element.startLine} endLine={element.endLine} compact />
-                      {element.variantName && (
-                        <Badge variant="outline" className="text-[10px] font-medium border-blue-500/40 text-blue-600">
-                          variant: {element.variantName}
-                        </Badge>
-                      )}
-                    </span>
-                  </FieldRow>
-                )}
-
-                {element.extractedClasses && (
-                  <FieldRow>
-                    <FieldLabel>Classes:</FieldLabel>
-                    <span className="font-mono text-xs bg-muted px-1.5 py-0.5 rounded max-w-sm truncate">
-                      {element.extractedClasses}
-                    </span>
-                  </FieldRow>
-                )}
               </>
             )}
           </DetailContainer>

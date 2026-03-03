@@ -2704,7 +2704,6 @@ interface A1TokenFinding {
   variant?: string; // 'hover', 'focus', 'active', 'dark', etc. — undefined = base state
   alpha?: number; // 0-1 opacity from Tailwind /N syntax
   lineNumber?: number; // approximate line number
-  extractedClasses?: string; // raw Tailwind tokens that produced the colors
 }
 
 // ===== A1 TEXT ELEMENT SCOPE =====
@@ -2944,7 +2943,7 @@ function findAncestorBg(code: string, tagStart: number): { bgClass: string; bgNa
 
 // Resolve background for a text element: self → ancestor → assumed default
 // Now also checks inline style colors on self and ancestors.
-function resolveBackground(code: string, textMatchIndex: number): { bgClass: string | null; bgName: string | null; bgSourceType: 'self' | 'ancestor' | 'unresolved'; inlineBgHex?: string } {
+function resolveBackground(code: string, textMatchIndex: number): { bgClass: string | null; bgName: string | null; bgSourceType: 'self' | 'ancestor' | 'assumed_default'; inlineBgHex?: string } {
   const containingTag = findContainingTagClasses(code, textMatchIndex);
   if (containingTag) {
     // Check Tailwind bg-* on self
@@ -2964,8 +2963,7 @@ function resolveBackground(code: string, textMatchIndex: number): { bgClass: str
     if (ancestorInlineBg) return { bgClass: null, bgName: null, bgSourceType: 'ancestor', inlineBgHex: ancestorInlineBg };
   }
   
-  // No background found — mark as unresolved, NOT assumed white
-  return { bgClass: null, bgName: null, bgSourceType: 'unresolved' };
+  return { bgClass: null, bgName: null, bgSourceType: 'assumed_default' };
 }
 
 /** Walk up ancestor JSX elements to find the nearest inline style backgroundColor */
@@ -3049,7 +3047,6 @@ interface ContrastViolation {
     riskLevel: 'high' | 'medium' | 'low';
     occurrence_count: number;
   }>;
-  extractedClasses?: string;
 }
 
 function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] {
@@ -3105,36 +3102,24 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         bgClass = resolved.bgClass;
         bgSource = 'tailwind_token';
       } else {
-        // Background unresolved — do NOT assume white
-        bgHex = '';
-        bgSource = 'unresolved';
+        bgHex = '#ffffff';
+        bgSource = 'assumed_default';
       }
+      
+      // --- Alpha compositing ---
+      let effectiveFgHex = fgHex;
+      if (alpha !== undefined && alpha < 1) {
+        const composited = alphaComposite(fgHex, bgHex, alpha);
+        if (composited) effectiveFgHex = composited;
+      }
+      
+      // --- Contrast computation ---
+      const ratio = getContrastRatio(effectiveFgHex, bgHex);
       
       // --- Size inference & WCAG 1.4.3 threshold ---
       const sizeStatus = inferTextSize(context);
       const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
       const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
-      
-      // --- If background is unresolved, do NOT compute contrast ---
-      let ratio: number | null = null;
-      let effectiveFgHex = fgHex;
-      
-      if (bgSource === 'unresolved') {
-        // Cannot compute contrast — will be emitted as Potential with no numeric ratio
-        ratio = null;
-      } else {
-        // --- Alpha compositing ---
-        if (alpha !== undefined && alpha < 1) {
-          const composited = alphaComposite(fgHex, bgHex, alpha);
-          if (composited) effectiveFgHex = composited;
-        }
-        
-        // --- Contrast computation (both fg and bg resolved) ---
-        ratio = getContrastRatio(effectiveFgHex, bgHex);
-        
-        // Only skip if ratio PASSES
-        if (ratio !== null && ratio >= threshold) continue; // PASS
-      }
       
       const evidenceLevel: A1EvidenceLevel = bgSource === 'tailwind_token' || bgSource === 'inline_style'
         ? 'structural_deterministic'
@@ -3142,15 +3127,14 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       
       const elementContext = inferElementContext(context);
       
-      // Extract surrounding classes for evidence
-      const containingTag = findContainingTagClasses(content, matchIndex);
-      const extractedClasses = containingTag?.classes || '';
+      // Only report if ratio fails threshold
+      if (ratio !== null && ratio >= threshold) continue; // PASS
       
       a1Findings.push({
         fgHex: effectiveFgHex,
         fgClass: alpha !== undefined ? `${colorClass}/${Math.round(alpha * 100)}` : colorClass,
         fgSource: 'tailwind_token',
-        bgHex: bgSource === 'unresolved' ? '' : bgHex,
+        bgHex,
         bgClass,
         bgSource,
         ratio,
@@ -3167,7 +3151,6 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         appliedThreshold: threshold,
         wcagCriterion: '1.4.3',
         lineNumber: getLineNumber(matchIndex),
-        extractedClasses,
       });
     }
 
@@ -3196,40 +3179,32 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         bgClass = resolved.bgClass;
         bgSource = 'tailwind_token';
       } else {
-        bgHex = '';
-        bgSource = 'unresolved';
+        bgHex = '#ffffff';
+        bgSource = 'assumed_default';
       }
       
+      let effectiveFgHex = fgHex;
+      if (alpha !== undefined && alpha < 1) {
+        const composited = alphaComposite(fgHex, bgHex, alpha);
+        if (composited) effectiveFgHex = composited;
+      }
+      
+      const ratio = getContrastRatio(effectiveFgHex, bgHex);
       const sizeStatus = inferTextSize(context);
       const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
       const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
       
-      let ratio: number | null = null;
-      let effectiveFgHex = fgHex;
-      
-      if (bgSource === 'unresolved') {
-        ratio = null;
-      } else {
-        if (alpha !== undefined && alpha < 1) {
-          const composited = alphaComposite(fgHex, bgHex, alpha);
-          if (composited) effectiveFgHex = composited;
-        }
-        ratio = getContrastRatio(effectiveFgHex, bgHex);
-        if (ratio !== null && ratio >= threshold) continue; // PASS
-      }
+      if (ratio !== null && ratio >= threshold) continue; // PASS
       
       const evidenceLevel: A1EvidenceLevel = bgSource === 'tailwind_token' || bgSource === 'inline_style'
         ? 'structural_deterministic'
         : 'structural_estimated';
       
-      const containingTagV = findContainingTagClasses(content, matchIndex);
-      const extractedClasses = containingTagV?.classes || '';
-      
       a1Findings.push({
         fgHex: effectiveFgHex,
         fgClass: `${variant}:${colorClass}`,
         fgSource: 'tailwind_token',
-        bgHex: bgSource === 'unresolved' ? '' : bgHex,
+        bgHex,
         bgClass,
         bgSource,
         ratio,
@@ -3247,7 +3222,6 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         wcagCriterion: '1.4.3',
         variant,
         lineNumber: getLineNumber(matchIndex),
-        extractedClasses,
       });
     }
 
@@ -3271,31 +3245,25 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         const resolved = resolveBackground(content, styleMatch.index);
         if (resolved.inlineBgHex) { bgHex = resolved.inlineBgHex; bgSource = 'inline_style'; }
         else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) { bgHex = TAILWIND_COLORS[resolved.bgName]; bgSource = 'tailwind_token'; }
-        else { bgHex = ''; bgSource = 'unresolved'; }
+        else { bgHex = '#ffffff'; bgSource = 'assumed_default'; }
       }
       console.log("[A1] inline style fg:", fgHex, "bg:", bgHex, "tag:", jsxTag, "in", filepath);
+      const ratio = getContrastRatio(fgHex, bgHex);
       const ctxStart = Math.max(0, styleMatch.index - 100);
       const ctxEnd = Math.min(content.length, styleMatch.index + 200);
       const context = content.slice(ctxStart, ctxEnd).replace(/\n/g, ' ').trim();
       const sizeStatus = inferTextSize(context);
       const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
       const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
-      let ratio: number | null = null;
-      if (bgSource === 'unresolved') {
-        ratio = null;
-      } else {
-        ratio = getContrastRatio(fgHex, bgHex);
-        if (ratio !== null && ratio >= threshold) continue;
-      }
+      if (ratio !== null && ratio >= threshold) continue;
       a1Findings.push({
         fgHex, fgClass: `style:color(${fgHex})`, fgSource: 'inline_style',
-        bgHex: bgSource === 'unresolved' ? '' : bgHex, bgClass: null, bgSource, ratio, threshold, sizeStatus,
-        evidenceLevel: bgSource === 'unresolved' ? 'structural_estimated' : 'structural_deterministic',
+        bgHex, bgClass: null, bgSource, ratio, threshold, sizeStatus,
+        evidenceLevel: bgSource === 'assumed_default' ? 'structural_estimated' : 'structural_deterministic',
         filePath: filepath, componentName: componentName || undefined,
         elementContext: inferElementContext(context) || undefined,
         jsxTag, context, occurrence_count: 1, textType,
         appliedThreshold: threshold, wcagCriterion: '1.4.3',
-        lineNumber: getLineNumber(styleMatch.index),
       });
     }
 
@@ -3318,36 +3286,30 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       if (bgColorM) {
         const parsed = parseCssColor(bgColorM[1]);
         if (parsed) { bgHex = parsed; bgSource = 'inline_style'; }
-        else { bgHex = ''; bgSource = 'unresolved'; }
+        else { bgHex = '#ffffff'; bgSource = 'assumed_default'; }
       } else {
         const resolved = resolveBackground(content, htmlMatch.index);
         if (resolved.inlineBgHex) { bgHex = resolved.inlineBgHex; bgSource = 'inline_style'; }
         else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) { bgHex = TAILWIND_COLORS[resolved.bgName]; bgSource = 'tailwind_token'; }
-        else { bgHex = ''; bgSource = 'unresolved'; }
+        else { bgHex = '#ffffff'; bgSource = 'assumed_default'; }
       }
       console.log("[A1] HTML style fg:", fgHex, "bg:", bgHex, "tag:", jsxTag, "in", filepath);
+      const ratio = getContrastRatio(fgHex, bgHex);
       const ctxStart = Math.max(0, htmlMatch.index - 100);
       const ctxEnd = Math.min(content.length, htmlMatch.index + 200);
       const context = content.slice(ctxStart, ctxEnd).replace(/\n/g, ' ').trim();
       const sizeStatus = inferTextSize(context);
       const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
       const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
-      let ratio: number | null = null;
-      if (bgSource === 'unresolved') {
-        ratio = null;
-      } else {
-        ratio = getContrastRatio(fgHex, bgHex);
-        if (ratio !== null && ratio >= threshold) continue;
-      }
+      if (ratio !== null && ratio >= threshold) continue;
       a1Findings.push({
         fgHex, fgClass: `style:color(${fgHex})`, fgSource: 'inline_style',
-        bgHex: bgSource === 'unresolved' ? '' : bgHex, bgClass: null, bgSource, ratio, threshold, sizeStatus,
-        evidenceLevel: bgSource === 'unresolved' ? 'structural_estimated' : 'structural_deterministic',
+        bgHex, bgClass: null, bgSource, ratio, threshold, sizeStatus,
+        evidenceLevel: bgSource === 'assumed_default' ? 'structural_estimated' : 'structural_deterministic',
         filePath: filepath, componentName: componentName || undefined,
         elementContext: inferElementContext(context) || undefined,
         jsxTag, context, occurrence_count: 1, textType,
         appliedThreshold: threshold, wcagCriterion: '1.4.3',
-        lineNumber: getLineNumber(htmlMatch.index),
       });
     }
   }
@@ -3380,6 +3342,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     
     // Reason codes
     const reasonCodes: string[] = ['STATIC_ANALYSIS'];
+    if (finding.bgSource === 'assumed_default') reasonCodes.push('BG_ASSUMED_DEFAULT');
     if (finding.bgSource === 'unresolved') reasonCodes.push('BG_UNRESOLVED');
     if (finding.sizeStatus === 'unknown') reasonCodes.push('SIZE_UNKNOWN');
     
@@ -3389,16 +3352,16 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       if (finding.ratio < 2.5) riskLevel = 'high';
       else if (finding.ratio < 3.5) riskLevel = 'medium';
       else riskLevel = 'low';
-    } else {
-      riskLevel = 'low'; // unresolved — no numeric evidence of high risk
     }
     
-    const ratioStr = finding.ratio !== null ? `${finding.ratio.toFixed(2)}:1` : 'not computed (background unresolved)';
-    const bgNote = finding.bgSource === 'inline_style'
-      ? ` (background from inline style ${finding.bgHex})`
-      : finding.bgSource === 'unresolved'
-        ? ' (background unresolved / context-dependent)'
-        : ` (background from ${finding.bgClass})`;
+    const ratioStr = finding.ratio !== null ? `${finding.ratio.toFixed(2)}:1` : 'not computable';
+    const bgNote = finding.bgSource === 'assumed_default'
+      ? ' (background assumed #FFFFFF — no bg token found)'
+      : finding.bgSource === 'inline_style'
+        ? ` (background from inline style ${finding.bgHex})`
+        : finding.bgSource === 'unresolved'
+          ? ' (background unresolved)'
+          : ` (background from ${finding.bgClass})`;
     
     const variantLabel = finding.variant ? ` [${finding.variant} state]` : '';
     const diagnosis = `Text ${finding.fgClass} (${finding.fgHex}) on ${finding.bgHex}${bgNote}${variantLabel} — ` +
@@ -3413,10 +3376,8 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     }
     
     const advisoryGuidance = isConfirmed ? undefined :
-      finding.bgSource === 'unresolved'
-        ? 'Background could not be resolved from static analysis. Verify contrast with browser DevTools after rendering.'
-        : `Verify contrast in browser DevTools. Computed ratio: ${ratioStr}. ` +
-          `If background differs from ${finding.bgHex}, re-check.`;
+      `Verify contrast in browser DevTools. Computed ratio: ${ratioStr}. ` +
+      `If background differs from ${finding.bgHex}, re-check.`;
     
     results.push({
       ruleId: 'A1',
@@ -3435,7 +3396,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       diagnosis,
       contextualHint: `Contrast ${ratioStr} — ${finding.evidenceLevel.replace(/_/g, ' ')}.`,
       correctivePrompt,
-      confidence: isConfirmed ? 0.90 : (finding.bgSource === 'unresolved' ? 0.40 : 0.55),
+      confidence: isConfirmed ? 0.90 : (finding.bgSource === 'assumed_default' ? 0.55 : 0.40),
       riskLevel,
       reasonCodes: isConfirmed ? undefined : reasonCodes,
       potentialRiskReason: isConfirmed ? undefined : `Background source: ${finding.bgSource.replace(/_/g, ' ')}.`,
@@ -3459,7 +3420,6 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         riskLevel,
         occurrence_count: finding.occurrence_count,
       }],
-      extractedClasses: finding.extractedClasses,
     });
   }
   
@@ -8765,12 +8725,11 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       const potentialFindings = contrastViolations.filter(v => v.status !== 'confirmed');
       
       const mapToElement = (v: any) => {
-        const ratioStr = v.contrastRatio != null ? `${v.contrastRatio.toFixed(1)}:1` : 'not computed';
+        const ratioStr = v.contrastRatio != null ? `${v.contrastRatio.toFixed(1)}:1` : 'unknown';
         const threshStr = `${v.thresholdUsed || 4.5}:1`;
         const sizeLabel = v.sizeStatus === 'large' ? 'large' : 'normal';
         const fgHex = v.foregroundHex || '???';
-        const bgHex = v.backgroundHex || '';
-        const bgIsUnresolved = v.bgSource === 'unresolved' || (!v.backgroundHex && v.backgroundStatus !== 'certain');
+        const bgHex = v.backgroundHex || '#FFFFFF';
         const prompt = v.status === 'confirmed'
           ? `Issue reason: ${ratioStr} measured vs ${threshStr} required (WCAG AA, ${sizeLabel} text).\n\nRecommended fix: Increase text contrast for this element (currently ${fgHex} on ${bgHex}) by darkening the text color or adjusting the background to reach ≥${threshStr}; keep visual style consistent across similar elements.`
           : undefined;
@@ -8781,10 +8740,10 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           textSnippet: v.evidence,
           location: v.evidence || '',
           foregroundHex: v.foregroundHex,
-          backgroundHex: bgIsUnresolved ? undefined : v.backgroundHex,
-          backgroundStatus: bgIsUnresolved ? 'unmeasurable' : ((v.backgroundStatus || 'unmeasurable') as 'certain' | 'uncertain' | 'unmeasurable'),
-          contrastRatio: bgIsUnresolved ? undefined : v.contrastRatio,
-          contrastNotMeasurable: bgIsUnresolved || v.contrastRatio === undefined,
+          backgroundHex: v.backgroundHex,
+          backgroundStatus: (v.backgroundStatus || 'unmeasurable') as 'certain' | 'uncertain' | 'unmeasurable',
+          contrastRatio: v.contrastRatio,
+          contrastNotMeasurable: v.contrastRatio === undefined,
           thresholdUsed: (v.thresholdUsed || 4.5) as 4.5 | 3.0,
           explanation: v.diagnosis,
           reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
@@ -8796,17 +8755,6 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           correctivePrompt: prompt,
           variant: v.variant || undefined,
           lineNumber: v.lineNumber || undefined,
-          // New fields: source location, variant context, resolution status
-          filePath: v.affectedComponents?.[0]?.filePath,
-          startLine: v.lineNumber || null,
-          endLine: v.lineNumber || null,
-          variantName: v.variant || undefined,
-          extractedClasses: v.extractedClasses || undefined,
-          resolutionStatus: {
-            fg: v.foregroundHex ? 'resolved' : 'unresolved',
-            bg: bgIsUnresolved ? 'unresolved' : 'resolved',
-          },
-          unresolvedReason: bgIsUnresolved ? 'background unresolved / context-dependent' : undefined,
         };
       };
       

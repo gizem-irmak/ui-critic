@@ -318,24 +318,6 @@ export interface A1ElementSubItem {
   variant?: string; // 'hover', 'focus', 'active', 'dark' — undefined = base state
   lineNumber?: number; // approximate source line number
   
-  // Source location (structural A1)
-  filePath?: string; // file path for sorting/display
-  startLine?: number | null; // start line of the className/variant string
-  endLine?: number | null; // end line
-  
-  // Variant/branch context (structural A1)
-  variantName?: string; // CVA variant name (e.g., "default", "destructive")
-  extractedClasses?: string; // raw Tailwind tokens that produced the colors
-  
-  // Resolution status (structural A1)
-  resolutionStatus?: {
-    fg: 'resolved' | 'unresolved';
-    bg: 'resolved' | 'unresolved';
-  };
-  
-  // Unresolved reason (when bg cannot be computed)
-  unresolvedReason?: string; // e.g., "background unresolved / context-dependent"
-  
   // Deduplication key
   deduplicationKey: string; // screenId + bbox + textSnippet
 }
