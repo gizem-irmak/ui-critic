@@ -903,3 +903,67 @@ Deno.test("U3 HEADER SUPPRESS: TableHead row with static labels never emits", ()
     assert(HEADER_LABELS.test(l), `'${l}' is a known header label → suppressed`);
   }
 });
+
+// ═══════════════════════════════════════════════════
+// Content preview subtree binding regression tests
+// ═══════════════════════════════════════════════════
+
+/** Minimal reimplementation of extractU3CarrierContentPreview for testing */
+function extractPreviewFromElement(elementContent: string): string | undefined {
+  const allDynRe = /\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g;
+  let dm;
+  const dynExprs: string[] = [];
+  const ATTR_NAMES = /^(className|style|key|ref|id|onClick|onChange|onSubmit|disabled|checked|value|type|src|href|alt|htmlFor|role|aria-\w+)$/;
+  while ((dm = allDynRe.exec(elementContent)) !== null) {
+    const expr = dm[1].trim();
+    if (!expr || expr.length > 120) continue;
+    if (ATTR_NAMES.test(expr)) continue;
+    if (/^cn\(|^clsx\(|^classNames?\(/i.test(expr)) continue;
+    if (/^(?:\(\)\s*=>|function\b)/.test(expr) && !/\.\w+/.test(expr)) continue;
+    if (!dynExprs.includes(expr)) dynExprs.push(expr);
+  }
+  if (dynExprs.length > 0) {
+    const meaningful = dynExprs.find(e => /[a-zA-Z_]\w*[\s)]*\.[\w?]/.test(e));
+    if (meaningful) {
+      const castMatch = meaningful.match(/\((\w+)\s+as\s+\w+\)\.\s*([\w?.]+)/);
+      if (castMatch) return `(dynamic text: (${castMatch[1]} as any).${castMatch[2]})`;
+      const coreVar = meaningful.match(/([a-zA-Z_][\w.?]*)/);
+      return `(dynamic text: ${coreVar ? coreVar[1] : meaningful})`;
+    }
+    return `(dynamic text: ${dynExprs[0]})`;
+  }
+  return undefined;
+}
+
+Deno.test("U3 CONTENT BINDING: cast expression (appt as any).doctors?.name", () => {
+  // elementContent is what's BETWEEN <p ...> and </p>
+  const elementContent = `{(appt as any).doctors?.name}`;
+  const preview = extractPreviewFromElement(elementContent);
+  assert(preview !== undefined, "Should extract a preview");
+  assert(preview!.includes("doctors?.name"), `Preview must contain doctors?.name, got: ${preview}`);
+  assert(!preview!.includes("appt.status"), "Must NOT contain appt.status from sibling");
+});
+
+Deno.test("U3 CONTENT BINDING: simple dot expression a.reason", () => {
+  const elementContent = `{a.reason || "—"}`;
+  const preview = extractPreviewFromElement(elementContent);
+  assert(preview !== undefined, "Should extract a preview");
+  assert(preview!.includes("a.reason"), `Preview must contain a.reason, got: ${preview}`);
+});
+
+Deno.test("U3 CONTENT BINDING: sibling expressions must NOT leak", () => {
+  // Only the truncated cell's content, not sibling cells
+  const truncatedCellContent = `{(appt as any).doctors?.name}`;
+  const siblingContent = `{appt.status}`;
+  // Extraction from truncated cell only
+  const preview = extractPreviewFromElement(truncatedCellContent);
+  assert(preview !== undefined);
+  assert(preview!.includes("doctors?.name"), "Must bind to own content");
+  assert(!preview!.includes("appt.status"), "Must NOT include sibling content");
+});
+
+Deno.test("U3 CONTENT BINDING: self-closing element returns undefined (no children)", () => {
+  const elementContent = ``; // self-closing has no children
+  const preview = extractPreviewFromElement(elementContent);
+  assertEquals(preview, undefined, "Self-closing with no children → undefined");
+});
