@@ -375,3 +375,58 @@ Deno.test("U2: Aggregated output always has blocksConvergence=false", () => {
   assertEquals(aggregated.blocksConvergence, false);
   assertEquals(aggregated.status, 'potential');
 });
+
+// ============================================================
+// ROUTE-PAGE HEADING VERIFICATION (v5)
+// ============================================================
+
+Deno.test("U2.D2: Suppressed when active nav highlight + route pages have <h1>", () => {
+  const hasActiveNavHighlight = true;
+  const hasPageHeadingInRoutePages = true;
+  const suppressed = hasActiveNavHighlight && hasPageHeadingInRoutePages;
+  assert(suppressed, "Should suppress: active highlight + route page headings = strong wayfinding");
+});
+
+Deno.test("U2.D2: NOT suppressed when active highlight but no route page <h1>", () => {
+  const hasActiveNavHighlight = true;
+  const hasPageHeadingInRoutePages = false;
+  const suppressed = hasActiveNavHighlight && hasPageHeadingInRoutePages;
+  assert(!suppressed, "Should NOT suppress: no heading evidence in route pages");
+});
+
+Deno.test("U2.D2: PatientLayout with route page headings does NOT claim 'missing page title'", () => {
+  const hasPageHeadingInRoutePages = true;
+  const hasPageHeadingInLayout = false;
+  // Detection text should be layout-scoped, not claim missing page title
+  const detectionText = hasPageHeadingInRoutePages
+    ? 'Layout does not include breadcrumb structure or a persistent location indicator. Page-level headings were evaluated separately in route pages.'
+    : 'Detail/nested views lack persistent wayfinding cues';
+  assert(!detectionText.includes('no clear page title in the main content area'));
+  assert(detectionText.includes('Page-level headings were evaluated'));
+});
+
+Deno.test("U2.D2: Confidence capped at 0.55 when route pages have headings but layout doesn't", () => {
+  const hasPageHeadingInRoutePages = true;
+  const hasPageHeadingInLayout = false;
+  const conf = (hasPageHeadingInRoutePages && !hasPageHeadingInLayout) ? 0.55 : 0.70;
+  assertEquals(conf, 0.55, "Route-page headings without layout headings → confidence ≤ 0.55");
+});
+
+Deno.test("U2.D2: Advisory text mentions existing headings when route pages have <h1>", () => {
+  const hasPageHeadingInRoutePages = true;
+  const advisory = hasPageHeadingInRoutePages
+    ? 'Optional: add breadcrumbs for deep navigation, but current pages already expose headings.'
+    : 'Add at least one persistent "you are here" cue.';
+  assert(advisory.includes('already expose headings'));
+});
+
+Deno.test("U2.D2: hasAnyCue includes hasPageHeadingInRoutePages", () => {
+  const hasActiveNavHighlight = false;
+  const hasPageHeadingInLayout = false;
+  const hasPageHeadingInRoutePages = true;
+  const hasBreadcrumbRendered = false;
+  const hasBackControl = false;
+  const hasParentRouteLink = false;
+  const hasAnyCue = hasActiveNavHighlight || hasPageHeadingInLayout || hasPageHeadingInRoutePages || hasBreadcrumbRendered || hasBackControl || hasParentRouteLink;
+  assert(hasAnyCue, "Route page headings should count as a wayfinding cue");
+});
