@@ -4857,7 +4857,8 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       const outlineRemovalTokens = allTokens.filter(t =>
         t === 'outline-none' ||
         t === 'focus:outline-none' ||
-        t === 'focus-visible:outline-none'
+        t === 'focus-visible:outline-none' ||
+        t === '[&]:outline-none'
       );
       if (outlineRemovalTokens.length === 0) continue;
 
@@ -4930,11 +4931,24 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
         continue;
       }
 
-      const stateDrivenTokens = allTokens.filter(t =>
-        /^data-\[selected(?:=true|='true')?\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
-        /^data-\[highlighted(?:=true|='true')?\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
-        /^aria-selected:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t) ||
-        /^data-\[state=active\]:(?:bg-|text-|ring-|border-|outline-|shadow-)/i.test(t)
+      // State-driven tokens split: strong (ring/border/shadow/outline) vs weak (bg/text)
+      const stateDrivenStrongTokens = allTokens.filter(t =>
+        /^data-\[selected(?:=true|='true')?\]:(?:ring-|border-|outline-|shadow-)/i.test(t) ||
+        /^data-\[highlighted(?:=true|='true')?\]:(?:ring-|border-|outline-|shadow-)/i.test(t) ||
+        /^aria-selected:(?:ring-|border-|outline-|shadow-)/i.test(t) ||
+        /^data-\[state=active\]:(?:ring-|border-|outline-|shadow-)/i.test(t)
+      );
+
+      if (stateDrivenStrongTokens.length > 0) {
+        console.log(`A2 PASS (deterministic): ${filePath}:${lineStart} — state-driven strong replacement [${stateDrivenStrongTokens.join(', ')}]`);
+        continue;
+      }
+
+      const stateDrivenWeakTokens = allTokens.filter(t =>
+        /^data-\[selected(?:=true|='true')?\]:(?:bg-|text-)/i.test(t) ||
+        /^data-\[highlighted(?:=true|='true')?\]:(?:bg-|text-)/i.test(t) ||
+        /^aria-selected:(?:bg-|text-)/i.test(t) ||
+        /^data-\[state=(?:active|open)\]:(?:bg-|text-)/i.test(t)
       );
 
       const weakFocusTokens = allTokens.filter(t =>
@@ -4947,14 +4961,14 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       );
 
       const wrapperIndicatorTokens = extractA2ParentIndicatorTokens(content, node.index);
-      const isCmdkItem = /Command(?:Primitive\.)?Item|CommandItem/i.test(node.tag) || /CommandItem/i.test(elementName) || stateDrivenTokens.some(t => /^data-\[selected/.test(t));
+      const isCmdkItem = /Command(?:Primitive\.)?Item|CommandItem/i.test(node.tag) || /CommandItem/i.test(elementName) || stateDrivenWeakTokens.some(t => /^data-\[selected/.test(t));
 
-      const hasStateDrivenIndicator = stateDrivenTokens.length > 0 || ariaSelectedParsed.present;
+      const hasStateDrivenIndicator = stateDrivenWeakTokens.length > 0 || ariaSelectedParsed.present;
       const hasWeakFocusStyling = weakFocusTokens.length > 0;
       const hasWrapperIndicator = wrapperIndicatorTokens.length > 0;
 
       const alternativeIndicatorTokens = Array.from(new Set([
-        ...stateDrivenTokens,
+        ...stateDrivenWeakTokens,
         ...weakFocusTokens,
         ...wrapperIndicatorTokens,
       ]));
@@ -4970,6 +4984,8 @@ function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
       } else if (parsedTabIndex !== null) {
         focusable = parsedTabIndex >= 0 ? 'yes' : 'no';
       } else if (parsedRole && FOCUSABLE_ROLES.has(parsedRole)) {
+        focusable = 'yes';
+      } else if (/\b(?:onClick|onKeyDown|onSelect)\s*=/.test(node.fullMatch)) {
         focusable = 'yes';
       } else if (/^[A-Z]/.test(node.tag) || node.tag.includes('.')) {
         focusable = /(Input|Item|Button|Link|Trigger|Tab|Checkbox|Switch|Radio|Slider|Option)$/i.test(elementName || node.tag)
