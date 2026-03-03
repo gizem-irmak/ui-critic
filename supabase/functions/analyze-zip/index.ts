@@ -4200,6 +4200,80 @@ function extractA2ParentIndicatorTokens(content: string, elementIndex: number): 
   );
 }
 
+interface ComponentSymbol {
+  name: string;
+  startLine: number;
+  endLine: number;
+}
+
+function buildComponentSymbolTable(content: string): ComponentSymbol[] {
+  const symbols: ComponentSymbol[] = [];
+  const lines = content.split('\n');
+
+  // Match exported const/function component definitions with forwardRef or arrow functions
+  const patterns = [
+    /(?:export\s+)?(?:const|let)\s+([A-Z][A-Za-z0-9_]*)\s*=\s*(?:React\.)?forwardRef/,
+    /(?:export\s+)?(?:const|let)\s+([A-Z][A-Za-z0-9_]*)\s*=\s*\(/,
+    /(?:export\s+)?function\s+([A-Z][A-Za-z0-9_]*)\s*\(/,
+  ];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
+      if (match?.[1]) {
+        // Find the end of this component (next component start or end of file)
+        let endLine = lines.length;
+        for (let j = i + 1; j < lines.length; j++) {
+          if (patterns.some(p => p.test(lines[j]))) {
+            endLine = j - 1;
+            break;
+          }
+        }
+        symbols.push({ name: match[1], startLine: i + 1, endLine });
+        break;
+      }
+    }
+  }
+
+  return symbols;
+}
+
+interface ResolvedElement {
+  elementName: string;
+  elementSource: 'jsx_tag' | 'wrapper_component' | 'html_tag' | 'unknown';
+}
+
+function resolveA2ElementName(
+  _content: string,
+  _parserPos: number,
+  _lineStart: number,
+  syntheticTagMatch: RegExpMatchArray | null,
+  inferredTag: string,
+  symbolTable: ComponentSymbol[],
+  componentName: string,
+): ResolvedElement {
+  // Tier 1: Use JSX tag name if it's a PascalCase component
+  const tagName = syntheticTagMatch?.[1] || '';
+  if (tagName && /^[A-Z]/.test(tagName)) {
+    return { elementName: tagName, elementSource: 'jsx_tag' };
+  }
+
+  // Tier 2: Check symbol table for wrapper component
+  const wrapper = symbolTable.find(sym => _lineStart >= sym.startLine && _lineStart <= sym.endLine);
+  if (wrapper) {
+    return { elementName: wrapper.name, elementSource: 'wrapper_component' };
+  }
+
+  // Tier 3: HTML tag fallback
+  if (inferredTag && inferredTag !== 'unknown') {
+    return { elementName: inferredTag, elementSource: 'html_tag' };
+  }
+
+  // Tier 4: Unknown
+  return { elementName: componentName || 'unknown', elementSource: 'unknown' };
+}
+
 function detectA2FocusVisibility(allFiles: Map<string, string>): A2Finding[] {
   const findings: A2Finding[] = [];
   const seenKeys = new Set<string>();
