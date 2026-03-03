@@ -563,6 +563,8 @@ export interface U3ElementSubItem {
   contentKind?: 'static_short' | 'static_long' | 'dynamic' | 'list_mapped';
   recoverySignals?: string[]; // e.g., ['title_attr', 'tooltip_component', 'overflow_scroll']
   truncationTokens?: string[]; // exact classes found: ['h-6', 'overflow-hidden', 'truncate']
+  columnLabel?: string; // Header label for the column (e.g., "Reason", "Status")
+  contentPreview?: string; // Literal text or dynamic expression like "{appt.reason}"
 }
 
 // U4 Element sub-item for aggregated recognition-to-recall reporting

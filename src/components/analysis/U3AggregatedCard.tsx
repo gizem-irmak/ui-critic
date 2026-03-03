@@ -38,6 +38,15 @@ function U3ElementItem({ element, compact = false }: {
 
         <CollapsibleContent>
           <DetailContainer>
+            {element.columnLabel && (
+              <FieldRow>
+                <FieldLabel>Column:</FieldLabel>
+                <Badge variant="outline" className="text-xs font-semibold">
+                  {element.columnLabel}
+                </Badge>
+              </FieldRow>
+            )}
+
             {(element.truncationType || element.elementTag) && (
               <FieldRow>
                 <FieldLabel>Element:</FieldLabel>

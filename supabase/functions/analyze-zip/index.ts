@@ -1052,25 +1052,28 @@ function u3ContentRiskGate(content: string, pos: number, textPreview: string | u
 
 /** Gate 2: Table header / label row suppression */
 function u3IsHeaderRow(content: string, pos: number, context: string, textPreview: string | undefined): boolean {
-  // Inside <thead> or <th>
+  // Inside <thead>, <th>, or <TableHead>
   const before300 = content.slice(Math.max(0, pos - 300), pos);
   if (/<thead\b/i.test(before300) && !/<\/thead\b/i.test(before300)) return true;
-  if (/<th\b/i.test(before300)) {
-    // Check if the <th> is unclosed before pos
-    const lastTh = before300.lastIndexOf('<th');
-    const closeTh = before300.indexOf('</th', lastTh);
-    if (lastTh >= 0 && closeTh < 0) return true;
+  // Check unclosed <th> or <TableHead>
+  for (const tag of ['<th', '<TableHead']) {
+    const lastIdx = before300.lastIndexOf(tag);
+    if (lastIdx >= 0) {
+      const closeTag = tag === '<th' ? '</th' : '</TableHead';
+      if (before300.indexOf(closeTag, lastIdx) < 0) return true;
+    }
   }
 
   // role="columnheader"
   if (/role\s*=\s*["']columnheader["']/i.test(context)) return true;
 
-  // Short text matching known header labels
+  // Short static text (no dynamic expression) that is a known header label or ≤20 chars
   if (textPreview && !u3IsDynamic(textPreview)) {
     const staticText = textPreview.replace(/…$/, '').trim();
-    if (staticText.length <= 16 && U3_HEADER_LABELS.test(staticText)) return true;
-    // Header styling + short text
-    if (staticText.length <= 16 && U3_HEADER_STYLE_RE.test(context)) return true;
+    if (staticText.length <= 20 && U3_HEADER_LABELS.test(staticText)) return true;
+    if (staticText.length <= 20 && U3_HEADER_STYLE_RE.test(context)) return true;
+    // Pure short static label with no dynamic content — not a data cell
+    if (staticText.length <= 20 && !/\{/.test(context.slice(context.indexOf(staticText)))) return true;
   }
 
   return false;
@@ -1265,6 +1268,11 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           ? `Dynamic content (${contentGate.contentKind}) with ${label}`
           : `Static text (${staticLen} chars) with ${label}`;
 
+        const contentPreview = isDynamic && d1VarMatch ? `{${d1VarMatch[1]}}` : textPreview;
+        const evidenceStr = columnLabel
+          ? `Column "${columnLabel}" cell uses \`${label}\` on ${contentPreview || 'dynamic content'} with no tooltip/expand`
+          : `${m[0]} at ${fileName}:${lineNumber}`;
+
         findings.push({
           subCheck: 'U3.D1',
           subCheckLabel: 'Line clamp / ellipsis truncation',
@@ -1272,12 +1280,12 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           elementLabel: columnLabel ? `Truncated "${columnLabel}" cell (${label})` : `Truncated text (${label})`,
           elementType: 'text',
           filePath,
-          detection: `${m[0]} without expand mechanism${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
-          evidence: `${m[0]} at ${fileName}:${lineNumber}`,
+          detection: `${label}${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
+          evidence: evidenceStr,
           explanation: `Text is truncated using ${label} without a visible mechanism to reveal full content.`,
           confidence,
           textPreview,
-          advisoryGuidance: 'Ensure truncated content has an accessible expand mechanism.',
+          advisoryGuidance: 'Ensure truncated content has an accessible expand mechanism (title, tooltip, or expand action).',
           deduplicationKey: dedupeKey,
           truncationType: label,
           textLength: isDynamic ? 'dynamic' : (staticLen >= 0 ? staticLen : undefined),
@@ -1291,6 +1299,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
           contentKind: contentGate.contentKind,
           recoverySignals: recoverySignals.length > 0 ? recoverySignals : undefined,
           truncationTokens,
+          columnLabel: columnLabel || undefined,
+          contentPreview: contentPreview || undefined,
         });
       }
     }
@@ -1346,19 +1356,25 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       const nwVarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
       const nwVarName = nwVarMatch ? nwVarMatch[1].split('.').pop() : undefined;
 
+      const nwColumnLabel = u3FindColumnLabel(content, pos);
+      const nwContentPreview = isDynamic && nwVarMatch ? `{${nwVarMatch[1]}}` : textPreview;
+      const nwEvidenceStr = nwColumnLabel
+        ? `Column "${nwColumnLabel}" cell uses nowrap + overflow-hidden on ${nwContentPreview || 'dynamic content'} with no tooltip/expand`
+        : `whitespace-nowrap + overflow-hidden at ${fileName}:${lineNumber}`;
+
       findings.push({
         subCheck: 'U3.D1',
         subCheckLabel: 'Line clamp / ellipsis truncation',
         classification: 'potential',
-        elementLabel: 'Truncated text (nowrap + overflow)',
+        elementLabel: nwColumnLabel ? `Truncated "${nwColumnLabel}" cell (nowrap)` : 'Truncated text (nowrap + overflow)',
         elementType: 'text',
         filePath,
         detection: `whitespace-nowrap + overflow-hidden${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
-        evidence: `whitespace-nowrap + overflow-hidden at ${fileName}:${lineNumber}`,
+        evidence: nwEvidenceStr,
         explanation: 'Text is forced to a single line with overflow hidden, potentially clipping important content.',
         confidence,
         textPreview,
-        advisoryGuidance: 'Add a title attribute or expand mechanism for nowrap-truncated text.',
+        advisoryGuidance: 'Add a title attribute or tooltip to reveal full content on hover.',
         deduplicationKey: dedupeKey,
         truncationType: 'nowrap',
         textLength: isDynamic ? 'dynamic' : (staticLen >= 0 ? staticLen : undefined),
@@ -1371,6 +1387,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         contentKind: contentGate.contentKind,
         recoverySignals: recoverySignals.length > 0 ? recoverySignals : undefined,
         truncationTokens,
+        columnLabel: nwColumnLabel || undefined,
+        contentPreview: nwContentPreview || undefined,
       });
     }
 
@@ -1421,6 +1439,11 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       const wcVarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
       const wcVarName = wcVarMatch ? wcVarMatch[1].split('.').pop() : undefined;
 
+      const wcContentPreview = isDynamic && wcVarMatch ? `{${wcVarMatch[1]}}` : textPreview;
+      const wcEvidenceStr = columnLabel
+        ? `Column "${columnLabel}" cell uses ${wcm[0]} + overflow-hidden on ${wcContentPreview || 'dynamic content'} with no tooltip/expand`
+        : `${wcm[0]} with overflow-hidden at ${fileName}:${lineNumber}`;
+
       findings.push({
         subCheck: 'U3.D1',
         subCheckLabel: 'Width-constrained overflow clipping',
@@ -1429,7 +1452,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         elementType: 'text',
         filePath,
         detection: `${wcm[0]} + overflow-hidden${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
-        evidence: `${wcm[0]} with overflow-hidden at ${fileName}:${lineNumber}`,
+        evidence: wcEvidenceStr,
         explanation: `Content is constrained by ${wcm[0]} with overflow-hidden, potentially clipping dynamic text.`,
         confidence,
         textPreview,
@@ -1446,6 +1469,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         contentKind: contentGate.contentKind,
         recoverySignals: recoverySignals.length > 0 ? recoverySignals : undefined,
         truncationTokens,
+        columnLabel: columnLabel || undefined,
+        contentPreview: wcContentPreview || undefined,
       });
     }
 
@@ -1500,7 +1525,9 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         elementType: 'container',
         filePath,
         detection: `${hm[0]} + overflow-hidden${recoverySignals.length > 0 ? ` (recovery: ${recoverySignals.join(', ')})` : ''}`,
-        evidence: `${hm[0]} with overflow-hidden at ${fileName}:${lineNumber}`,
+        evidence: columnLabel
+          ? `Column "${columnLabel}" container uses ${hm[0]} + overflow-hidden, may clip content`
+          : `${hm[0]} with overflow-hidden at ${fileName}:${lineNumber}`,
         explanation: `Container has a fixed height (${hm[0]}) with overflow-hidden, which may clip text content.`,
         confidence,
         textPreview,
@@ -1514,6 +1541,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         contentKind: contentGate.contentKind,
         recoverySignals: recoverySignals.length > 0 ? recoverySignals : undefined,
         truncationTokens,
+        columnLabel: columnLabel || undefined,
       });
     }
 
