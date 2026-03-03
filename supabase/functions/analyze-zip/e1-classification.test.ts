@@ -8,7 +8,8 @@ const E1_AUTH_FLOW_PATH = /(?:forgot.?password|reset.?password|sign.?in|sign.?up
 const E1_AUTH_EXCLUDED_LABELS = /\b(send\s*reset\s*link|reset\s*password|sign\s*in|sign\s*up|log\s*in|log\s*out|sign\s*out|register|create\s*account|verify\s*email|resend\s*code|resend\s*link)\b/i;
 const E1_OVERRIDE_IN_AUTH = /\b(delete|erase|destroy|permanently|purchase|pay\b|subscribe|checkout|billing)\b/i;
 const E1_STRONG_DISCLOSURE_RE = /\b(cannot\s*be\s*undone|irreversible|permanent(?:ly)?|will\s*be\s*(?:deleted|removed|lost|erased)|this\s*(?:action|cannot)|data\s*will\s*be\s*removed|all\s*(?:your\s*)?data|appointments|messages|records|files)\b/gi;
-const E1_CONFIRMATION_PATTERNS = /\b(AlertDialog|confirm\s*\(|useConfirm|ConfirmDialog|ConfirmModal|confirmation|modal|Dialog)\b/i;
+// NOTE: Matches production — "Dialog" alone excluded (too broad)
+const E1_CONFIRMATION_PATTERNS = /\b(AlertDialog|confirm\s*\(|useConfirm|ConfirmDialog|ConfirmModal|DeleteConfirmDialog|DeleteDialog)\b/i;
 const E1_TWO_STEP_STATE_RE = /\b(set(?:Pending|Confirm|ShowConfirm|DeleteConfirm|ConfirmOpen|ConfirmDelete|IsDeleting|ShowDelete|DeleteDialog)\s*\(|setPending\w*Delete\s*\(|setConfirm\w*\s*\(true\))/i;
 const E1_NETWORK_DELETE_RE = /(?:fetch\s*\([^)]*[,{]\s*method\s*:\s*["']DELETE["']|\.delete\s*\(|apiRequest\s*\(\s*["']DELETE["']|method\s*:\s*["']DELETE["'])/i;
 const E1_DELETE_HANDLER_RE = /\b(handle(?:Delete|Remove|Destroy)|on(?:Delete|Remove|Destroy)|delete(?:Item|Row|Record|Entry|User|Account|Doctor|Patient|Appointment|Data)|remove(?:Item|Row|Record|Entry)|destroy(?:Item|Row|Record))\b/i;
@@ -27,70 +28,97 @@ function extractDisclosureTerms(text: string): string[] {
   return terms;
 }
 
-function detectConfirmationGate(content: string): { hasGate: boolean; gateType: string } {
-  if (E1_CONFIRMATION_PATTERNS.test(content)) return { hasGate: true, gateType: 'confirmation-dialog' };
-  if (E1_TWO_STEP_STATE_RE.test(content)) return { hasGate: true, gateType: 'two-step-state' };
-  if (/\bwindow\.confirm\s*\(/i.test(content)) return { hasGate: true, gateType: 'window.confirm' };
+// FLOW-LOCAL: detects confirmation gates in a scoped region (not full file)
+function detectConfirmationGate(region: string): { hasGate: boolean; gateType: string } {
+  const confirmMatch = region.match(E1_CONFIRMATION_PATTERNS);
+  if (confirmMatch) return { hasGate: true, gateType: confirmMatch[1] || 'confirmation-dialog' };
+  if (E1_TWO_STEP_STATE_RE.test(region)) return { hasGate: true, gateType: 'two-step-state' };
+  if (/\bwindow\.confirm\s*\(/i.test(region)) return { hasGate: true, gateType: 'window.confirm' };
   return { hasGate: false, gateType: '' };
 }
 
-function detectRecovery(content: string): { hasRecovery: boolean; recoveryType: string } {
-  if (E1_UNDO_RECOVERY_RE.test(content)) {
-    const m = content.match(E1_UNDO_RECOVERY_RE);
+function detectRecovery(region: string): { hasRecovery: boolean; recoveryType: string } {
+  if (E1_UNDO_RECOVERY_RE.test(region)) {
+    const m = region.match(E1_UNDO_RECOVERY_RE);
     return { hasRecovery: true, recoveryType: m?.[1] || 'undo' };
   }
   return { hasRecovery: false, recoveryType: '' };
 }
 
+function extractFriction(region: string): string[] {
+  const f: string[] = [];
+  if (E1_FRICTION_TYPE_CONFIRM.test(region)) f.push('type-to-confirm');
+  if (E1_FRICTION_DOUBLE_CONFIRM.test(region)) f.push('double-confirm');
+  return f;
+}
+
+function isHandlerGatedByConfirmation(handlerName: string, content: string): boolean {
+  const handlerBodyRe = new RegExp(`(?:function\\s+${handlerName}|const\\s+${handlerName}\\s*=)\\s*(?:\\([^)]*\\)\\s*(?:=>|\\{)|\\{)([\\s\\S]{0,500})`, 'i');
+  const bodyMatch = content.match(handlerBodyRe);
+  if (bodyMatch) {
+    const body = bodyMatch[1];
+    if (E1_TWO_STEP_STATE_RE.test(body)) return true;
+    if (/\bconfirm\s*\(/i.test(body)) return true;
+  }
+  return false;
+}
+
+// Mirrors production shouldSuppressE1Bundle with FLOW-LOCAL gate/recovery
 function shouldSuppressE1(opts: {
-  filePath: string; label: string; fileContent: string; handlerName?: string;
+  filePath: string; label: string; localRegion: string; fullContent: string; handlerName?: string;
 }): { suppressed: boolean; reason: string } {
-  const { filePath, label, fileContent } = opts;
+  const { filePath, label, localRegion, fullContent } = opts;
 
   // Auth-flow file exclusion
-  if (E1_AUTH_FLOW_PATH.test(filePath) && !E1_OVERRIDE_IN_AUTH.test(fileContent)) {
+  if (E1_AUTH_FLOW_PATH.test(filePath) && !E1_OVERRIDE_IN_AUTH.test(fullContent)) {
     return { suppressed: true, reason: 'auth-flow file without destructive/billing override' };
   }
-  // Auth-excluded label
   if (E1_AUTH_EXCLUDED_LABELS.test(label)) {
     return { suppressed: true, reason: 'auth-excluded label' };
   }
-  // Not a high-impact keyword (for label-based detection)
   if (!E1_HIGH_IMPACT_KEYWORDS.test(label) && !E1_DELETE_HANDLER_RE.test(label)) {
     return { suppressed: true, reason: 'no high-impact keyword in label' };
   }
 
-  // Recovery suppression
-  const recovery = detectRecovery(fileContent);
+  // FLOW-LOCAL: gate and recovery scoped to localRegion
+  const recovery = detectRecovery(localRegion);
   if (recovery.hasRecovery) {
     return { suppressed: true, reason: `recovery mechanism: ${recovery.recoveryType}` };
   }
 
-  // Confirmation gate + disclosure pass-through
-  const gate = detectConfirmationGate(fileContent);
-  const disclosureTerms = extractDisclosureTerms(fileContent);
+  const gate = detectConfirmationGate(localRegion);
+  const disclosureTerms = extractDisclosureTerms(localRegion);
+  const friction = extractFriction(localRegion);
+
   if (gate.hasGate && disclosureTerms.length > 0) {
     return { suppressed: true, reason: `disclosure (${disclosureTerms.join(', ')}) + ${gate.gateType}` };
   }
-  // Confirmation gate alone for destructive labels
-  if (gate.hasGate && E1_DESTRUCTIVE_LABEL_RE.test(label)) {
-    return { suppressed: true, reason: `destructive label + ${gate.gateType}` };
+  if (gate.hasGate) {
+    if (opts.handlerName && isHandlerGatedByConfirmation(opts.handlerName, fullContent)) {
+      return { suppressed: true, reason: `handler ${opts.handlerName} is gated by confirmation state` };
+    }
+    if (friction.length > 0) {
+      return { suppressed: true, reason: `${gate.gateType} + friction (${friction.join(', ')}) in local scope` };
+    }
+    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state/i.test(gate.gateType)) {
+      return { suppressed: true, reason: `destructive label + ${gate.gateType} in local scope` };
+    }
   }
 
   return { suppressed: false, reason: '' };
 }
 
-// ── Test 1: Settings delete account with full disclosure + confirmation ──
+// ── Test 1: Settings delete account with full disclosure + confirmation → SUPPRESSED ──
 Deno.test("E1: Settings delete account with disclosure + confirmation → SUPPRESSED", () => {
+  const localRegion = `
+    <AlertDialog>
+      <p>This action cannot be undone. Your data will be permanently removed.</p>
+      <Button variant="destructive">Delete Account</Button>
+    </AlertDialog>
+  `;
   const result = shouldSuppressE1({
-    filePath: "src/pages/Settings.tsx",
-    label: "Delete Account",
-    fileContent: `
-      <AlertDialog>
-        <p>This action cannot be undone. Your data will be permanently removed.</p>
-        <Button variant="destructive">Delete Account</Button>
-      </AlertDialog>
-    `,
+    filePath: "src/pages/Settings.tsx", label: "Delete Account",
+    localRegion, fullContent: localRegion,
   });
   assertEquals(result.suppressed, true, `Expected suppression but got: ${result.reason}`);
 });
@@ -98,9 +126,8 @@ Deno.test("E1: Settings delete account with disclosure + confirmation → SUPPRE
 // ── Test 2: ForgotPassword "Send reset link" → SUPPRESSED (auth-excluded label) ──
 Deno.test("E1: ForgotPassword send reset link → SUPPRESSED (auth label)", () => {
   const result = shouldSuppressE1({
-    filePath: "src/pages/ForgotPassword.tsx",
-    label: "Send reset link",
-    fileContent: `<Button>Send reset link</Button>`,
+    filePath: "src/pages/ForgotPassword.tsx", label: "Send reset link",
+    localRegion: `<Button>Send reset link</Button>`, fullContent: `<Button>Send reset link</Button>`,
   });
   assertEquals(result.suppressed, true);
 });
@@ -108,19 +135,18 @@ Deno.test("E1: ForgotPassword send reset link → SUPPRESSED (auth label)", () =
 // ── Test 3: Auth-flow file without destructive content → SUPPRESSED ──
 Deno.test("E1: Auth-flow file without destructive keywords → SUPPRESSED", () => {
   const result = shouldSuppressE1({
-    filePath: "src/pages/ResetPassword.tsx",
-    label: "Reset Password",
-    fileContent: `<Button>Reset Password</Button>`,
+    filePath: "src/pages/ResetPassword.tsx", label: "Reset Password",
+    localRegion: `<Button>Reset Password</Button>`, fullContent: `<Button>Reset Password</Button>`,
   });
   assertEquals(result.suppressed, true);
 });
 
 // ── Test 4: Delete with no disclosure or confirmation → NOT suppressed ──
 Deno.test("E1: Delete with no disclosure or confirmation → NOT suppressed", () => {
+  const localRegion = `<Button variant="destructive">Delete</Button>`;
   const result = shouldSuppressE1({
-    filePath: "src/pages/Dashboard.tsx",
-    label: "Delete",
-    fileContent: `<Button variant="destructive">Delete</Button>`,
+    filePath: "src/pages/Dashboard.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
   });
   assertEquals(result.suppressed, false, "Should NOT be suppressed");
 });
@@ -128,9 +154,8 @@ Deno.test("E1: Delete with no disclosure or confirmation → NOT suppressed", ()
 // ── Test 5: "Subscribe" with no pricing disclosure → NOT suppressed ──
 Deno.test("E1: Subscribe without pricing → NOT suppressed", () => {
   const result = shouldSuppressE1({
-    filePath: "src/pages/Pricing.tsx",
-    label: "Subscribe",
-    fileContent: `<Button>Subscribe</Button>`,
+    filePath: "src/pages/Pricing.tsx", label: "Subscribe",
+    localRegion: `<Button>Subscribe</Button>`, fullContent: `<Button>Subscribe</Button>`,
   });
   assertEquals(result.suppressed, false);
 });
@@ -138,9 +163,8 @@ Deno.test("E1: Subscribe without pricing → NOT suppressed", () => {
 // ── Test 6: Generic "reset" → SUPPRESSED (not high-impact) ──
 Deno.test("E1: Generic 'reset' label → SUPPRESSED (not in keyword list)", () => {
   const result = shouldSuppressE1({
-    filePath: "src/pages/Settings.tsx",
-    label: "Reset",
-    fileContent: `<Button>Reset</Button>`,
+    filePath: "src/pages/Settings.tsx", label: "Reset",
+    localRegion: `<Button>Reset</Button>`, fullContent: `<Button>Reset</Button>`,
   });
   assertEquals(result.suppressed, true);
 });
@@ -148,19 +172,18 @@ Deno.test("E1: Generic 'reset' label → SUPPRESSED (not in keyword list)", () =
 // ── Test 7: Generic "Accept" → SUPPRESSED ──
 Deno.test("E1: Generic 'Accept' label → SUPPRESSED (not in keyword list)", () => {
   const result = shouldSuppressE1({
-    filePath: "src/pages/Terms.tsx",
-    label: "Accept",
-    fileContent: `<Button>Accept</Button>`,
+    filePath: "src/pages/Terms.tsx", label: "Accept",
+    localRegion: `<Button>Accept</Button>`, fullContent: `<Button>Accept</Button>`,
   });
   assertEquals(result.suppressed, true);
 });
 
 // ── Test 8: Delete in auth-flow file WITH destructive content → NOT suppressed ──
 Deno.test("E1: Delete account inside auth file → NOT suppressed (override)", () => {
+  const localRegion = `<Button variant="destructive">Delete Account</Button>`;
   const result = shouldSuppressE1({
-    filePath: "src/pages/auth/AccountSettings.tsx",
-    label: "Delete Account",
-    fileContent: `<Button variant="destructive">Delete Account</Button>`,
+    filePath: "src/pages/auth/AccountSettings.tsx", label: "Delete Account",
+    localRegion, fullContent: localRegion,
   });
   assertEquals(result.suppressed, false);
 });
@@ -228,13 +251,13 @@ Deno.test("E1: Undo/recovery detection works", () => {
 
 // ── Test 15: Delete with undo recovery → SUPPRESSED ──
 Deno.test("E1: Delete with undo toast → SUPPRESSED (recovery)", () => {
+  const localRegion = `
+    <Button onClick={() => deleteItem(id)}>Delete</Button>
+    toast({ title: "Deleted", action: "undo" })
+  `;
   const result = shouldSuppressE1({
-    filePath: "src/pages/Items.tsx",
-    label: "Delete",
-    fileContent: `
-      <Button onClick={() => deleteItem(id)}>Delete</Button>
-      toast({ title: "Deleted", action: "undo" })
-    `,
+    filePath: "src/pages/Items.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
   });
   assertEquals(result.suppressed, true);
   assertEquals(result.reason.includes('recovery'), true);
@@ -242,13 +265,13 @@ Deno.test("E1: Delete with undo toast → SUPPRESSED (recovery)", () => {
 
 // ── Test 16: Delete with two-step state + destructive label → SUPPRESSED ──
 Deno.test("E1: Delete with setPendingDelete state → SUPPRESSED", () => {
+  const localRegion = `
+    const handleDelete = () => { setPendingDelete(id); };
+    <Button onClick={handleDelete}>Delete</Button>
+  `;
   const result = shouldSuppressE1({
-    filePath: "src/pages/Doctors.tsx",
-    label: "Delete",
-    fileContent: `
-      const handleDelete = () => { setPendingDelete(id); };
-      <Button onClick={handleDelete}>Delete</Button>
-    `,
+    filePath: "src/pages/Doctors.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
   });
   assertEquals(result.suppressed, true);
   assertEquals(result.reason.includes('two-step-state'), true);
@@ -262,7 +285,6 @@ Deno.test("E1: Direct DELETE fetch with no confirmation → NOT suppressed", () 
     };
     <Button onClick={() => handleDelete(item.id)}>Delete</Button>
   `;
-  // Has high-impact keyword, has DELETE, no confirmation gate
   const gate = detectConfirmationGate(content);
   assertEquals(gate.hasGate, false, "Should NOT detect confirmation gate");
   assertEquals(E1_NETWORK_DELETE_RE.test(content), true, "Should detect DELETE method");
@@ -283,21 +305,110 @@ Deno.test("E1: window.confirm detection", () => {
 // ── Test 19: Soft-delete API endpoint → recovery detected ──
 Deno.test("E1: Soft-delete/archive endpoint triggers recovery", () => {
   const content = `fetch("/api/items/archive", { method: "POST" })`;
-  const recovery = detectRecovery(content);
-  // Note: archive keyword triggers recovery
   assertEquals(E1_UNDO_RECOVERY_RE.test(content), true);
 });
 
-// ── Test 20: Destructive label + confirmation dialog (no disclosure) → SUPPRESSED ──
-Deno.test("E1: Delete + Dialog (no disclosure) → SUPPRESSED for destructive label", () => {
+// ── Test 20: Destructive label + AlertDialog in LOCAL scope → SUPPRESSED ──
+Deno.test("E1: Delete + AlertDialog in local scope → SUPPRESSED for destructive label", () => {
+  const localRegion = `
+    <AlertDialog>
+      <Button>Delete</Button>
+    </AlertDialog>
+  `;
   const result = shouldSuppressE1({
-    filePath: "src/pages/Items.tsx",
-    label: "Delete",
-    fileContent: `
-      <Dialog>
-        <Button>Delete</Button>
-      </Dialog>
-    `,
+    filePath: "src/pages/Items.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
   });
-  assertEquals(result.suppressed, true, "Destructive label + confirmation dialog should suppress");
+  assertEquals(result.suppressed, true, "Destructive label + AlertDialog in local scope should suppress");
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// REGRESSION TESTS: Flow-local suppression (file-level Dialog must NOT suppress)
+// ════════════════════════════════════════════════════════════════════════
+
+// ── Test 21: admin/doctors.tsx — direct deleteMutation.mutate + Dialog elsewhere → NOT suppressed ──
+Deno.test("E1 REGRESSION: doctors page — delete with Dialog elsewhere → NOT suppressed", () => {
+  // Full file has Dialog (for add/edit), but delete trigger is NOT inside it
+  const fullContent = `
+    import { Dialog } from "@/components/ui/dialog";
+    const deleteMutation = useMutation({ mutationFn: (id) => apiRequest("DELETE", \`/api/doctors/\${id}\`) });
+    // Add/edit dialog (unrelated)
+    <Dialog open={dialogOpen}>
+      <form><Input /><Button>Save</Button></form>
+    </Dialog>
+    // Delete button — NOT inside Dialog
+    <Button onClick={() => deleteMutation.mutate(doc.id)} aria-label="Delete doctor"><Trash2 /></Button>
+  `;
+  // The LOCAL region around the delete trigger does NOT contain AlertDialog/ConfirmDialog
+  const localRegion = `<Button onClick={() => deleteMutation.mutate(doc.id)} aria-label="Delete doctor"><Trash2 /></Button>`;
+
+  const result = shouldSuppressE1({
+    filePath: "src/pages/admin/doctors.tsx", label: "Delete doctor",
+    localRegion, fullContent,
+  });
+  assertEquals(result.suppressed, false, `Should NOT be suppressed, but got: ${result.reason}`);
+});
+
+// ── Test 22: admin/timeslots.tsx — same pattern → NOT suppressed ──
+Deno.test("E1 REGRESSION: timeslots page — delete with Dialog elsewhere → NOT suppressed", () => {
+  const fullContent = `
+    import { Dialog } from "@/components/ui/dialog";
+    const deleteMutation = useMutation({ mutationFn: (id) => apiRequest("DELETE", \`/api/timeslots/\${id}\`) });
+    <Dialog open={dialogOpen}><form><Button>Add</Button></form></Dialog>
+    <Button onClick={() => deleteMutation.mutate(ts.id)} aria-label="Delete time slot"><Trash2 /></Button>
+  `;
+  const localRegion = `<Button onClick={() => deleteMutation.mutate(ts.id)} aria-label="Delete time slot"><Trash2 /></Button>`;
+
+  const result = shouldSuppressE1({
+    filePath: "src/pages/admin/timeslots.tsx", label: "Delete time slot",
+    localRegion, fullContent,
+  });
+  assertEquals(result.suppressed, false, `Should NOT be suppressed, but got: ${result.reason}`);
+});
+
+// ── Test 23: settings.tsx — account deletion with AlertDialog gate → SUPPRESSED ──
+Deno.test("E1 REGRESSION: settings account deletion with AlertDialog → SUPPRESSED", () => {
+  const localRegion = `
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="destructive">Delete Account</Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <p>This will permanently delete your account and all data.</p>
+        <AlertDialogCancel>Cancel</AlertDialogCancel>
+        <AlertDialogAction onClick={() => deleteAccount()}>Delete</AlertDialogAction>
+      </AlertDialogContent>
+    </AlertDialog>
+  `;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/Settings.tsx", label: "Delete Account",
+    localRegion, fullContent: localRegion,
+  });
+  assertEquals(result.suppressed, true, `Should be suppressed due to AlertDialog + disclosure`);
+});
+
+// ── Test 24: "Dialog" alone in local scope should NOT suppress (too broad) ──
+Deno.test("E1 REGRESSION: bare Dialog in local scope does NOT suppress", () => {
+  const localRegion = `
+    <Dialog>
+      <Button variant="destructive">Delete</Button>
+    </Dialog>
+  `;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/Items.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
+  });
+  // Dialog alone (not AlertDialog/ConfirmDialog) should NOT suppress
+  assertEquals(result.suppressed, false, `Bare Dialog should NOT suppress E1, but got: ${result.reason}`);
+});
+
+// ── Test 25: Delete with disabled={!confirm} pattern via handler → NOT suppressed without gate ──
+Deno.test("E1 REGRESSION: disabled flag alone is not a gate", () => {
+  const localRegion = `<Button disabled={!confirmDelete} onClick={() => deleteAccount()}>Delete</Button>`;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/Settings.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
+  });
+  // disabled flag without an explicit confirmation component is NOT a confirmation gate
+  assertEquals(result.suppressed, false, "disabled flag alone is not a confirmation gate");
 });
