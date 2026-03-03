@@ -80,9 +80,12 @@ export interface Violation {
   thresholdUsed?: 4.5 | 3.0; // WCAG threshold applied
   foregroundRgb?: string; // Sampled median RGB (e.g., "rgb(156, 163, 175)") — only when samplingMethod = "pixel"
   foregroundHex?: string; // Approximate hex derived from median RGB — only when samplingMethod = "pixel"
+  foreground?: { value: string | null; resolved: boolean };
   foregroundConfidence?: number; // Confidence in foreground color extraction (0-1)
   backgroundRgb?: string; // Sampled median RGB (e.g., "rgb(255, 255, 255)") — only when samplingMethod = "pixel"
   backgroundHex?: string; // Approximate hex derived from median RGB — only when samplingMethod = "pixel"
+  background?: { value: string | null; resolved: boolean; reason?: string };
+  note?: string;
   // Background candidates for uncertain backgrounds
   backgroundCandidates?: Array<{ hex: string; confidence: number }>;
   backgroundStatus?: 'certain' | 'uncertain' | 'unmeasurable';
@@ -255,71 +258,69 @@ export interface Violation {
 // A1 Element sub-item for aggregated reporting
 export interface A1ElementSubItem {
   // Element identification
-  elementLabel: string; // e.g., "Header subtitle", "Credits badge"
-  textSnippet?: string; // Sample text if available
-  location: string; // screen + bbox or component path
-  uiRole?: string; // Semantic UI role: "metadata", "label", "badge", "navigation link", "heading", etc.
-  patternGroup?: string; // UI pattern group: "course card metadata", "filter panel", "header section", etc.
+  elementLabel: string;
+  textSnippet?: string;
+  location: string;
+  uiRole?: string;
+  patternGroup?: string;
   screenshotIndex?: number;
   bbox?: { x: number; y: number; w: number; h: number };
-  
+
   // Foreground color data
   foregroundHex?: string;
+  foreground?: { value: string | null; resolved: boolean };
   foregroundConfidence?: number;
-  
+
   // Background data
   backgroundStatus: 'certain' | 'uncertain' | 'unmeasurable';
-  backgroundHex?: string; // Single dominant if certain
-  backgroundCandidates?: Array<{ hex: string; confidence: number }>; // List if uncertain
-  
+  backgroundHex?: string;
+  background?: { value: string | null; resolved: boolean; reason?: string };
+  backgroundCandidates?: Array<{ hex: string; confidence: number }>;
+
   // Contrast data
-  contrastRatio?: number; // Single ratio if certain
-  contrastRange?: { min: number; max: number }; // Min-max if uncertain
-  contrastNotMeasurable?: boolean; // True if truly unmeasurable
-  
+  contrastRatio?: number;
+  contrastRange?: { min: number; max: number };
+  contrastNotMeasurable?: boolean;
+
   // WCAG threshold
   thresholdUsed: 4.5 | 3.0;
-  
+
   // Classification explanation
-  explanation: string; // Why this element is confirmed or potential
-  reasonCodes?: A1ReasonCode[]; // Mandatory for potential (structural)
-  
+  explanation: string;
+  reasonCodes?: A1ReasonCode[];
+
   // Perceptual contrast assessment (screenshot LLM-assisted A1 only)
   perceivedContrast?: 'low' | 'adequate' | 'high';
   perceptualRationale?: string;
   suggestedFix?: string;
-  
-  // Content type classification (screenshot A1)
-  contentType?: 'text' | 'icon'; // "icon" findings are filtered out
-  
-  // Text size classification (screenshot A1 perceptual)
-  // Also used by structural mode (textType/appliedThreshold/wcagCriterion above)
+
+  contentType?: 'text' | 'icon';
   screenshotTextSize?: 'normal' | 'large' | 'unknown';
-  
-  // Element-specific corrective prompt (ONLY for confirmed violations)
-  // Must be pattern-oriented: mentions text content, UI role, location, and suggests group-wide fix
   correctivePrompt?: string;
-  
-  // Optional "near-threshold" tag (within small margin of threshold, NOT for far-below values)
   nearThreshold?: boolean;
-  
-  // JSX tag name for structural findings (e.g., "p", "span", "div")
+
+  // Structural metadata
   jsxTag?: string;
-  
-  // WCAG 1.4.3 text classification
-  textType?: 'normal' | 'large'; // Normal (4.5:1) or large text (3:1)
-  appliedThreshold?: 4.5 | 3.0; // Threshold used for this element
-  wcagCriterion?: '1.4.3'; // Always 1.4.3 for A1
-  
-  // Two-stage hybrid method label (screenshot A1)
+  textType?: 'normal' | 'large';
+  appliedThreshold?: 4.5 | 3.0;
+  wcagCriterion?: '1.4.3';
   a1Method?: 'LLM→Pixel' | 'LLM-only (measurement failed)';
-  
-  // Variant/state tracking (structural A1)
-  variant?: string; // 'hover', 'focus', 'active', 'dark' — undefined = base state
-  lineNumber?: number; // approximate source line number
-  
-  // Deduplication key
-  deduplicationKey: string; // screenId + bbox + textSnippet
+  variant?: string;
+  lineNumber?: number;
+
+  // Source + branch context
+  filePath?: string;
+  startLine?: number | null;
+  endLine?: number | null;
+  variantName?: string;
+  extractedClasses?: string;
+  resolutionStatus?: {
+    fg: 'resolved' | 'unresolved';
+    bg: 'resolved' | 'unresolved';
+  };
+  unresolvedReason?: string;
+
+  deduplicationKey: string;
 }
 
 // A2 Element sub-item for aggregated focus visibility reporting

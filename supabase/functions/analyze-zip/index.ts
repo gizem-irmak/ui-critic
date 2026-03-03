@@ -2572,6 +2572,10 @@ function getContrastRatio(hex1: string, hex2: string): number | null {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function isValidHexColor(hex: string | null | undefined): hex is string {
+  return typeof hex === 'string' && /^#[0-9a-f]{6}$/i.test(hex);
+}
+
 // Alpha-composite a foreground color over a background color
 function alphaComposite(fgHex: string, bgHex: string, alpha: number): string | null {
   const fg = hexToRgb(fgHex);
@@ -2597,7 +2601,7 @@ const VARIANT_PREFIXES = new Set([
 // ratio when both fg and bg are resolvable. Epistemic flags track source reliability.
 
 type A1FgSource = 'tailwind_token' | 'inline_style';
-type A1BgSource = 'tailwind_token' | 'inline_style' | 'assumed_default' | 'unresolved';
+type A1BgSource = 'tailwind_token' | 'inline_style' | 'unresolved';
 type A1EvidenceLevel = 'structural_deterministic' | 'structural_estimated';
 
 // ===== INLINE STYLE COLOR HELPERS =====
@@ -2682,10 +2686,10 @@ function extractInlineStyleColors(tagContent: string): InlineStyleColors {
 type A1SizeStatus = 'normal' | 'large' | 'unknown';
 
 interface A1TokenFinding {
-  fgHex: string;
+  fgHex: string | null;
   fgClass: string;
   fgSource: A1FgSource;
-  bgHex: string;
+  bgHex: string | null;
   bgClass: string | null;
   bgSource: A1BgSource;
   ratio: number | null;
@@ -2702,8 +2706,15 @@ interface A1TokenFinding {
   appliedThreshold: 4.5 | 3.0;
   wcagCriterion: '1.4.3';
   variant?: string; // 'hover', 'focus', 'active', 'dark', etc. — undefined = base state
+  variantName?: string; // CVA variant branch, e.g. default/destructive
   alpha?: number; // 0-1 opacity from Tailwind /N syntax
   lineNumber?: number; // approximate line number
+  startLine?: number | null;
+  endLine?: number | null;
+  extractedClasses?: string;
+  fgResolved: boolean;
+  bgResolved: boolean;
+  bgUnresolvedReason?: string;
 }
 
 // ===== A1 TEXT ELEMENT SCOPE =====
@@ -2941,29 +2952,30 @@ function findAncestorBg(code: string, tagStart: number): { bgClass: string; bgNa
   return null;
 }
 
-// Resolve background for a text element: self → ancestor → assumed default
-// Now also checks inline style colors on self and ancestors.
-function resolveBackground(code: string, textMatchIndex: number): { bgClass: string | null; bgName: string | null; bgSourceType: 'self' | 'ancestor' | 'assumed_default'; inlineBgHex?: string } {
+// Resolve background for a text element: self → ancestor → unresolved
+// Also checks inline style colors on self and ancestors.
+function resolveBackground(code: string, textMatchIndex: number): { bgClass: string | null; bgName: string | null; bgSourceType: 'self' | 'ancestor' | 'unresolved'; inlineBgHex?: string } {
   const containingTag = findContainingTagClasses(code, textMatchIndex);
   if (containingTag) {
     // Check Tailwind bg-* on self
     const selfBg = extractBgFromClasses(containingTag.classes);
     if (selfBg) return { bgClass: selfBg.bgClass, bgName: selfBg.bgName, bgSourceType: 'self' };
-    
+
     // Check inline style backgroundColor on self
     const selfInline = extractInlineStyleColors(containingTag.tagContent);
     if (selfInline.bg) return { bgClass: null, bgName: null, bgSourceType: 'self', inlineBgHex: selfInline.bg };
-    
+
     // Check Tailwind bg-* on ancestors
     const ancestorBg = findAncestorBg(code, containingTag.tagStart);
     if (ancestorBg) return { bgClass: ancestorBg.bgClass, bgName: ancestorBg.bgName, bgSourceType: ancestorBg.bgSourceType };
-    
+
     // Check inline style backgroundColor on ancestors
     const ancestorInlineBg = findAncestorInlineBg(code, containingTag.tagStart);
     if (ancestorInlineBg) return { bgClass: null, bgName: null, bgSourceType: 'ancestor', inlineBgHex: ancestorInlineBg };
   }
-  
-  return { bgClass: null, bgName: null, bgSourceType: 'assumed_default' };
+
+  // Critical: unresolved stays unresolved (never assume white)
+  return { bgClass: null, bgName: null, bgSourceType: 'unresolved' };
 }
 
 /** Walk up ancestor JSX elements to find the nearest inline style backgroundColor */
@@ -3017,6 +3029,9 @@ interface ContrastViolation {
   thresholdUsed?: 4.5 | 3.0;
   foregroundHex?: string;
   backgroundHex?: string;
+  foreground?: { value: string | null; resolved: boolean };
+  background?: { value: string | null; resolved: boolean; reason?: string };
+  note?: string;
   elementDescription?: string;
   elementIdentifier?: string;
   evidence: string;
@@ -3036,8 +3051,12 @@ interface ContrastViolation {
   bgSource?: A1BgSource;
   evidenceLevel?: A1EvidenceLevel;
   sizeStatus?: A1SizeStatus;
-  variant?: string; // 'hover', 'focus', 'active', 'dark' — undefined = base
+  variant?: string; // interaction state (hover/focus/active/dark)
+  variantName?: string; // branch/variant id (default/destructive/...)
   lineNumber?: number;
+  startLine?: number | null;
+  endLine?: number | null;
+  extractedClasses?: string;
   affectedComponents?: Array<{
     colorClass: string;
     hexColor?: string;
@@ -3051,99 +3070,172 @@ interface ContrastViolation {
 
 function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] {
   const a1Findings: A1TokenFinding[] = [];
-  
+
   for (const [filepath, content] of files) {
     let componentName = filepath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js)$/i, '') || '';
     const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
     const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
     if (exportedFn?.[1]) componentName = exportedFn[1];
     else if (exportedConst?.[1]) componentName = exportedConst[1];
-    
-    // Build set of lucide-react icon imports for this file
+
     const lucideIcons = extractLucideImports(content);
-    
+
     // Pre-compute line offsets for approximate line number reporting
     const lineOffsets: number[] = [0];
     for (let ci = 0; ci < content.length; ci++) {
       if (content[ci] === '\n') lineOffsets.push(ci + 1);
     }
     const getLineNumber = (idx: number): number => {
-      let lo = 0, hi = lineOffsets.length - 1;
-      while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (lineOffsets[mid] <= idx) lo = mid; else hi = mid - 1; }
-      return lo + 1; // 1-based
+      let lo = 0;
+      let hi = lineOffsets.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (lineOffsets[mid] <= idx) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo + 1;
     };
-    
+
+    // ============================================================
+    // CVA / variant-driven design-system components (suppression-safe)
+    // ============================================================
+    const isDesignSystemComponent = /src\/components\/ui\/.+\.(tsx|jsx)$/i.test(filepath);
+    const cvaConfig = isDesignSystemComponent ? extractCvaVariantConfigRegex(content) : null;
+
+    if (isDesignSystemComponent && cvaConfig) {
+      let hasResolvedVariantPair = false;
+
+      for (const [variantName, variantClasses] of Object.entries(cvaConfig.variantClassMap)) {
+        const textTokens = extractTextColorTokens(variantClasses).filter(t => !t.variant);
+        const fgToken = textTokens[0];
+        const bgToken = extractBgFromClasses(variantClasses);
+
+        const fgHex = fgToken ? (TAILWIND_COLORS[fgToken.colorName] || null) : null;
+        const bgHex = bgToken ? (TAILWIND_COLORS[bgToken.bgName] || null) : null;
+
+        const fgResolved = isValidHexColor(fgHex);
+        const bgResolved = isValidHexColor(bgHex);
+
+        if (!fgResolved || !bgResolved) {
+          continue;
+        }
+
+        hasResolvedVariantPair = true;
+
+        const sizeStatus = inferTextSize(variantClasses);
+        const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
+        const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
+        const ratio = getContrastRatio(fgHex, bgHex);
+
+        if (ratio === null || ratio >= threshold) {
+          continue;
+        }
+
+        const variantIdx = content.indexOf(variantClasses);
+        const line = variantIdx >= 0 ? getLineNumber(variantIdx) : undefined;
+
+        a1Findings.push({
+          fgHex,
+          fgClass: fgToken?.colorClass || 'text-*',
+          fgSource: 'tailwind_token',
+          bgHex,
+          bgClass: bgToken?.bgClass || null,
+          bgSource: 'tailwind_token',
+          ratio,
+          threshold,
+          sizeStatus,
+          evidenceLevel: 'structural_deterministic',
+          filePath: filepath,
+          componentName: componentName || undefined,
+          elementContext: inferElementContext(variantClasses) || undefined,
+          context: variantClasses,
+          occurrence_count: 1,
+          textType,
+          appliedThreshold: threshold,
+          wcagCriterion: '1.4.3',
+          variantName,
+          lineNumber: line,
+          startLine: line ?? null,
+          endLine: line ?? null,
+          extractedClasses: variantClasses,
+          fgResolved: true,
+          bgResolved: true,
+        });
+      }
+
+      if (!hasResolvedVariantPair) {
+        console.log(`[A1] suppressed: unresolved component styles (${filepath})`);
+      }
+
+      // Important: for CVA-driven primitives, avoid generic token-level heuristics.
+      // We only trust resolved per-variant fg+bg pairs.
+      continue;
+    }
+
+    const pushFinding = (finding: A1TokenFinding) => {
+      a1Findings.push(finding);
+    };
+
     const textTokens = extractTextColorTokens(content);
-    
-    // ===== BASE STATE PASS: Process only non-variant text tokens =====
+
+    // ===== BASE STATE PASS =====
     for (const { colorClass, colorName, context, matchIndex, jsxTag, variant, alpha } of textTokens) {
-      // Skip variant-prefixed tokens (hover:text-*, focus:text-*, etc.)
-      // These are NOT the element's base foreground color
       if (variant) continue;
-      
-      const fgHex = TAILWIND_COLORS[colorName];
-      if (!fgHex) continue; // Unknown token — skip
-      
-      // --- WCAG 1.4.3 SCOPE FILTER ---
+
+      const fgHexRaw = TAILWIND_COLORS[colorName] || null;
+      if (!fgHexRaw) continue;
       if (!isTextElement(jsxTag, lucideIcons)) continue;
-      
-      // --- Background resolution (ancestor-only, no sibling leakage) ---
-      let bgHex: string;
+
+      let bgHex: string | null = null;
       let bgClass: string | null = null;
-      let bgSource: A1BgSource;
-      
+      let bgSource: A1BgSource = 'unresolved';
+
       const resolved = resolveBackground(content, matchIndex);
       if (resolved.inlineBgHex) {
         bgHex = resolved.inlineBgHex;
-        bgClass = null;
         bgSource = 'inline_style';
       } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
         bgHex = TAILWIND_COLORS[resolved.bgName];
         bgClass = resolved.bgClass;
         bgSource = 'tailwind_token';
-      } else {
-        bgHex = '#ffffff';
-        bgSource = 'assumed_default';
       }
-      
-      // --- Alpha compositing ---
-      let effectiveFgHex = fgHex;
-      if (alpha !== undefined && alpha < 1) {
-        const composited = alphaComposite(fgHex, bgHex, alpha);
-        if (composited) effectiveFgHex = composited;
-      }
-      
-      // --- Contrast computation ---
-      const ratio = getContrastRatio(effectiveFgHex, bgHex);
-      
-      // --- Size inference & WCAG 1.4.3 threshold ---
+
       const sizeStatus = inferTextSize(context);
       const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
       const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
-      
-      const evidenceLevel: A1EvidenceLevel = bgSource === 'tailwind_token' || bgSource === 'inline_style'
-        ? 'structural_deterministic'
-        : 'structural_estimated';
-      
-      const elementContext = inferElementContext(context);
-      
-      // Only report if ratio fails threshold
-      if (ratio !== null && ratio >= threshold) continue; // PASS
-      
-      a1Findings.push({
-        fgHex: effectiveFgHex,
+
+      let effectiveFgHex: string | null = fgHexRaw;
+      if (alpha !== undefined && alpha < 1 && isValidHexColor(fgHexRaw) && isValidHexColor(bgHex)) {
+        const composited = alphaComposite(fgHexRaw, bgHex, alpha);
+        effectiveFgHex = composited ?? null;
+      }
+
+      const fgResolved = isValidHexColor(effectiveFgHex);
+      const bgResolved = isValidHexColor(bgHex) && bgSource !== 'unresolved';
+      const ratio = (fgResolved && bgResolved)
+        ? getContrastRatio(effectiveFgHex, bgHex)
+        : null;
+
+      if (ratio !== null && ratio >= threshold) continue;
+
+      const containingTag = findContainingTagClasses(content, matchIndex);
+      const extractedClasses = containingTag?.classes || '';
+      const unresolvedReason = !bgResolved ? 'variant/context-dependent' : undefined;
+
+      pushFinding({
+        fgHex: fgResolved ? effectiveFgHex : null,
         fgClass: alpha !== undefined ? `${colorClass}/${Math.round(alpha * 100)}` : colorClass,
         fgSource: 'tailwind_token',
-        bgHex,
+        bgHex: bgResolved ? bgHex : null,
         bgClass,
-        bgSource,
+        bgSource: bgResolved ? bgSource : 'unresolved',
         ratio,
         threshold,
         sizeStatus,
-        evidenceLevel,
+        evidenceLevel: bgResolved ? 'structural_deterministic' : 'structural_estimated',
         filePath: filepath,
         componentName: componentName || undefined,
-        elementContext: elementContext || undefined,
+        elementContext: inferElementContext(context) || undefined,
         jsxTag,
         context,
         occurrence_count: 1,
@@ -3151,66 +3243,72 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         appliedThreshold: threshold,
         wcagCriterion: '1.4.3',
         lineNumber: getLineNumber(matchIndex),
+        startLine: getLineNumber(matchIndex),
+        endLine: getLineNumber(matchIndex),
+        extractedClasses,
+        fgResolved,
+        bgResolved,
+        bgUnresolvedReason: unresolvedReason,
       });
     }
 
-    // ===== VARIANT STATE PASS: Process hover/focus/active/dark text tokens =====
+    // ===== VARIANT STATE PASS =====
     for (const { colorClass, colorName, context, matchIndex, jsxTag, variant, alpha } of textTokens) {
-      if (!variant) continue; // base tokens already processed above
-      // Only process interactive/visual state variants
+      if (!variant) continue;
       if (!['hover', 'focus', 'focus-visible', 'focus-within', 'active', 'dark'].includes(variant)) continue;
-      
-      const fgHex = TAILWIND_COLORS[colorName];
-      if (!fgHex) continue;
+
+      const fgHexRaw = TAILWIND_COLORS[colorName] || null;
+      if (!fgHexRaw) continue;
       if (!isTextElement(jsxTag, lucideIcons)) continue;
-      
-      // For variant tokens, resolve background from base state (not variant bg)
-      let bgHex: string;
+
+      let bgHex: string | null = null;
       let bgClass: string | null = null;
-      let bgSource: A1BgSource;
-      
+      let bgSource: A1BgSource = 'unresolved';
+
       const resolved = resolveBackground(content, matchIndex);
       if (resolved.inlineBgHex) {
         bgHex = resolved.inlineBgHex;
-        bgClass = null;
         bgSource = 'inline_style';
       } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
         bgHex = TAILWIND_COLORS[resolved.bgName];
         bgClass = resolved.bgClass;
         bgSource = 'tailwind_token';
-      } else {
-        bgHex = '#ffffff';
-        bgSource = 'assumed_default';
       }
-      
-      let effectiveFgHex = fgHex;
-      if (alpha !== undefined && alpha < 1) {
-        const composited = alphaComposite(fgHex, bgHex, alpha);
-        if (composited) effectiveFgHex = composited;
-      }
-      
-      const ratio = getContrastRatio(effectiveFgHex, bgHex);
+
       const sizeStatus = inferTextSize(context);
       const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
       const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
-      
-      if (ratio !== null && ratio >= threshold) continue; // PASS
-      
-      const evidenceLevel: A1EvidenceLevel = bgSource === 'tailwind_token' || bgSource === 'inline_style'
-        ? 'structural_deterministic'
-        : 'structural_estimated';
-      
-      a1Findings.push({
-        fgHex: effectiveFgHex,
+
+      let effectiveFgHex: string | null = fgHexRaw;
+      if (alpha !== undefined && alpha < 1 && isValidHexColor(fgHexRaw) && isValidHexColor(bgHex)) {
+        const composited = alphaComposite(fgHexRaw, bgHex, alpha);
+        effectiveFgHex = composited ?? null;
+      }
+
+      const fgResolved = isValidHexColor(effectiveFgHex);
+      const bgResolved = isValidHexColor(bgHex) && bgSource !== 'unresolved';
+      const ratio = (fgResolved && bgResolved)
+        ? getContrastRatio(effectiveFgHex, bgHex)
+        : null;
+
+      if (ratio !== null && ratio >= threshold) continue;
+
+      const containingTag = findContainingTagClasses(content, matchIndex);
+      const extractedClasses = containingTag?.classes || '';
+      const unresolvedReason = !bgResolved ? 'variant/context-dependent' : undefined;
+      const line = getLineNumber(matchIndex);
+
+      pushFinding({
+        fgHex: fgResolved ? effectiveFgHex : null,
         fgClass: `${variant}:${colorClass}`,
         fgSource: 'tailwind_token',
-        bgHex,
+        bgHex: bgResolved ? bgHex : null,
         bgClass,
-        bgSource,
+        bgSource: bgResolved ? bgSource : 'unresolved',
         ratio,
         threshold,
         sizeStatus,
-        evidenceLevel,
+        evidenceLevel: bgResolved ? 'structural_deterministic' : 'structural_estimated',
         filePath: filepath,
         componentName: componentName || undefined,
         elementContext: inferElementContext(context) || undefined,
@@ -3221,7 +3319,14 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
         appliedThreshold: threshold,
         wcagCriterion: '1.4.3',
         variant,
-        lineNumber: getLineNumber(matchIndex),
+        variantName: variant,
+        lineNumber: line,
+        startLine: line,
+        endLine: line,
+        extractedClasses,
+        fgResolved,
+        bgResolved,
+        bgUnresolvedReason: unresolvedReason,
       });
     }
 
@@ -3231,39 +3336,72 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     while ((styleMatch = styleRegex.exec(content)) !== null) {
       const containingTag = findContainingTagClasses(content, styleMatch.index);
       if (!containingTag) continue;
+
       const jsxTag = containingTag.tagName;
       if (!isTextElement(jsxTag, lucideIcons)) continue;
+
       const inlineColors = extractInlineStyleColors(containingTag.tagContent);
       if (!inlineColors.fg) continue;
-      const fgHex = inlineColors.fg;
-      let bgHex: string;
-      let bgSource: A1BgSource;
+
+      const fgHexRaw = inlineColors.fg;
+      let bgHex: string | null = null;
+      let bgSource: A1BgSource = 'unresolved';
+
       if (inlineColors.bg) {
         bgHex = inlineColors.bg;
         bgSource = 'inline_style';
       } else {
         const resolved = resolveBackground(content, styleMatch.index);
-        if (resolved.inlineBgHex) { bgHex = resolved.inlineBgHex; bgSource = 'inline_style'; }
-        else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) { bgHex = TAILWIND_COLORS[resolved.bgName]; bgSource = 'tailwind_token'; }
-        else { bgHex = '#ffffff'; bgSource = 'assumed_default'; }
+        if (resolved.inlineBgHex) {
+          bgHex = resolved.inlineBgHex;
+          bgSource = 'inline_style';
+        } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
+          bgHex = TAILWIND_COLORS[resolved.bgName];
+          bgSource = 'tailwind_token';
+        }
       }
-      console.log("[A1] inline style fg:", fgHex, "bg:", bgHex, "tag:", jsxTag, "in", filepath);
-      const ratio = getContrastRatio(fgHex, bgHex);
+
       const ctxStart = Math.max(0, styleMatch.index - 100);
       const ctxEnd = Math.min(content.length, styleMatch.index + 200);
       const context = content.slice(ctxStart, ctxEnd).replace(/\n/g, ' ').trim();
       const sizeStatus = inferTextSize(context);
       const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
       const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
+
+      const fgResolved = isValidHexColor(fgHexRaw);
+      const bgResolved = isValidHexColor(bgHex) && bgSource !== 'unresolved';
+      const ratio = (fgResolved && bgResolved) ? getContrastRatio(fgHexRaw, bgHex) : null;
+
       if (ratio !== null && ratio >= threshold) continue;
-      a1Findings.push({
-        fgHex, fgClass: `style:color(${fgHex})`, fgSource: 'inline_style',
-        bgHex, bgClass: null, bgSource, ratio, threshold, sizeStatus,
-        evidenceLevel: bgSource === 'assumed_default' ? 'structural_estimated' : 'structural_deterministic',
-        filePath: filepath, componentName: componentName || undefined,
+
+      const line = getLineNumber(styleMatch.index);
+      pushFinding({
+        fgHex: fgResolved ? fgHexRaw : null,
+        fgClass: `style:color(${fgHexRaw})`,
+        fgSource: 'inline_style',
+        bgHex: bgResolved ? bgHex : null,
+        bgClass: null,
+        bgSource: bgResolved ? bgSource : 'unresolved',
+        ratio,
+        threshold,
+        sizeStatus,
+        evidenceLevel: bgResolved ? 'structural_deterministic' : 'structural_estimated',
+        filePath: filepath,
+        componentName: componentName || undefined,
         elementContext: inferElementContext(context) || undefined,
-        jsxTag, context, occurrence_count: 1, textType,
-        appliedThreshold: threshold, wcagCriterion: '1.4.3',
+        jsxTag,
+        context,
+        occurrence_count: 1,
+        textType,
+        appliedThreshold: threshold,
+        wcagCriterion: '1.4.3',
+        lineNumber: line,
+        startLine: line,
+        endLine: line,
+        extractedClasses: containingTag.classes || '',
+        fgResolved,
+        bgResolved,
+        bgUnresolvedReason: !bgResolved ? 'variant/context-dependent' : undefined,
       });
     }
 
@@ -3274,111 +3412,154 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       const styleStr = htmlMatch[1];
       const colorM = styleStr.match(/(?:^|;)\s*color\s*:\s*([^;]+)/);
       if (!colorM) continue;
-      const fgHex = parseCssColor(colorM[1]);
-      if (!fgHex) continue;
+
+      const fgHexRaw = parseCssColor(colorM[1]);
+      if (!fgHexRaw) continue;
+
       const containingTag = findContainingTagClasses(content, htmlMatch.index);
       if (!containingTag) continue;
       const jsxTag = containingTag.tagName;
       if (!isTextElement(jsxTag, lucideIcons)) continue;
-      let bgHex: string;
-      let bgSource: A1BgSource;
+
+      let bgHex: string | null = null;
+      let bgSource: A1BgSource = 'unresolved';
+
       const bgColorM = styleStr.match(/background-color\s*:\s*([^;]+)/);
       if (bgColorM) {
         const parsed = parseCssColor(bgColorM[1]);
-        if (parsed) { bgHex = parsed; bgSource = 'inline_style'; }
-        else { bgHex = '#ffffff'; bgSource = 'assumed_default'; }
+        if (parsed) {
+          bgHex = parsed;
+          bgSource = 'inline_style';
+        }
       } else {
         const resolved = resolveBackground(content, htmlMatch.index);
-        if (resolved.inlineBgHex) { bgHex = resolved.inlineBgHex; bgSource = 'inline_style'; }
-        else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) { bgHex = TAILWIND_COLORS[resolved.bgName]; bgSource = 'tailwind_token'; }
-        else { bgHex = '#ffffff'; bgSource = 'assumed_default'; }
+        if (resolved.inlineBgHex) {
+          bgHex = resolved.inlineBgHex;
+          bgSource = 'inline_style';
+        } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
+          bgHex = TAILWIND_COLORS[resolved.bgName];
+          bgSource = 'tailwind_token';
+        }
       }
-      console.log("[A1] HTML style fg:", fgHex, "bg:", bgHex, "tag:", jsxTag, "in", filepath);
-      const ratio = getContrastRatio(fgHex, bgHex);
+
       const ctxStart = Math.max(0, htmlMatch.index - 100);
       const ctxEnd = Math.min(content.length, htmlMatch.index + 200);
       const context = content.slice(ctxStart, ctxEnd).replace(/\n/g, ' ').trim();
       const sizeStatus = inferTextSize(context);
       const textType: 'normal' | 'large' = sizeStatus === 'large' ? 'large' : 'normal';
       const threshold: 4.5 | 3.0 = textType === 'large' ? 3.0 : 4.5;
+
+      const fgResolved = isValidHexColor(fgHexRaw);
+      const bgResolved = isValidHexColor(bgHex) && bgSource !== 'unresolved';
+      const ratio = (fgResolved && bgResolved) ? getContrastRatio(fgHexRaw, bgHex) : null;
+
       if (ratio !== null && ratio >= threshold) continue;
-      a1Findings.push({
-        fgHex, fgClass: `style:color(${fgHex})`, fgSource: 'inline_style',
-        bgHex, bgClass: null, bgSource, ratio, threshold, sizeStatus,
-        evidenceLevel: bgSource === 'assumed_default' ? 'structural_estimated' : 'structural_deterministic',
-        filePath: filepath, componentName: componentName || undefined,
+
+      const line = getLineNumber(htmlMatch.index);
+      pushFinding({
+        fgHex: fgResolved ? fgHexRaw : null,
+        fgClass: `style:color(${fgHexRaw})`,
+        fgSource: 'inline_style',
+        bgHex: bgResolved ? bgHex : null,
+        bgClass: null,
+        bgSource: bgResolved ? bgSource : 'unresolved',
+        ratio,
+        threshold,
+        sizeStatus,
+        evidenceLevel: bgResolved ? 'structural_deterministic' : 'structural_estimated',
+        filePath: filepath,
+        componentName: componentName || undefined,
         elementContext: inferElementContext(context) || undefined,
-        jsxTag, context, occurrence_count: 1, textType,
-        appliedThreshold: threshold, wcagCriterion: '1.4.3',
+        jsxTag,
+        context,
+        occurrence_count: 1,
+        textType,
+        appliedThreshold: threshold,
+        wcagCriterion: '1.4.3',
+        lineNumber: line,
+        startLine: line,
+        endLine: line,
+        extractedClasses: containingTag.classes || '',
+        fgResolved,
+        bgResolved,
+        bgUnresolvedReason: !bgResolved ? 'variant/context-dependent' : undefined,
       });
     }
   }
-  
+
   if (a1Findings.length === 0) return [];
-  
+
   const dedupeMap = new Map<string, A1TokenFinding>();
   for (const finding of a1Findings) {
-    const key = `${finding.fgClass}:${finding.bgSource}:${finding.bgHex}:${finding.filePath}:${finding.variant || 'base'}`;
+    const key = [
+      finding.fgClass,
+      finding.bgSource,
+      finding.bgHex || 'unresolved',
+      finding.filePath,
+      finding.variant || 'base',
+      finding.variantName || 'none',
+      finding.lineNumber || 0,
+    ].join('|');
+
     if (dedupeMap.has(key)) {
       dedupeMap.get(key)!.occurrence_count += 1;
     } else {
       dedupeMap.set(key, { ...finding });
     }
   }
-  
+
   const results: ContrastViolation[] = [];
-  
+
   for (const finding of dedupeMap.values()) {
     const fileName = finding.filePath.split('/').pop() || finding.filePath;
     const elementIdentifier = finding.componentName
       ? `${finding.componentName} (${fileName})`
       : fileName;
-    
-    // Classification: Confirmed when bg is deterministically resolved (tailwind OR inline style) AND no variant
-    // Variant-state findings are Confirmed but labeled as state-specific
-    const bgDeterministic = finding.bgSource === 'tailwind_token' || finding.bgSource === 'inline_style';
-    const isConfirmed = bgDeterministic && finding.ratio !== null && finding.ratio < finding.threshold;
+
+    const fgResolved = finding.fgResolved && isValidHexColor(finding.fgHex);
+    const bgResolved = finding.bgResolved && isValidHexColor(finding.bgHex);
+    const canCompute = fgResolved && bgResolved && finding.ratio !== null;
+
+    const isConfirmed = canCompute && finding.ratio! < finding.threshold;
     const status: 'confirmed' | 'potential' = isConfirmed ? 'confirmed' : 'potential';
-    
-    // Reason codes
+
     const reasonCodes: string[] = ['STATIC_ANALYSIS'];
-    if (finding.bgSource === 'assumed_default') reasonCodes.push('BG_ASSUMED_DEFAULT');
-    if (finding.bgSource === 'unresolved') reasonCodes.push('BG_UNRESOLVED');
+    if (!bgResolved) reasonCodes.push('BG_UNRESOLVED');
     if (finding.sizeStatus === 'unknown') reasonCodes.push('SIZE_UNKNOWN');
-    
-    // Risk level from ratio
-    let riskLevel: 'high' | 'medium' | 'low' = 'medium';
-    if (finding.ratio !== null) {
-      if (finding.ratio < 2.5) riskLevel = 'high';
-      else if (finding.ratio < 3.5) riskLevel = 'medium';
+
+    let riskLevel: 'high' | 'medium' | 'low' = 'low';
+    if (canCompute) {
+      if (finding.ratio! < 2.5) riskLevel = 'high';
+      else if (finding.ratio! < 3.5) riskLevel = 'medium';
       else riskLevel = 'low';
     }
-    
-    const ratioStr = finding.ratio !== null ? `${finding.ratio.toFixed(2)}:1` : 'not computable';
-    const bgNote = finding.bgSource === 'assumed_default'
-      ? ' (background assumed #FFFFFF — no bg token found)'
-      : finding.bgSource === 'inline_style'
-        ? ` (background from inline style ${finding.bgHex})`
-        : finding.bgSource === 'unresolved'
-          ? ' (background unresolved)'
-          : ` (background from ${finding.bgClass})`;
-    
+
+    const ratioStr = canCompute
+      ? `${finding.ratio!.toFixed(2)}:1`
+      : 'not computed (background unresolved / context-dependent)';
+
+    const bgDisplay = bgResolved && finding.bgHex ? finding.bgHex : 'unresolved';
+    const fgDisplay = fgResolved && finding.fgHex ? finding.fgHex : 'unresolved';
+
     const variantLabel = finding.variant ? ` [${finding.variant} state]` : '';
-    const diagnosis = `Text ${finding.fgClass} (${finding.fgHex}) on ${finding.bgHex}${bgNote}${variantLabel} — ` +
-      `contrast ratio ${ratioStr} vs ${finding.threshold}:1 required (${finding.sizeStatus === 'large' ? 'large' : 'normal'} text).`;
-    
+    const branchLabel = finding.variantName ? ` [variant=${finding.variantName}]` : '';
+    const diagnosis = canCompute
+      ? `Text ${finding.fgClass} (${fgDisplay}) on ${bgDisplay}${variantLabel}${branchLabel} — contrast ratio ${ratioStr} vs ${finding.threshold}:1 required (${finding.sizeStatus === 'large' ? 'large' : 'normal'} text).`
+      : `Text ${finding.fgClass} (${fgDisplay}) with unresolved background${variantLabel}${branchLabel} — contrast not computed due to insufficient color context.`;
+
     let correctivePrompt = '';
     if (isConfirmed) {
       correctivePrompt = `• ${finding.elementContext || 'Text element'} "${finding.fgClass}" in ${elementIdentifier}\n` +
         `  Issue: ${ratioStr} vs ${finding.threshold}:1 required\n` +
-        `  Fix: Replace ${finding.fgClass} with a darker token (e.g., ${finding.fgClass.replace(/\d+$/, '700')}) ` +
-        `or lighten background from ${finding.bgClass || finding.bgHex} to ensure ≥ ${finding.threshold}:1.`;
+        `  Fix: Replace ${finding.fgClass} with a darker token or adjust background ${finding.bgClass || bgDisplay} to ensure ≥ ${finding.threshold}:1.`;
     }
-    
-    const advisoryGuidance = isConfirmed ? undefined :
-      `Verify contrast in browser DevTools. Computed ratio: ${ratioStr}. ` +
-      `If background differs from ${finding.bgHex}, re-check.`;
-    
+
+    const advisoryGuidance = isConfirmed
+      ? undefined
+      : !canCompute
+        ? 'Contrast not computed (background unresolved / context-dependent). Verify in the rendered UI with browser DevTools.'
+        : `Verify contrast in browser DevTools. Computed ratio: ${ratioStr}.`;
+
     results.push({
       ruleId: 'A1',
       ruleName: 'Insufficient text contrast',
@@ -3386,47 +3567,59 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       status,
       samplingMethod: 'inferred',
       inputType: 'zip',
-      contrastRatio: finding.ratio ?? undefined,
+      contrastRatio: canCompute ? (finding.ratio ?? undefined) : undefined,
       thresholdUsed: finding.threshold,
-      foregroundHex: finding.fgHex,
-      backgroundHex: finding.bgHex,
+      foregroundHex: fgResolved ? (finding.fgHex ?? undefined) : undefined,
+      backgroundHex: bgResolved ? (finding.bgHex ?? undefined) : undefined,
+      foreground: { value: fgResolved ? finding.fgHex : null, resolved: fgResolved },
+      background: {
+        value: bgResolved ? finding.bgHex : null,
+        resolved: bgResolved,
+        reason: bgResolved ? undefined : (finding.bgUnresolvedReason || 'variant/context-dependent'),
+      },
+      note: !canCompute ? 'contrast not computed (background unresolved)' : undefined,
       elementIdentifier,
       elementDescription: finding.elementContext,
-      evidence: `${finding.fgClass}${finding.bgClass ? ` on ${finding.bgClass}` : ''} in ${finding.filePath}${finding.lineNumber ? `:${finding.lineNumber}` : ''}`,
+      evidence: `${finding.fgClass}${finding.bgClass ? ` on ${finding.bgClass}` : ''} in ${finding.filePath}${finding.startLine ? `:${finding.startLine}` : ''}${finding.variantName ? ` [variant=${finding.variantName}]` : ''}`,
       diagnosis,
-      contextualHint: `Contrast ${ratioStr} — ${finding.evidenceLevel.replace(/_/g, ' ')}.`,
+      contextualHint: canCompute
+        ? `Contrast ${ratioStr} — ${finding.evidenceLevel.replace(/_/g, ' ')}.`
+        : 'Contrast not computed — insufficient color context.',
       correctivePrompt,
-      confidence: isConfirmed ? 0.90 : (finding.bgSource === 'assumed_default' ? 0.55 : 0.40),
+      confidence: isConfirmed ? 0.9 : (!bgResolved ? 0.4 : 0.55),
       riskLevel,
       reasonCodes: isConfirmed ? undefined : reasonCodes,
-      potentialRiskReason: isConfirmed ? undefined : `Background source: ${finding.bgSource.replace(/_/g, ' ')}.`,
-      backgroundStatus: (finding.bgSource === 'tailwind_token' || finding.bgSource === 'inline_style') ? 'certain' : 'uncertain',
+      potentialRiskReason: isConfirmed ? undefined : (!canCompute ? 'background unresolved / context-dependent' : `computed ratio ${ratioStr}`),
+      backgroundStatus: bgResolved ? 'certain' : 'uncertain',
       blocksConvergence: isConfirmed,
-      inputLimitation: (finding.bgSource !== 'tailwind_token' && finding.bgSource !== 'inline_style') ? `Background inferred (${finding.bgSource.replace(/_/g, ' ')}); verify at runtime.` : undefined,
+      inputLimitation: !canCompute ? 'Background unresolved / context-dependent; static analysis cannot verify final rendered contrast.' : undefined,
       advisoryGuidance,
       fgSource: finding.fgSource,
-      bgSource: finding.bgSource,
+      bgSource: bgResolved ? finding.bgSource : 'unresolved',
       evidenceLevel: finding.evidenceLevel,
       sizeStatus: finding.sizeStatus,
       variant: finding.variant,
+      variantName: finding.variantName,
       lineNumber: finding.lineNumber,
+      startLine: finding.startLine ?? finding.lineNumber ?? null,
+      endLine: finding.endLine ?? finding.lineNumber ?? null,
+      extractedClasses: finding.extractedClasses,
       affectedComponents: [{
         colorClass: finding.fgClass,
-        hexColor: finding.fgHex,
+        hexColor: finding.fgHex ?? undefined,
         filePath: finding.filePath,
         componentName: finding.componentName,
         elementContext: finding.elementContext,
-        jsxTag: finding.jsxTag,
         riskLevel,
         occurrence_count: finding.occurrence_count,
       }],
     });
   }
-  
+
   const confirmed = results.filter(r => r.status === 'confirmed').length;
   const potential = results.filter(r => r.status === 'potential').length;
   console.log(`A1 token-contrast (ZIP): ${results.length} findings (${confirmed} confirmed, ${potential} potential)`);
-  
+
   return results;
 }
 
@@ -8725,25 +8918,32 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       const potentialFindings = contrastViolations.filter(v => v.status !== 'confirmed');
       
       const mapToElement = (v: any) => {
-        const ratioStr = v.contrastRatio != null ? `${v.contrastRatio.toFixed(1)}:1` : 'unknown';
+        const fgResolved = v.foreground?.resolved ?? !!v.foregroundHex;
+        const bgResolved = v.background?.resolved ?? (v.backgroundStatus === 'certain' && !!v.backgroundHex);
+        const hasInsufficientColorContext = !fgResolved || !bgResolved || v.backgroundStatus !== 'certain';
+
+        const ratioStr = v.contrastRatio != null ? `${v.contrastRatio.toFixed(1)}:1` : 'not computed';
         const threshStr = `${v.thresholdUsed || 4.5}:1`;
         const sizeLabel = v.sizeStatus === 'large' ? 'large' : 'normal';
-        const fgHex = v.foregroundHex || '???';
-        const bgHex = v.backgroundHex || '#FFFFFF';
-        const prompt = v.status === 'confirmed'
+        const fgHex = fgResolved ? (v.foregroundHex || v.foreground?.value || '???') : 'unresolved';
+        const bgHex = bgResolved ? (v.backgroundHex || v.background?.value || 'unresolved') : 'unresolved';
+        const prompt = v.status === 'confirmed' && !hasInsufficientColorContext
           ? `Issue reason: ${ratioStr} measured vs ${threshStr} required (WCAG AA, ${sizeLabel} text).\n\nRecommended fix: Increase text contrast for this element (currently ${fgHex} on ${bgHex}) by darkening the text color or adjusting the background to reach ≥${threshStr}; keep visual style consistent across similar elements.`
           : undefined;
+
         return {
           elementLabel: v.variant
             ? `${v.elementIdentifier || v.elementDescription || 'Unknown element'} [${v.variant}]`
             : (v.elementIdentifier || v.elementDescription || 'Unknown element'),
           textSnippet: v.evidence,
           location: v.evidence || '',
-          foregroundHex: v.foregroundHex,
-          backgroundHex: v.backgroundHex,
-          backgroundStatus: (v.backgroundStatus || 'unmeasurable') as 'certain' | 'uncertain' | 'unmeasurable',
-          contrastRatio: v.contrastRatio,
-          contrastNotMeasurable: v.contrastRatio === undefined,
+          foregroundHex: fgResolved ? (v.foregroundHex || v.foreground?.value || undefined) : undefined,
+          backgroundHex: bgResolved ? (v.backgroundHex || v.background?.value || undefined) : undefined,
+          foreground: v.foreground || { value: fgResolved ? (v.foregroundHex || null) : null, resolved: !!fgResolved },
+          background: v.background || { value: bgResolved ? (v.backgroundHex || null) : null, resolved: !!bgResolved, reason: !bgResolved ? 'variant/context-dependent' : undefined },
+          backgroundStatus: (bgResolved ? 'certain' : (v.backgroundStatus || 'uncertain')) as 'certain' | 'uncertain' | 'unmeasurable',
+          contrastRatio: hasInsufficientColorContext ? undefined : v.contrastRatio,
+          contrastNotMeasurable: hasInsufficientColorContext || v.contrastRatio === undefined,
           thresholdUsed: (v.thresholdUsed || 4.5) as 4.5 | 3.0,
           explanation: v.diagnosis,
           reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
@@ -8755,6 +8955,16 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           correctivePrompt: prompt,
           variant: v.variant || undefined,
           lineNumber: v.lineNumber || undefined,
+          filePath: v.affectedComponents?.[0]?.filePath || v.filePath,
+          startLine: v.startLine ?? v.lineNumber ?? null,
+          endLine: v.endLine ?? v.lineNumber ?? null,
+          variantName: v.variantName || v.variant || undefined,
+          extractedClasses: v.extractedClasses || undefined,
+          resolutionStatus: {
+            fg: fgResolved ? 'resolved' : 'unresolved',
+            bg: bgResolved ? 'resolved' : 'unresolved',
+          },
+          unresolvedReason: !bgResolved ? (v.background?.reason || 'background unresolved / context-dependent') : undefined,
         };
       };
       
