@@ -24,7 +24,7 @@ function buildA1PromptBody(el: A1ElementSubItem): { issueReason: string; recomme
   const threshStr = `${el.thresholdUsed || 4.5}:1`;
   const sizeLabel = el.textType === 'large' ? 'large' : 'normal';
   const fgHex = el.foregroundHex || '???';
-  const bgHex = el.backgroundHex || '#FFFFFF';
+  const bgHex = el.backgroundHex || 'unresolved background';
   const issueReason = `Contrast ratio ${ratioStr} is below WCAG 1.4.3 threshold of ${threshStr} (${sizeLabel} text).`;
   const recommendedFix = `Darken the text color (currently ${fgHex} on ${bgHex}) to reach ≥${threshStr}, e.g. use text-gray-700/800 or adjust the background; keep visual style consistent across similar elements.`;
   return { issueReason, recommendedFix };

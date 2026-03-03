@@ -45,6 +45,10 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
   const isHybridPixel = element.a1Method === 'LLM→Pixel';
   const isLLMOnly = element.a1Method === 'LLM-only (measurement failed)';
 
+  const fgResolved = element.foreground?.resolved ?? element.resolutionStatus?.fg !== 'unresolved';
+  const bgResolved = element.background?.resolved ?? element.resolutionStatus?.bg !== 'unresolved';
+  const insufficientColorContext = !fgResolved || !bgResolved || element.backgroundStatus === 'uncertain' || element.backgroundStatus === 'unmeasurable' || !!element.contrastNotMeasurable;
+
   const cleanLabel = element.elementLabel.replace(/\s*\([^)]*\.tsx?\)/, '');
   const cleanLocation = element.location.replace(/^.*?([\w/-]+\.\w+).*$/, '$1');
   
@@ -158,7 +162,7 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
 
                 <FieldRow>
                   <FieldLabel>Detection:</FieldLabel>
-                  {element.contrastRatio !== undefined ? (
+                  {(!insufficientColorContext && element.contrastRatio !== undefined) ? (
                     <span className="text-sm">
                       <span className="font-mono font-medium text-destructive">
                         Contrast: {element.contrastRatio.toFixed(1)}:1
@@ -167,7 +171,7 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                         vs {element.thresholdUsed}:1
                       </span>
                     </span>
-                  ) : element.contrastRange ? (
+                  ) : (!insufficientColorContext && element.contrastRange) ? (
                     <span className="text-sm">
                       <span className="font-mono font-medium text-destructive">
                         Contrast: {element.contrastRange.min.toFixed(1)}:1 – {element.contrastRange.max.toFixed(1)}:1
@@ -215,18 +219,20 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
 
                 <FieldRow>
                   <FieldLabel>Background:</FieldLabel>
-                  {element.backgroundHex ? (
+                  {(!bgResolved || element.backgroundStatus === 'uncertain' || element.backgroundStatus === 'unmeasurable') ? (
+                    <span className="flex items-center gap-1 text-sm">
+                      <span className="text-muted-foreground italic">unresolved</span>
+                      <Badge variant="outline" className="text-xs font-medium border-warning/50 text-warning">
+                        uncertain
+                      </Badge>
+                    </span>
+                  ) : element.backgroundHex ? (
                     <span className="flex items-center gap-1 text-sm">
                       <span className="font-mono">{element.backgroundHex}</span>
                       <span 
                         className="w-3 h-3 rounded border border-border" 
                         style={{ backgroundColor: element.backgroundHex }} 
                       />
-                      {element.backgroundStatus === 'uncertain' && (
-                        <Badge variant="outline" className="text-xs font-medium border-warning/50 text-warning">
-                          uncertain
-                        </Badge>
-                      )}
                     </span>
                   ) : (
                     <span className="text-sm text-muted-foreground italic">unmeasurable</span>
@@ -235,8 +241,8 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
 
                 <FieldRow>
                   <FieldLabel>Contrast:</FieldLabel>
-                  {element.contrastNotMeasurable ? (
-                    <span className="text-sm text-muted-foreground italic">not measurable</span>
+                  {insufficientColorContext ? (
+                    <span className="text-sm text-muted-foreground italic">Not computed (insufficient color context)</span>
                   ) : element.contrastRange ? (
                     <span className="text-sm">
                       <span className="font-mono font-medium text-warning">
@@ -256,7 +262,7 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
                       </span>
                     </span>
                   ) : (
-                    <span className="text-sm text-muted-foreground italic">not computed</span>
+                    <span className="text-sm text-muted-foreground italic">Not computed (insufficient color context)</span>
                   )}
                 </FieldRow>
 
