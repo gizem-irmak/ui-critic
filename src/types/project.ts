@@ -618,11 +618,15 @@ export interface E1ElementSubItem {
   elementLabel: string;   // e.g., '"Delete Account" action', '"Subscribe" button'
   elementType?: string;   // button, link, form, etc.
   location: string;       // file path
+  startLine?: number;     // Line number of the UI trigger
+  deleteLine?: number;    // Line number of the DELETE request
   detection?: string;     // Summary of what was detected (missing disclosure)
   evidence?: string;      // Specific evidence citations
+  evidenceTokens?: string[]; // Evidence tokens (DELETE method, handler name, label)
   recommendedFix?: string; // Actionable fix suggestion
-  confidence: number;     // 0.60–0.80
-  evaluationMethod?: 'llm_only_code' | 'llm_perceptual';
+  confidence: number;     // 0.60–0.90
+  evaluationMethod?: 'llm_only_code' | 'llm_perceptual' | 'deterministic_structural';
+  detectionSource?: 'label' | 'handler' | 'network' | 'icon'; // How was this detected
   deduplicationKey: string;
 }
 

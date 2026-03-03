@@ -25,7 +25,7 @@ function E1ElementItem({ element, compact = false }: {
           <div className="flex items-center justify-between gap-2 cursor-pointer">
             <ComponentTitle>{displayLabel}</ComponentTitle>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <LocationBadge filePath={element.location} compact={compact} />
+              <LocationBadge filePath={element.location} startLine={element.startLine} compact={compact} />
               {isOpen ? (
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               ) : (

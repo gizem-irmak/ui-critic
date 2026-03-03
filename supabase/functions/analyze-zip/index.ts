@@ -6140,11 +6140,12 @@ Look for patterns that may undermine user autonomy or informed consent:
 ### E1 (Insufficient Transparency in High-Impact Actions) — LLM-ASSISTED EVALUATION:
 **NOTE:** E1 uses pre-extracted high-impact action evidence bundles appended as \`[E1_EVIDENCE_BUNDLE]\`. Use ONLY the provided extracted UI text/context to assess transparency.
 **NOTE:** Actions with strong disclosure (irreversibility warnings, consequence lists) AND a confirmation dialog have ALREADY been filtered out. The bundles you receive represent actions where disclosure may be missing or insufficient. Do NOT re-flag actions that were suppressed.
+**NOTE:** Detection now covers ALL deletion flows: button labels, handler-based invocations (onClick calling delete functions), network DELETE requests, and Trash icon patterns.
 
 **CRITICAL ANTI-HALLUCINATION RULES (MANDATORY):**
 - Do NOT use file names, component names, or test wording as evidence.
 - Do NOT infer malicious intent. Use neutral language ("may be unclear", "transparency risk").
-- Base conclusions ONLY on the extracted CTA labels, nearby UI text (headings, warnings, pricing), and confirmation dialog presence/absence.
+- Base conclusions ONLY on the extracted CTA labels, evidence tokens, nearby UI text, and confirmation dialog presence/absence.
 - If evidence is insufficient to demonstrate missing transparency, return NO E1 finding — do not guess.
 - Do NOT flag password reset, sign-in, sign-out, or other auth-flow actions.
 - Do NOT flag actions where disclosure terms are already present (check the "Disclosure terms found" field in the bundle).
@@ -6153,12 +6154,16 @@ Look for patterns that may undermine user autonomy or informed consent:
 - Missing consequence disclosure: delete/remove actions without "permanent", "cannot be undone" warnings
 - Missing cost disclosure: subscribe/buy/upgrade actions without visible pricing or billing cycle
 - Missing data implications: data-sharing actions without consent explanation
-- Missing confirmation step: high-impact actions without confirmation dialog/modal
+- Missing confirmation step: destructive actions executed with a single gesture without confirmation dialog/modal
+- Direct DELETE request: network DELETE calls triggered from UI without any confirmation gate
 
 **CLASSIFICATION:**
 - E1 is ALWAYS "Potential" (non-blocking) — NEVER "Confirmed"
-- Confidence: 0.60–0.80 (cap at 0.80)
-- If the bundle shows partial disclosure (some terms found but confirmation missing), use lower confidence (0.60–0.65)
+- Confidence:
+  - 0.85–0.90: DELETE request + direct UI trigger + no confirmation gate (strong evidence)
+  - 0.70–0.80: delete intent inferred from handler name or label but request/gate linkage is weaker
+  - 0.60–0.65: partial disclosure exists but confirmation is missing
+- For each e1Element, include the "detectionSource" field from the bundle (label/handler/network/icon)
 
 **OUTPUT FOR E1 — STRUCTURED e1Elements:**
 \`\`\`json
@@ -6173,19 +6178,24 @@ Look for patterns that may undermine user autonomy or informed consent:
       "elementLabel": "\\"Delete Account\\" action",
       "elementType": "button",
       "location": "src/components/Settings.tsx",
+      "startLine": 42,
+      "deleteLine": 15,
       "detection": "Destructive action without consequence disclosure or confirmation step",
-      "evidence": "CTA: 'Delete Account' | No nearby warning text ('permanent', 'cannot be undone') | No confirmation dialog detected",
+      "evidence": "CTA: 'Delete Account' | Evidence: DELETE method, handler:handleDelete | No confirmation dialog detected",
+      "evidenceTokens": ["DELETE method", "handler:handleDelete", "label:\\"Delete Account\\""],
       "recommendedFix": "Add a confirmation dialog that explicitly states the action is irreversible and what data will be lost",
-      "confidence": 0.75
+      "confidence": 0.85,
+      "detectionSource": "label"
     }
   ],
   "diagnosis": "Summary of transparency issues...",
   "contextualHint": "Short guidance...",
-  "confidence": 0.75
+  "confidence": 0.85
 }
 \`\`\`
 - If NO E1 issues found, do NOT include E1 in the violations array.
-- Each e1Element MUST cite evidence from the provided evidence bundle (CTA labels, nearby text — NOT file names).
+- Each e1Element MUST cite evidence from the provided evidence bundle (CTA labels, evidence tokens, nearby text — NOT file names).
+- Use the startLine/deleteLine from the bundle for precise source attribution.
 
 ### E2 (Imbalanced Choice Architecture in High-Impact Decisions) — LLM-ASSISTED EVALUATION:
 **NOTE:** E2 uses pre-extracted choice bundle data appended as \`[E2_CHOICE_BUNDLE]\`. Each bundle has ALREADY passed the high-impact domain gate (consent/privacy, monetization, irreversible actions) and has 2+ deterministic imbalance signals. Your job is to confirm whether the imbalance plausibly nudges users toward a system-beneficial outcome.
@@ -6834,10 +6844,17 @@ interface E1EvidenceBundle {
   frictionMechanisms: string[];
   suppressed: boolean;
   suppressionReason?: string;
+  startLine?: number; // Line number of the UI trigger
+  deleteLine?: number; // Line number of the DELETE request
+  evidenceTokens: string[]; // Evidence tokens (DELETE method, handler name, label)
+  detectionSource: 'label' | 'handler' | 'network' | 'icon'; // How was this detected
 }
 
 // Strict high-impact keyword list — excludes "reset", "accept", "agree" (too broad)
 const E1_HIGH_IMPACT_KEYWORDS = /\b(delete|remove\s*account|close\s*account|permanently\s*delete|destroy|erase|cancel\s*(?:subscription|membership|plan|account)|subscribe|buy|purchase|pay\b|upgrade|checkout|confirm\s*(?:order|purchase|payment)|finalize|publish|authorize|grant\s*access|share\s*data|export\s*data|connect\s*account)\b/i;
+
+// Destructive label keywords (broader than high-impact — covers "Remove", "Trash")
+const E1_DESTRUCTIVE_LABEL_RE = /\b(delete|remove|trash|destroy|erase)\b/i;
 
 // Auth-flow file path patterns — excluded from E1 unless destructive/billing keywords present
 const E1_AUTH_FLOW_PATH = /(?:forgot.?password|reset.?password|sign.?in|sign.?up|login|register|auth|verify.?email|confirm.?email)/i;
@@ -6849,6 +6866,24 @@ const E1_OVERRIDE_IN_AUTH = /\b(delete|erase|destroy|permanently|purchase|pay\b|
 const E1_WARNING_WORDS = /\b(permanent|cannot\s*be\s*undone|irreversible|this\s*action|will\s*be\s*(?:deleted|removed|lost)|are\s*you\s*sure|caution|warning|permanently\s*(?:remove|delete|erase)|data\s*will\s*be\s*removed)\b/i;
 const E1_PRICING_WORDS = /\b(\$\d|\€\d|\£\d|USD|EUR|per\s*month|\/mo|\/year|billing|subscription\s*(?:fee|cost|price)|free\s*trial|charged)\b/i;
 const E1_CONFIRMATION_PATTERNS = /\b(AlertDialog|confirm\s*\(|useConfirm|ConfirmDialog|ConfirmModal|confirmation|modal|Dialog)\b/i;
+
+// Two-step state flow confirmation patterns (setPendingDelete, setConfirmOpen, etc.)
+const E1_TWO_STEP_STATE_RE = /\b(set(?:Pending|Confirm|ShowConfirm|DeleteConfirm|ConfirmOpen|ConfirmDelete|IsDeleting|ShowDelete|DeleteDialog)\s*\(|setPending\w*Delete\s*\(|setConfirm\w*\s*\(true\))/i;
+
+// Network DELETE request patterns
+const E1_NETWORK_DELETE_RE = /(?:fetch\s*\([^)]*[,{]\s*method\s*:\s*["']DELETE["']|\.delete\s*\(|apiRequest\s*\(\s*["']DELETE["']|method\s*:\s*["']DELETE["'])/i;
+
+// Delete mutation / hook patterns
+const E1_DELETE_MUTATION_RE = /\b(delete(?:Mutation|mutation)|useMutation\s*\(\s*\{[^}]*(?:method|DELETE))|mutationFn\s*:[^}]*(?:delete|remove|destroy)/i;
+
+// Handler names indicating deletion
+const E1_DELETE_HANDLER_RE = /\b(handle(?:Delete|Remove|Destroy)|on(?:Delete|Remove|Destroy)|delete(?:Item|Row|Record|Entry|User|Account|Doctor|Patient|Appointment|Data)|remove(?:Item|Row|Record|Entry)|destroy(?:Item|Row|Record))\b/i;
+
+// Direct delete invocation in onClick (no intermediate confirmation state)
+const E1_DIRECT_DELETE_INVOKE_RE = /(?:onClick|onSelect|onAction|onConfirm|onPress)\s*=\s*\{?\s*(?:\(\s*\)\s*=>|function\s*\(\s*\)\s*\{)?\s*(?:delete|remove|destroy|trash)\w*(?:\.\w+)?\s*\(/i;
+
+// Undo / recovery patterns
+const E1_UNDO_RECOVERY_RE = /\b(undo|restore|undelete|soft.?delete|archive(?:d)?|moved?\s*to\s*trash|trash.?(?:can|bin)|action\s*:\s*["']undo["']|toast\s*\([^)]*undo)/i;
 
 // Strong disclosure terms — if found near CTA or in modal, disclosure is considered present
 const E1_STRONG_DISCLOSURE_RE = /\b(cannot\s*be\s*undone|irreversible|permanent(?:ly)?|will\s*be\s*(?:deleted|removed|lost|erased)|this\s*(?:action|cannot)|data\s*will\s*be\s*removed|all\s*(?:your\s*)?data|appointments|messages|records|files)\b/gi;
@@ -6877,12 +6912,57 @@ function extractE1FrictionMechanisms(text: string): string[] {
   return mechanisms;
 }
 
+// Detect confirmation gates in a file: AlertDialog, confirm(), two-step state, etc.
+function detectE1ConfirmationGate(content: string): { hasGate: boolean; gateType: string } {
+  if (E1_CONFIRMATION_PATTERNS.test(content)) {
+    return { hasGate: true, gateType: 'confirmation-dialog' };
+  }
+  if (E1_TWO_STEP_STATE_RE.test(content)) {
+    return { hasGate: true, gateType: 'two-step-state' };
+  }
+  if (/\bwindow\.confirm\s*\(/i.test(content) || /\bconfirm\s*\(\s*["'`]/i.test(content)) {
+    return { hasGate: true, gateType: 'window.confirm' };
+  }
+  return { hasGate: false, gateType: '' };
+}
+
+// Detect recovery/undo mechanisms
+function detectE1Recovery(content: string): { hasRecovery: boolean; recoveryType: string } {
+  if (E1_UNDO_RECOVERY_RE.test(content)) {
+    const m = content.match(E1_UNDO_RECOVERY_RE);
+    return { hasRecovery: true, recoveryType: m?.[1] || 'undo' };
+  }
+  // Soft-delete API endpoints
+  if (/\/archive\b|\/disable\b|\/deactivate\b/i.test(content) && !E1_DESTRUCTIVE_LABEL_RE.test(content.match(/<(?:Button|button)[^>]*>([^<]*)<\//)?.[1] || '')) {
+    return { hasRecovery: true, recoveryType: 'soft-delete-endpoint' };
+  }
+  return { hasRecovery: false, recoveryType: '' };
+}
+
+// Check if a handler name is connected to a confirmation gate (same scope)
+function isHandlerGatedByConfirmation(handlerName: string, content: string): boolean {
+  // Check if the handler sets a confirmation state before executing
+  const handlerBodyRe = new RegExp(`(?:function\\s+${handlerName}|const\\s+${handlerName}\\s*=)\\s*(?:\\([^)]*\\)\\s*(?:=>|\\{)|\\{)([\\s\\S]{0,500})`, 'i');
+  const bodyMatch = content.match(handlerBodyRe);
+  if (bodyMatch) {
+    const body = bodyMatch[1];
+    // If the handler sets confirmation state, it's gated
+    if (E1_TWO_STEP_STATE_RE.test(body)) return true;
+    // If the handler calls confirm()
+    if (/\bconfirm\s*\(/i.test(body)) return true;
+  }
+  return false;
+}
+
 function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundle[] {
   const bundles: E1EvidenceBundle[] = [];
+  // Deduplication key: filePath + label (normalized)
+  const seenKeys = new Set<string>();
 
   for (const [filePathRaw, content] of allFiles) {
     const filePath = filePathRaw.replace(/\\/g, '/').replace(/^\.\//, '');
-    if (!/\.(tsx|jsx|html)$/.test(filePath)) continue;
+    // Expand to .ts files for handler/network detection
+    if (!/\.(tsx|jsx|ts|js|html)$/.test(filePath)) continue;
     if (/\.(test|spec)\./i.test(filePath)) continue;
     if (filePath.includes('components/ui/') || filePath.includes('node_modules') || filePath.includes('dist/')) continue;
 
@@ -6893,7 +6973,30 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
       continue;
     }
 
-    // Find high-impact CTA candidates
+    const lines = content.split('\n');
+    const getLineNumber = (index: number) => content.slice(0, index).split('\n').length;
+
+    // File-level signals (computed once per file)
+    const confirmGate = detectE1ConfirmationGate(content);
+    const recovery = detectE1Recovery(content);
+    const disclosureTermsFound = extractE1DisclosureTerms(content);
+    const frictionMechanisms = extractE1FrictionMechanisms(content);
+    const hasStrongDisclosure = disclosureTermsFound.length > 0;
+
+    // Detect network DELETE calls in this file
+    const hasNetworkDelete = E1_NETWORK_DELETE_RE.test(content) || E1_DELETE_MUTATION_RE.test(content);
+    let networkDeleteLine: number | undefined;
+    if (hasNetworkDelete) {
+      // Find the line number of the first DELETE call
+      for (let i = 0; i < lines.length; i++) {
+        if (E1_NETWORK_DELETE_RE.test(lines[i]) || E1_DELETE_MUTATION_RE.test(lines[i])) {
+          networkDeleteLine = i + 1;
+          break;
+        }
+      }
+    }
+
+    // ── DETECTION A: UI button labels with delete/high-impact keywords ──
     const btnRe = /<(?:Button|button|a)\b([^>]*)>([^<]{1,80})<\/(?:Button|button|a)>/gi;
     let bm;
     while ((bm = btnRe.exec(content)) !== null) {
@@ -6902,128 +7005,328 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
       if (!label || label.length < 2) continue;
 
       // Skip explicitly excluded auth labels
-      if (E1_AUTH_EXCLUDED_LABELS.test(label)) {
-        console.log(`E1 SUPPRESSED (auth-excluded label): "${label}" in ${filePath}`);
-        continue;
-      }
-
+      if (E1_AUTH_EXCLUDED_LABELS.test(label)) continue;
       if (!E1_HIGH_IMPACT_KEYWORDS.test(label) && !E1_HIGH_IMPACT_KEYWORDS.test(attrs)) continue;
+
+      const triggerLine = getLineNumber(bm.index);
+      const dedupeKey = `E1|${filePath}|${label.toLowerCase()}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
 
       // Classify CTA type
       let ctaType = 'destructive';
       if (/\b(subscribe|buy|purchase|pay|upgrade|checkout)\b/i.test(label)) ctaType = 'financial';
       if (/\b(share\s*data|export\s*data|grant\s*access|connect\s*account|authorize)\b/i.test(label)) ctaType = 'data-sharing';
 
-      // Collect nearby text (500 chars before and after the CTA for better disclosure detection)
+      // Collect nearby text
       const regionStart = Math.max(0, bm.index - 500);
       const regionEnd = Math.min(content.length, bm.index + bm[0].length + 500);
       const region = content.slice(regionStart, regionEnd);
-
-      const nearbyText: string[] = [];
-      const hRe = /<h([1-6])\b[^>]*>([^<]{2,80})<\/h\1>/gi;
-      let hm;
-      while ((hm = hRe.exec(region)) !== null) {
-        nearbyText.push(`h${hm[1]}: ${hm[2].replace(/\{[^}]*\}/g, '').trim()}`);
-      }
-      const pRe = /<(?:p|span|div|label)\b[^>]*>([^<]{3,150})<\/(?:p|span|div|label)>/gi;
-      let pm;
-      while ((pm = pRe.exec(region)) !== null) {
-        const text = pm[1].replace(/\{[^}]*\}/g, '').trim();
-        if (text.length >= 3 && text.length <= 150) nearbyText.push(text);
-      }
+      const nearbyText = extractNearbyText(region);
 
       const hasWarningText = E1_WARNING_WORDS.test(region);
       const hasPricingText = E1_PRICING_WORDS.test(region);
-      const hasConfirmationDialog = E1_CONFIRMATION_PATTERNS.test(content);
 
-      // Extract disclosure terms and friction mechanisms from the full file (includes modals)
-      const disclosureTermsFound = extractE1DisclosureTerms(content);
-      const frictionMechanisms = extractE1FrictionMechanisms(content);
+      // Evidence tokens
+      const evidenceTokens: string[] = [];
+      if (E1_DESTRUCTIVE_LABEL_RE.test(label)) evidenceTokens.push(`label:"${label}"`);
+      if (hasNetworkDelete) evidenceTokens.push('DELETE method');
 
-      // DISCLOSURE + CONFIRMATION PASS-THROUGH:
-      // If strong disclosure exists AND confirmation dialog present, suppress the bundle
-      const hasStrongDisclosure = disclosureTermsFound.length > 0;
-      const hasFriction = frictionMechanisms.length > 0;
-      const labelMentionsAction = /\b(delete|remove|erase|destroy|cancel|unsubscribe)\b/i.test(label);
+      // Extract handler name from onClick
+      const handlerMatch = attrs.match(/onClick\s*=\s*\{?\s*(?:\(\)\s*=>\s*)?(\w+)/);
+      if (handlerMatch) evidenceTokens.push(`handler:${handlerMatch[1]}`);
 
-      let suppressed = false;
-      let suppressionReason: string | undefined;
+      // Suppression checks
+      const suppressResult = shouldSuppressE1Bundle({
+        label, filePath, content, confirmGate, recovery,
+        hasStrongDisclosure, disclosureTermsFound, frictionMechanisms,
+        handlerName: handlerMatch?.[1],
+      });
 
-      if (hasStrongDisclosure && hasConfirmationDialog) {
-        // CTA label is descriptive AND disclosure + confirmation exist → full pass
-        if (labelMentionsAction) {
-          suppressed = true;
-          suppressionReason = `Descriptive CTA label ("${label}") + strong disclosure (${disclosureTermsFound.slice(0, 3).join(', ')}) + confirmation dialog`;
-        }
-        // Even with ambiguous label, if friction is present → full pass
-        else if (hasFriction) {
-          suppressed = true;
-          suppressionReason = `Disclosure (${disclosureTermsFound.slice(0, 3).join(', ')}) + confirmation + friction (${frictionMechanisms.join(', ')})`;
-        }
-        // Ambiguous label + disclosure + confirmation but no friction → still suppress (disclosure is sufficient)
-        else {
-          suppressed = true;
-          suppressionReason = `Strong disclosure (${disclosureTermsFound.slice(0, 3).join(', ')}) + confirmation dialog present`;
-        }
-      }
-
-      if (suppressed) {
-        console.log(`E1 SUPPRESSED (disclosure pass-through): "${label}" in ${filePath} — ${suppressionReason}`);
-        continue; // Do not include in bundles sent to LLM
+      if (suppressResult.suppressed) {
+        console.log(`E1 SUPPRESSED (label): "${label}" in ${filePath} — ${suppressResult.reason}`);
+        continue;
       }
 
       bundles.push({
-        filePath,
-        ctaLabel: label,
-        ctaType,
+        filePath, ctaLabel: label, ctaType,
         nearbyText: [...new Set(nearbyText)].slice(0, 6),
-        hasConfirmationDialog,
-        hasWarningText,
-        hasPricingText,
-        disclosureTermsFound,
-        frictionMechanisms,
+        hasConfirmationDialog: confirmGate.hasGate,
+        hasWarningText, hasPricingText,
+        disclosureTermsFound, frictionMechanisms,
         suppressed: false,
+        startLine: triggerLine,
+        deleteLine: networkDeleteLine,
+        evidenceTokens,
+        detectionSource: 'label',
       });
     }
 
-    // Also check aria-label/title on icon buttons
+    // ── DETECTION A (icon buttons): aria-label/title on icon buttons ──
     const iconBtnRe = /<(?:Button|button)\b([^>]*(?:aria-label|title)\s*=\s*(?:"([^"]+)"|'([^']+)'))[^>]*(?:\/>|>[^<]*<\/(?:Button|button)>)/gi;
     let ibm;
     while ((ibm = iconBtnRe.exec(content)) !== null) {
       const label = ibm[2] || ibm[3] || '';
       if (!label || !E1_HIGH_IMPACT_KEYWORDS.test(label)) continue;
       if (E1_AUTH_EXCLUDED_LABELS.test(label)) continue;
-      if (bundles.some(b => b.filePath === filePath && b.ctaLabel === label)) continue;
+
+      const dedupeKey = `E1|${filePath}|${label.toLowerCase()}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+
+      const triggerLine = getLineNumber(ibm.index);
 
       let ctaType = 'destructive';
       if (/\b(subscribe|buy|purchase|pay|upgrade|checkout)\b/i.test(label)) ctaType = 'financial';
 
-      const hasConfirmationDialog = E1_CONFIRMATION_PATTERNS.test(content);
-      const disclosureTermsFound = extractE1DisclosureTerms(content);
-      const frictionMechanisms = extractE1FrictionMechanisms(content);
+      const evidenceTokens: string[] = [`icon-label:"${label}"`];
+      if (hasNetworkDelete) evidenceTokens.push('DELETE method');
 
-      // Apply same disclosure pass-through
-      if (disclosureTermsFound.length > 0 && hasConfirmationDialog) {
-        console.log(`E1 SUPPRESSED (icon btn disclosure pass-through): "${label}" in ${filePath}`);
+      const suppressResult = shouldSuppressE1Bundle({
+        label, filePath, content, confirmGate, recovery,
+        hasStrongDisclosure, disclosureTermsFound, frictionMechanisms,
+      });
+      if (suppressResult.suppressed) {
+        console.log(`E1 SUPPRESSED (icon): "${label}" in ${filePath} — ${suppressResult.reason}`);
         continue;
       }
 
       bundles.push({
-        filePath,
-        ctaLabel: label,
-        ctaType,
+        filePath, ctaLabel: label, ctaType,
         nearbyText: [],
-        hasConfirmationDialog,
-        hasWarningText: false,
-        hasPricingText: false,
-        disclosureTermsFound,
-        frictionMechanisms,
+        hasConfirmationDialog: confirmGate.hasGate,
+        hasWarningText: false, hasPricingText: false,
+        disclosureTermsFound, frictionMechanisms,
         suppressed: false,
+        startLine: triggerLine,
+        deleteLine: networkDeleteLine,
+        evidenceTokens,
+        detectionSource: 'icon',
       });
+    }
+
+    // ── DETECTION B: Handler-based deletion (onClick={() => deleteMutation.mutate(id)}) ──
+    // Only for TSX/JSX files with UI
+    if (/\.(tsx|jsx)$/.test(filePath)) {
+      // Pattern: onClick/onSelect/onAction calling a delete-named function directly
+      const directInvokeRe = /(?:onClick|onSelect|onAction|onConfirm|onPress)\s*=\s*\{[^}]{0,200}?\b(delete|remove|destroy|trash)\w*(?:\.\w+)?\s*\(/gi;
+      let dim;
+      while ((dim = directInvokeRe.exec(content)) !== null) {
+        const triggerLine = getLineNumber(dim.index);
+        const handlerSnippet = dim[0];
+        // Extract a meaningful label from surrounding context
+        const surroundStart = Math.max(0, dim.index - 300);
+        const surroundEnd = Math.min(content.length, dim.index + 300);
+        const surroundRegion = content.slice(surroundStart, surroundEnd);
+
+        // Try to find a label from the element's text content or nearby context
+        const nearbyLabelMatch = surroundRegion.match(/>([^<]{2,40}(?:Delete|Remove|Trash|Destroy)[^<]{0,20})<\//i)
+          || surroundRegion.match(/<(?:Button|button)[^>]*>([^<]{2,40})<\//i);
+        const inferredLabel = nearbyLabelMatch?.[1]?.trim() || `${dim[1]}() action`;
+
+        const dedupeKey = `E1|${filePath}|handler|${inferredLabel.toLowerCase()}|${triggerLine}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        // Also skip if we already have a label-based detection for same label in same file
+        const labelDedupeKey = `E1|${filePath}|${inferredLabel.toLowerCase()}`;
+        if (seenKeys.has(labelDedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        const evidenceTokens: string[] = [`handler:${dim[1]}`, `trigger:${handlerSnippet.slice(0, 40)}`];
+        if (hasNetworkDelete) evidenceTokens.push('DELETE method');
+
+        const suppressResult = shouldSuppressE1Bundle({
+          label: inferredLabel, filePath, content, confirmGate, recovery,
+          hasStrongDisclosure, disclosureTermsFound, frictionMechanisms,
+          handlerName: dim[1],
+        });
+        if (suppressResult.suppressed) {
+          console.log(`E1 SUPPRESSED (handler): "${inferredLabel}" in ${filePath}:${triggerLine} — ${suppressResult.reason}`);
+          continue;
+        }
+
+        bundles.push({
+          filePath, ctaLabel: inferredLabel, ctaType: 'destructive',
+          nearbyText: extractNearbyText(surroundRegion).slice(0, 4),
+          hasConfirmationDialog: confirmGate.hasGate,
+          hasWarningText: E1_WARNING_WORDS.test(surroundRegion),
+          hasPricingText: false,
+          disclosureTermsFound, frictionMechanisms,
+          suppressed: false,
+          startLine: triggerLine,
+          deleteLine: networkDeleteLine,
+          evidenceTokens,
+          detectionSource: 'handler',
+        });
+      }
+
+      // ── DETECTION C: Trash icon + delete handler combination ──
+      const trashIconRe = /<(?:Trash|Trash2|TrashIcon)\b[^/]*\/>/gi;
+      let tim;
+      while ((tim = trashIconRe.exec(content)) !== null) {
+        // Check if the Trash icon is inside a clickable element with a delete handler
+        const contextStart = Math.max(0, tim.index - 200);
+        const contextEnd = Math.min(content.length, tim.index + 200);
+        const iconContext = content.slice(contextStart, contextEnd);
+
+        // Must have a delete handler nearby
+        if (!E1_DELETE_HANDLER_RE.test(iconContext) && !E1_DIRECT_DELETE_INVOKE_RE.test(iconContext)) continue;
+
+        const triggerLine = getLineNumber(tim.index);
+        const inferredLabel = 'Trash icon (delete action)';
+
+        const dedupeKey = `E1|${filePath}|trash-icon|${triggerLine}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        const evidenceTokens: string[] = ['Trash icon', 'delete handler'];
+        if (hasNetworkDelete) evidenceTokens.push('DELETE method');
+
+        const suppressResult = shouldSuppressE1Bundle({
+          label: inferredLabel, filePath, content, confirmGate, recovery,
+          hasStrongDisclosure, disclosureTermsFound, frictionMechanisms,
+        });
+        if (suppressResult.suppressed) {
+          console.log(`E1 SUPPRESSED (trash-icon): ${filePath}:${triggerLine} — ${suppressResult.reason}`);
+          continue;
+        }
+
+        bundles.push({
+          filePath, ctaLabel: inferredLabel, ctaType: 'destructive',
+          nearbyText: [],
+          hasConfirmationDialog: confirmGate.hasGate,
+          hasWarningText: false, hasPricingText: false,
+          disclosureTermsFound, frictionMechanisms,
+          suppressed: false,
+          startLine: triggerLine,
+          deleteLine: networkDeleteLine,
+          evidenceTokens,
+          detectionSource: 'handler',
+        });
+      }
+    }
+
+    // ── DETECTION A (network): DELETE request without any UI confirmation gate ──
+    // Only flag if the file has a DELETE network call but NO confirmation gate at all
+    if (hasNetworkDelete && !confirmGate.hasGate && /\.(tsx|jsx)$/.test(filePath)) {
+      // Check if there's a delete-named function that directly calls DELETE
+      const deleteHandlerRe = /(?:const|function)\s+(handle(?:Delete|Remove|Destroy)|(?:delete|remove|destroy)\w+)\s*=\s*(?:async\s*)?\(?/gi;
+      let dhm;
+      while ((dhm = deleteHandlerRe.exec(content)) !== null) {
+        const handlerName = dhm[1];
+        const handlerLine = getLineNumber(dhm.index);
+
+        // Skip if handler is already gated
+        if (isHandlerGatedByConfirmation(handlerName, content)) continue;
+
+        // Check handler body for direct DELETE call
+        const afterHandler = content.slice(dhm.index, Math.min(content.length, dhm.index + 500));
+        if (!E1_NETWORK_DELETE_RE.test(afterHandler) && !E1_DELETE_MUTATION_RE.test(afterHandler)) {
+          // Check if handler calls .mutate() or similar
+          if (!/\.mutate\s*\(|\.mutateAsync\s*\(/i.test(afterHandler)) continue;
+        }
+
+        const inferredLabel = `${handlerName}() network DELETE`;
+        const dedupeKey = `E1|${filePath}|network|${handlerName.toLowerCase()}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        // Also skip if we already have label/handler-based detection for same file+handler
+        const anyExisting = bundles.some(b => b.filePath === filePath &&
+          (b.ctaLabel.toLowerCase().includes(handlerName.toLowerCase().replace('handle', '').replace('delete', 'delete')) ||
+           b.evidenceTokens.some(t => t.includes(handlerName))));
+        if (anyExisting) continue;
+        seenKeys.add(dedupeKey);
+
+        const evidenceTokens: string[] = [`handler:${handlerName}`, 'DELETE method'];
+
+        const suppressResult = shouldSuppressE1Bundle({
+          label: inferredLabel, filePath, content, confirmGate, recovery,
+          hasStrongDisclosure, disclosureTermsFound, frictionMechanisms,
+          handlerName,
+        });
+        if (suppressResult.suppressed) {
+          console.log(`E1 SUPPRESSED (network): "${handlerName}" in ${filePath}:${handlerLine} — ${suppressResult.reason}`);
+          continue;
+        }
+
+        bundles.push({
+          filePath, ctaLabel: inferredLabel, ctaType: 'destructive',
+          nearbyText: [],
+          hasConfirmationDialog: false,
+          hasWarningText: false, hasPricingText: false,
+          disclosureTermsFound, frictionMechanisms,
+          suppressed: false,
+          startLine: handlerLine,
+          deleteLine: networkDeleteLine,
+          evidenceTokens,
+          detectionSource: 'network',
+        });
+      }
     }
   }
 
-  return bundles.slice(0, 20);
+  return bundles.slice(0, 30);
+}
+
+// Helper: extract nearby text from a region
+function extractNearbyText(region: string): string[] {
+  const nearbyText: string[] = [];
+  const hRe = /<h([1-6])\b[^>]*>([^<]{2,80})<\/h\1>/gi;
+  let hm;
+  while ((hm = hRe.exec(region)) !== null) {
+    nearbyText.push(`h${hm[1]}: ${hm[2].replace(/\{[^}]*\}/g, '').trim()}`);
+  }
+  const pRe = /<(?:p|span|div|label)\b[^>]*>([^<]{3,150})<\/(?:p|span|div|label)>/gi;
+  let pm;
+  while ((pm = pRe.exec(region)) !== null) {
+    const text = pm[1].replace(/\{[^}]*\}/g, '').trim();
+    if (text.length >= 3 && text.length <= 150) nearbyText.push(text);
+  }
+  return nearbyText;
+}
+
+// Unified suppression logic for E1 bundles
+function shouldSuppressE1Bundle(opts: {
+  label: string;
+  filePath: string;
+  content: string;
+  confirmGate: { hasGate: boolean; gateType: string };
+  recovery: { hasRecovery: boolean; recoveryType: string };
+  hasStrongDisclosure: boolean;
+  disclosureTermsFound: string[];
+  frictionMechanisms: string[];
+  handlerName?: string;
+}): { suppressed: boolean; reason: string } {
+  const { label, content, confirmGate, recovery, hasStrongDisclosure, disclosureTermsFound, frictionMechanisms, handlerName } = opts;
+
+  // Recovery suppression (undo/restore/soft-delete)
+  if (recovery.hasRecovery) {
+    return { suppressed: true, reason: `recovery mechanism detected: ${recovery.recoveryType}` };
+  }
+
+  // Confirmation gate + disclosure pass-through
+  if (confirmGate.hasGate && hasStrongDisclosure) {
+    const labelMentionsAction = E1_DESTRUCTIVE_LABEL_RE.test(label);
+    if (labelMentionsAction) {
+      return { suppressed: true, reason: `label ("${label}") + disclosure (${disclosureTermsFound.slice(0, 3).join(', ')}) + ${confirmGate.gateType}` };
+    }
+    if (frictionMechanisms.length > 0) {
+      return { suppressed: true, reason: `disclosure + ${confirmGate.gateType} + friction (${frictionMechanisms.join(', ')})` };
+    }
+    return { suppressed: true, reason: `disclosure (${disclosureTermsFound.slice(0, 3).join(', ')}) + ${confirmGate.gateType}` };
+  }
+
+  // Confirmation gate alone (even without disclosure — still gated)
+  if (confirmGate.hasGate) {
+    // Check if the specific handler is gated (not just file-level)
+    if (handlerName && isHandlerGatedByConfirmation(handlerName, content)) {
+      return { suppressed: true, reason: `handler ${handlerName} is gated by confirmation state` };
+    }
+    // For destructive labels with a confirmation dialog in the same file, suppress
+    if (E1_DESTRUCTIVE_LABEL_RE.test(label)) {
+      return { suppressed: true, reason: `destructive label + ${confirmGate.gateType} in same file` };
+    }
+  }
+
+  return { suppressed: false, reason: '' };
 }
 
 // ========== E2 CHOICE BUNDLE EXTRACTION (Imbalanced Choice Architecture — v2 with High-Impact Gate + Signal Scoring) ==========
@@ -7353,17 +7656,19 @@ function formatE1EvidenceBundleForPrompt(bundles: E1EvidenceBundle[]): string {
   const lines = [
     '[E1_EVIDENCE_BUNDLE]',
     'IMPORTANT: Location references are for traceability ONLY. Do NOT use file names as evidence.',
-    'Evaluate ONLY the extracted CTA labels and nearby UI text.',
+    'Evaluate ONLY the extracted CTA labels, nearby UI text, and evidence tokens.',
     'NOTE: Bundles where strong disclosure + confirmation dialog are present have ALREADY been filtered out.',
-    'The bundles below represent actions where disclosure may be missing or insufficient.',
+    'The bundles below represent destructive actions where confirmation or disclosure may be missing.',
   ];
   for (const b of activeBundles) {
-    lines.push(`\n--- Location: ${b.filePath} ---`);
-    lines.push(`  CTA: "${b.ctaLabel}" (type: ${b.ctaType})`);
+    lines.push(`\n--- Location: ${b.filePath}${b.startLine ? ':' + b.startLine : ''} ---`);
+    lines.push(`  CTA: "${b.ctaLabel}" (type: ${b.ctaType}, source: ${b.detectionSource})`);
+    if (b.evidenceTokens.length > 0) lines.push(`  Evidence tokens: ${b.evidenceTokens.join(', ')}`);
     if (b.nearbyText.length > 0) lines.push(`  Nearby text: ${b.nearbyText.join(' | ')}`);
     lines.push(`  Flags: confirmation=${b.hasConfirmationDialog}, warning=${b.hasWarningText}, pricing=${b.hasPricingText}`);
     if (b.disclosureTermsFound.length > 0) lines.push(`  Disclosure terms found: ${b.disclosureTermsFound.join(', ')}`);
     if (b.frictionMechanisms.length > 0) lines.push(`  Friction mechanisms: ${b.frictionMechanisms.join(', ')}`);
+    if (b.deleteLine) lines.push(`  DELETE request line: ${b.deleteLine}`);
   }
   lines.push('[/E1_EVIDENCE_BUNDLE]');
   return lines.join('\n');
