@@ -1007,6 +1007,9 @@ const U3_HEADER_LABELS = /^(?:name|status|actions?|date|doctor|specialty|locatio
 // Typical header styling classes
 const U3_HEADER_STYLE_RE = /\b(?:uppercase|tracking-wide|tracking-wider|text-xs|font-medium|font-semibold|font-bold|text-muted-foreground)\b/;
 
+// Icon component names — skip these as carrier/report elements
+const U3_ICON_COMPONENT_RE = /^(?:Icon|[A-Z][a-zA-Z]*Icon|Lucide[A-Z]|ChevronRight|ChevronLeft|ChevronDown|ChevronUp|ArrowLeft|ArrowRight|Check|X|Plus|Minus|Search|Loader2?|Spinner|Eye|EyeOff|Mail|Phone|Calendar|Clock|User|Users|Star|Heart|Bell|Settings|Menu|MoreHorizontal|MoreVertical|Trash|Edit|Copy|Download|Upload|ExternalLink|Link|Info|AlertCircle|AlertTriangle|HelpCircle|Filter|SortAsc|SortDesc|Grip|GripVertical|Dot|Circle|Square|Badge|Shield|Lock|Unlock|Globe|Map|MapPin|Home|Building|Briefcase|Book|FileText|File|Folder|Image|Camera|Video|Mic|Volume|Play|Pause|SkipForward|SkipBack|RefreshCw|RotateCw|ZoomIn|ZoomOut|Maximize|Minimize|Sun|Moon|Cloud|Zap|Activity|TrendingUp|TrendingDown|BarChart|PieChart|Hash|AtSign|Paperclip|Send|MessageSquare|MessageCircle|Inbox|Archive|Bookmark|Flag|Tag|Terminal|Code|Database|Server|Wifi|Bluetooth|Monitor|Smartphone|Tablet|Watch|Cpu|HardDrive|Package|Box|Gift|ShoppingCart|ShoppingBag|CreditCard|DollarSign|Percent|Award|Trophy|Target|Crosshair|Navigation|Compass|Layers|Layout|Grid|List|Columns|Rows|Sidebar|PanelLeft|PanelRight|SplitSquare)$/;
+
 /** Gate 1: Content risk assessment — does this content have meaningful truncation risk? */
 function u3ContentRiskGate(content: string, pos: number, textPreview: string | undefined, context: string): {
   pass: boolean;
