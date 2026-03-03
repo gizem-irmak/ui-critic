@@ -1478,7 +1478,7 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
       });
       if (confidence < 0.40) continue;
 
-      const columnLabel = u3FindColumnLabel(content, pos);
+      // columnLabel already resolved above for dedup
       const isDynamic = contentGate.contentKind === 'dynamic' || contentGate.contentKind === 'list_mapped';
       const wcVarMatch = textPreview && textPreview.startsWith('(dynamic text: ') ? textPreview.match(/\(dynamic text: ([^)]+)\)/) : null;
       const wcVarName = wcVarMatch ? wcVarMatch[1].split('.').pop() : undefined;
