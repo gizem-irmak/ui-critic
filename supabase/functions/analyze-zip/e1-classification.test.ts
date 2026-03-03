@@ -34,6 +34,14 @@ function detectConfirmationGate(region: string): { hasGate: boolean; gateType: s
   if (confirmMatch) return { hasGate: true, gateType: confirmMatch[1] || 'confirmation-dialog' };
   if (E1_TWO_STEP_STATE_RE.test(region)) return { hasGate: true, gateType: 'two-step-state' };
   if (/\bwindow\.confirm\s*\(/i.test(region)) return { hasGate: true, gateType: 'window.confirm' };
+  // Disabled-until-confirm gate
+  const disabledConfirmMatch = region.match(/disabled=\{!(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\}/i)
+    || region.match(/disabled=\{(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*===\s*false\}/i);
+  if (disabledConfirmMatch) return { hasGate: true, gateType: `disabled-until-confirm (${disabledConfirmMatch[1]})` };
+  // Conditional execution gated by confirm state
+  if (/\b(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*&&\s*\w*(?:delete|remove|destroy)\w*\s*[.(]/i.test(region)) {
+    return { hasGate: true, gateType: 'conditional-confirm-gate' };
+  }
   return { hasGate: false, gateType: '' };
 }
 
@@ -100,7 +108,7 @@ function shouldSuppressE1(opts: {
     if (friction.length > 0) {
       return { suppressed: true, reason: `${gate.gateType} + friction (${friction.join(', ')}) in local scope` };
     }
-    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state/i.test(gate.gateType)) {
+    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state|disabled-until-confirm|conditional-confirm-gate/i.test(gate.gateType)) {
       return { suppressed: true, reason: `destructive label + ${gate.gateType} in local scope` };
     }
   }
@@ -402,13 +410,42 @@ Deno.test("E1 REGRESSION: bare Dialog in local scope does NOT suppress", () => {
   assertEquals(result.suppressed, false, `Bare Dialog should NOT suppress E1, but got: ${result.reason}`);
 });
 
-// ── Test 25: Delete with disabled={!confirm} pattern via handler → NOT suppressed without gate ──
-Deno.test("E1 REGRESSION: disabled flag alone is not a gate", () => {
-  const localRegion = `<Button disabled={!confirmDelete} onClick={() => deleteAccount()}>Delete</Button>`;
+// ── Test 25: Delete with disabled={!confirmChecked} → SUPPRESSED (disabled-until-confirm gate) ──
+Deno.test("E1 REGRESSION: disabled={!confirmChecked} is a valid confirmation gate", () => {
+  const localRegion = `<Button disabled={!confirmChecked} onClick={() => deleteAccount()}>Delete</Button>`;
   const result = shouldSuppressE1({
     filePath: "src/pages/Settings.tsx", label: "Delete",
     localRegion, fullContent: localRegion,
   });
-  // disabled flag without an explicit confirmation component is NOT a confirmation gate
-  assertEquals(result.suppressed, false, "disabled flag alone is not a confirmation gate");
+  assertEquals(result.suppressed, true, `Expected suppression via disabled-until-confirm, got: ${result.reason}`);
+});
+
+// ── Test 26: disabled={!unrelatedState} should NOT suppress ──
+Deno.test("E1: disabled={!isLoading} is NOT a confirmation gate", () => {
+  const localRegion = `<Button disabled={!isLoading} onClick={() => deleteAccount()}>Delete</Button>`;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/Settings.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
+  });
+  assertEquals(result.suppressed, false, "disabled with non-confirm state should NOT suppress");
+});
+
+// ── Test 27: disabled={acknowledged === false} → SUPPRESSED ──
+Deno.test("E1: disabled={acknowledged === false} is a valid gate", () => {
+  const localRegion = `<Button disabled={acknowledged === false} onClick={() => deleteAccount()}>Delete</Button>`;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/Settings.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
+  });
+  assertEquals(result.suppressed, true, `Expected suppression via disabled-until-confirm`);
+});
+
+// ── Test 28: confirmChecked && deleteMutation.mutate() → SUPPRESSED ──
+Deno.test("E1: conditional confirm gate (confirmChecked && delete) → SUPPRESSED", () => {
+  const localRegion = `<Button onClick={() => confirmChecked && deleteMutation.mutate(id)}>Delete</Button>`;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/Settings.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
+  });
+  assertEquals(result.suppressed, true, `Expected suppression via conditional-confirm-gate`);
 });
