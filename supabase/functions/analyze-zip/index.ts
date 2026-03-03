@@ -974,27 +974,36 @@ function u3HasExpandMechanism(content: string, pos: number, windowLines: number)
  */
 function u3FindCarrierElement(content: string, pos: number): { tag: string; className: string; tagStart: number; fullTag: string } | null {
   const U3_TRUNC_CLASS_RE = /\b(truncate|line-clamp-\d+|text-ellipsis)\b/;
-  // Walk backward to find all unclosed opening tags before pos
-  const before = content.slice(Math.max(0, pos - 600), pos);
+  // IMPORTANT: pos may be INSIDE a tag's className attribute (e.g., the 't' in truncate).
+  // Extend the search window 300 chars past pos to capture the full opening tag.
+  const searchStart = Math.max(0, pos - 600);
+  const searchEnd = Math.min(content.length, pos + 300);
+  const searchSlice = content.slice(searchStart, searchEnd);
   const tagRe = /<([a-zA-Z][\w.]*)\s([^>]*)>/g;
-  // Collect all unclosed ancestors
   const ancestors: { tag: string; className: string; tagStart: number; fullTag: string }[] = [];
   let tm;
-  while ((tm = tagRe.exec(before)) !== null) {
+  while ((tm = tagRe.exec(searchSlice)) !== null) {
     const tag = tm[1];
     const attrs = tm[2];
-    const absStart = Math.max(0, pos - 600) + tm.index;
+    const absStart = searchStart + tm.index;
+    const absEnd = absStart + tm[0].length;
     if (attrs.endsWith('/')) continue;
-    const tagEnd = absStart + tm[0].length;
-    const between = content.slice(tagEnd, pos);
-    const closeRe = new RegExp(`</${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*>`, 'i');
-    if (closeRe.test(between)) continue;
+    // Skip tags that start after pos AND whose className doesn't contain pos
+    if (absStart > pos) continue;
+    // Tag whose opening < is before pos and closing > is after pos → pos is inside this tag's attributes
+    const isContainingTag = absStart <= pos && absEnd > pos;
+    if (!isContainingTag) {
+      // Normal ancestor: check it's not closed between tagEnd and pos
+      const between = content.slice(absEnd, pos);
+      const closeRe = new RegExp(`</${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*>`, 'i');
+      if (closeRe.test(between)) continue;
+    }
     const classMatch = attrs.match(/className\s*=\s*(?:"([^"]*)"|'([^']*)'|\{[^}]*["']([^"']*)["'][^}]*\})/);
     const className = classMatch ? (classMatch[1] || classMatch[2] || classMatch[3] || '') : '';
     ancestors.push({ tag, className, tagStart: absStart, fullTag: tm[0] });
   }
   if (ancestors.length === 0) return null;
-  // Prefer the CLOSEST ancestor that actually has a truncation class
+  // Prefer the CLOSEST element that actually has a truncation class in its className
   for (let i = ancestors.length - 1; i >= 0; i--) {
     if (U3_TRUNC_CLASS_RE.test(ancestors[i].className)) return ancestors[i];
   }
@@ -1231,9 +1240,11 @@ function u3DetectRecoverySignals(content: string, pos: number, context: string):
   return signals;
 }
 
-/** Extract truncation-related class tokens from a class string */
+/** Extract truncation-related class tokens from a class string (deduped) */
 function u3ExtractTruncationTokens(classStr: string): string[] {
+  const seen = new Set<string>();
   const tokens: string[] = [];
+  const add = (t: string) => { if (!seen.has(t)) { seen.add(t); tokens.push(t); } };
   const tokenPatterns = [
     /\btruncate\b/, /\bline-clamp-\d+\b/, /\btext-ellipsis\b/,
     /\bwhitespace-nowrap\b/, /\boverflow-hidden\b/, /\boverflow-clip\b/,
@@ -1244,25 +1255,25 @@ function u3ExtractTruncationTokens(classStr: string): string[] {
   ];
   for (const p of tokenPatterns) {
     const m = classStr.match(p);
-    if (m) tokens.push(m[0]);
+    if (m) add(m[0]);
   }
-  // Match w-N but NOT inside min-w-N or max-w-N (use negative lookbehind workaround)
+  // Match w-N but NOT inside min-w-N or max-w-N
   const wMatches = classStr.match(/\bw-\d+\b/g);
   if (wMatches) {
     for (const wm of wMatches) {
       const idx = classStr.indexOf(wm);
       const before = idx > 0 ? classStr.slice(Math.max(0, idx - 4), idx) : '';
       if (/min-$/.test(before) || /max-$/.test(before)) continue;
-      tokens.push(wm);
-      break; // only first
+      add(wm);
+      break;
     }
   }
   // Match w-[...] bracket notation
   const wBracketMatch = classStr.match(/\bw-\[[^\]]+\]/);
-  if (wBracketMatch) tokens.push(wBracketMatch[0]);
+  if (wBracketMatch) add(wBracketMatch[0]);
   // Match max-w-[...] bracket notation
   const maxWBracketMatch = classStr.match(/\bmax-w-\[[^\]]+\]/);
-  if (maxWBracketMatch && !tokens.includes(maxWBracketMatch[0])) tokens.push(maxWBracketMatch[0]);
+  if (maxWBracketMatch) add(maxWBracketMatch[0]);
   return tokens;
 }
 
@@ -1377,7 +1388,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         if (u3HasExpandMechanism(content, pos, 20)) continue;
 
         const carrierClasses = carrier ? carrier.className : '';
-        const truncationTokens = u3ExtractTruncationTokens(carrierClasses + ' ' + context);
+        // Extract tokens from carrier className first; fall back to context only if carrier has none
+        const truncationTokens = u3ExtractTruncationTokens(carrierClasses || context);
         if (truncationTokens.length === 0) truncationTokens.push(m[0]);
 
         const confidence = u3ComputeConfidence({
@@ -1417,8 +1429,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
 
         const contentPreview = isDynamic && d1VarMatch ? `{${d1VarMatch[1]}}` : textPreview;
         const evidenceStr = columnLabel
-          ? `Column "${columnLabel}" cell uses \`${label}\` on ${contentPreview || 'dynamic content'} with no tooltip/expand`
-          : `${m[0]} at ${fileName}:${lineNumber}`;
+          ? `Column "${columnLabel}" cell (${elementTag || 'element'}) uses \`${label}\` on ${contentPreview || 'dynamic content'} with no tooltip/expand`
+          : `${label} on ${contentPreview || 'content'} at ${fileName}:${lineNumber}`;
 
         findings.push({
           subCheck: 'U3.D1',
@@ -1705,10 +1717,11 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         if (seenKeys.has(dedupeKey)) continue;
         seenKeys.add(dedupeKey);
 
-        const truncationTokens = u3ExtractTruncationTokens(context);
+        const d6CarrierClasses = d6Carrier ? d6Carrier.className : '';
+        const truncationTokens = u3ExtractTruncationTokens(d6CarrierClasses || context);
         if (truncationTokens.length === 0) truncationTokens.push(d6m[0]);
-        if (hasOverflowClip) truncationTokens.push('overflow-hidden');
-        if (hasNowrap) truncationTokens.push('whitespace-nowrap');
+        if (hasOverflowClip && !truncationTokens.includes('overflow-hidden')) truncationTokens.push('overflow-hidden');
+        if (hasNowrap && !truncationTokens.includes('whitespace-nowrap')) truncationTokens.push('whitespace-nowrap');
 
         const confidence = u3ComputeConfidence({
           contentKind: contentGate.contentKind,
@@ -1726,8 +1739,8 @@ function detectU3ContentAccessibility(allFiles: Map<string, string>): U3Finding[
         const elementTag = d6Carrier?.tag && !U3_ICON_COMPONENT_RE.test(d6Carrier.tag) ? d6Carrier.tag : undefined;
 
         const d6EvidenceStr = columnLabel
-          ? `Column "${columnLabel}" cell constrained by ${d6m[0]}${hasNowrap ? ' + nowrap' : ''} (no tooltip/expand) on ${d6ContentPreview || 'dynamic content'}`
-          : `Cell constrained by ${d6m[0]}${hasOverflowClip ? ' + overflow-hidden' : ''} at ${fileName}:${lineNumber}`;
+          ? `Column "${columnLabel}" cell (${elementTag || 'element'}) constrained by ${d6m[0]}${hasNowrap ? ' + nowrap' : ''} (no tooltip/expand) on ${d6ContentPreview || 'dynamic content'}`
+          : `Cell (${elementTag || 'element'}) constrained by ${d6m[0]}${hasOverflowClip ? ' + overflow-hidden' : ''} at ${fileName}:${lineNumber}`;
 
         findings.push({
           subCheck: 'U3.D6',
