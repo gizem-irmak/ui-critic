@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { LocationBadge } from './LocationBadge';
 import type { Violation, U3ElementSubItem } from '@/types/project';
@@ -43,9 +44,28 @@ function U3ElementItem({ element, compact = false }: {
                 <FieldValue mono>
                   {element.elementTag ? `<${element.elementTag}>` : '(unknown tag)'}
                   {' — '}type: {element.truncationType || '(none)'}
-                  {' — '}text: {element.textLength === 'dynamic' ? 'dynamic' : element.textLength != null ? `${element.textLength} chars` : '(unknown)'}
+                  {element.textLength === 'dynamic' ? ' — text: dynamic' : element.textLength != null ? ` — text: ${element.textLength} chars` : ''}
                   {' — '}expand: {element.expandDetected ? 'Yes' : 'No'}
                 </FieldValue>
+              </FieldRow>
+            )}
+
+            {element.contentKind && (
+              <FieldRow>
+                <FieldLabel>Content:</FieldLabel>
+                <Badge variant="outline" className="text-xs font-normal">
+                  {element.contentKind === 'dynamic' ? 'Dynamic expression' :
+                   element.contentKind === 'list_mapped' ? 'List/map row' :
+                   element.contentKind === 'static_long' ? 'Static (long)' :
+                   'Static (short)'}
+                </Badge>
+              </FieldRow>
+            )}
+
+            {element.truncationTokens && element.truncationTokens.length > 0 && (
+              <FieldRow>
+                <FieldLabel>Tokens:</FieldLabel>
+                <FieldValue mono>{element.truncationTokens.join(', ')}</FieldValue>
               </FieldRow>
             )}
 
@@ -74,6 +94,22 @@ function U3ElementItem({ element, compact = false }: {
               <FieldRow>
                 <FieldLabel>Text preview:</FieldLabel>
                 <span className="font-mono text-xs text-foreground/80 truncate max-w-full">{element.textPreview}</span>
+              </FieldRow>
+            )}
+
+            {element.recoverySignals && element.recoverySignals.length > 0 && (
+              <FieldRow>
+                <FieldLabel>Recovery:</FieldLabel>
+                <FieldValue mono>{element.recoverySignals.join(', ')}</FieldValue>
+              </FieldRow>
+            )}
+
+            {(element.startLine != null) && (
+              <FieldRow>
+                <FieldLabel>Source:</FieldLabel>
+                <FieldValue mono>
+                  {element.location}:{element.startLine}{element.endLine && element.endLine !== element.startLine ? `–${element.endLine}` : ''}
+                </FieldValue>
               </FieldRow>
             )}
 
