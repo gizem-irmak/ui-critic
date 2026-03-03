@@ -1,13 +1,21 @@
 # Memory: features/analysis-rules/u4-context-aware-suppression
 Updated: now
 
-Rule U4 (Recognition-to-Recall Regression) uses a **two-stage architecture** where Stage 1 is candidate-only extraction and Stage 2 is mandatory LLM decision.
+Rule U4 (Recognition-to-Recall Regression) uses a **two-stage architecture** where Stage 1 is candidate-only extraction and Stage 2 is mandatory LLM decision, with an optional Stage 2.5 LLM validator for suppression-only.
 
 ## Architecture
 
 ### Stage 1 — Deterministic Candidate Extraction (No Classification)
 Extracts candidates across 4 subtypes. Does NOT classify, emit, or assign status. Builds evidence bundles with:
 - Code snippets, nearby headings, mitigation signals, raw evidence descriptions
+- U4.1 enrichment: candidateKind, knownOptionsDetected, knownOptionsExamples, nearbyText, actionContext
+
+### Stage 1.5 — Confirmation-Phrase Suppression (Hard, Deterministic)
+U4.1 candidates are checked for confirmation-phrase patterns BEFORE reaching LLM:
+1. Detect DESTRUCTIVE context: `delete`, `cannot be undone`, `permanent`, `irreversible`, etc.
+2. Detect visible required phrase: `Type DELETE to confirm`, `Enter CONFIRM to proceed`, etc.
+3. If BOTH destructive context AND visible phrase → **hard suppress** (not a recall issue, it's copying)
+4. If destructive context but no visible phrase → mark as `candidateKind: 'confirmation_phrase'` (ambiguous)
 
 ### Stage 2 — LLM Decision Layer (Mandatory)
 ALL candidates go to LLM. The LLM is the SOLE decision maker and must answer:
@@ -18,6 +26,14 @@ ALL candidates go to LLM. The LLM is the SOLE decision maker and must answer:
 
 If ANY answer is uncertain → candidate is SUPPRESSED.
 
+### Stage 2.5 — Optional LLM Validator (suppression-only)
+Controlled by `u4_llm_validator_enabled` config flag (default: false).
+- Runs ONLY on candidates with confidence in [0.45, 0.70]
+- Can ONLY suppress or downgrade — never creates new findings
+- Input: structured JSON per candidate with field_label, nearby_text, action_context, candidate_kind, etc.
+- Output: `{ keep_issue: true|false, reason, confidence_adjust: -0.20..+0.10 }`
+- Invalid LLM output → fallback to deterministic decision
+
 ## Global Constraints (Mandatory)
 - U4 MUST NEVER output "confirmed" — status is ALWAYS "potential"
 - Maximum confidence: **0.65** (range: 0.45–0.65)
@@ -27,6 +43,22 @@ If ANY answer is uncertain → candidate is SUPPRESSED.
 - Do NOT infer enum expectation from generic labels: reason, message, description, notes, details
 - Truncation/overflow is U3 scope — never flag under U4
 - U4 prioritizes false-positive avoidance over sensitivity
+
+## U4.1 Categorical-Only Trigger
+U4.1 now triggers ONLY when:
+- Field label/placeholder matches categorical domain keywords (specialty, country, status, etc.)
+- Field label does NOT match freeform keywords (notes, message, description, etc.)
+- Field is NOT a confirmation-phrase pattern (see Stage 1.5 above)
+
+### Known-Set Evidence Detection
+Confidence is boosted when:
+- A predefined array is found: `const specialties = [...]`, `const categories: string[] = [...]`
+- Enum validation detected: `z.enum([...])`, `enum TypeName {...}`
+- If no known set exists → keep as low-confidence Potential (≤ 0.55) or suppress
+
+### Evidence Text
+For kept U4.1 items: "User must recall valid values instead of selecting from a list/autocomplete."
+Includes known options examples when detected.
 
 ## U4.2 Component-Aware Import Resolution (Anti-False-Positive)
 When Tabs/TabsTrigger/ToggleGroup usage is detected in a page file:
@@ -64,27 +96,25 @@ Only sent to LLM when ALL of:
 
 ## Subtypes
 
-1. **U4.1 — Structured Selection → Free-Text** (LLM-decided)
-   - Candidates: text inputs with semantic labels (category, status, etc.) without nearby selection components
+1. **U4.1 — Structured Selection → Free-Text** (Deterministic gate + LLM-decided)
+   - Candidates: text inputs with categorical labels (specialty, country, etc.) without nearby selection components
+   - Hard-suppressed if confirmation-phrase pattern with visible instruction
+   - Known-set evidence boosts confidence
    - LLM reports ONLY if finite categorical domain is strongly evidenced
-   - Suppressed if: label implies open description, domain unclear, no enum evidence
 
 2. **U4.2 — Hidden Selection State** (LLM-decided, component-aware)
    - Candidates: Tabs/ToggleGroup without active state indicators
    - **Import resolution**: checks component definition file for `data-[state=active]:` styling
    - LLM reports ONLY if active state truly not persistent in both usage AND definition
-   - Suppressed if: active styling, aria-selected, or visible context exists (locally OR in component definition)
 
 3. **U4.3 — Multi-Step Context Regression** (LLM-decided, conservative grounding)
    - Candidates: flows with ≥2 steps (counted conservatively)
    - Pre-LLM suppression when strong mitigations present (see rules above)
-   - LLM reports ONLY if ALL mitigations missing (step indicator, back nav, summary, persistent context)
-   - If ANY mitigation exists → suppress
+   - LLM reports ONLY if ALL mitigations missing
 
 4. **U4.4 — Generic Context-Free CTAs** (LLM-decided)
    - Candidates: generic buttons (Next, Submit, etc.) that transition steps or commit data
    - LLM reports ONLY if action outcome not contextually clarified
-   - Suppressed if: headings clarify, universally obvious action
 
 ## Post-Processing
 - ALL findings come from LLM only — no deterministic emission
@@ -93,8 +123,5 @@ Only sent to LLM when ALL of:
 - evaluationMethod is always "llm_assisted"
 - Single aggregated violation object (no confirmed/potential split)
 
-## False Positive Prevention
-- Never trigger based solely on: text input presence, missing step indicator without multi-step logic, minimalist styling, truncation, short labels
-- LLM is explicitly allowed to decline reporting
-- Generic labels (reason, message, description, notes, details) excluded from U4.1
-- Prefer "unknown" over false when evidence is incomplete — do not infer
+## Tests (u4-classification.test.ts)
+- 20 tests covering: confirmation-phrase suppression, categorical field detection, non-categorical exclusion, regex validation, known-set detection

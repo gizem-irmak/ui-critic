@@ -4611,6 +4611,7 @@ If ANY answer is "no" or "uncertain" → SUPPRESS.
 **U4.1 (Structured Selection → Free-Text):**
 Report ONLY if: strong evidence the field represents a FINITE categorical domain AND no structured input exists AND the field is NOT narrative/open-ended.
 Suppress if: label implies open description, domain expectation unclear, no explicit enum evidence.
+**CRITICAL — Confirmation-phrase exception:** If the input is used for typed confirmation of a destructive action (e.g., "Type DELETE to confirm") and the required phrase is visibly displayed nearby, this is recognition/copying, NOT recall. You MUST suppress these candidates. Look for: "type", "enter", "confirm", "to confirm" + a visible required word like DELETE, CONFIRM, REMOVE.
 
 **U4.2 (Hidden Selection State):**
 Report ONLY if: selection interaction exists AND active state is NOT visually persistent AND no visible badge/highlight/breadcrumb/summary exists.
@@ -4944,12 +4945,32 @@ interface U4Candidate {
   nearbyHeadings: string[];
   mitigationSignals: string[];
   rawEvidence: string;
+  // U4.1-specific enrichment fields
+  candidateKind?: 'categorical_free_text' | 'confirmation_phrase' | 'unknown';
+  hasVisibleRequiredPhrase?: boolean;
+  knownOptionsDetected?: boolean;
+  knownOptionsExamples?: string[];
+  nearbyText?: string[];
+  actionContext?: string[];
+  suppressionReason?: string;
+  fieldLabel?: string;
+  fieldPlaceholder?: string;
+  inputType?: string;
 }
 
 const U4_STRUCTURED_LABEL_RE = /\b(category|type|status|specialty|department|gender|country|state|province|region|language|currency|priority|severity|role|level|grade|plan|tier|occupation|industry|marital|blood\s*type|ethnicity|nationality|education|degree|sport|position|brand|model|color|size|material|condition|source|channel|frequency|method|mode|format|platform|device)\b/i;
 const U4_FREEFORM_LABEL_RE = /\b(note|notes|comment|comments|description|details|message|reason|bio|biography|about|story|narrative|explain|additional|other|remarks|feedback|suggestion|instructions|address|street|thoughts|opinion|custom|free.?text)\b/i;
 const U4_SELECTION_RE = /<(?:Select|RadioGroup|Radio|CheckboxGroup|Combobox|Autocomplete|Listbox|ToggleGroup|SegmentedControl|Dropdown|DropdownMenu)\b|<(?:select|datalist)\b|\b(?:autocomplete|datalist|onSuggest|filterOptions|combobox)\b/i;
 const U4_STANDARD_AUTH_CTAS = /^(Sign\s*In|Sign\s*Up|Log\s*In|Log\s*Out|Register|Create\s*Account|Go\s*to\s*Dashboard|Go\s*Home|Back\s*to\s*Home|Back\s*to\s*Login|Forgot\s*Password|Reset\s*Password|Verify\s*Email|Resend\s*Code|Resend\s*Email|Sign\s*Out|Logout)$/i;
+
+// Confirmation-phrase detection: requires DESTRUCTIVE context keywords (not just "type"/"enter" alone)
+const U4_CONFIRMATION_DESTRUCTIVE_RE = /\b(delete|DELETE|cannot\s*be\s*undone|permanent|irreversible|are\s*you\s*sure|this\s*action|will\s*be\s*(?:deleted|removed|lost)|destroy|erase|remove\s*account|close\s*account)\b/i;
+const U4_CONFIRMATION_INSTRUCTION_RE = /\b(type|enter)\s+(?:["'`]?[A-Z]{2,20}["'`]?|the\s*(?:word|name|phrase))\b/i;
+const U4_CONFIRMATION_PHRASE_VISIBLE_RE = /(?:type|enter)\s+["'`]?(?:DELETE|CONFIRM|REMOVE|CANCEL|YES|[A-Z]{2,20})["'`]?\s*(?:to\s*(?:confirm|delete|remove|proceed|continue)|in\s*order\s*to)|type\s*(?:the\s*)?(?:word|name|phrase|text)\s/i;
+
+// Known-set evidence detection for U4.1 confidence boosting
+const U4_KNOWN_SET_RE = /(?:const|let|var)\s+(?:specialties|categories|types|statuses|departments|roles|options|choices|genders|countries|states|provinces|languages|currencies|priorities|severities|levels|grades|plans|tiers|occupations|industries)\s*(?::\s*\w+(?:\[\])?\s*)?=\s*\[([^\]]{10,})\]/i;
+const U4_ENUM_RE = /(?:enum\s+\w+|oneOf|z\.enum)\s*(?:\{|\()\s*\[?([^\]})]{10,})\]?\s*(?:\}|\))/i;
 
 function extractU4Candidates(allFiles: Map<string, string>): U4Candidate[] {
   const candidates: U4Candidate[] = [];
@@ -4994,21 +5015,87 @@ function extractU4Candidates(allFiles: Map<string, string>): U4Candidate[] {
       const placeholder = placeholderMatch?.[1] || placeholderMatch?.[2] || '';
       const fieldText = `${label} ${placeholder}`.trim();
 
+      // Skip non-categorical fields entirely
       if (!fieldText || !U4_STRUCTURED_LABEL_RE.test(fieldText)) continue;
       if (U4_FREEFORM_LABEL_RE.test(fieldText)) continue;
       if (/optional/i.test(attrs)) continue;
 
       const lineNum = content.substring(0, m.index).split('\n').length;
-      const nearbyContent = getSnippet(lineNum, 30);
+      const nearbyContent = getSnippet(lineNum, 40);
       const mitigations: string[] = [];
       if (U4_SELECTION_RE.test(nearbyContent)) mitigations.push('selection_component_nearby');
       if (/autocomplete/i.test(attrs)) mitigations.push('autocomplete_present');
+
+      // --- Confirmation-phrase suppression (hard) ---
+      // If a free-text input is used for typed confirmation of a destructive action,
+      // and the required phrase is visibly displayed, this is recognition/copying, not recall.
+      const hasDestructiveContext = U4_CONFIRMATION_DESTRUCTIVE_RE.test(nearbyContent);
+      const hasConfirmationInstruction = U4_CONFIRMATION_INSTRUCTION_RE.test(nearbyContent);
+      const hasVisibleRequiredPhrase = U4_CONFIRMATION_PHRASE_VISIBLE_RE.test(nearbyContent);
+      const isConfirmationPattern = hasDestructiveContext && (hasVisibleRequiredPhrase || hasConfirmationInstruction);
+      if (isConfirmationPattern && hasVisibleRequiredPhrase) {
+        console.log(`U4.1 SUPPRESSED (confirmation_phrase_visible) for "${fieldText}" in ${filePath}: nearby text contains visible confirmation phrase instruction`);
+        continue; // Hard suppression — not a recognition→recall issue
+      }
+
+      // --- Extract nearby text and action context for enrichment ---
+      const nearbyTextSnippets: string[] = [];
+      const nearbyTextRe = />([^<]{3,80})</g;
+      let ntm;
+      let ntCount = 0;
+      while ((ntm = nearbyTextRe.exec(nearbyContent)) !== null && ntCount < 6) {
+        const txt = ntm[1].replace(/\{[^}]*\}/g, '').trim();
+        if (txt.length >= 3 && !/^\s*$/.test(txt)) { nearbyTextSnippets.push(txt); ntCount++; }
+      }
+      const actionContextLabels: string[] = [];
+      const actBtnRe = /<(?:Button|button)\b[^>]*>([^<]{2,40})<\/(?:Button|button)>/gi;
+      let abm;
+      while ((abm = actBtnRe.exec(nearbyContent)) !== null) {
+        const btnLabel = abm[1].replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim();
+        if (btnLabel.length >= 2) actionContextLabels.push(btnLabel);
+      }
+
+      // --- Known-set evidence detection ---
+      let knownOptionsDetected = false;
+      let knownOptionsExamples: string[] = [];
+      const knownSetMatch = content.match(U4_KNOWN_SET_RE);
+      if (knownSetMatch) {
+        knownOptionsDetected = true;
+        const arrayContent = knownSetMatch[1];
+        const optionVals = arrayContent.match(/["'`]([^"'`]{1,40})["'`]/g);
+        if (optionVals) knownOptionsExamples = optionVals.slice(0, 5).map(v => v.replace(/["'`]/g, ''));
+        mitigations.push('known_options_in_code');
+      }
+      const enumMatch = content.match(U4_ENUM_RE);
+      if (enumMatch && !knownOptionsDetected) {
+        knownOptionsDetected = true;
+        const enumContent = enumMatch[1];
+        const enumVals = enumContent.match(/["'`]([^"'`]{1,40})["'`]/g);
+        if (enumVals) knownOptionsExamples = enumVals.slice(0, 5).map(v => v.replace(/["'`]/g, ''));
+        mitigations.push('enum_validation_in_code');
+      }
+
+      // --- Determine candidate kind ---
+      let candidateKind: 'categorical_free_text' | 'confirmation_phrase' | 'unknown' = 'unknown';
+      if (isConfirmationPattern && !hasVisibleRequiredPhrase) {
+        candidateKind = 'confirmation_phrase'; // Destructive context + instruction but phrase not visibly shown — ambiguous
+      } else {
+        candidateKind = 'categorical_free_text';
+      }
+
+      // Build evidence text
+      const evidenceText = knownOptionsDetected
+        ? `User must recall valid values instead of selecting from a list/autocomplete. Known options exist in code (${knownOptionsExamples.slice(0, 3).join(', ')}${knownOptionsExamples.length > 3 ? '...' : ''}) but are not presented as a selection component.`
+        : `Text input for categorical field "${fieldText.match(U4_STRUCTURED_LABEL_RE)?.[0] || ''}". User must recall valid values instead of selecting from a list/autocomplete. No known options array detected in code.`;
 
       candidates.push({
         candidateType: 'U4.1', elementLabel: `"${label || placeholder}" text input`,
         elementType: 'input', filePath, codeSnippet: getSnippet(lineNum, 8),
         nearbyHeadings: getHeadings(lineNum, 15), mitigationSignals: mitigations,
-        rawEvidence: `Text input with label/placeholder "${fieldText}". Matched keyword: "${fieldText.match(U4_STRUCTURED_LABEL_RE)?.[0] || ''}". ${mitigations.length > 0 ? 'Mitigations: ' + mitigations.join(', ') : 'No nearby selection component or autocomplete.'}`,
+        rawEvidence: evidenceText,
+        candidateKind, hasVisibleRequiredPhrase: false, knownOptionsDetected, knownOptionsExamples,
+        nearbyText: nearbyTextSnippets, actionContext: actionContextLabels,
+        fieldLabel: label, fieldPlaceholder: placeholder, inputType: inputType || 'text',
       });
     }
 
@@ -5296,12 +5383,17 @@ function formatU4CandidatesForLLM(candidates: U4Candidate[]): string {
   lines.push('You are the SOLE decision maker. Do NOT auto-confirm. Status is ALWAYS "potential". Max confidence: 0.65.');
   lines.push('For each: (1) Does this reduce recognition-based interaction? (2) Is recall burden plausibly increased? (3) Are there visible mitigations? (4) Is semantic intent clearly categorical?');
   lines.push('If ANY answer uncertain → SUPPRESS.');
+  lines.push('IMPORTANT: Confirmation-phrase inputs (e.g., "Type DELETE to confirm") where the required phrase is visible are NOT recognition→recall regressions. They are recognition/copying. SUPPRESS these.');
   lines.push('');
   for (const c of candidates) {
     lines.push(`--- ${c.candidateType} CANDIDATE ---`);
     lines.push(`Element: ${c.elementLabel} (${c.elementType})`);
     lines.push(`File: ${c.filePath}`);
     lines.push(`Evidence: ${c.rawEvidence}`);
+    if (c.candidateKind) lines.push(`Candidate kind: ${c.candidateKind}`);
+    if (c.knownOptionsDetected) lines.push(`Known options detected: true (examples: ${c.knownOptionsExamples?.join(', ') || 'N/A'})`);
+    if (c.nearbyText && c.nearbyText.length > 0) lines.push(`Nearby text: ${c.nearbyText.join(' | ')}`);
+    if (c.actionContext && c.actionContext.length > 0) lines.push(`Action context (buttons): ${c.actionContext.join(', ')}`);
     if (c.mitigationSignals.length > 0) lines.push(`Mitigations: ${c.mitigationSignals.join(', ')}`);
     if (c.nearbyHeadings.length > 0) lines.push(`Nearby headings: ${c.nearbyHeadings.join(', ')}`);
     lines.push(`Code:\n${c.codeSnippet.slice(0, 400)}`);
@@ -7687,7 +7779,7 @@ serve(async (req) => {
   }
 
   try {
-    const { zipBase64, categories, selectedRules, toolUsed } = await req.json();
+    const { zipBase64, categories, selectedRules, toolUsed, u4_llm_validator_enabled } = await req.json();
 
     if (!zipBase64) {
       return new Response(
@@ -8864,6 +8956,101 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
             mitigationSummary: el.mitigationSummary || '',
             deduplicationKey: el.deduplicationKey || `U4|${el.subCheck || 'U4.4'}|${el.location || ''}|${el.elementLabel || ''}`,
           });
+        }
+      }
+
+      // ========== OPTIONAL U4 LLM VALIDATOR (suppression-only) ==========
+      // When enabled, runs a focused LLM validation on ambiguous U4 candidates.
+      // Can ONLY suppress or downgrade — never creates new findings.
+      if (u4_llm_validator_enabled === true && allU4Elements.length > 0 && LOVABLE_API_KEY) {
+        const ambiguousCandidates = allU4Elements.filter((el: any) => {
+          const conf = el.confidence || 0.55;
+          return (conf >= 0.45 && conf <= 0.70);
+        });
+        if (ambiguousCandidates.length > 0) {
+          console.log(`U4 LLM Validator: validating ${ambiguousCandidates.length} ambiguous candidates`);
+          try {
+            // Build minimal structured input for each candidate
+            const validationPayload = ambiguousCandidates.map((el: any) => {
+              // Find matching original candidate for enriched fields
+              const origCandidate = u4Candidates.find(c => 
+                c.filePath === (el.location || '') && c.candidateType === (el.subCheck || '')
+              );
+              return {
+                rule: el.subCheck || 'U4.1',
+                field_label: origCandidate?.fieldLabel || el.elementLabel || '',
+                placeholder: origCandidate?.fieldPlaceholder || '',
+                input_type: origCandidate?.inputType || 'text',
+                nearby_text: origCandidate?.nearbyText || [],
+                action_context: origCandidate?.actionContext || [],
+                deterministic_reason: el.detection || '',
+                candidate_kind: origCandidate?.candidateKind || 'unknown',
+                has_visible_required_phrase: origCandidate?.hasVisibleRequiredPhrase || false,
+                known_options_detected: origCandidate?.knownOptionsDetected || false,
+                known_options_examples: origCandidate?.knownOptionsExamples || [],
+              };
+            });
+
+            const validatorPrompt = `You are a strict validator for U4 (Recognition-to-Recall Regression) findings.
+Your task: For each candidate, decide if it is a GENUINE recognition→recall regression.
+
+Rules:
+- If it is a confirmation phrase input where the required phrase is visible (e.g., "Type DELETE to confirm"), it MUST be suppressed — this is copying, not recall.
+- If it is a categorical field with no selection component and known options exist, it is likely genuine.
+- If evidence is ambiguous, suppress.
+- You can ONLY suppress or downgrade. You CANNOT create new findings.
+
+Output STRICT JSON array, one entry per candidate:
+[{ "index": 0, "keep_issue": true|false, "reason": "<one sentence>", "confidence_adjust": -0.20..+0.10 }]
+
+Candidates:
+${JSON.stringify(validationPayload, null, 2)}`;
+
+            const validatorResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+              method: "POST",
+              headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: "google/gemini-2.5-flash",
+                messages: [{ role: "user", content: validatorPrompt }],
+                temperature: 0.1,
+              }),
+            });
+
+            if (validatorResponse.ok) {
+              const validatorData = await validatorResponse.json();
+              const validatorText = validatorData.choices?.[0]?.message?.content || '';
+              // Extract JSON array from response
+              const jsonMatch = validatorText.match(/\[[\s\S]*\]/);
+              if (jsonMatch) {
+                try {
+                  const decisions = JSON.parse(jsonMatch[0]);
+                  let suppressedCount = 0;
+                  for (const decision of decisions) {
+                    if (typeof decision.index === 'number' && decision.index < ambiguousCandidates.length) {
+                      const targetEl = ambiguousCandidates[decision.index];
+                      if (decision.keep_issue === false) {
+                        // Remove from allU4Elements
+                        const idx = allU4Elements.indexOf(targetEl);
+                        if (idx >= 0) { allU4Elements.splice(idx, 1); suppressedCount++; }
+                        console.log(`U4 LLM Validator SUPPRESSED: ${targetEl.elementLabel} — ${decision.reason}`);
+                      } else if (typeof decision.confidence_adjust === 'number') {
+                        // Apply confidence adjustment (cap to [0.40, 0.75])
+                        const newConf = Math.min(0.75, Math.max(0.40, (targetEl.confidence || 0.55) + decision.confidence_adjust));
+                        targetEl.confidence = Math.round(newConf * 100) / 100;
+                      }
+                    }
+                  }
+                  console.log(`U4 LLM Validator: suppressed ${suppressedCount}/${ambiguousCandidates.length}, kept ${allU4Elements.length}`);
+                } catch (parseErr) {
+                  console.warn('U4 LLM Validator: failed to parse response, keeping deterministic decisions', parseErr);
+                }
+              }
+            } else {
+              console.warn(`U4 LLM Validator: API error ${validatorResponse.status}, keeping deterministic decisions`);
+            }
+          } catch (validatorErr) {
+            console.warn('U4 LLM Validator: error, falling back to deterministic decisions', validatorErr);
+          }
         }
       }
 
