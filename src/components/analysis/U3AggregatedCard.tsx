@@ -3,7 +3,6 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
 import { LocationBadge } from './LocationBadge';
 import type { Violation, U3ElementSubItem } from '@/types/project';
 import {
@@ -17,7 +16,32 @@ function U3ElementItem({ element, compact = false }: {
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const displayLabel = element.elementLabel || 'Content element';
+
+  // Title: "Truncated "Reason" cell (truncate)" or "Truncated text (truncate)"
+  const truncType = element.truncationType || 'truncate';
+  const displayLabel = element.columnLabel
+    ? `Truncated "${element.columnLabel}" cell (${truncType})`
+    : `Truncated text (${truncType})`;
+
+  // Compact element summary: <Tag> • contentKind • truncationType • expand status
+  const tagStr = element.elementTag ? `<${element.elementTag}>` : '<element>';
+  const kindStr = element.contentKind === 'dynamic' ? 'dynamic'
+    : element.contentKind === 'list_mapped' ? 'dynamic(list)'
+    : element.contentKind === 'static_long' ? 'static(long)'
+    : 'static';
+  const expandStr = element.expandDetected ? 'expand: yes' : 'expand: none';
+  const elementSummary = `${tagStr} • ${kindStr} • ${truncType} • ${expandStr}`;
+
+  // Recovery line
+  const hasRecovery = element.recoverySignals && element.recoverySignals.length > 0;
+  const recoveryStr = hasRecovery
+    ? element.recoverySignals!.join(', ')
+    : 'none (no tooltip/title/expand/modal)';
+
+  // Source line
+  const sourceLine = element.startLine
+    ? `${element.location}:${element.startLine}${element.endLine && element.endLine !== element.startLine ? `–${element.endLine}` : ''}`
+    : element.location;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -47,27 +71,17 @@ function U3ElementItem({ element, compact = false }: {
               </FieldRow>
             )}
 
-            {(element.truncationType || element.elementTag) && (
-              <FieldRow>
-                <FieldLabel>Element:</FieldLabel>
-                <FieldValue mono>
-                  {element.elementTag ? `<${element.elementTag}>` : '(unknown tag)'}
-                  {' — '}type: {element.truncationType || '(none)'}
-                  {element.textLength === 'dynamic' ? ' — text: dynamic' : element.textLength != null ? ` — text: ${element.textLength} chars` : ''}
-                  {' — '}expand: {element.expandDetected ? 'Yes' : 'No'}
-                </FieldValue>
-              </FieldRow>
-            )}
+            <FieldRow>
+              <FieldLabel>Element:</FieldLabel>
+              <FieldValue mono>{elementSummary}</FieldValue>
+            </FieldRow>
 
-            {element.contentKind && (
+            {(element.contentPreview || element.textPreview) && (
               <FieldRow>
                 <FieldLabel>Content:</FieldLabel>
-                <Badge variant="outline" className="text-xs font-normal">
-                  {element.contentKind === 'dynamic' ? 'Dynamic expression' :
-                   element.contentKind === 'list_mapped' ? 'List/map row' :
-                   element.contentKind === 'static_long' ? 'Static (long)' :
-                   'Static (short)'}
-                </Badge>
+                <span className="font-mono text-xs text-foreground/80 truncate max-w-full">
+                  {element.contentPreview || element.textPreview}
+                </span>
               </FieldRow>
             )}
 
@@ -78,49 +92,15 @@ function U3ElementItem({ element, compact = false }: {
               </FieldRow>
             )}
 
-            {element.triggerReason && (
-              <FieldRow>
-                <FieldLabel>Trigger:</FieldLabel>
-                <FieldValue mono>{element.triggerReason}</FieldValue>
-              </FieldRow>
-            )}
+            <FieldRow>
+              <FieldLabel>Recovery:</FieldLabel>
+              <FieldValue mono>{recoveryStr}</FieldValue>
+            </FieldRow>
 
-            {element.detection && (
-              <FieldRow>
-                <FieldLabel>Detection:</FieldLabel>
-                <FieldValue mono>{element.detection}</FieldValue>
-              </FieldRow>
-            )}
-
-            {element.evidence && (
-              <FieldRow>
-                <FieldLabel>Evidence:</FieldLabel>
-                <FieldValue mono>{element.evidence}</FieldValue>
-              </FieldRow>
-            )}
-
-            {element.textPreview && (
-              <FieldRow>
-                <FieldLabel>Text preview:</FieldLabel>
-                <span className="font-mono text-xs text-foreground/80 truncate max-w-full">{element.textPreview}</span>
-              </FieldRow>
-            )}
-
-            {element.recoverySignals && element.recoverySignals.length > 0 && (
-              <FieldRow>
-                <FieldLabel>Recovery:</FieldLabel>
-                <FieldValue mono>{element.recoverySignals.join(', ')}</FieldValue>
-              </FieldRow>
-            )}
-
-            {(element.startLine != null) && (
-              <FieldRow>
-                <FieldLabel>Source:</FieldLabel>
-                <FieldValue mono>
-                  {element.location}:{element.startLine}{element.endLine && element.endLine !== element.startLine ? `–${element.endLine}` : ''}
-                </FieldValue>
-              </FieldRow>
-            )}
+            <FieldRow>
+              <FieldLabel>Source:</FieldLabel>
+              <FieldValue mono>{sourceLine}</FieldValue>
+            </FieldRow>
 
             {element.confidence != null && (
               <FieldRow>
@@ -165,7 +145,7 @@ export function U3AggregatedCard({ violation, compact = false }: U3AggregatedCar
           <ElementCountBadge count={elements.length} isConfirmed={false} />
         </CardTitle>
         <CardDescription compact={compact}>
-          Static analysis flagged a potential content truncation or accessibility risk; verify in context.
+          Static analysis flagged potential content truncation; verify in context.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
