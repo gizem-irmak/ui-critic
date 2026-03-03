@@ -4335,6 +4335,24 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     }
   }
 
+  // === A1.1 risk-signal gate for Potential findings ===
+  // Only emit a Potential finding from analyzeContrastInCode if there is a concrete
+  // contrast-risk signal (theme token, opacity, CSS variable) in the element's classes.
+  // Mere "background unresolved" without a risk signal is NOT enough.
+  const A1_RISK_SIGNAL_PATTERNS = [
+    /\btext-muted\b/, /\btext-muted-foreground\b/, /\btext-foreground\b/,
+    /\btext-primary\b/, /\btext-secondary\b/, /\btext-accent\b/,
+    /\btext-popover-foreground\b/, /\btext-card-foreground\b/,
+    /\bopacity-(?:50|60|70)\b/, /\btext-opacity-\d+\b/,
+    /var\(--[\w-]*(?:foreground|muted|background|primary|secondary|accent)[\w-]*\)/,
+    /hsl\(var\(--[\w-]+\)\)/,
+  ];
+
+  function hasRiskSignal(classes: string, fgClass: string): boolean {
+    const combined = `${classes} ${fgClass}`;
+    return A1_RISK_SIGNAL_PATTERNS.some(p => p.test(combined));
+  }
+
   const results: ContrastViolation[] = [];
 
   for (const finding of dedupeMap.values()) {
@@ -4350,6 +4368,15 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     const isConfirmed = canCompute && finding.ratio! < finding.threshold;
     const status: 'confirmed' | 'potential' = isConfirmed ? 'confirmed' : 'potential';
 
+    // === GATE: skip noisy potential findings with no risk signal ===
+    if (!isConfirmed && !canCompute) {
+      const riskFound = hasRiskSignal(finding.extractedClasses || '', finding.fgClass);
+      if (!riskFound) {
+        // No concrete risk token → skip this finding (A1.3 handles theme/opacity separately)
+        continue;
+      }
+    }
+
     const reasonCodes: string[] = ['STATIC_ANALYSIS'];
     if (!bgResolved) reasonCodes.push('BG_UNRESOLVED');
     if (finding.sizeStatus === 'unknown') reasonCodes.push('SIZE_UNKNOWN');
@@ -4363,16 +4390,16 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
 
     const ratioStr = canCompute
       ? `${finding.ratio!.toFixed(2)}:1`
-      : 'not computed (background unresolved / context-dependent)';
+      : 'Not computed (requires rendered colors)';
 
-    const bgDisplay = bgResolved && finding.bgHex ? finding.bgHex : 'unresolved';
-    const fgDisplay = fgResolved && finding.fgHex ? finding.fgHex : 'unresolved';
+    const bgDisplay = bgResolved && finding.bgHex ? finding.bgHex : 'theme/variable-dependent';
+    const fgDisplay = fgResolved && finding.fgHex ? finding.fgHex : 'theme/variable/opacity-dependent';
 
     const variantLabel = finding.variant ? ` [${finding.variant} state]` : '';
     const branchLabel = finding.variantName ? ` [variant=${finding.variantName}]` : '';
     const diagnosis = canCompute
       ? `Text ${finding.fgClass} (${fgDisplay}) on ${bgDisplay}${variantLabel}${branchLabel} — contrast ratio ${ratioStr} vs ${finding.threshold}:1 required (${finding.sizeStatus === 'large' ? 'large' : 'normal'} text).`
-      : `Text ${finding.fgClass} (${fgDisplay}) with unresolved background${variantLabel}${branchLabel} — contrast not computed due to insufficient color context.`;
+      : `Text ${finding.fgClass} (${fgDisplay}) on ${bgDisplay}${variantLabel}${branchLabel} — contrast not computed (theme/variable-dependent colors).`;
 
     let correctivePrompt = '';
     if (isConfirmed) {
@@ -4384,7 +4411,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
     const advisoryGuidance = isConfirmed
       ? undefined
       : !canCompute
-        ? 'Contrast not computed (background unresolved / context-dependent). Verify in the rendered UI with browser DevTools.'
+        ? 'Theme-dependent or opacity-reduced colors cannot be verified statically. Provide a rendered screenshot or enable runtime contrast sampling to compute effective contrast.'
         : `Verify contrast in browser DevTools. Computed ratio: ${ratioStr}.`;
 
     results.push({
@@ -4402,24 +4429,24 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       background: {
         value: bgResolved ? finding.bgHex : null,
         resolved: bgResolved,
-        reason: bgResolved ? undefined : (finding.bgUnresolvedReason || 'variant/context-dependent'),
+        reason: bgResolved ? undefined : (finding.bgUnresolvedReason || 'theme/variable-dependent'),
       },
-      note: !canCompute ? 'contrast not computed (background unresolved)' : undefined,
+      note: !canCompute ? 'contrast not computed (theme/variable-dependent colors)' : undefined,
       elementIdentifier,
       elementDescription: finding.elementContext,
       evidence: `${finding.fgClass}${finding.bgClass ? ` on ${finding.bgClass}` : ''} in ${finding.filePath}${finding.startLine ? `:${finding.startLine}` : ''}${finding.variantName ? ` [variant=${finding.variantName}]` : ''}`,
       diagnosis,
       contextualHint: canCompute
         ? `Contrast ${ratioStr} — ${finding.evidenceLevel.replace(/_/g, ' ')}.`
-        : 'Contrast not computed — insufficient color context.',
+        : 'Contrast not computed — theme/variable-dependent colors.',
       correctivePrompt,
       confidence: isConfirmed ? 0.9 : (!bgResolved ? 0.4 : 0.55),
       riskLevel,
       reasonCodes: isConfirmed ? undefined : reasonCodes,
-      potentialRiskReason: isConfirmed ? undefined : (!canCompute ? 'background unresolved / context-dependent' : `computed ratio ${ratioStr}`),
+      potentialRiskReason: isConfirmed ? undefined : (!canCompute ? 'theme/variable-dependent colors' : `computed ratio ${ratioStr}`),
       backgroundStatus: bgResolved ? 'certain' : 'uncertain',
       blocksConvergence: isConfirmed,
-      inputLimitation: !canCompute ? 'Background unresolved / context-dependent; static analysis cannot verify final rendered contrast.' : undefined,
+      inputLimitation: !canCompute ? 'Theme/variable-dependent colors; static analysis cannot compute effective contrast ratio.' : undefined,
       advisoryGuidance,
       fgSource: finding.fgSource,
       bgSource: bgResolved ? finding.bgSource : 'unresolved',
@@ -4445,7 +4472,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
 
   const confirmed = results.filter(r => r.status === 'confirmed').length;
   const potential = results.filter(r => r.status === 'potential').length;
-  console.log(`A1 token-contrast (ZIP): ${results.length} findings (${confirmed} confirmed, ${potential} potential)`);
+  console.log(`A1 token-contrast (ZIP): ${results.length} findings (${confirmed} confirmed, ${potential} potential, ${a1Findings.length - dedupeMap.size} pre-deduped, ${dedupeMap.size - results.length} gated-out)`);
 
   return results;
 }
@@ -10125,11 +10152,11 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
         const bgResolved = v.background?.resolved ?? (v.backgroundStatus === 'certain' && !!v.backgroundHex);
         const hasInsufficientColorContext = !fgResolved || !bgResolved || v.backgroundStatus !== 'certain';
 
-        const ratioStr = v.contrastRatio != null ? `${v.contrastRatio.toFixed(1)}:1` : 'not computed';
+        const ratioStr = v.contrastRatio != null ? `${v.contrastRatio.toFixed(1)}:1` : 'Not computed (requires rendered colors)';
         const threshStr = `${v.thresholdUsed || 4.5}:1`;
         const sizeLabel = v.sizeStatus === 'large' ? 'large' : 'normal';
-        const fgHex = fgResolved ? (v.foregroundHex || v.foreground?.value || '???') : 'unresolved';
-        const bgHex = bgResolved ? (v.backgroundHex || v.background?.value || 'unresolved') : 'unresolved';
+        const fgHex = fgResolved ? (v.foregroundHex || v.foreground?.value || '???') : 'theme/variable/opacity-dependent';
+        const bgHex = bgResolved ? (v.backgroundHex || v.background?.value || 'theme/variable-dependent') : 'theme/variable-dependent';
         const prompt = v.status === 'confirmed' && !hasInsufficientColorContext
           ? `Issue reason: ${ratioStr} measured vs ${threshStr} required (WCAG AA, ${sizeLabel} text).\n\nRecommended fix: Increase text contrast for this element (currently ${fgHex} on ${bgHex}) by darkening the text color or adjusting the background to reach ≥${threshStr}; keep visual style consistent across similar elements.`
           : undefined;
@@ -10143,7 +10170,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           foregroundHex: fgResolved ? (v.foregroundHex || v.foreground?.value || undefined) : undefined,
           backgroundHex: bgResolved ? (v.backgroundHex || v.background?.value || undefined) : undefined,
           foreground: v.foreground || { value: fgResolved ? (v.foregroundHex || null) : null, resolved: !!fgResolved },
-          background: v.background || { value: bgResolved ? (v.backgroundHex || null) : null, resolved: !!bgResolved, reason: !bgResolved ? 'variant/context-dependent' : undefined },
+          background: v.background || { value: bgResolved ? (v.backgroundHex || null) : null, resolved: !!bgResolved, reason: !bgResolved ? 'theme/variable-dependent' : undefined },
           backgroundStatus: (bgResolved ? 'certain' : (v.backgroundStatus || 'uncertain')) as 'certain' | 'uncertain' | 'unmeasurable',
           contrastRatio: hasInsufficientColorContext ? undefined : v.contrastRatio,
           contrastNotMeasurable: hasInsufficientColorContext || v.contrastRatio === undefined,
@@ -10154,7 +10181,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           textType: v.sizeStatus === 'large' ? 'large' : 'normal',
           appliedThreshold: v.thresholdUsed || 4.5,
           wcagCriterion: '1.4.3' as const,
-          deduplicationKey: `a1|${v.elementIdentifier}|${v.foregroundHex}|${v.variant || 'base'}`,
+          deduplicationKey: `a1|${v.elementIdentifier}|${v.foregroundHex || v.evidence}|${v.variant || 'base'}|${v.startLine || ''}`,
           correctivePrompt: prompt,
           variant: v.variant || undefined,
           lineNumber: v.lineNumber || undefined,
@@ -10167,7 +10194,7 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
             fg: fgResolved ? 'resolved' : 'unresolved',
             bg: bgResolved ? 'resolved' : 'unresolved',
           },
-          unresolvedReason: !bgResolved ? (v.background?.reason || 'background unresolved / context-dependent') : undefined,
+          unresolvedReason: !bgResolved ? (v.background?.reason || 'theme/variable-dependent') : undefined,
         };
       };
       
@@ -10194,7 +10221,20 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
       }
       
       if (potentialFindings.length > 0) {
-        const a1Elements = potentialFindings.map(mapToElement);
+        // Deduplicate potential elements by (elementIdentifier + evidence + variant)
+        const rawElements = potentialFindings.map(mapToElement);
+        const dedupeMap = new Map<string, any>();
+        for (const el of rawElements) {
+          if (dedupeMap.has(el.deduplicationKey)) {
+            // Merge: increment occurrence count
+            const existing = dedupeMap.get(el.deduplicationKey);
+            existing.occurrences = (existing.occurrences || 1) + 1;
+          } else {
+            dedupeMap.set(el.deduplicationKey, { ...el, occurrences: 1 });
+          }
+        }
+        const a1Elements = Array.from(dedupeMap.values());
+        
         const avgConf = potentialFindings.reduce((s, v) => s + v.confidence, 0) / potentialFindings.length;
         aggregatedA1Violations.push({
           ruleId: 'A1',
@@ -10203,19 +10243,20 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
           status: 'potential',
           isA1Aggregated: true,
           a1Elements,
-          diagnosis: `${a1Elements.length} text element${a1Elements.length !== 1 ? 's' : ''} with potential contrast issues (WCAG 1.4.3) — verify at runtime.`,
+          diagnosis: `${a1Elements.length} text element${a1Elements.length !== 1 ? 's' : ''} with potential contrast issues (WCAG 1.4.3) — theme/variable/opacity-dependent colors require runtime verification.`,
           correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools after rendering.',
           contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools after rendering.',
           confidence: Math.round(avgConf * 100) / 100,
-          reasonCodes: ['STATIC_ANALYSIS'],
-          potentialRiskReason: 'STATIC_ANALYSIS',
-          advisoryGuidance: 'Upload screenshots of the rendered UI for higher-confidence verification.',
+          reasonCodes: ['STATIC_ANALYSIS', 'THEME_DEPENDENT'],
+          potentialRiskReason: 'THEME_DEPENDENT',
+          advisoryGuidance: 'Theme-dependent or opacity-reduced colors cannot be verified statically. Provide a rendered screenshot or enable runtime contrast sampling to compute effective contrast.',
           blocksConvergence: false,
           inputType: 'zip',
           samplingMethod: 'inferred',
           evaluationMethod: 'deterministic',
           evidenceLevel: 'structural_estimated',
         });
+        console.log(`A1 potential dedup: ${rawElements.length} raw → ${a1Elements.length} unique elements`);
       }
       
       const confirmed = confirmedFindings.length;
