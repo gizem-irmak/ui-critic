@@ -88,17 +88,14 @@ function A2ElementItem({ element, isConfirmed, compact = false }: {
               {elementSubtype && elementSubtype !== element.elementTag && (
                 <span className="text-xs text-muted-foreground font-mono">({elementSubtype})</span>
               )}
-              <Badge
-                variant="outline"
-                className={cn(
-                  'text-xs font-medium',
-                  elementIsConfirmed
-                    ? 'border-destructive/50 text-destructive'
-                    : 'border-warning/50 text-warning'
-                )}
-              >
-                {elementIsConfirmed ? 'Confirmed' : 'Potential'}
-              </Badge>
+              {elementIsConfirmed && (
+                <Badge
+                  variant="outline"
+                  className="text-xs font-medium border-destructive/50 text-destructive"
+                >
+                  Confirmed
+                </Badge>
+              )}
               {element.affectedComponents && element.affectedComponents.length > 1 && (
                 <Badge variant="outline" className="text-xs font-medium border-muted-foreground/40 text-muted-foreground">
                   {element.affectedComponents.length} components
