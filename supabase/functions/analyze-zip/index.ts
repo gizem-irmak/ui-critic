@@ -4450,6 +4450,187 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
   return results;
 }
 
+// ========== A1.3 — Theme-Dependent or Opacity-Reduced Text (Potential Only) ==========
+// Detects text using CSS-variable-based colors (text-muted, text-foreground, var(--...))
+// or opacity-reduced patterns where contrast ratio cannot be statically computed.
+
+const A1_3_THEME_CLASS_PATTERNS = [
+  /\btext-muted\b/,
+  /\btext-muted-foreground\b/,
+  /\btext-foreground\b/,
+  /\btext-primary\b/,
+  /\btext-secondary\b/,
+  /\btext-accent\b/,
+  /\btext-popover-foreground\b/,
+  /\btext-card-foreground\b/,
+];
+
+const A1_3_OPACITY_PATTERNS = [
+  /\bopacity-(?:50|60|70)\b/,
+  /\btext-opacity-\d+\b/,
+  /\btext-(?:gray|slate|zinc|neutral|stone)-\d{2,3}\s[^"'`]*?opacity-(?:50|60|70)\b/,
+];
+
+const A1_3_CSS_VAR_PATTERN = /(?:color|--[\w-]+)\s*:\s*(?:var\(--[\w-]*(?:foreground|muted|primary|secondary|accent)[\w-]*\)|hsl\(var\(--[\w-]+\)\))/;
+
+// Suppression patterns
+const A1_3_SUPPRESS_DISABLED = /\bdisabled\b/;
+const A1_3_SUPPRESS_ARIA_HIDDEN = /aria-hidden\s*=\s*["']true["']/;
+const A1_3_SUPPRESS_PLACEHOLDER = /\bplaceholder\b/;
+
+function detectA1ThemeDependentText(files: Map<string, string>): ContrastViolation[] {
+  const findings: ContrastViolation[] = [];
+  const seen = new Set<string>();
+
+  for (const [filepath, content] of files) {
+    // Skip non-component files
+    if (!/\.(tsx|jsx)$/i.test(filepath)) continue;
+
+    let componentName = filepath.split('/').pop()?.replace(/\.(tsx|jsx|ts|js)$/i, '') || '';
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+    if (exportedFn?.[1]) componentName = exportedFn[1];
+    else if (exportedConst?.[1]) componentName = exportedConst[1];
+
+    const lucideIcons = extractLucideImports(content);
+
+    // Pre-compute line offsets
+    const lineOffsets: number[] = [0];
+    for (let ci = 0; ci < content.length; ci++) {
+      if (content[ci] === '\n') lineOffsets.push(ci + 1);
+    }
+    const getLineNumber = (idx: number): number => {
+      let lo = 0, hi = lineOffsets.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (lineOffsets[mid] <= idx) lo = mid; else hi = mid - 1;
+      }
+      return lo + 1;
+    };
+
+    // Scan all JSX opening tags
+    const tagRegex = /<([A-Za-z][A-Za-z0-9_.]*)\s+[^>]*(?:className|style)[^>]*>/g;
+    let tagMatch;
+    while ((tagMatch = tagRegex.exec(content)) !== null) {
+      const tagContent = tagMatch[0];
+      const tagName = tagMatch[1];
+
+      // Check if this is a text-bearing element
+      if (!isTextElement(tagName, lucideIcons)) continue;
+
+      // === Suppression checks ===
+      if (A1_3_SUPPRESS_ARIA_HIDDEN.test(tagContent)) continue;
+      if (A1_3_SUPPRESS_DISABLED.test(tagContent)) continue;
+
+      // Check surrounding context for placeholder (input placeholder styling)
+      const ctxStart = Math.max(0, tagMatch.index - 40);
+      const ctxEnd = Math.min(content.length, tagMatch.index + tagContent.length + 40);
+      const surroundingCtx = content.slice(ctxStart, ctxEnd);
+      if (A1_3_SUPPRESS_PLACEHOLDER.test(tagContent) && /input|textarea/i.test(tagName)) continue;
+
+      // Check for icon-only elements (no text children)
+      const afterTag = content.slice(tagMatch.index + tagContent.length, tagMatch.index + tagContent.length + 80);
+      const selfClosing = tagContent.endsWith('/>');
+      if (selfClosing) {
+        // Self-closing tags with no text content — skip unless they have visible text attributes
+        if (!/\b(?:label|title|alt|aria-label)\s*=/.test(tagContent)) continue;
+      }
+
+      // === Detection: theme-class patterns ===
+      let matched = false;
+      let matchedPattern = '';
+
+      for (const pat of A1_3_THEME_CLASS_PATTERNS) {
+        if (pat.test(tagContent)) {
+          matched = true;
+          const m = tagContent.match(pat);
+          matchedPattern = m ? m[0] : 'theme-dependent class';
+          break;
+        }
+      }
+
+      // === Detection: opacity-reduced patterns ===
+      if (!matched) {
+        for (const pat of A1_3_OPACITY_PATTERNS) {
+          if (pat.test(tagContent)) {
+            matched = true;
+            const m = tagContent.match(pat);
+            matchedPattern = m ? m[0] : 'opacity-reduced text';
+            break;
+          }
+        }
+      }
+
+      // === Detection: CSS variable in inline style ===
+      if (!matched && A1_3_CSS_VAR_PATTERN.test(tagContent)) {
+        matched = true;
+        matchedPattern = 'CSS variable text color';
+      }
+
+      if (!matched) continue;
+
+      const line = getLineNumber(tagMatch.index);
+      const fileName = filepath.split('/').pop() || filepath;
+      const dedupeKey = `a1.3|${filepath}|${line}|${matchedPattern}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+
+      const elementIdentifier = componentName
+        ? `${componentName} (${fileName})`
+        : fileName;
+
+      const elementContext = inferElementContext(surroundingCtx) || `${tagName} element`;
+
+      findings.push({
+        ruleId: 'A1',
+        ruleName: 'Insufficient text contrast',
+        category: 'accessibility',
+        status: 'potential',
+        samplingMethod: 'inferred',
+        inputType: 'zip',
+        contrastRatio: undefined,
+        thresholdUsed: 4.5,
+        foreground: { value: null, resolved: false },
+        background: { value: null, resolved: false, reason: 'theme-dependent / CSS variable' },
+        note: 'A1.3: Theme-dependent or opacity-reduced text — contrast not statically computable.',
+        elementIdentifier,
+        elementDescription: elementContext,
+        evidence: `${matchedPattern} in ${filepath}:${line}`,
+        diagnosis: `Text color is theme-dependent or opacity-reduced. Final contrast ratio cannot be statically computed. WCAG 2.1 AA (4.5:1) compliance must be verified in rendered output.`,
+        contextualHint: 'Contrast not computed — theme-dependent or opacity-reduced text.',
+        correctivePrompt: '',
+        confidence: matchedPattern.includes('opacity') ? 0.70 : 0.65,
+        riskLevel: 'low',
+        reasonCodes: ['THEME_DEPENDENT', 'STATIC_ANALYSIS'],
+        potentialRiskReason: 'theme-dependent or opacity-reduced text color',
+        backgroundStatus: 'unmeasurable',
+        blocksConvergence: false,
+        inputLimitation: 'Text color is theme-dependent or opacity-reduced; static analysis cannot compute effective contrast ratio.',
+        advisoryGuidance: 'Text color is theme-dependent or opacity-reduced. Final contrast ratio cannot be statically computed. WCAG 2.1 AA (4.5:1) compliance must be verified in rendered output.',
+        fgSource: undefined,
+        bgSource: 'unresolved',
+        evidenceLevel: 'structural_estimated',
+        sizeStatus: 'unknown',
+        lineNumber: line,
+        startLine: line,
+        endLine: line,
+        extractedClasses: tagContent.match(/className\s*=\s*"([^"]+)"/)?.[1] || '',
+        affectedComponents: [{
+          colorClass: matchedPattern,
+          filePath: filepath,
+          componentName: componentName || undefined,
+          elementContext,
+          riskLevel: 'low',
+          occurrence_count: 1,
+        }],
+      });
+    }
+  }
+
+  console.log(`A1.3 theme-dependent/opacity: ${findings.length} potential findings`);
+  return findings;
+}
+
 // Try to infer what kind of UI element the text is in based on context
 function inferElementContext(context: string): string | null {
   const lowerContext = context.toLowerCase();
@@ -9083,7 +9264,10 @@ serve(async (req) => {
     if (selectedRulesSet.has('A1')) {
       const computed = analyzeContrastInCode(files);
       contrastViolations.push(...computed);
-      console.log(`Computed ${contrastViolations.length} contrast violations`);
+      // A1.3: theme-dependent / opacity-reduced text detection
+      const themeDependentFindings = detectA1ThemeDependentText(files);
+      contrastViolations.push(...themeDependentFindings);
+      console.log(`Computed ${contrastViolations.length} contrast violations (incl. ${themeDependentFindings.length} A1.3 theme/opacity)`);
     } else {
       console.log('A1 not selected, skipping contrast analysis');
     }
