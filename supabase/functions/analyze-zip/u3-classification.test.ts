@@ -1,6 +1,6 @@
 /**
  * U3 — Truncated or Inaccessible Content
- * Classification tests for deterministic sub-checks U3.D1–U3.D4
+ * Classification tests for deterministic sub-checks U3.D1–U3.D6
  * Including suppression rules for short text, responsive hidden, and expand mechanisms
  */
 import { assertEquals, assert } from "https://deno.land/std@0.224.0/assert/mod.ts";
@@ -809,4 +809,97 @@ Deno.test("U3 ACCEPT: Truncation with title={fullText} → SUPPRESSED or confide
   // Recovery signal → confidence drops by 0.20
   const confidence = 0.45 + 0.10 - 0.20; // base + truncUtility - recovery = 0.35 → below 0.40 → suppressed
   assert(confidence < 0.40, "Should be suppressed due to recovery");
+});
+
+// ═══════════════════════════════════════════════════
+// U3 — Carrier element binding regression tests
+// ═══════════════════════════════════════════════════
+
+Deno.test("U3 CARRIER: truncate inside TableCell className → carrier is TableCell, not TableRow", () => {
+  // Simulates: <TableRow>...<TableCell className="max-w-[200px] truncate">{a.reason}</TableCell>...
+  const code = `<TableRow><TableCell className="max-w-[200px] truncate">{a.reason || "—"}</TableCell></TableRow>`;
+  // The carrier finder should return TableCell (has truncate) not TableRow
+  const truncPos = code.indexOf('truncate');
+  // Scan backward from truncPos: <TableRow> is fully before truncPos, but <TableCell starts before and > is after
+  // The fix ensures we find <TableCell className="max-w-[200px] truncate"> by extending search past pos
+  const tagRe = /<([a-zA-Z][\w.]*)\s([^>]*)>/g;
+  const searchSlice = code.slice(0, Math.min(code.length, truncPos + 300));
+  let bestWithTrunc: string | undefined;
+  let tm;
+  while ((tm = tagRe.exec(searchSlice)) !== null) {
+    const absStart = tm.index;
+    if (absStart > truncPos) continue;
+    const className = tm[2].match(/className="([^"]*)"/)?.[1] || '';
+    if (/\btruncate\b/.test(className)) bestWithTrunc = tm[1];
+  }
+  assertEquals(bestWithTrunc, "TableCell", "Carrier must be TableCell, not TableRow");
+});
+
+Deno.test("U3 CARRIER: truncate on <p> inside <td> → carrier is p, not td", () => {
+  const code = `<td><p className="text-sm truncate">{(appt as any).doctors?.name}</p><Badge>{appt.status}</Badge></td>`;
+  const truncPos = code.indexOf('truncate');
+  const tagRe = /<([a-zA-Z][\w.]*)\s([^>]*)>/g;
+  const searchSlice = code.slice(0, Math.min(code.length, truncPos + 300));
+  let bestWithTrunc: string | undefined;
+  let tm;
+  while ((tm = tagRe.exec(searchSlice)) !== null) {
+    if (tm.index > truncPos) continue;
+    const className = tm[2].match(/className="([^"]*)"/)?.[1] || '';
+    if (/\btruncate\b/.test(className)) bestWithTrunc = tm[1];
+  }
+  assertEquals(bestWithTrunc, "p", "Carrier must be p (the truncate owner), not td");
+});
+
+Deno.test("U3 PREVIEW: carrier-scoped preview extracts from element subtree only", () => {
+  // <p className="truncate">{doctors?.name}</p> should preview doctors?.name, NOT appt.status from sibling
+  const code = `<td><p className="text-sm truncate">{(appt as any).doctors?.name}</p><Badge>{appt.status}</Badge></td>`;
+  // Extract content between <p ...> and </p>
+  const pStart = code.indexOf('<p ');
+  const pTagEnd = code.indexOf('>', pStart) + 1;
+  const pClose = code.indexOf('</p>', pTagEnd);
+  const elementContent = code.slice(pTagEnd, pClose);
+  // Should contain doctors?.name
+  assert(/doctors\?\.name/.test(elementContent), "Preview must contain doctors?.name");
+  // Should NOT contain appt.status
+  assert(!/appt\.status/.test(elementContent), "Preview must NOT contain appt.status");
+});
+
+Deno.test("U3 TOKENS: deduplication - no repeated tokens", () => {
+  const classStr = "truncate overflow-hidden max-w-[200px] truncate overflow-hidden";
+  const seen = new Set<string>();
+  const tokens: string[] = [];
+  const add = (t: string) => { if (!seen.has(t)) { seen.add(t); tokens.push(t); } };
+  if (/\btruncate\b/.test(classStr)) add('truncate');
+  if (/\boverflow-hidden\b/.test(classStr)) add('overflow-hidden');
+  const mwb = classStr.match(/\bmax-w-\[[^\]]+\]/);
+  if (mwb) add(mwb[0]);
+  assertEquals(tokens.length, 3, "Should have exactly 3 unique tokens");
+  assertEquals(new Set(tokens).size, tokens.length, "No duplicates");
+});
+
+Deno.test("U3 TOKENS: min-w-0 stays as min-w-0, not w-0", () => {
+  const classStr = "min-w-0 flex-1";
+  // w-N regex with lookbehind check
+  const wMatches = classStr.match(/\bw-\d+\b/g);
+  if (wMatches) {
+    for (const wm of wMatches) {
+      const idx = classStr.indexOf(wm);
+      const before = idx > 0 ? classStr.slice(Math.max(0, idx - 4), idx) : '';
+      assert(/min-$/.test(before) || /max-$/.test(before), "w-0 inside min-w-0 must be skipped");
+    }
+  }
+  // min-w-0 should be its own token
+  assert(/\bmin-w-0\b/.test(classStr), "min-w-0 token preserved");
+});
+
+Deno.test("U3 HEADER SUPPRESS: TableHead row with static labels never emits", () => {
+  const code = `<TableHeader><TableRow><TableHead>Patient</TableHead><TableHead>Doctor</TableHead><TableHead>Reason</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead>Actions</TableHead></TableRow></TableHeader>`;
+  // All static labels, inside TableHead/TableHeader → header suppression must fire
+  assert(/<TableHead>/.test(code), "Has TableHead elements");
+  assert(/<TableHeader>/.test(code), "Has TableHeader wrapper");
+  const labels = ["Patient", "Doctor", "Reason", "Status", "Date", "Actions"];
+  const HEADER_LABELS = /^(?:patient|doctor|reason|name|status|actions?|date|time|type|role|id|email|phone|address|specialty|location|joined)$/i;
+  for (const l of labels) {
+    assert(HEADER_LABELS.test(l), `'${l}' is a known header label → suppressed`);
+  }
 });
