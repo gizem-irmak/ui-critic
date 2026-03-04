@@ -35,15 +35,152 @@ const reasonCodeLabels: Record<A1ReasonCode, string> = {
   STATIC_ANALYSIS: 'Static code analysis',
 };
 
-function A1ElementItem({ element, isConfirmed, compact = false }: { 
+function A1ScreenshotElementItem({ element, compact = false }: {
+  element: A1ElementSubItem;
+  compact?: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const isHybridPixel = element.a1Method === 'LLM→Pixel';
+
+  const cleanLabel = element.elementLabel.replace(/\s*\([^)]*\.tsx?\)/, '');
+  const cleanLocation = element.location.replace(/^.*?([\w/-]+\.\w+).*$/, '$1');
+
+  // Foreground: show hex if available from pixel sampling, otherwise indicate limitation
+  const fgDisplay = element.foregroundHex
+    ? element.foregroundHex
+    : null;
+
+  // Background: show hex if pixel-sampled, otherwise unresolved
+  const bgDisplay = element.backgroundHex
+    ? element.backgroundHex
+    : null;
+
+  return (
+    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+      <ElementItemWrapper isConfirmed={false} compact={compact}>
+        <CollapsibleTrigger className="w-full">
+          <div className="flex items-center justify-between gap-2 cursor-pointer">
+            <div className="flex items-center gap-2">
+              <ComponentTitle>{cleanLabel}</ComponentTitle>
+              {isHybridPixel && (
+                <Badge variant="outline" className="text-[10px] font-medium border-emerald-500/40 text-emerald-600">
+                  LLM→Pixel
+                </Badge>
+              )}
+              {!isHybridPixel && (
+                <Badge variant="outline" className="text-[10px] font-medium border-amber-500/40 text-amber-600">
+                  Perceptual
+                </Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <LocationBadge filePath={cleanLocation} displayName={cleanLocation} compact={compact} />
+              {isOpen ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              )}
+            </div>
+          </div>
+        </CollapsibleTrigger>
+
+        <CollapsibleContent>
+          <DetailContainer>
+            {element.perceptualRationale && (
+              <FieldRow>
+                <FieldLabel>Detection:</FieldLabel>
+                <FieldValue>{element.perceptualRationale}</FieldValue>
+              </FieldRow>
+            )}
+
+            <FieldRow>
+              <FieldLabel>Element:</FieldLabel>
+              <FieldValue>{cleanLabel}</FieldValue>
+            </FieldRow>
+
+            <FieldRow>
+              <FieldLabel>Foreground color:</FieldLabel>
+              {fgDisplay ? (
+                <span className="flex items-center gap-1 text-sm">
+                  <span className="font-mono">{fgDisplay}</span>
+                  <span
+                    className="w-3 h-3 rounded border border-border"
+                    style={{ backgroundColor: fgDisplay }}
+                  />
+                  {isHybridPixel && <span className="text-xs text-muted-foreground">(pixel-sampled)</span>}
+                </span>
+              ) : (
+                <span className="text-sm text-muted-foreground italic">Approximation unavailable (screenshot limitation)</span>
+              )}
+            </FieldRow>
+
+            <FieldRow>
+              <FieldLabel>Background color:</FieldLabel>
+              {bgDisplay ? (
+                <span className="flex items-center gap-1 text-sm">
+                  <span className="font-mono">{bgDisplay}</span>
+                  <span
+                    className="w-3 h-3 rounded border border-border"
+                    style={{ backgroundColor: bgDisplay }}
+                  />
+                  {isHybridPixel && <span className="text-xs text-muted-foreground">(pixel-sampled)</span>}
+                </span>
+              ) : (
+                <span className="text-sm text-muted-foreground italic">Unresolved (screenshot context uncertain)</span>
+              )}
+            </FieldRow>
+
+            <FieldRow>
+              <FieldLabel>Contrast ratio:</FieldLabel>
+              {isHybridPixel && element.contrastRatio !== undefined ? (
+                <span className="text-sm">
+                  <span className="font-mono font-medium text-warning">
+                    {element.contrastRatio.toFixed(1)}:1
+                  </span>
+                  <span className="text-muted-foreground ml-1">
+                    vs {element.thresholdUsed}:1 (screenshot estimate)
+                  </span>
+                </span>
+              ) : (
+                <span className="text-sm text-muted-foreground italic">Not computed — requires DOM or pixel sampling</span>
+              )}
+            </FieldRow>
+
+            <FieldRow>
+              <FieldLabel>Requirement:</FieldLabel>
+              <FieldValue>
+                WCAG 2.1 — 1.4.3 Contrast (Minimum) — {element.textType === 'large' ? 'Large text: 3:1' : 'Normal text: 4.5:1'}
+              </FieldValue>
+            </FieldRow>
+
+            {element.foregroundConfidence != null && (
+              <FieldRow>
+                <FieldLabel>Confidence:</FieldLabel>
+                <span className="text-sm font-medium text-warning">
+                  {Math.round(element.foregroundConfidence * 100)}%
+                </span>
+              </FieldRow>
+            )}
+
+            {element.suggestedFix && (
+              <FieldRow>
+                <FieldLabel>Advisory:</FieldLabel>
+                <FieldValue>{element.suggestedFix}</FieldValue>
+              </FieldRow>
+            )}
+          </DetailContainer>
+        </CollapsibleContent>
+      </ElementItemWrapper>
+    </Collapsible>
+  );
+}
+
+function A1CodeElementItem({ element, isConfirmed, compact = false }: { 
   element: A1ElementSubItem; 
   isConfirmed: boolean;
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const isPerceptual = !!element.perceivedContrast && element.a1Method !== 'LLM→Pixel';
-  const isHybridPixel = element.a1Method === 'LLM→Pixel';
-  const isLLMOnly = element.a1Method === 'LLM-only (measurement failed)';
 
   const fgResolved = element.foreground?.resolved ?? element.resolutionStatus?.fg !== 'unresolved';
   const bgResolved = element.background?.resolved ?? element.resolutionStatus?.bg !== 'unresolved';
@@ -78,51 +215,8 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
         
         <CollapsibleContent>
           <DetailContainer>
-            {/* PERCEPTUAL MODE */}
-            {(isPerceptual || isLLMOnly) && !isHybridPixel ? (
+            {isConfirmed ? (
               <>
-                {element.screenshotTextSize && (
-                  <FieldRow>
-                    <FieldLabel>Text size:</FieldLabel>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="text-xs font-medium">
-                        {element.screenshotTextSize === 'large' ? 'Large text' : element.screenshotTextSize === 'unknown' ? 'Unknown (assumed normal)' : 'Normal text'}
-                      </Badge>
-                      {element.appliedThreshold && (
-                        <span className="text-sm text-muted-foreground">
-                          Threshold: {element.appliedThreshold}:1
-                        </span>
-                      )}
-                    </div>
-                  </FieldRow>
-                )}
-
-                <FieldRow>
-                  <FieldLabel>Contrast:</FieldLabel>
-                  <Badge variant="outline" className={cn('text-xs font-medium',
-                    element.perceivedContrast === 'low' ? 'border-warning/50 text-warning' : 'border-muted-foreground/50'
-                  )}>
-                    {element.perceivedContrast === 'low' ? 'Low (perceptual)' : element.perceivedContrast}
-                  </Badge>
-                </FieldRow>
-                
-                {element.perceptualRationale && (
-                  <FieldRow>
-                    <FieldLabel>Rationale:</FieldLabel>
-                    <FieldValue>{element.perceptualRationale}</FieldValue>
-                  </FieldRow>
-                )}
-                
-                {element.suggestedFix && (
-                  <FieldRow>
-                    <FieldLabel>Suggestion:</FieldLabel>
-                    <FieldValue>{element.suggestedFix}</FieldValue>
-                  </FieldRow>
-                )}
-              </>
-            ) : isConfirmed ? (
-              <>
-                {/* CONFIRMED STRUCTURAL MODE */}
                 {element.jsxTag && (
                   <FieldRow>
                     <FieldLabel>Element:</FieldLabel>
@@ -194,7 +288,6 @@ function A1ElementItem({ element, isConfirmed, compact = false }: {
               </>
             ) : (
               <>
-                {/* POTENTIAL STRUCTURAL MODE */}
                 {element.jsxTag && (
                   <FieldRow>
                     <FieldLabel>Element:</FieldLabel>
@@ -288,9 +381,32 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
   
   const isConfirmed = violation.status === 'confirmed';
   const elements = violation.a1Elements;
-  const isPerceptual = violation.evaluationMethod === 'llm_assisted' || violation.inputType === 'screenshots';
+  const isScreenshot = violation.inputType === 'screenshots';
+  const isPerceptual = violation.evaluationMethod === 'llm_assisted' || isScreenshot;
   const isHybrid = violation.evaluationMethod === 'hybrid_deterministic';
   
+  // Determine subtitle based on modality
+  const getSubtitle = () => {
+    if (isScreenshot || isPerceptual || isHybrid) {
+      return 'Perceptual analysis suggests potential contrast issues. Exact contrast ratios could not be computed from the screenshot and require manual verification.';
+    }
+    if (isConfirmed) {
+      return 'Text contrast falls below WCAG AA minimum thresholds.';
+    }
+    const bgUncertain = elements.some(e => e.backgroundStatus === 'uncertain' || e.backgroundStatus === 'unmeasurable');
+    const sizeUnknown = elements.some(e => !e.textType || e.textType === 'normal' && e.appliedThreshold === 4.5 && e.reasonCodes?.includes('SIZE_UNKNOWN'));
+    if (bgUncertain && sizeUnknown) {
+      return 'Static analysis detected a potential contrast issue. Background color and text size could not be fully verified.';
+    }
+    if (bgUncertain) {
+      return 'Static analysis detected a potential contrast issue. The background color could not be deterministically resolved.';
+    }
+    if (sizeUnknown) {
+      return 'Static analysis detected a potential contrast issue. Text size could not be deterministically verified; the 4.5:1 normal-text threshold was applied.';
+    }
+    return 'Static analysis detected a potential contrast issue. Background or text size could not be fully verified.';
+  };
+
   return (
     <Card className={cn(
       'border',
@@ -305,40 +421,33 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
             <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
               LLM→Pixel Hybrid (Screenshot)
             </span>
-          ) : isPerceptual ? (
+          ) : (isPerceptual || isScreenshot) ? (
             <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-violet-500/10 text-violet-600 border-violet-500/20">
               LLM-Assisted (Perceptual – Screenshot Modality)
             </span>
           ) : null}
         </CardTitle>
         <CardDescription compact={compact}>
-          {isConfirmed
-            ? 'Text contrast falls below WCAG AA minimum thresholds.'
-            : (() => {
-                const bgUncertain = elements.some(e => e.backgroundStatus === 'uncertain' || e.backgroundStatus === 'unmeasurable');
-                const sizeUnknown = elements.some(e => !e.textType || e.textType === 'normal' && e.appliedThreshold === 4.5 && e.reasonCodes?.includes('SIZE_UNKNOWN'));
-                if (bgUncertain && sizeUnknown) {
-                  return 'Static analysis detected a potential contrast issue. Background color and text size could not be fully verified.';
-                }
-                if (bgUncertain) {
-                  return 'Static analysis detected a potential contrast issue. The background color could not be deterministically resolved.';
-                }
-                if (sizeUnknown) {
-                  return 'Static analysis detected a potential contrast issue. Text size could not be deterministically verified; the 4.5:1 normal-text threshold was applied.';
-                }
-                return 'Static analysis detected a potential contrast issue. Background or text size could not be fully verified.';
-              })()}
+          {getSubtitle()}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
-        {elements.map((element, idx) => (
-          <A1ElementItem 
-            key={element.deduplicationKey || idx} 
-            element={element} 
-            isConfirmed={isConfirmed}
-            compact={compact}
-          />
-        ))}
+        {elements.map((element, idx) =>
+          (isScreenshot || isPerceptual || isHybrid) ? (
+            <A1ScreenshotElementItem
+              key={element.deduplicationKey || idx}
+              element={element}
+              compact={compact}
+            />
+          ) : (
+            <A1CodeElementItem 
+              key={element.deduplicationKey || idx} 
+              element={element} 
+              isConfirmed={isConfirmed}
+              compact={compact}
+            />
+          )
+        )}
         
         {isHybrid && (
           <div className={cn(
@@ -350,18 +459,18 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
             </p>
           </div>
         )}
-        {isPerceptual && !isHybrid && (
+        {(isPerceptual || isScreenshot) && !isHybrid && (
           <div className={cn(
             'rounded-lg bg-violet-500/5 border border-violet-500/20 mt-3',
             compact ? 'p-2' : 'p-3'
           )}>
             <p className="text-sm text-violet-600 italic">
-              ⚠️ Screenshot-based contrast assessment is perceptual and requires manual verification using developer tools for WCAG compliance.
+              ⚠️ Screenshot-based contrast assessment is perceptual and cannot reliably compute exact contrast ratios. Manual verification using source code or developer tools is required for WCAG compliance.
             </p>
           </div>
         )}
 
-        {!isConfirmed && !isPerceptual && !isHybrid && elements.some(e =>
+        {!isConfirmed && !isPerceptual && !isScreenshot && !isHybrid && elements.some(e =>
           (!e.foreground?.resolved || !e.background?.resolved || e.backgroundStatus === 'uncertain' || e.backgroundStatus === 'unmeasurable' || e.contrastNotMeasurable) &&
           e.contrastRatio === undefined && !e.contrastRange
         ) && (
