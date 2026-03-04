@@ -4033,18 +4033,29 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       if (!fgHexRaw) continue;
       if (!isTextElement(jsxTag, lucideIcons)) continue;
 
+      // --- Ternary-context detection ---
+      // If the text token is inside a ternary expression (? "..." : "..."),
+      // bg resolution from self/ancestor is unreliable (cross-branch contamination).
+      const ternaryWindow = content.slice(Math.max(0, matchIndex - 200), Math.min(content.length, matchIndex + 200));
+      const isInsideTernary = /\?\s*["'`][^"'`]*$/.test(content.slice(Math.max(0, matchIndex - 200), matchIndex)) ||
+        /\?\s*["'`]/.test(ternaryWindow) && /:\s*["'`]/.test(ternaryWindow);
+
       let bgHex: string | null = null;
       let bgClass: string | null = null;
       let bgSource: A1BgSource = 'unresolved';
 
-      const resolved = resolveBackground(content, matchIndex);
-      if (resolved.inlineBgHex) {
-        bgHex = resolved.inlineBgHex;
-        bgSource = 'inline_style';
-      } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
-        bgHex = TAILWIND_COLORS[resolved.bgName];
-        bgClass = resolved.bgClass;
-        bgSource = 'tailwind_token';
+      if (!isInsideTernary) {
+        const resolved = resolveBackground(content, matchIndex);
+        if (resolved.inlineBgHex) {
+          bgHex = resolved.inlineBgHex;
+          bgSource = 'inline_style';
+        } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
+          bgHex = TAILWIND_COLORS[resolved.bgName];
+          bgClass = resolved.bgClass;
+          bgSource = 'tailwind_token';
+        }
+      } else {
+        console.log(`[A1] ternary-context detected for ${colorClass} at index ${matchIndex} in ${filepath} — bg resolution skipped`);
       }
 
       const sizeStatus = inferTextSize(context);
@@ -4062,6 +4073,15 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       const ratio = (fgResolved && bgResolved)
         ? getContrastRatio(effectiveFgHex, bgHex)
         : null;
+
+      // --- Same-color guard ---
+      // If fg and bg resolve to the exact same hex (e.g., #ffffff vs #ffffff → 1.0:1),
+      // this is almost certainly a cross-branch resolution error, not a real violation.
+      if (ratio !== null && effectiveFgHex && bgHex &&
+          effectiveFgHex.toLowerCase() === bgHex.toLowerCase()) {
+        console.log(`[A1] same-color guard: skipping ${colorClass} (${effectiveFgHex}) === bg (${bgHex}) in ${filepath}`);
+        continue;
+      }
 
       if (ratio !== null && ratio >= threshold) continue;
 
@@ -4108,18 +4128,25 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       if (!fgHexRaw) continue;
       if (!isTextElement(jsxTag, lucideIcons)) continue;
 
+      // --- Ternary-context detection (same as base pass) ---
+      const ternaryWindowV = content.slice(Math.max(0, matchIndex - 200), Math.min(content.length, matchIndex + 200));
+      const isInsideTernaryV = /\?\s*["'`][^"'`]*$/.test(content.slice(Math.max(0, matchIndex - 200), matchIndex)) ||
+        /\?\s*["'`]/.test(ternaryWindowV) && /:\s*["'`]/.test(ternaryWindowV);
+
       let bgHex: string | null = null;
       let bgClass: string | null = null;
       let bgSource: A1BgSource = 'unresolved';
 
-      const resolved = resolveBackground(content, matchIndex);
-      if (resolved.inlineBgHex) {
-        bgHex = resolved.inlineBgHex;
-        bgSource = 'inline_style';
-      } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
-        bgHex = TAILWIND_COLORS[resolved.bgName];
-        bgClass = resolved.bgClass;
-        bgSource = 'tailwind_token';
+      if (!isInsideTernaryV) {
+        const resolved = resolveBackground(content, matchIndex);
+        if (resolved.inlineBgHex) {
+          bgHex = resolved.inlineBgHex;
+          bgSource = 'inline_style';
+        } else if (resolved.bgName && TAILWIND_COLORS[resolved.bgName]) {
+          bgHex = TAILWIND_COLORS[resolved.bgName];
+          bgClass = resolved.bgClass;
+          bgSource = 'tailwind_token';
+        }
       }
 
       const sizeStatus = inferTextSize(context);
@@ -4137,6 +4164,12 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       const ratio = (fgResolved && bgResolved)
         ? getContrastRatio(effectiveFgHex, bgHex)
         : null;
+
+      // --- Same-color guard (variant pass) ---
+      if (ratio !== null && effectiveFgHex && bgHex &&
+          effectiveFgHex.toLowerCase() === bgHex.toLowerCase()) {
+        continue;
+      }
 
       if (ratio !== null && ratio >= threshold) continue;
 
@@ -4454,7 +4487,7 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
       note: !canCompute ? 'contrast not computed (theme/variable-dependent colors)' : undefined,
       elementIdentifier,
       elementDescription: finding.elementContext,
-      evidence: `${finding.fgClass}${finding.bgClass ? ` on ${finding.bgClass}` : ''} in ${finding.filePath}${finding.startLine ? `:${finding.startLine}` : ''}${finding.variantName ? ` [variant=${finding.variantName}]` : ''}`,
+      evidence: `${finding.fgClass}${fgResolved && finding.fgHex ? ` (${finding.fgHex})` : ''}${finding.bgClass ? ` on ${finding.bgClass}${bgResolved && finding.bgHex ? ` (${finding.bgHex})` : ''}` : ''} in ${finding.filePath}${finding.startLine ? `:${finding.startLine}` : ''}${finding.variantName ? ` [variant=${finding.variantName}]` : ''}`,
       diagnosis,
       contextualHint: canCompute
         ? `Contrast ${ratioStr} — ${finding.evidenceLevel.replace(/_/g, ' ')}.`
