@@ -103,6 +103,7 @@ export interface Violation {
   inputLimitation?: string; // Explanation of why this is heuristic
   advisoryGuidance?: string; // Non-mandatory guidance for potential risks
   actionableGuidance?: string; // Short, actionable fix guidance
+  impactAnnotation?: string; // Cross-rule suppression impact explanation (e.g., U3 suppresses U4)
   // A1 sampling fallback tracking
   samplingFallback?: {
     method: string; // 'direct ring sampling', 'expanded region (+Xpx)', 'color clustering', 'range-based'

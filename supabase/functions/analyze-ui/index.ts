@@ -4529,10 +4529,99 @@ serve(async (req) => {
     const { kept: enhancedViolations, suppressedElements } = applyCrossRuleSuppression(issuesOnly);
     console.log(`Analysis complete: ${allViolationsPreSuppression.length} pre-suppression → ${enhancedViolations.length} violations (${suppressedElements.length} element(s) suppressed)`);
 
+    // ========== SCREENSHOT-SPECIFIC USABILITY CROSS-RULE SUPPRESSION ==========
+    // Prevent duplicate findings where multiple rules describe the same root cause.
+    // Priority: U3 > U4, U5 > U4, U6 > U1, U2 > U1
+    const ruleIds = new Set(enhancedViolations.map((v: any) => v.ruleId));
+    const hasU3 = ruleIds.has('U3');
+    const hasU5 = ruleIds.has('U5');
+    const hasU6 = ruleIds.has('U6');
+    const hasU2 = ruleIds.has('U2');
+
+    const screenshotSuppressed: string[] = [];
+    const finalViolations = enhancedViolations.filter((v: any) => {
+      // S-SS1: U3 suppresses U4 (truncation causes recall regression on review screens)
+      if (v.ruleId === 'U4' && hasU3) {
+        const u4Text = `${v.diagnosis || ''} ${v.evidence || ''} ${v.contextualHint || ''}`.toLowerCase();
+        const isReviewContext = /review|confirm|summar|verif|check.*before|final.*step/.test(u4Text);
+        const isTruncationCaused = /truncat|clip|hidden|cut.?off|ellipsis|inaccessible|cannot.*see|not.*visible/.test(u4Text);
+        if (isReviewContext || isTruncationCaused) {
+          console.log(`Screenshot suppression: U4 suppressed by U3 (truncation→recall on review screen)`);
+          screenshotSuppressed.push('U4 (by U3)');
+          return false;
+        }
+      }
+
+      // S-SS2: U5 suppresses U4 (missing feedback causes recall regression)
+      if (v.ruleId === 'U4' && hasU5) {
+        const u4Text = `${v.diagnosis || ''} ${v.evidence || ''}`.toLowerCase();
+        const isFeedbackCaused = /feedback|state|status|response|confirmation|indicator|loading|spinner/.test(u4Text);
+        if (isFeedbackCaused) {
+          console.log(`Screenshot suppression: U4 suppressed by U5 (missing feedback→recall)`);
+          screenshotSuppressed.push('U4 (by U5)');
+          return false;
+        }
+      }
+
+      // S-SS3: U6 suppresses U1 (weak grouping explains unclear primary action)
+      if (v.ruleId === 'U1' && hasU6) {
+        const u1Text = `${v.diagnosis || ''} ${v.evidence || ''}`.toLowerCase();
+        const isGroupingCaused = /group|hierarchy|layout|section|visual.*weight|spacing|alignment|cluster|scattered/.test(u1Text);
+        if (isGroupingCaused) {
+          console.log(`Screenshot suppression: U1 suppressed by U6 (grouping→unclear action)`);
+          screenshotSuppressed.push('U1 (by U6)');
+          return false;
+        }
+      }
+
+      // S-SS4: U2 suppresses U1 (navigation ambiguity explains unclear primary action)
+      if (v.ruleId === 'U1' && hasU2) {
+        const u1Text = `${v.diagnosis || ''} ${v.evidence || ''}`.toLowerCase();
+        const isNavCaused = /navigat|wayfind|where.*am|location|breadcrumb|menu|path|route/.test(u1Text);
+        if (isNavCaused) {
+          console.log(`Screenshot suppression: U1 suppressed by U2 (navigation→unclear action)`);
+          screenshotSuppressed.push('U1 (by U2)');
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    // Add impact annotations to surviving parent rules
+    if (screenshotSuppressed.some(s => s.startsWith('U4 (by U3)'))) {
+      const u3Violation = finalViolations.find((v: any) => v.ruleId === 'U3');
+      if (u3Violation) {
+        u3Violation.impactAnnotation = 'This truncation may force users to recall previously entered information instead of recognizing it during verification.';
+      }
+    }
+    if (screenshotSuppressed.some(s => s.startsWith('U4 (by U5)'))) {
+      const u5Violation = finalViolations.find((v: any) => v.ruleId === 'U5');
+      if (u5Violation) {
+        u5Violation.impactAnnotation = 'Missing interaction feedback may force users to recall system state instead of recognizing it from visible indicators.';
+      }
+    }
+    if (screenshotSuppressed.some(s => s.startsWith('U1 (by U6)'))) {
+      const u6Violation = finalViolations.find((v: any) => v.ruleId === 'U6');
+      if (u6Violation) {
+        u6Violation.impactAnnotation = 'Weak visual grouping may make the primary action harder to identify, contributing to unclear action hierarchy.';
+      }
+    }
+    if (screenshotSuppressed.some(s => s.startsWith('U1 (by U2)'))) {
+      const u2Violation = finalViolations.find((v: any) => v.ruleId === 'U2');
+      if (u2Violation) {
+        u2Violation.impactAnnotation = 'Navigation ambiguity may contribute to unclear primary action identification.';
+      }
+    }
+
+    if (screenshotSuppressed.length > 0) {
+      console.log(`Screenshot cross-rule suppression: ${screenshotSuppressed.length} finding(s) suppressed: ${screenshotSuppressed.join(', ')}`);
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
-        violations: enhancedViolations,
+        violations: finalViolations,
         passNotes: analysisResult.passNotes || {},
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
