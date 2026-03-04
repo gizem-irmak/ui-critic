@@ -2619,6 +2619,7 @@ Assess whether high-impact actions (delete, purchase, subscribe, reset) visibly 
 E2 flags choice imbalance ONLY in high-impact decision contexts: consent/privacy, monetization/payment, irreversible actions, data sharing.
 - **HIGH-IMPACT GATE (REQUIRED):** Only evaluate if visible CTA context includes: consent, cookie, payment, subscribe, upgrade, delete, confirm, privacy, data sharing keywords.
 - **MUST NOT FLAG:** Standard "Sign Up" primary + "Sign In" secondary on landing pages. Navigation vs auth buttons. Marketing layouts without consent/monetization context.
+- **SAFETY PATTERN EXCLUSION (CRITICAL):** A destructive action styled in red/warning color (e.g., red "Delete" button) paired with a clearly visible neutral cancel/keep/go-back button is a STANDARD SAFETY PATTERN, not manipulative architecture. This includes: red destructive button + neutral cancel button, confirmation dialogs with warning text, additional acknowledgement checkboxes. If both options are clearly visible and accessible, do NOT report E2.
 - **REQUIRE 2+ imbalance signals:** visual dominance asymmetry, size difference, language bias, default selection, ambiguous alternative.
 - Do NOT infer malicious intent. Use neutral phrasing ("imbalance risk", "may nudge").
 - E2 is ALWAYS "Potential" — NEVER "Confirmed". Confidence: 0.55–0.75 (cap at 0.75).
