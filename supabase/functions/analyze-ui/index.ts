@@ -4211,14 +4211,14 @@ serve(async (req) => {
     if (selectedRulesSet.has('A4')) {
       aggregatedA4UI = {
         ruleId: 'A4',
-        ruleName: 'Missing semantic structure',
+        ruleName: 'Missing Semantic Structure',
         category: 'accessibility',
-        status: 'not_evaluated',
+        status: 'informational',
         blocksConvergence: false,
         inputType: 'screenshots',
         isA4Aggregated: false,
-        diagnosis: 'Semantic structure cannot be verified without source code.',
-        contextualHint: 'Upload source code (ZIP file or GitHub repository) to enable semantic structure evaluation (headings, landmarks, lists, interactive roles).',
+        diagnosis: 'Semantic structure cannot be verified from a static screenshot. Detection of headings (<h1>–<h6>), landmarks (<main>, <nav>, <header>), ARIA roles, and list semantics requires DOM or source code inspection, which is not observable from an image.',
+        contextualHint: 'Upload source code (ZIP file or GitHub repository) to enable deterministic semantic structure analysis.',
         correctivePrompt: '',
         confidence: 0,
         evidence: 'Input type: Screenshot',
