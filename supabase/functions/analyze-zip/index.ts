@@ -7113,9 +7113,18 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
       const localDisclosure = extractE1DisclosureTerms(region);
       const localFriction = extractE1FrictionMechanisms(region);
 
+      // FILE-LEVEL FALLBACK: if local check misses gate/disclosure, check full file
+      // (confirmation modal + disclosure text may be far from the button label)
+      const fileLevelGateLbl = !localConfirmGate.hasGate ? detectE1ConfirmationGate(content) : localConfirmGate;
+      const fileLevelDisclosureLbl = localDisclosure.length === 0 ? extractE1DisclosureTerms(content) : localDisclosure;
+      const fileLevelFrictionLbl = localFriction.length === 0 ? extractE1FrictionMechanisms(content) : localFriction;
+      const effectiveGateLbl = localConfirmGate.hasGate ? localConfirmGate : fileLevelGateLbl;
+      const effectiveDisclosureLbl = localDisclosure.length > 0 ? localDisclosure : fileLevelDisclosureLbl;
+      const effectiveFrictionLbl = localFriction.length > 0 ? localFriction : fileLevelFrictionLbl;
+
       const suppressResult = shouldSuppressE1Bundle({
-        label, filePath, content, confirmGate: localConfirmGate, recovery: localRecovery,
-        hasStrongDisclosure: localDisclosure.length > 0, disclosureTermsFound: localDisclosure, frictionMechanisms: localFriction,
+        label, filePath, content, confirmGate: effectiveGateLbl, recovery: localRecovery,
+        hasStrongDisclosure: effectiveDisclosureLbl.length > 0, disclosureTermsFound: effectiveDisclosureLbl, frictionMechanisms: effectiveFrictionLbl,
         handlerName: handlerMatch?.[1],
       });
 
@@ -7172,9 +7181,17 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
       const localDisclosure = extractE1DisclosureTerms(iconRegion);
       const localFriction = extractE1FrictionMechanisms(iconRegion);
 
+      // FILE-LEVEL FALLBACK for icon channel
+      const fileLevelGateIcon = !localConfirmGate.hasGate ? detectE1ConfirmationGate(content) : localConfirmGate;
+      const fileLevelDisclosureIcon = localDisclosure.length === 0 ? extractE1DisclosureTerms(content) : localDisclosure;
+      const fileLevelFrictionIcon = localFriction.length === 0 ? extractE1FrictionMechanisms(content) : localFriction;
+      const effectiveGateIcon = localConfirmGate.hasGate ? localConfirmGate : fileLevelGateIcon;
+      const effectiveDisclosureIcon = localDisclosure.length > 0 ? localDisclosure : fileLevelDisclosureIcon;
+      const effectiveFrictionIcon = localFriction.length > 0 ? localFriction : fileLevelFrictionIcon;
+
       const suppressResult = shouldSuppressE1Bundle({
-        label, filePath, content, confirmGate: localConfirmGate, recovery: localRecovery,
-        hasStrongDisclosure: localDisclosure.length > 0, disclosureTermsFound: localDisclosure, frictionMechanisms: localFriction,
+        label, filePath, content, confirmGate: effectiveGateIcon, recovery: localRecovery,
+        hasStrongDisclosure: effectiveDisclosureIcon.length > 0, disclosureTermsFound: effectiveDisclosureIcon, frictionMechanisms: effectiveFrictionIcon,
       });
       if (suppressResult.suppressed) {
         if (suppressResult.reason.includes('recovery')) e1SuppressedRecovery++;
@@ -7230,9 +7247,17 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
         const localDisclosure = extractE1DisclosureTerms(surroundRegion);
         const localFriction = extractE1FrictionMechanisms(surroundRegion);
 
+        // FILE-LEVEL FALLBACK for handler channel
+        const fileLevelGateHdl = !localConfirmGate.hasGate ? detectE1ConfirmationGate(content) : localConfirmGate;
+        const fileLevelDisclosureHdl = localDisclosure.length === 0 ? extractE1DisclosureTerms(content) : localDisclosure;
+        const fileLevelFrictionHdl = localFriction.length === 0 ? extractE1FrictionMechanisms(content) : localFriction;
+        const effectiveGateHdl = localConfirmGate.hasGate ? localConfirmGate : fileLevelGateHdl;
+        const effectiveDisclosureHdl = localDisclosure.length > 0 ? localDisclosure : fileLevelDisclosureHdl;
+        const effectiveFrictionHdl = localFriction.length > 0 ? localFriction : fileLevelFrictionHdl;
+
         const suppressResult = shouldSuppressE1Bundle({
-          label: inferredLabel, filePath, content, confirmGate: localConfirmGate, recovery: localRecovery,
-          hasStrongDisclosure: localDisclosure.length > 0, disclosureTermsFound: localDisclosure, frictionMechanisms: localFriction,
+          label: inferredLabel, filePath, content, confirmGate: effectiveGateHdl, recovery: localRecovery,
+          hasStrongDisclosure: effectiveDisclosureHdl.length > 0, disclosureTermsFound: effectiveDisclosureHdl, frictionMechanisms: effectiveFrictionHdl,
           handlerName: dim[1],
         });
         if (suppressResult.suppressed) {
@@ -7286,9 +7311,17 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
         const localDisclosure = extractE1DisclosureTerms(iconContext);
         const localFriction = extractE1FrictionMechanisms(iconContext);
 
+        // FILE-LEVEL FALLBACK for trash-icon channel
+        const fileLevelGateTrsh = !localConfirmGate.hasGate ? detectE1ConfirmationGate(content) : localConfirmGate;
+        const fileLevelDisclosureTrsh = localDisclosure.length === 0 ? extractE1DisclosureTerms(content) : localDisclosure;
+        const fileLevelFrictionTrsh = localFriction.length === 0 ? extractE1FrictionMechanisms(content) : localFriction;
+        const effectiveGateTrsh = localConfirmGate.hasGate ? localConfirmGate : fileLevelGateTrsh;
+        const effectiveDisclosureTrsh = localDisclosure.length > 0 ? localDisclosure : fileLevelDisclosureTrsh;
+        const effectiveFrictionTrsh = localFriction.length > 0 ? localFriction : fileLevelFrictionTrsh;
+
         const suppressResult = shouldSuppressE1Bundle({
-          label: inferredLabel, filePath, content, confirmGate: localConfirmGate, recovery: localRecovery,
-          hasStrongDisclosure: localDisclosure.length > 0, disclosureTermsFound: localDisclosure, frictionMechanisms: localFriction,
+          label: inferredLabel, filePath, content, confirmGate: effectiveGateTrsh, recovery: localRecovery,
+          hasStrongDisclosure: effectiveDisclosureTrsh.length > 0, disclosureTermsFound: effectiveDisclosureTrsh, frictionMechanisms: effectiveFrictionTrsh,
         });
         if (suppressResult.suppressed) {
           if (suppressResult.reason.includes('recovery')) e1SuppressedRecovery++;

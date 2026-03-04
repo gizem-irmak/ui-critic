@@ -20,8 +20,8 @@ E1 now covers ALL deletion flows across the app using three detection channels:
 - Delete mutations (`deleteMutation`, `useMutation` with DELETE method)
 - Handler functions (`handleDelete`, `deleteItem`, etc.) that call network DELETE without confirmation gate
 
-## Confirmation Gate Detection — FLOW-LOCAL (suppresses E1) + FILE-LEVEL FALLBACK for network channel
-**CRITICAL**: Confirmation gates are detected in the LOCAL region (~500 chars) around each candidate trigger, NOT at file level. This prevents unrelated Dialog/AlertDialog components (e.g., add/edit dialogs) from falsely suppressing deletion findings. **EXCEPTION**: The network detection channel (Detection D) uses a file-level fallback for non-modal confirmation gates (disabled-until-confirm, checkbox-confirm-gate, conditional-confirm-gate, two-step-state) because these UI-level gates are typically far from the handler definition but inherently linked to the same deletion flow.
+## Confirmation Gate Detection — FLOW-LOCAL with FILE-LEVEL FALLBACK (all channels)
+**CRITICAL**: Confirmation gates are first detected in the LOCAL region (~500 chars) around each candidate trigger. If no gate or disclosure is found locally, ALL channels (label, icon, handler, network) fall back to a FILE-LEVEL scan. This ensures that confirmation modals/gates that are far from the trigger button (common in Settings pages with separate modal components) are correctly linked to the destructive action. The file-level fallback checks for gates, disclosure terms, and friction mechanisms. If gate + disclosure exist at file level, the finding is suppressed.
 
 - AlertDialog / ConfirmDialog / DeleteConfirmDialog components (in local scope)
 - `window.confirm()` / `confirm()`
