@@ -1930,7 +1930,6 @@ const buildAnalysisPrompt = (categories: string[], selectedRules: string[]) => {
 Run visual inspection for accessibility issues:
 - Text contrast ratios (minimum 4.5:1 for normal text)
 - Font sizes (minimum 16px for body text)
-- Line spacing and readability
 - Focus indicator visibility
 
 ### A2 (Poor focus visibility) — SCREENSHOT DETECTION RULES:
@@ -1995,98 +1994,9 @@ When a focused element is shown but lacks indicator:
 - Focus visibility requires runtime keyboard testing — screenshots show only one state
 - Do NOT report non-interactive elements (headings, paragraphs, images)
 - Do NOT flag elements that appear to have visible focus indicators
-### A3 (Insufficient line spacing) — PARAGRAPH BLOCK DETECTION FOR SCREENSHOTS:
 
-**SCOPE:** Primary body text only: paragraphs, descriptions, article content, main text areas,
-dialog descriptions, alert bodies, form descriptions, card descriptions.
-
-**DO NOT APPLY to:** Headings, badges, metadata, timestamps, navigation, buttons, labels, microcopy.
-
-**PARAGRAPH BLOCK DETECTION METHOD:**
-
-STEP 1 — Detect all text boxes (words/text regions) in the screenshot.
-
-STEP 2 — Merge word-level boxes into LINE-level boxes:
-- Two text boxes are on the same line if: abs(centerY1 - centerY2) <= 0.6 * medianTextHeight
-- Merge horizontally if gaps are small and y-overlap is high
-- Output: line boxes with combined bounding box
-
-STEP 3 — Group LINES into PARAGRAPH blocks:
-Group adjacent lines into a multi-line block when ALL conditions are met:
-- Left alignment similar: abs(leftX1 - leftX2) <= max(12px, 0.15 * lineWidth)
-- Font height similar: within ±25%
-- Vertical distance between consecutive line centers: 0.6 * textHeight to 2.2 * textHeight
-- Same column region: x-overlap >= 40%
-
-STEP 4 — For each block with >= 2 lines, compute:
-- textHeightPx = median of line box heights
-- lineStepPx = median of (centerY[i+1] - centerY[i]) for consecutive lines
-- estimatedRatio = lineStepPx / textHeightPx
-
-**CLASSIFICATION (Screenshot Only — uses UNIFIED threshold bands):**
-- estimatedRatio < 1.30 → Potential Risk (High confidence: 60-65%)
-- 1.30 <= estimatedRatio < 1.45 → Potential Risk (Low confidence: 40-50%, add "Borderline dense spacing detected")
-- estimatedRatio >= 1.45 → No risk (do not report as violation but include in a3ParagraphBlocks)
-- NEVER classify screenshot A3 as Confirmed
-
-**OUTPUT — a3ParagraphBlocks (MANDATORY when A3 is selected):**
-Include a top-level array \`a3ParagraphBlocks\` with ALL detected paragraph blocks (even non-violating ones):
-\`\`\`json
-"a3ParagraphBlocks": [
-  {
-    "blockIndex": 1,
-    "linesDetected": 3,
-    "textHeightPx": 16,
-    "lineStepPx": 19.2,
-    "estimatedRatio": 1.20,
-    "location": "Course description area",
-    "screenshotIndex": 1,
-    "confidence": 0.65,
-    "isViolation": true
-  },
-  {
-    "blockIndex": 2,
-    "linesDetected": 2,
-    "textHeightPx": 14,
-    "lineStepPx": 22.4,
-    "estimatedRatio": 1.60,
-    "location": "About section paragraph",
-    "screenshotIndex": 1,
-    "confidence": 0.55,
-    "isViolation": false
-  }
-]
-\`\`\`
-
-If no multi-line paragraph blocks can be detected, output:
-\`\`\`json
-"a3ParagraphBlocks": [],
-"a3DetectionDiagnostics": {
-  "rawBoxesDetected": 45,
-  "linesConstructed": 12,
-  "reason": "groupingTooStrict" | "wordBoxesNotMerged" | "noParagraphCandidates"
-}
-\`\`\`
-
-**IMPORTANT:** Even if grouping fails, if at least 2 lines exist with similar left alignment, treat them as a minimal block and compute an estimated ratio. Do NOT require perfect paragraph detection.
-
-**Also emit A3 violations** in the violations array for blocks where isViolation=true, using this format:
-\`\`\`json
-{
-  "ruleId": "A3",
-  "ruleName": "Insufficient line spacing",
-  "category": "accessibility",
-  "status": "potential",
-  "evidence": "Body text in [location] — [N] lines, estimated ratio ≈[X.XX]",
-  "diagnosis": "Line spacing ratio ≈[X.XX] is below the recommended 1.30 readability baseline for body text.",
-  "contextualHint": "Increase line-height to at least 1.5 (leading-normal) for primary body text.",
-  "confidence": 0.60,
-  "lineCount": 3,
-  "estimatedRatio": 1.20,
-  "textHeightPx": 16,
-  "lineStepPx": 19.2
-}
-\`\`\`
+### IMPORTANT — Rules NOT evaluated for screenshots:
+**A3 (Incomplete Keyboard Operability), A4 (Missing Semantic Structure), A5 (Missing Form Labels), and A6 (Missing Accessible Names) require DOM inspection and CANNOT be evaluated from screenshots. Do NOT generate any findings for these rules. They will be marked as "Not Evaluated" automatically.**
 
     ### A4 (Small tap / click targets) — DESKTOP WEB UI EVALUATION (Screenshot):
 
@@ -2778,8 +2688,6 @@ Respond with a JSON object in this exact structure:
     }
   ],
   "a1TextElements": [],
-  "a3ParagraphBlocks": [],
-  "a3DetectionDiagnostics": null,
   "passNotes": {
     "accessibility": "Summary of accessibility pass findings",
     "usability": "Summary of usability pass findings",
@@ -3208,11 +3116,16 @@ serve(async (req) => {
     const a2Violations: any[] = []; // A2 = Poor focus visibility (accepts both old A5 and new A2 IDs)
     const otherViolations: any[] = [];
     
-    // Filter LLM violations — skip any A1 (handled by two-stage pipeline above)
+    // Filter LLM violations — skip A1 (handled by two-stage pipeline) and A3/A4/A5/A6 (Not Evaluated for screenshots)
+    const screenshotSuppressedRuleIds = new Set(['A3', 'A4', 'A5', 'A6']);
     filteredBySelection.forEach((v: any) => {
       if (v.ruleId === 'A1') {
         // A1 is handled by the two-stage hybrid pipeline — skip LLM A1 violations
         console.log(`A1: Skipping LLM violation (handled by two-stage hybrid): ${v.evidence || v.elementDescription || 'unknown'}`);
+        return;
+      } else if (screenshotSuppressedRuleIds.has(v.ruleId)) {
+        // A3, A4, A5, A6 require DOM — suppress any LLM-generated violations for these rules
+        console.log(`${v.ruleId}: Suppressed (requires DOM, not evaluable from screenshots): ${(v.evidence || '').substring(0, 80)}`);
         return;
       } else if (v.ruleId === 'A2' || v.ruleId === 'A5') {
         v.ruleId = 'A2'; // Normalize to A2
