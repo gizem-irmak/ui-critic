@@ -115,22 +115,30 @@ function shouldSuppressE1(opts: {
   const disclosureTerms = extractDisclosureTerms(localRegion);
   const friction = extractFriction(localRegion);
 
-  if (gate.hasGate && disclosureTerms.length > 0) {
-    return { suppressed: true, reason: `disclosure (${disclosureTerms.join(', ')}) + ${gate.gateType}` };
+  // FILE-LEVEL FALLBACK: if local check misses gate/disclosure, check full file
+  const fileLevelGate = !gate.hasGate ? detectConfirmationGate(fullContent) : gate;
+  const fileLevelDisclosure = disclosureTerms.length === 0 ? extractDisclosureTerms(fullContent) : disclosureTerms;
+  const fileLevelFriction = friction.length === 0 ? extractFriction(fullContent) : friction;
+  const effectiveGate = gate.hasGate ? gate : fileLevelGate;
+  const effectiveDisclosure = disclosureTerms.length > 0 ? disclosureTerms : fileLevelDisclosure;
+  const effectiveFriction = friction.length > 0 ? friction : fileLevelFriction;
+
+  if (effectiveGate.hasGate && effectiveDisclosure.length > 0) {
+    return { suppressed: true, reason: `disclosure (${effectiveDisclosure.join(', ')}) + ${effectiveGate.gateType}` };
   }
-  if (gate.hasGate) {
+  if (effectiveGate.hasGate) {
     if (opts.handlerName && isHandlerGatedByConfirmation(opts.handlerName, fullContent)) {
       return { suppressed: true, reason: `handler ${opts.handlerName} is gated by confirmation state` };
     }
-    if (friction.length > 0) {
-      return { suppressed: true, reason: `${gate.gateType} + friction (${friction.join(', ')}) in local scope` };
+    if (effectiveFriction.length > 0) {
+      return { suppressed: true, reason: `${effectiveGate.gateType} + friction (${effectiveFriction.join(', ')}) in local scope` };
     }
     // Non-modal gate types always suppress
-    if (/disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate|type-to-confirm|handler-guard/i.test(gate.gateType)) {
-      return { suppressed: true, reason: `non-modal confirmation gate: ${gate.gateType}` };
+    if (/disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate|type-to-confirm|handler-guard/i.test(effectiveGate.gateType)) {
+      return { suppressed: true, reason: `non-modal confirmation gate: ${effectiveGate.gateType}` };
     }
-    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state/i.test(gate.gateType)) {
-      return { suppressed: true, reason: `destructive label + ${gate.gateType} in local scope` };
+    if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state/i.test(effectiveGate.gateType)) {
+      return { suppressed: true, reason: `destructive label + ${effectiveGate.gateType} in local scope` };
     }
   }
 
@@ -666,6 +674,42 @@ Deno.test("E1 REGRESSION: Settings.tsx handler guard + Dialog + disclosure → S
   const result = shouldSuppressE1({
     filePath: "src/pages/patient/Settings.tsx", label: "Delete",
     localRegion: fullContent, fullContent,
+});
+
+// ── Test 40: Settings.tsx label far from modal — file-level fallback suppresses ──
+Deno.test("E1 REGRESSION: label-channel file-level fallback suppresses when gate+disclosure exist in file", () => {
+  // The label "Yes, Delete My Account" is detected in a small local region with NO gate/disclosure
+  const localRegion = `<Button variant="destructive" onClick={handleDeleteAccount}>Yes, Delete My Account</Button>`;
+
+  // But the full file contains the modal with gate + disclosure
+  const fullContent = `
+    import { useState } from 'react';
+    const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+    const [confirmation, setConfirmation] = useState('');
+
+    const handleDeleteAccount = async () => {
+      if (confirmation !== 'DELETE') return;
+      await deleteMutation.mutateAsync();
+    };
+
+    // ... 200 lines of other settings UI ...
+
+    <Dialog open={showDeleteDialog}>
+      <DialogContent>
+        <p>This action cannot be undone. All your data will be permanently deleted.</p>
+        <Input placeholder="Type DELETE to confirm" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} />
+        <Button variant="destructive" disabled={confirmation !== 'DELETE'} onClick={handleDeleteAccount}>
+          Yes, Delete My Account
+        </Button>
+        <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>Cancel</Button>
+      </DialogContent>
+    </Dialog>
+  `;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/patient/Settings.tsx", label: "Delete",
+    localRegion, fullContent,
   });
+  assertEquals(result.suppressed, true, `File-level fallback must suppress when gate+disclosure exist, got: ${result.reason}`);
+});
   assertEquals(result.suppressed, true, `Full settings pattern must suppress, got: ${result.reason}`);
 });
