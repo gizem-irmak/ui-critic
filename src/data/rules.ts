@@ -104,7 +104,7 @@ export const rules: Rule[] = [
       'A4.4: Repeated sibling patterns without semantic list wrappers',
     ],
     notEvaluatedReason: {
-      screenshot: 'Semantic structure requires DOM/HTML analysis; screenshot-only input cannot be evaluated.',
+      screenshot: 'Semantic structure cannot be verified from a static screenshot. Detection of headings (<h1>–<h6>), landmarks (<main>, <nav>, <header>), ARIA roles, and list semantics requires DOM or source code inspection, which is not observable from an image.',
     },
   },
   {
