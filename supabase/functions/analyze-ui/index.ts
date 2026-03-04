@@ -2488,10 +2488,54 @@ ${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: $
 Consider:
 - Visual hierarchy and primary action clarity (U1)
 - Navigation WAYFINDING ONLY: Can users know where they are, where they can go, and navigate back? (U2) — Do NOT flag just because breadcrumbs are missing. Active nav highlight + page heading = sufficient. Do NOT comment on layout grouping (U6), truncation (U3), step indicators (U4), exit/cancel absence (E3), or landmark semantics (A-rules). Confidence: 0.60–0.80, cap at 0.80.
-- Content truncation, overflow, and text visibility (U3)
+- Content truncation, overflow, and text visibility (U3) — see U3 CONSTRAINTS below
 - Recognition vs recall: visible options, labels, contextual cues (U4) — see U4 CONSTRAINTS below
 - Interaction feedback: loading states, confirmations, error messages (U5)
 - Layout grouping, alignment, and visual coherence (U6)
+
+### U3 (Truncated or Inaccessible Content) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
+**STRICT VISUAL-ONLY GATING — Only report U3 when at least ONE of these visual cues is present:**
+1. Visible ellipsis (…) indicating text truncation
+2. Text visibly cut off at container edge (characters truncated mid-line)
+3. A fade/mask/gradient overlay indicating overflow
+4. Text overlapping other UI elements or exiting its bounding area
+
+**If NONE of these visual cues are present, do NOT report U3.**
+
+**FORBIDDEN:** Do NOT use code-centric language: "static analysis", "truncate class", "expand: none", "CSS", "overflow-hidden".
+**Use visual-only language:** "visually clipped", "text appears cut off", "ellipsis observed", "content extends beyond container".
+
+**U3 is ALWAYS "status": "potential" — NEVER "confirmed" for screenshots.**
+**Confidence range:** 0.55–0.75 (cap at 0.75).
+
+**OUTPUT FORMAT for U3 screenshot findings:**
+\`\`\`json
+{
+  "ruleId": "U3",
+  "ruleName": "Truncated or inaccessible content",
+  "category": "usability",
+  "status": "potential",
+  "isU3Aggregated": true,
+  "u3Elements": [
+    {
+      "elementLabel": "Text content region (e.g., Reason / Notes)",
+      "location": "Screenshot #1",
+      "detection": "Short visual-based statement of what is observed",
+      "evidence": "What in the screenshot indicates clipping (e.g., ellipsis visible, text cut off at edge)",
+      "recoveryObserved": "None observed | Tooltip observed | Expandable / Show more observed | Scrollable region observed | Wrapped text (no truncation)",
+      "confidence": 0.65,
+      "classification": "potential",
+      "subCheck": "U3.D1",
+      "subCheckLabel": "Visual content truncation",
+      "deduplicationKey": "U3-screenshot-region-description"
+    }
+  ],
+  "diagnosis": "Visual inspection suggests content may be clipped; verify in context.",
+  "confidence": 0.65,
+  "advisoryGuidance": "Ensure long user-entered text wraps or can be expanded (e.g., Show more, tooltip, scroll) on the Review/Confirm screen so users can fully verify inputs before submission."
+}
+\`\`\`
+- If NO visual truncation cues found, do NOT include U3 in the violations array.
 
 ### U4 (Recognition-to-Recall Regression) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
 **CRITICAL ANTI-HALLUCINATION RULES:**
@@ -3458,11 +3502,18 @@ serve(async (req) => {
         const isU4 = v.ruleId === 'U4';
         const isU5 = v.ruleId === 'U5';
         const isU6 = v.ruleId === 'U6';
+        const isU3 = v.ruleId === 'U3';
         // Tag with evaluationMethod — all screenshot LLM violations are llm_assisted
         return {
           ...v,
           correctivePrompt: rule?.correctivePrompt || v.correctivePrompt || '',
           evaluationMethod: 'llm_assisted',
+          ...(isU3 ? {
+            status: 'potential',
+            blocksConvergence: false,
+            confidence: Math.min(v.confidence || 0.60, 0.75),
+            inputType: 'screenshots',
+          } : {}),
           ...(isU4 ? {
             status: 'potential',
             blocksConvergence: false,
@@ -3481,6 +3532,50 @@ serve(async (req) => {
           } : {}),
         };
       });
+
+    // ========== U3 SCREENSHOT POST-PROCESSING ==========
+    // Enforce visual-cue gating: only keep U3 findings with actual truncation evidence
+    // Also standardize fields for screenshot modality
+    const u3ScreenshotViolations = filteredOtherViolations.filter((v: any) => v.ruleId === 'U3');
+    const nonU3Violations = filteredOtherViolations.filter((v: any) => v.ruleId !== 'U3');
+    
+    const validU3Screenshots: any[] = [];
+    for (const v of u3ScreenshotViolations) {
+      const combined = `${v.evidence || ''} ${v.diagnosis || ''} ${v.detection || ''}`.toLowerCase();
+      
+      // Strict visual-cue gating
+      const hasEllipsis = /ellipsis|…|\.\.\./.test(combined);
+      const hasCutOff = /cut.?off|truncat|clip|cropped|mid.?line|overflow/.test(combined);
+      const hasFade = /fade|mask|gradient.*overflow|overlay/.test(combined);
+      const hasOverlap = /overlap|exit.*bound|beyond.*container|outside.*area/.test(combined);
+      
+      if (!hasEllipsis && !hasCutOff && !hasFade && !hasOverlap) {
+        console.log(`U3 screenshot: Filtering out — no visual truncation cue: ${(v.evidence || v.diagnosis || '').substring(0, 100)}`);
+        continue;
+      }
+      
+      // Sanitize code-centric language from diagnosis
+      let cleanDiagnosis = (v.diagnosis || '').replace(/static analysis\s*(flagged|identified|detected)?/gi, 'Visual inspection suggests');
+      
+      // If the violation is already aggregated with u3Elements, sanitize each element
+      if (v.isU3Aggregated && Array.isArray(v.u3Elements)) {
+        v.u3Elements = v.u3Elements.map((el: any) => ({
+          ...el,
+          classification: 'potential',
+          recoveryObserved: el.recoveryObserved || (el.recoverySignals && el.recoverySignals.length > 0 ? el.recoverySignals.join(', ') : 'None observed'),
+          inputType: 'screenshots',
+        }));
+      }
+      
+      v.diagnosis = cleanDiagnosis || 'Visual inspection suggests content may be clipped; verify in context.';
+      v.advisoryGuidance = 'Ensure long user-entered text wraps or can be expanded (e.g., Show more, tooltip, scroll) on the Review/Confirm screen so users can fully verify inputs before submission.';
+      v.inputType = 'screenshots';
+      
+      validU3Screenshots.push(v);
+      console.log(`U3 screenshot: Kept finding with visual cue: ${(v.evidence || '').substring(0, 80)}`);
+    }
+    
+    filteredOtherViolations = [...nonU3Violations, ...validU3Screenshots];
 
     // ========== A1 AGGREGATION LOGIC (Screenshot Analysis - PER-ELEMENT DETERMINISTIC) ==========
     // For screenshots: A1 evaluates EACH text element INDIVIDUALLY:

@@ -11,7 +11,77 @@ import {
   FieldRow, FieldLabel, FieldValue, ConfidenceValue, AdvisoryBlock,
 } from './CardTypography';
 
-function U3ElementItem({ element, compact = false }: {
+function U3ScreenshotElementItem({ element, compact = false }: {
+  element: U3ElementSubItem;
+  compact?: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const displayLabel = element.elementLabel || element.columnLabel
+    ? `Text content region (${element.columnLabel || element.elementLabel})`
+    : 'Text content region';
+
+  const recoveryStr = (element as any).recoveryObserved
+    || (element.recoverySignals && element.recoverySignals.length > 0
+      ? element.recoverySignals.join(', ')
+      : 'None observed');
+
+  return (
+    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+      <ElementItemWrapper isConfirmed={false} compact={compact}>
+        <CollapsibleTrigger className="w-full">
+          <div className="flex items-center justify-between gap-2 cursor-pointer">
+            <ComponentTitle>{displayLabel}</ComponentTitle>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <LocationBadge filePath={element.location} displayName={element.location} compact={compact} />
+              {isOpen ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              )}
+            </div>
+          </div>
+        </CollapsibleTrigger>
+
+        <CollapsibleContent>
+          <DetailContainer>
+            {element.detection && (
+              <FieldRow>
+                <FieldLabel>Detection:</FieldLabel>
+                <FieldValue>{element.detection}</FieldValue>
+              </FieldRow>
+            )}
+
+            {element.evidence && (
+              <FieldRow>
+                <FieldLabel>Evidence:</FieldLabel>
+                <FieldValue>{element.evidence}</FieldValue>
+              </FieldRow>
+            )}
+
+            <FieldRow>
+              <FieldLabel>Recovery mechanism observed:</FieldLabel>
+              <FieldValue>{recoveryStr}</FieldValue>
+            </FieldRow>
+
+            <FieldRow>
+              <FieldLabel>Location:</FieldLabel>
+              <FieldValue>{element.location}</FieldValue>
+            </FieldRow>
+
+            {element.confidence != null && (
+              <FieldRow>
+                <FieldLabel>Confidence:</FieldLabel>
+                <ConfidenceValue value={element.confidence} />
+              </FieldRow>
+            )}
+          </DetailContainer>
+        </CollapsibleContent>
+      </ElementItemWrapper>
+    </Collapsible>
+  );
+}
+
+function U3CodeElementItem({ element, compact = false }: {
   element: U3ElementSubItem;
   compact?: boolean;
 }) {
@@ -133,6 +203,8 @@ interface U3AggregatedCardProps {
 }
 
 export function U3AggregatedCard({ violation, compact = false }: U3AggregatedCardProps) {
+  const isScreenshot = violation.inputType === 'screenshots';
+
   const elements: U3ElementSubItem[] = (violation.isU3Aggregated && violation.u3Elements)
     ? violation.u3Elements
     : [{
@@ -142,18 +214,24 @@ export function U3AggregatedCard({ violation, compact = false }: U3AggregatedCar
         detection: violation.diagnosis || '',
         evidence: violation.evidence || '',
         subCheck: 'U3.D1' as const,
-        subCheckLabel: 'Line clamp / ellipsis truncation',
+        subCheckLabel: isScreenshot ? 'Visual content truncation' : 'Line clamp / ellipsis truncation',
         confidence: violation.confidence,
         advisoryGuidance: violation.advisoryGuidance || violation.contextualHint,
         deduplicationKey: `${violation.ruleId}-fallback`,
       }];
 
-  const hasConfirmed = elements.some(el => el.classification === 'confirmed');
+  const hasConfirmed = !isScreenshot && elements.some(el => el.classification === 'confirmed');
   const hasPotentialOnly = elements.some(el => el.classification !== 'confirmed');
   const cardBorderClass = hasConfirmed ? 'border border-destructive/40' : 'border border-warning/30';
 
   // Advisory only for potential-only cards; confirmed cards get corrective prompts instead
   const showAdvisory = !hasConfirmed && hasPotentialOnly && (violation.advisoryGuidance || violation.contextualHint);
+
+  const subtitle = isScreenshot
+    ? 'Visual inspection suggests content may be clipped; verify in context.'
+    : hasConfirmed
+      ? 'CSS truncation detected without accessible recovery mechanism.'
+      : 'Static analysis flagged potential content truncation; verify in context.';
 
   return (
     <Card className={cardBorderClass}>
@@ -164,19 +242,25 @@ export function U3AggregatedCard({ violation, compact = false }: U3AggregatedCar
           <ElementCountBadge count={elements.length} isConfirmed={hasConfirmed} />
         </CardTitle>
         <CardDescription compact={compact}>
-          {hasConfirmed
-            ? 'CSS truncation detected without accessible recovery mechanism.'
-            : 'Static analysis flagged potential content truncation; verify in context.'}
+          {subtitle}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
-        {elements.map((el, idx) => (
-          <U3ElementItem
-            key={el.deduplicationKey || idx}
-            element={el}
-            compact={compact}
-          />
-        ))}
+        {elements.map((el, idx) =>
+          isScreenshot ? (
+            <U3ScreenshotElementItem
+              key={el.deduplicationKey || idx}
+              element={el}
+              compact={compact}
+            />
+          ) : (
+            <U3CodeElementItem
+              key={el.deduplicationKey || idx}
+              element={el}
+              compact={compact}
+            />
+          )
+        )}
 
         {showAdvisory && (
           <AdvisoryBlock compact={compact}>{violation.advisoryGuidance || violation.contextualHint}</AdvisoryBlock>
