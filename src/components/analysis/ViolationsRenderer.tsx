@@ -108,52 +108,54 @@ function isAggregated(v: Violation): boolean {
 }
 
 function AggregatedCard({ violation, compact }: { violation: Violation; compact?: boolean }) {
+  let card: React.ReactNode = null;
   if (violation.ruleId === 'A1' && violation.isA1Aggregated) {
-    return <A1AggregatedCard violation={violation} compact={compact} />;
+    card = <A1AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'A2' && violation.isA2Aggregated) {
+    card = <A2AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'A3') {
+    card = <A3AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'A4') {
+    card = <A4AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'A5') {
+    card = <A5AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'A6') {
+    card = <A6AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'U1' && violation.isU1Aggregated) {
+    card = <U1AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'U2') {
+    card = <U2AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'U3') {
+    card = <U3AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'U4' && violation.isU4Aggregated) {
+    card = <U4AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'U5' && violation.isU5Aggregated) {
+    card = <U5AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'U6' && violation.isU6Aggregated) {
+    card = <U6AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'E1' && violation.isE1Aggregated) {
+    card = <E1AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'E2' && violation.isE2Aggregated) {
+    card = <E2AggregatedCard violation={violation} compact={compact} />;
+  } else if (violation.ruleId === 'E3' && violation.isE3Aggregated) {
+    card = <E3AggregatedCard violation={violation} compact={compact} />;
   }
-  if (violation.ruleId === 'A2' && violation.isA2Aggregated) {
-    return <A2AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'A3') {
-    return <A3AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'A4') {
-    return <A4AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'A5') {
-    return <A5AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'A6') {
-    return <A6AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'U1' && violation.isU1Aggregated) {
-    return <U1AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'U2') {
-    return <U2AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'U3') {
-    return <U3AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'U4' && violation.isU4Aggregated) {
-    return <U4AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'U5' && violation.isU5Aggregated) {
-    return <U5AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'U6' && violation.isU6Aggregated) {
-    return <U6AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'E1' && violation.isE1Aggregated) {
-    return <E1AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'E2' && violation.isE2Aggregated) {
-    return <E2AggregatedCard violation={violation} compact={compact} />;
-  }
-  if (violation.ruleId === 'E3' && violation.isE3Aggregated) {
-    return <E3AggregatedCard violation={violation} compact={compact} />;
-  }
-  return null;
+
+  if (!card) return null;
+
+  return (
+    <div className="space-y-0">
+      {card}
+      {violation.impactAnnotation && (
+        <div className="mt-1 ml-4 pl-3 border-l-2 border-amber-500/40 py-2">
+          <p className="text-sm text-muted-foreground italic">
+            <span className="font-medium text-amber-600">Impact: </span>
+            {violation.impactAnnotation}
+          </p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
