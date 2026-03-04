@@ -3451,7 +3451,7 @@ serve(async (req) => {
     }
     
     // Process non-A1/A2/U1 violations
-    const filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
+    let filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
         // HARD GUARDRAIL: U4, U5, U6 are ALWAYS Potential (non-blocking), never Confirmed
