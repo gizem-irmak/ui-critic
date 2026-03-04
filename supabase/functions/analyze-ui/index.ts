@@ -2502,11 +2502,22 @@ Consider:
 
 **If NONE of these visual cues are present, do NOT report U3.**
 
+**RECOVERY MECHANISM CHECK (MANDATORY BEFORE REPORTING U3):**
+Before reporting any U3 finding, check for these recovery cues in the same content region:
+1. **Horizontal scrollbar** visible at the bottom of the table/container
+2. **Vertical scrollbar** visible on the right edge of the table/container
+3. **"Show more" / "Expand" / "View all"** control near the content
+4. **Tooltip** or hover indicator on truncated text
+5. **Wrapped text** that flows to additional lines
+
+**If ANY recovery cue is present → do NOT report U3 for that region.**
+**If truncation cues are present but recovery is uncertain → report U3 as Potential with recoveryObserved: "Uncertain" and confidence 0.55–0.65.**
+
 **FORBIDDEN:** Do NOT use code-centric language: "static analysis", "truncate class", "expand: none", "CSS", "overflow-hidden".
 **Use visual-only language:** "visually clipped", "text appears cut off", "ellipsis observed", "content extends beyond container".
 
 **U3 is ALWAYS "status": "potential" — NEVER "confirmed" for screenshots.**
-**Confidence range:** 0.55–0.75 (cap at 0.75).
+**Confidence range:** 0.55–0.75 (cap at 0.75). If recovery is uncertain, cap at 0.65.
 
 **OUTPUT FORMAT for U3 screenshot findings:**
 \`\`\`json
@@ -2522,7 +2533,7 @@ Consider:
       "location": "Screenshot #1",
       "detection": "Short visual-based statement of what is observed",
       "evidence": "What in the screenshot indicates clipping (e.g., ellipsis visible, text cut off at edge)",
-      "recoveryObserved": "None observed | Tooltip observed | Expandable / Show more observed | Scrollable region observed | Wrapped text (no truncation)",
+      "recoveryObserved": "None observed | Horizontal scroll observed | Vertical scroll observed | Expandable control observed | Uncertain",
       "confidence": 0.65,
       "classification": "potential",
       "subCheck": "U3.D1",
@@ -2532,10 +2543,11 @@ Consider:
   ],
   "diagnosis": "Visual inspection suggests content may be clipped; verify in context.",
   "confidence": 0.65,
-  "advisoryGuidance": "Ensure long user-entered text wraps or can be expanded (e.g., Show more, tooltip, scroll) on the Review/Confirm screen so users can fully verify inputs before submission."
+  "advisoryGuidance": "Ensure long table values are readable (wrap, tooltip on hover, expandable cell, or scroll)."
 }
 \`\`\`
 - If NO visual truncation cues found, do NOT include U3 in the violations array.
+- If a scrollbar (horizontal or vertical) is visible in the same container, do NOT include U3.
 
 ### U4 (Recognition-to-Recall Regression) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
 **CRITICAL ANTI-HALLUCINATION RULES:**
@@ -3555,21 +3567,71 @@ serve(async (req) => {
         continue;
       }
       
+      // ========== RECOVERY MECHANISM SUPPRESSION ==========
+      // Check for scrollbar or other recovery cues — suppress U3 if found
+      const allText = combined + ` ${(v.recoveryObserved || '')}`.toLowerCase();
+      // Also check u3Elements for recovery signals
+      const elementRecovery = (v.isU3Aggregated && Array.isArray(v.u3Elements))
+        ? v.u3Elements.map((el: any) => `${el.recoveryObserved || ''} ${(el.recoverySignals || []).join(' ')}`).join(' ').toLowerCase()
+        : '';
+      const recoveryText = allText + ' ' + elementRecovery;
+      
+      const hasHScrollbar = /horizontal\s*scroll|scroll.?bar.*bottom|bottom.*scroll/i.test(recoveryText);
+      const hasVScrollbar = /vertical\s*scroll|scroll.?bar.*right|right.*scroll/i.test(recoveryText);
+      const hasScrollbar = hasHScrollbar || hasVScrollbar || /scrollable|scroll\s*observed|scrollbar/i.test(recoveryText);
+      const hasExpandControl = /show\s*more|expand|view\s*all|view\s*more/i.test(recoveryText);
+      const hasTooltip = /tooltip\s*observed|tooltip\s*on\s*hover/i.test(recoveryText);
+      
+      if (hasScrollbar || hasExpandControl || hasTooltip) {
+        const recoveryType = hasHScrollbar ? 'horizontal scrollbar' : hasVScrollbar ? 'vertical scrollbar' : hasScrollbar ? 'scrollbar' : hasExpandControl ? 'expand control' : 'tooltip';
+        console.log(`U3 screenshot: Suppressed — recovery mechanism detected (${recoveryType}): ${(v.evidence || '').substring(0, 80)}`);
+        continue;
+      }
+      
       // Sanitize code-centric language from diagnosis
       let cleanDiagnosis = (v.diagnosis || '').replace(/static analysis\s*(flagged|identified|detected)?/gi, 'Visual inspection suggests');
       
       // If the violation is already aggregated with u3Elements, sanitize each element
       if (v.isU3Aggregated && Array.isArray(v.u3Elements)) {
+        v.u3Elements = v.u3Elements.filter((el: any) => {
+          // Suppress individual elements with recovery cues
+          const elRecovery = `${el.recoveryObserved || ''} ${(el.recoverySignals || []).join(' ')}`.toLowerCase();
+          if (/scroll|show\s*more|expand|tooltip\s*observed/i.test(elRecovery) && !/none|uncertain/i.test(elRecovery)) {
+            console.log(`U3 screenshot element suppressed — recovery: ${elRecovery.substring(0, 60)}`);
+            return false;
+          }
+          return true;
+        });
+        
         v.u3Elements = v.u3Elements.map((el: any) => ({
           ...el,
           classification: 'potential',
           recoveryObserved: el.recoveryObserved || (el.recoverySignals && el.recoverySignals.length > 0 ? el.recoverySignals.join(', ') : 'None observed'),
           inputType: 'screenshots',
         }));
+        
+        // If all elements were suppressed, skip the entire violation
+        if (v.u3Elements.length === 0) {
+          console.log(`U3 screenshot: All elements suppressed by recovery — skipping card`);
+          continue;
+        }
       }
       
       v.diagnosis = cleanDiagnosis || 'Visual inspection suggests content may be clipped; verify in context.';
-      v.advisoryGuidance = 'Ensure long user-entered text wraps or can be expanded (e.g., Show more, tooltip, scroll) on the Review/Confirm screen so users can fully verify inputs before submission.';
+      
+      // Context-aware advisory: detect table/admin vs review/confirm context
+      const contextText = `${v.evidence || ''} ${v.diagnosis || ''} ${v.contextualHint || ''}`.toLowerCase();
+      const isTableContext = /table|admin|list|grid|column|row|cell|doctor|patient|record/i.test(contextText);
+      const isReviewContext = /review|confirm|summary|checkout|submit|verify|order/i.test(contextText);
+      
+      if (isTableContext) {
+        v.advisoryGuidance = 'Ensure long table values are readable (wrap, tooltip on hover, expandable cell, or scroll).';
+      } else if (isReviewContext) {
+        v.advisoryGuidance = 'Ensure long user-entered text wraps or can be expanded (e.g., Show more, tooltip, scroll) on the review/confirmation screen so users can fully verify inputs before submission.';
+      } else {
+        v.advisoryGuidance = 'Ensure content is fully readable. Consider wrapping, tooltips, expandable sections, or scrollable regions for long text.';
+      }
+      
       v.inputType = 'screenshots';
       
       validU3Screenshots.push(v);

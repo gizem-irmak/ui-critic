@@ -25,6 +25,9 @@ function U3ScreenshotElementItem({ element, compact = false }: {
       ? element.recoverySignals.join(', ')
       : 'None observed');
 
+  // Determine if recovery is uncertain for styling
+  const isUncertainRecovery = recoveryStr.toLowerCase() === 'uncertain';
+
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <ElementItemWrapper isConfirmed={false} compact={compact}>
