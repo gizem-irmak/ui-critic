@@ -6245,6 +6245,7 @@ Look for patterns that may undermine user autonomy or informed consent:
 - Standard marketing layout unless tied to consent/monetization/data/high-impact context.
 - Role-based dashboard actions that are not explicit user choice sets.
 - Any cluster where BOTH options are clearly visible and accessible, even if styled differently.
+- **SAFETY PATTERNS:** A destructive action styled in red/destructive (e.g., "Delete Account") paired with a clearly visible neutral cancel/keep/go-back button is a STANDARD SAFETY PATTERN, not manipulative architecture. This includes: red destructive button + neutral cancel button, confirmation dialogs with warning text, and additional acknowledgement checkboxes. If both actions are clearly visible and accessible, do NOT report E2.
 
 **CRITICAL ANTI-HALLUCINATION RULES:**
 - Do NOT use file names, component names, or test wording as evidence.
@@ -7535,6 +7536,25 @@ function detectE2ImbalanceSignals(ctaLabels: { label: string; styleTokens: strin
 
   const styles = ctaLabels.map(c => c.styleTokens.toLowerCase());
   const labels = ctaLabels.map(c => c.label.toLowerCase());
+
+  // ── SAFETY PATTERN SUPPRESSION ──
+  // A destructive action (red/destructive) paired with a clearly visible neutral cancel/back
+  // is a STANDARD SAFETY PATTERN, not manipulative choice architecture.
+  const hasDestructiveStyle = styles.some(s => /variant=destructive|bg-destructive|bg-red|text-destructive|border-destructive|text-red/.test(s));
+  const hasDestructiveLabel = labels.some(l => /\b(delete|remove|destroy|revoke|deactivate|disable|erase)\b/.test(l));
+  const hasSafeOption = labels.some(l => /\b(cancel|go\s*back|keep|no|close|dismiss|nevermind|don'?t)\b/.test(l));
+  const safeOptionVisible = hasSafeOption && styles.some(s =>
+    // Safe option is a real button (not hidden/text-xs/invisible)
+    !/hidden|invisible|sr-only|opacity-0/.test(s)
+  );
+
+  if ((hasDestructiveStyle || hasDestructiveLabel) && safeOptionVisible) {
+    // This is a standard safety pattern — both options visible, destructive is clearly marked
+    // Do NOT count visual_dominance for this case
+    console.log(`E2 SAFETY PATTERN: destructive action + visible safe option — suppressing visual_dominance signal`);
+    // Return empty — safety patterns should not trigger E2
+    return signals;
+  }
 
   // Signal 1: Visual dominance asymmetry (filled primary vs ghost/link/muted alternative)
   const hasPrimary = styles.some(s => /bg-|variant=default|variant=\s*$/.test(s) && !/variant=(ghost|link|outline|secondary)/.test(s));
