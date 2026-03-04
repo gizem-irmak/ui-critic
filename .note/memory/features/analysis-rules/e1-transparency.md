@@ -26,12 +26,14 @@ E1 now covers ALL deletion flows across the app using three detection channels:
 - AlertDialog / ConfirmDialog / DeleteConfirmDialog components (in local scope)
 - `window.confirm()` / `confirm()`
 - Two-step state flows: `setPendingDelete(id)`, `setConfirmOpen(true)`, `setConfirmDelete(true)`, etc.
-- Type-to-confirm friction: `type "DELETE" to confirm`
+- Type-to-confirm friction: `type "DELETE" to confirm` — also treated as a **gate type** (not just friction)
 - Checkbox acknowledgement: `<Checkbox>` with "understand"/"irreversible"/"permanent"
 - Double-confirm patterns: "Are you sure?", "This will permanently..."
 - **Disabled-until-confirm**: `disabled={!confirmState}`, `disabled={!deleteConfirm || isPending}`, `disabled={confirmState === false}` — variable name must imply confirmation intent (confirm, acknowledge, accept, agreed, checked, consent)
+- **String-comparison disabled**: `disabled={confirmation !== 'DELETE'}` — matches comparison against typed confirmation strings
 - **Checkbox-confirm-gate**: `onCheckedChange={setDeleteConfirm}` or `onChange` updating a confirmation state variable
 - **Conditional-confirm-gate**: `confirmState && deleteMutation.mutate()`
+- **Handler-guard**: `if (confirmation !== 'DELETE') return` — early return in handler gated by typed confirmation
 
 **NOTE**: Bare `Dialog` is intentionally excluded from confirmation patterns — too broad (matches add/edit dialogs).
 

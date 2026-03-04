@@ -6942,6 +6942,19 @@ function detectE1ConfirmationGate(content: string): { hasGate: boolean; gateType
   if (/\b(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*&&\s*\w*(?:delete|remove|destroy)\w*\s*[.(]/i.test(content)) {
     return { hasGate: true, gateType: 'conditional-confirm-gate' };
   }
+  // Type-to-confirm gate: "Type DELETE to confirm", input comparing against 'DELETE'/'CONFIRM'
+  if (E1_FRICTION_TYPE_CONFIRM.test(content)) {
+    return { hasGate: true, gateType: 'type-to-confirm' };
+  }
+  // String-comparison disabled gate: disabled={confirmation !== 'DELETE'} or disabled={confirmText !== "DELETE"}
+  const comparisonDisabledMatch = content.match(/disabled=\{[^}]*(\w*(?:confirm|acknowledge|verification|delete)\w*)\s*!==\s*["'`](?:DELETE|CONFIRM|delete|confirm)["'`][^}]*\}/i);
+  if (comparisonDisabledMatch) {
+    return { hasGate: true, gateType: `disabled-until-confirm (${comparisonDisabledMatch[1]})` };
+  }
+  // Handler guard: if (confirmation !== 'DELETE') return
+  if (/if\s*\(\s*\w*(?:confirm|verification)\w*\s*!==\s*["'`](?:DELETE|CONFIRM)["'`]\s*\)\s*return/i.test(content)) {
+    return { hasGate: true, gateType: 'handler-guard' };
+  }
   return { hasGate: false, gateType: '' };
 }
 
@@ -7275,7 +7288,7 @@ function extractE1EvidenceBundle(allFiles: Map<string, string>): E1EvidenceBundl
       // These are inherently linked to the same deletion flow within the same component file.
       const fileLevelGate = detectE1ConfirmationGate(content);
       const fileLevelIsNonModalGate = fileLevelGate.hasGate &&
-        /disabled-until-confirm|checkbox-confirm-gate|conditional-confirm-gate|two-step-state/i.test(fileLevelGate.gateType);
+        /disabled-until-confirm|checkbox-confirm-gate|conditional-confirm-gate|two-step-state|type-to-confirm|handler-guard/i.test(fileLevelGate.gateType);
 
       const deleteHandlerRe = /(?:const|function)\s+(handle(?:Delete|Remove|Destroy)|(?:delete|remove|destroy)\w+)\s*=\s*(?:async\s*)?\(?/gi;
       let dhm;
@@ -7421,7 +7434,7 @@ function shouldSuppressE1Bundle(opts: {
       return { suppressed: true, reason: `${confirmGate.gateType} + friction (${frictionMechanisms.join(', ')}) in local scope` };
     }
    // Non-modal gate types always suppress when present (they are inherently linked to the deletion flow)
-    if (/disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate/i.test(confirmGate.gateType)) {
+    if (/disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate|type-to-confirm|handler-guard/i.test(confirmGate.gateType)) {
       return { suppressed: true, reason: `non-modal confirmation gate: ${confirmGate.gateType}` };
     }
     // Destructive label + explicit confirmation pattern in LOCAL region = suppress

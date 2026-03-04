@@ -46,6 +46,19 @@ function detectConfirmationGate(region: string): { hasGate: boolean; gateType: s
   if (/\b(\w*(?:confirm|acknowledge|accept|agreed|checked|consent)\w*)\s*&&\s*\w*(?:delete|remove|destroy)\w*\s*[.(]/i.test(region)) {
     return { hasGate: true, gateType: 'conditional-confirm-gate' };
   }
+  // Type-to-confirm gate
+  if (E1_FRICTION_TYPE_CONFIRM.test(region)) {
+    return { hasGate: true, gateType: 'type-to-confirm' };
+  }
+  // String-comparison disabled gate: disabled={confirmation !== 'DELETE'}
+  const comparisonDisabledMatch = region.match(/disabled=\{[^}]*(\w*(?:confirm|acknowledge|verification|delete)\w*)\s*!==\s*["'`](?:DELETE|CONFIRM|delete|confirm)["'`][^}]*\}/i);
+  if (comparisonDisabledMatch) {
+    return { hasGate: true, gateType: `disabled-until-confirm (${comparisonDisabledMatch[1]})` };
+  }
+  // Handler guard: if (confirmation !== 'DELETE') return
+  if (/if\s*\(\s*\w*(?:confirm|verification)\w*\s*!==\s*["'`](?:DELETE|CONFIRM)["'`]\s*\)\s*return/i.test(region)) {
+    return { hasGate: true, gateType: 'handler-guard' };
+  }
   return { hasGate: false, gateType: '' };
 }
 
@@ -112,8 +125,8 @@ function shouldSuppressE1(opts: {
     if (friction.length > 0) {
       return { suppressed: true, reason: `${gate.gateType} + friction (${friction.join(', ')}) in local scope` };
     }
-    // Non-modal gate types always suppress (they are inherently linked to the deletion flow)
-    if (/disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate/i.test(gate.gateType)) {
+    // Non-modal gate types always suppress
+    if (/disabled-until-confirm|conditional-confirm-gate|checkbox-confirm-gate|type-to-confirm|handler-guard/i.test(gate.gateType)) {
       return { suppressed: true, reason: `non-modal confirmation gate: ${gate.gateType}` };
     }
     if (E1_DESTRUCTIVE_LABEL_RE.test(label) && /AlertDialog|ConfirmDialog|DeleteConfirmDialog|two-step-state/i.test(gate.gateType)) {
@@ -573,4 +586,86 @@ Deno.test("E1 REGRESSION: network channel doctors.tsx without gate → NOT suppr
   const isNonModalGate = fileLevelGate.hasGate &&
     /disabled-until-confirm|checkbox-confirm-gate|conditional-confirm-gate/i.test(fileLevelGate.gateType);
   assertEquals(isNonModalGate, false, "doctors.tsx should NOT have a non-modal file-level gate");
+});
+
+// ── Test 35: Settings.tsx with Dialog + type-to-confirm + disclosure → SUPPRESSED ──
+Deno.test("E1 REGRESSION: Settings.tsx type-to-confirm + Dialog + disclosure → SUPPRESSED", () => {
+  const localRegion = `
+    <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete Account</DialogTitle>
+          <DialogDescription>This action cannot be undone. All your data will be permanently deleted.</DialogDescription>
+        </DialogHeader>
+        <p>Type DELETE to confirm</p>
+        <Input placeholder="Type DELETE" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} />
+        <Button variant="destructive" disabled={confirmation !== 'DELETE'} onClick={() => deleteAccount()}>
+          Yes, Delete My Account
+        </Button>
+      </DialogContent>
+    </Dialog>
+  `;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/patient/Settings.tsx", label: "Delete",
+    localRegion, fullContent: localRegion,
+  });
+  assertEquals(result.suppressed, true, `Settings.tsx type-to-confirm must suppress, got: ${result.reason}`);
+});
+
+// ── Test 36: disabled={confirmation !== 'DELETE'} is a valid gate ──
+Deno.test("E1: disabled={confirmation !== 'DELETE'} is a valid gate", () => {
+  const region = `<Button disabled={confirmation !== 'DELETE'} onClick={() => deleteAccount()}>Delete</Button>`;
+  const gate = detectConfirmationGate(region);
+  assertEquals(gate.hasGate, true, "Should detect disabled comparison gate");
+  assertEquals(/disabled-until-confirm/i.test(gate.gateType), true);
+});
+
+// ── Test 37: Handler guard if (confirmation !== 'DELETE') return → gate ──
+Deno.test("E1: handler guard if (confirmation !== 'DELETE') return → gate", () => {
+  const region = `
+    const handleDelete = () => {
+      if (confirmation !== 'DELETE') return;
+      deleteMutation.mutate();
+    };
+  `;
+  const gate = detectConfirmationGate(region);
+  assertEquals(gate.hasGate, true, "Should detect handler guard gate");
+  assertEquals(gate.gateType, 'handler-guard');
+});
+
+// ── Test 38: type DELETE to confirm is a valid gate ──
+Deno.test("E1: type DELETE to confirm is a valid gate", () => {
+  const region = `<p>Type DELETE to confirm</p><Input /><Button>Delete</Button>`;
+  const gate = detectConfirmationGate(region);
+  assertEquals(gate.hasGate, true, "type-to-confirm should be a gate");
+  assertEquals(gate.gateType, 'type-to-confirm');
+});
+
+// ── Test 39: Full Settings.tsx with handler guard + disclosure + Dialog → SUPPRESSED ──
+Deno.test("E1 REGRESSION: Settings.tsx handler guard + Dialog + disclosure → SUPPRESSED", () => {
+  const fullContent = `
+    const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+    const [confirmation, setConfirmation] = useState('');
+    const deleteMutation = useMutation({ mutationFn: () => apiRequest("DELETE", "/api/account") });
+
+    const handleDeleteAccount = async () => {
+      if (confirmation !== 'DELETE') return;
+      await deleteMutation.mutateAsync();
+    };
+
+    <Dialog open={showDeleteDialog}>
+      <DialogContent>
+        <p>This action cannot be undone. All data will be permanently deleted.</p>
+        <Input placeholder="Type DELETE" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} />
+        <Button variant="destructive" disabled={confirmation !== 'DELETE'} onClick={handleDeleteAccount}>
+          Yes, Delete My Account
+        </Button>
+      </DialogContent>
+    </Dialog>
+  `;
+  const result = shouldSuppressE1({
+    filePath: "src/pages/patient/Settings.tsx", label: "Delete",
+    localRegion: fullContent, fullContent,
+  });
+  assertEquals(result.suppressed, true, `Full settings pattern must suppress, got: ${result.reason}`);
 });
