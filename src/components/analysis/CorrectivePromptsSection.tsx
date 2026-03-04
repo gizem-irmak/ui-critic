@@ -215,7 +215,8 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
   const [copied, setCopied] = useState(false);
 
   // ONLY include confirmed violations - potential risks don't get corrective prompts
-  const confirmedViolations = violations.filter(v => v.status === 'confirmed' || v.status !== 'potential');
+  // Explicitly block screenshot-only rules (A3–A6) that are "Not Evaluated"
+  const confirmedViolations = violations.filter(v => v.status === 'confirmed');
 
   // Group prompts by rule code, with element references for traceability
   const groupedPrompts = (() => {
@@ -294,8 +295,8 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
               group.a3Items!.push(el);
             }
           }
-        } else if (v.status === 'confirmed' || v.status !== 'potential') {
-          // Non-aggregated A3: synthesize a single element from top-level fields
+        } else {
+          // Non-aggregated A3: synthesize a single element from top-level fields (already filtered to confirmed)
           group.a3Items!.push({
             elementLabel: v.contextualHint || v.evidence || v.ruleName,
             elementType: 'div',
@@ -329,7 +330,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
               group.a4Items!.push(el);
             }
           }
-        } else if (v.status === 'confirmed' || v.status !== 'potential') {
+        } else {
           group.a4Items!.push({
             elementLabel: v.contextualHint || v.evidence || v.ruleName,
             elementType: 'div',
@@ -361,7 +362,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
               group.a5Items!.push(el);
             }
           }
-        } else if (v.status === 'confirmed' || v.status !== 'potential') {
+        } else {
           group.a5Items!.push({
             elementLabel: v.contextualHint || v.evidence || v.ruleName,
             elementType: 'input',
@@ -393,7 +394,7 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
               group.a6Items!.push(el);
             }
           }
-        } else if (v.status === 'confirmed' || v.status !== 'potential') {
+        } else {
           group.a6Items!.push({
             elementLabel: v.contextualHint || v.evidence || v.ruleName,
             elementType: 'button',
@@ -572,7 +573,23 @@ export function CorrectivePromptsSection({ violations }: CorrectivePromptsSectio
     }
   };
 
-  if (groupedPrompts.length === 0) return null;
+  if (groupedPrompts.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Corrective Prompts</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Corrective prompts are generated only for confirmed violations.
+          </p>
+          <p className="text-sm text-muted-foreground mt-1">
+            No confirmed issues were detected in this evaluation.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card>
