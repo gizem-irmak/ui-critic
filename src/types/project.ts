@@ -305,7 +305,8 @@ export interface A1ElementSubItem {
   textType?: 'normal' | 'large';
   appliedThreshold?: 4.5 | 3.0;
   wcagCriterion?: '1.4.3';
-  a1Method?: 'LLM→Pixel' | 'LLM-only (measurement failed)';
+  a1Method?: 'LLM→Pixel' | 'LLM-only (measurement failed)' | 'LLM-perceptual';
+  confidence?: number;
   variant?: string;
   lineNumber?: number;
 

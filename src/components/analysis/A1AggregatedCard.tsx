@@ -1,4 +1,4 @@
-import { AlertTriangle, AlertCircle, ShieldCheck } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { LocationBadge } from './LocationBadge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -40,20 +40,9 @@ function A1ScreenshotElementItem({ element, compact = false }: {
   compact?: boolean;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const isHybridPixel = element.a1Method === 'LLM→Pixel';
 
   const cleanLabel = element.elementLabel.replace(/\s*\([^)]*\.tsx?\)/, '');
   const cleanLocation = element.location.replace(/^.*?([\w/-]+\.\w+).*$/, '$1');
-
-  // Foreground: show hex if available from pixel sampling, otherwise indicate limitation
-  const fgDisplay = element.foregroundHex
-    ? element.foregroundHex
-    : null;
-
-  // Background: show hex if pixel-sampled, otherwise unresolved
-  const bgDisplay = element.backgroundHex
-    ? element.backgroundHex
-    : null;
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -62,16 +51,9 @@ function A1ScreenshotElementItem({ element, compact = false }: {
           <div className="flex items-center justify-between gap-2 cursor-pointer">
             <div className="flex items-center gap-2">
               <ComponentTitle>{cleanLabel}</ComponentTitle>
-              {isHybridPixel && (
-                <Badge variant="outline" className="text-[10px] font-medium border-emerald-500/40 text-emerald-600">
-                  LLM→Pixel
-                </Badge>
-              )}
-              {!isHybridPixel && (
-                <Badge variant="outline" className="text-[10px] font-medium border-amber-500/40 text-amber-600">
-                  Perceptual
-                </Badge>
-              )}
+              <Badge variant="outline" className="text-[10px] font-medium border-amber-500/40 text-amber-600">
+                Perceptual
+              </Badge>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               <LocationBadge filePath={cleanLocation} displayName={cleanLocation} compact={compact} />
@@ -88,63 +70,10 @@ function A1ScreenshotElementItem({ element, compact = false }: {
           <DetailContainer>
             {element.perceptualRationale && (
               <FieldRow>
-                <FieldLabel>Detection:</FieldLabel>
+                <FieldLabel>Visual rationale:</FieldLabel>
                 <FieldValue>{element.perceptualRationale}</FieldValue>
               </FieldRow>
             )}
-
-            <FieldRow>
-              <FieldLabel>Element:</FieldLabel>
-              <FieldValue>{cleanLabel}</FieldValue>
-            </FieldRow>
-
-            <FieldRow>
-              <FieldLabel>Foreground color:</FieldLabel>
-              {fgDisplay ? (
-                <span className="flex items-center gap-1 text-sm">
-                  <span className="font-mono">{fgDisplay}</span>
-                  <span
-                    className="w-3 h-3 rounded border border-border"
-                    style={{ backgroundColor: fgDisplay }}
-                  />
-                  {isHybridPixel && <span className="text-xs text-muted-foreground">(pixel-sampled)</span>}
-                </span>
-              ) : (
-                <span className="text-sm text-muted-foreground italic">Approximation unavailable (screenshot limitation)</span>
-              )}
-            </FieldRow>
-
-            <FieldRow>
-              <FieldLabel>Background color:</FieldLabel>
-              {bgDisplay ? (
-                <span className="flex items-center gap-1 text-sm">
-                  <span className="font-mono">{bgDisplay}</span>
-                  <span
-                    className="w-3 h-3 rounded border border-border"
-                    style={{ backgroundColor: bgDisplay }}
-                  />
-                  {isHybridPixel && <span className="text-xs text-muted-foreground">(pixel-sampled)</span>}
-                </span>
-              ) : (
-                <span className="text-sm text-muted-foreground italic">Unresolved (screenshot context uncertain)</span>
-              )}
-            </FieldRow>
-
-            <FieldRow>
-              <FieldLabel>Contrast ratio:</FieldLabel>
-              {isHybridPixel && element.contrastRatio !== undefined ? (
-                <span className="text-sm">
-                  <span className="font-mono font-medium text-warning">
-                    {element.contrastRatio.toFixed(1)}:1
-                  </span>
-                  <span className="text-muted-foreground ml-1">
-                    vs {element.thresholdUsed}:1 (screenshot estimate)
-                  </span>
-                </span>
-              ) : (
-                <span className="text-sm text-muted-foreground italic">Not computed — requires DOM or pixel sampling</span>
-              )}
-            </FieldRow>
 
             <FieldRow>
               <FieldLabel>Requirement:</FieldLabel>
@@ -153,19 +82,12 @@ function A1ScreenshotElementItem({ element, compact = false }: {
               </FieldValue>
             </FieldRow>
 
-            {element.foregroundConfidence != null && (
+            {element.confidence != null && (
               <FieldRow>
                 <FieldLabel>Confidence:</FieldLabel>
                 <span className="text-sm font-medium text-warning">
-                  {Math.round(element.foregroundConfidence * 100)}%
+                  {Math.round((element.confidence as number) * 100)}%
                 </span>
-              </FieldRow>
-            )}
-
-            {element.suggestedFix && (
-              <FieldRow>
-                <FieldLabel>Advisory:</FieldLabel>
-                <FieldValue>{element.suggestedFix}</FieldValue>
               </FieldRow>
             )}
           </DetailContainer>
@@ -174,7 +96,6 @@ function A1ScreenshotElementItem({ element, compact = false }: {
     </Collapsible>
   );
 }
-
 function A1CodeElementItem({ element, isConfirmed, compact = false }: { 
   element: A1ElementSubItem; 
   isConfirmed: boolean;
@@ -383,11 +304,10 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
   const elements = violation.a1Elements;
   const isScreenshot = violation.inputType === 'screenshots';
   const isPerceptual = violation.evaluationMethod === 'llm_assisted' || isScreenshot;
-  const isHybrid = violation.evaluationMethod === 'hybrid_deterministic';
   
   // Determine subtitle based on modality
   const getSubtitle = () => {
-    if (isScreenshot || isPerceptual || isHybrid) {
+    if (isScreenshot || isPerceptual) {
       return 'Perceptual analysis suggests potential contrast issues. Exact contrast ratios could not be computed from the screenshot and require manual verification.';
     }
     if (isConfirmed) {
@@ -417,15 +337,11 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           <RuleIdBadge ruleId="A1" isConfirmed={isConfirmed} categoryClass="category-accessibility" />
           <RuleHeader ruleId="A1" title="Insufficient Text Contrast" />
           <ElementCountBadge count={elements.length} isConfirmed={isConfirmed} />
-          {isHybrid ? (
-            <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-emerald-500/10 text-emerald-600 border-emerald-500/20">
-              LLM→Pixel Hybrid (Screenshot)
-            </span>
-          ) : (isPerceptual || isScreenshot) ? (
+          {(isPerceptual || isScreenshot) && (
             <span className="text-[10px] px-1.5 py-0.5 rounded border font-medium bg-violet-500/10 text-violet-600 border-violet-500/20">
-              LLM-Assisted (Perceptual – Screenshot Modality)
+              Perceptual (Screenshot)
             </span>
-          ) : null}
+          )}
         </CardTitle>
         <CardDescription compact={compact}>
           {getSubtitle()}
@@ -433,7 +349,7 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
       </CardHeader>
       <CardContent className="space-y-2">
         {elements.map((element, idx) =>
-          (isScreenshot || isPerceptual || isHybrid) ? (
+          (isScreenshot || isPerceptual) ? (
             <A1ScreenshotElementItem
               key={element.deduplicationKey || idx}
               element={element}
@@ -449,28 +365,18 @@ export function A1AggregatedCard({ violation, compact = false }: A1AggregatedCar
           )
         )}
         
-        {isHybrid && (
-          <div className={cn(
-            'rounded-lg bg-emerald-500/5 border border-emerald-500/20 mt-3',
-            compact ? 'p-2' : 'p-3'
-          )}>
-            <p className={cn('text-sm text-emerald-600 italic')}>
-              🔬 Two-stage hybrid: LLM identified candidate regions → pixel engine measured contrast ratios. Ratios are screenshot estimates — verify with browser DevTools for WCAG compliance.
-            </p>
-          </div>
-        )}
-        {(isPerceptual || isScreenshot) && !isHybrid && (
+        {(isPerceptual || isScreenshot) && (
           <div className={cn(
             'rounded-lg bg-violet-500/5 border border-violet-500/20 mt-3',
             compact ? 'p-2' : 'p-3'
           )}>
             <p className="text-sm text-violet-600 italic">
-              ⚠️ Screenshot-based contrast assessment is perceptual and cannot reliably compute exact contrast ratios. Manual verification using source code or developer tools is required for WCAG compliance.
+              Screenshot-based contrast assessment is perceptual. Verify contrast using browser dev tools or a color picker. Target WCAG 2.1 SC 1.4.3: 4.5:1 for normal text, 3:1 for large text.
             </p>
           </div>
         )}
 
-        {!isConfirmed && !isPerceptual && !isScreenshot && !isHybrid && elements.some(e =>
+        {!isConfirmed && !isPerceptual && !isScreenshot && elements.some(e =>
           (!e.foreground?.resolved || !e.background?.resolved || e.backgroundStatus === 'uncertain' || e.backgroundStatus === 'unmeasurable' || e.contrastNotMeasurable) &&
           e.contrastRatio === undefined && !e.contrastRange
         ) && (
