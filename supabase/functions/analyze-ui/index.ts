@@ -1996,7 +1996,7 @@ When a focused element is shown but lacks indicator:
 - Do NOT flag elements that appear to have visible focus indicators
 
 ### IMPORTANT — Rules NOT evaluated for screenshots:
-**A3 (Incomplete Keyboard Operability), A4 (Missing Semantic Structure), A5 (Missing Form Labels), and A6 (Missing Accessible Names) require DOM inspection and CANNOT be evaluated from screenshots. Do NOT generate any findings for these rules. They will be marked as "Not Evaluated" automatically.**
+**A3 (Incomplete Keyboard Operability), A4 (Missing Semantic Structure), A5 (Missing Form Labels), A6 (Missing Accessible Names), and U5 (Insufficient Interaction Feedback) require DOM inspection or runtime interaction and CANNOT be evaluated from screenshots. Do NOT generate any findings for these rules. They will be marked as "Not Evaluated" automatically.**
 
     ### A4 (Small tap / click targets) — DESKTOP WEB UI EVALUATION (Screenshot):
 
@@ -2353,14 +2353,14 @@ U1 must produce output ONLY when a violation is detected. All other cases must b
 - Confidence: 65–80% depending on clarity of evidence
 
 For EACH of the following rules, explicitly decide whether it is violated or not:
-${rules.usability.filter(r => selectedRulesSet.has(r.id)).map(r => `- ${r.id}: ${r.name} — ${r.diagnosis}`).join('\n')}
+${rules.usability.filter(r => selectedRulesSet.has(r.id) && r.id !== 'U5').map(r => `- ${r.id}: ${r.name} — ${r.diagnosis}`).join('\n')}
 
 Consider:
 - Visual hierarchy and primary action clarity (U1)
 - Navigation WAYFINDING ONLY: Can users know where they are, where they can go, and navigate back? (U2) — Do NOT flag just because breadcrumbs are missing. Active nav highlight + page heading = sufficient. Do NOT comment on layout grouping (U6), truncation (U3), step indicators (U4), exit/cancel absence (E3), or landmark semantics (A-rules). Confidence: 0.60–0.80, cap at 0.80.
 - Content truncation, overflow, and text visibility (U3) — see U3 CONSTRAINTS below
 - Recognition vs recall: visible options, labels, contextual cues (U4) — see U4 CONSTRAINTS below
-- Interaction feedback: loading states, confirmations, error messages (U5)
+
 - Layout grouping, alignment, and visual coherence (U6)
 
 ### U3 (Truncated or Inaccessible Content) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
@@ -2448,14 +2448,6 @@ For EACH content region where truncation is suspected, FIRST scan the SAME conta
 - Confidence range: 0.60–0.80 (cap at 0.80).
 - Each U4 finding must cite specific visible UI text as evidence.
 
-### U5 (Insufficient Interaction Feedback) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
-- Look for interactive elements (buttons, forms, toggles) that appear to lack feedback mechanisms:
-  - No loading/spinner indicator near submit buttons
-  - No visible success/error confirmation areas
-  - No disabled state cues during actions
-- U5 is ALWAYS "status": "potential" — NEVER "confirmed".
-- Confidence range: 0.60–0.75 (cap at 0.75).
-- Each U5 finding must reference specific visible UI elements as evidence.
 
 ### U6 (Weak Grouping / Layout Coherence) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
 **SCOPE: U6 evaluates visual grouping and spatial organization of UI elements, NOT content overflow or text truncation (those belong to U3).**
@@ -3300,9 +3292,10 @@ serve(async (req) => {
     let filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
-        // HARD GUARDRAIL: U4, U5, U6 are ALWAYS Potential (non-blocking), never Confirmed
+        // HARD GUARDRAIL: U4, U6 are ALWAYS Potential (non-blocking), never Confirmed
+        // U5 is NOT evaluated for screenshots — filter it out
+        if (v.ruleId === 'U5') return null;
         const isU4 = v.ruleId === 'U4';
-        const isU5 = v.ruleId === 'U5';
         const isU6 = v.ruleId === 'U6';
         const isU3 = v.ruleId === 'U3';
         // Tag with evaluationMethod — all screenshot LLM violations are llm_assisted
@@ -3321,11 +3314,6 @@ serve(async (req) => {
             blocksConvergence: false,
             confidence: Math.min(v.confidence || 0.65, 0.80),
           } : {}),
-          ...(isU5 ? {
-            status: 'potential',
-            blocksConvergence: false,
-            confidence: Math.min(v.confidence || 0.60, 0.75),
-          } : {}),
           ...(isU6 ? {
             status: 'potential',
             blocksConvergence: false,
@@ -3333,7 +3321,7 @@ serve(async (req) => {
             isU6Aggregated: v.isU6Aggregated || false,
           } : {}),
         };
-      });
+      }).filter(Boolean);
 
     // ========== U3 SCREENSHOT POST-PROCESSING ==========
     // Enforce visual-cue gating: only keep U3 findings with actual truncation evidence
@@ -3845,6 +3833,25 @@ serve(async (req) => {
       };
     }
     
+    // ========== U5 Screenshot Mode (NOT EVALUATED) ==========
+    let aggregatedU5UI: any = null;
+    if (selectedRulesSet.has('U5')) {
+      aggregatedU5UI = {
+        ruleId: 'U5',
+        ruleName: 'Insufficient interaction feedback',
+        category: 'usability',
+        status: 'informational',
+        blocksConvergence: false,
+        inputType: 'screenshots',
+        isU5Aggregated: false,
+        diagnosis: 'Interaction feedback such as loading states, button disabling, or progress indicators occurs during runtime interaction and cannot be reliably assessed from static screenshots.',
+        contextualHint: 'Upload source code or provide interaction recordings to evaluate feedback mechanisms during user actions.',
+        correctivePrompt: '',
+        confidence: 0,
+        evidence: 'Input type: Screenshot',
+      };
+    }
+    
     // ========== E1 POST-PROCESSING (Screenshot — LLM perceptual) ==========
     const aggregatedE1UIList: any[] = [];
     if (selectedRulesSet.has('E1')) {
@@ -4004,6 +4011,7 @@ serve(async (req) => {
       ...(aggregatedA4UI ? [aggregatedA4UI] : []),
       ...(aggregatedA5UI ? [aggregatedA5UI] : []),
       ...(aggregatedA6UI ? [aggregatedA6UI] : []),
+      ...(aggregatedU5UI ? [aggregatedU5UI] : []),
     ];
 
     // ========== POSITIVE FINDING FILTER (Issues-Only Guardrail) ==========
@@ -4017,10 +4025,9 @@ serve(async (req) => {
 
     // ========== SCREENSHOT-SPECIFIC USABILITY CROSS-RULE SUPPRESSION ==========
     // Prevent duplicate findings where multiple rules describe the same root cause.
-    // Priority: U3 > U4, U5 > U4, U6 > U1, U2 > U1
+    // Priority: U3 > U4, U6 > U1, U2 > U1
     const ruleIds = new Set(enhancedViolations.map((v: any) => v.ruleId));
     const hasU3 = ruleIds.has('U3');
-    const hasU5 = ruleIds.has('U5');
     const hasU6 = ruleIds.has('U6');
     const hasU2 = ruleIds.has('U2');
 
@@ -4038,16 +4045,6 @@ serve(async (req) => {
         }
       }
 
-      // S-SS2: U5 suppresses U4 (missing feedback causes recall regression)
-      if (v.ruleId === 'U4' && hasU5) {
-        const u4Text = `${v.diagnosis || ''} ${v.evidence || ''}`.toLowerCase();
-        const isFeedbackCaused = /feedback|state|status|response|confirmation|indicator|loading|spinner/.test(u4Text);
-        if (isFeedbackCaused) {
-          console.log(`Screenshot suppression: U4 suppressed by U5 (missing feedback→recall)`);
-          screenshotSuppressed.push('U4 (by U5)');
-          return false;
-        }
-      }
 
       // S-SS3: U6 suppresses U1 (weak grouping explains unclear primary action)
       if (v.ruleId === 'U1' && hasU6) {
@@ -4079,12 +4076,6 @@ serve(async (req) => {
       const u3Violation = finalViolations.find((v: any) => v.ruleId === 'U3');
       if (u3Violation) {
         u3Violation.impactAnnotation = 'This truncation may force users to recall previously entered information instead of recognizing it during verification.';
-      }
-    }
-    if (screenshotSuppressed.some(s => s.startsWith('U4 (by U5)'))) {
-      const u5Violation = finalViolations.find((v: any) => v.ruleId === 'U5');
-      if (u5Violation) {
-        u5Violation.impactAnnotation = 'Missing interaction feedback may force users to recall system state instead of recognizing it from visible indicators.';
       }
     }
     if (screenshotSuppressed.some(s => s.startsWith('U1 (by U6)'))) {
