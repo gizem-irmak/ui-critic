@@ -3689,6 +3689,13 @@ serve(async (req) => {
       confidence = Math.min(confidence, 0.75); // Cap for screenshot
 
       const rationale = 'Interactive element appears to lack a visible focus indicator for keyboard users.';
+
+      // ── A2 confidence suppression: suppress findings below 60% ──
+      if (confidence < 0.60) {
+        console.log(`A2 SUPPRESSED (<60% confidence: ${Math.round(confidence * 100)}%): ${componentName || location || 'unknown'}`);
+        continue;
+      }
+
       const dedupeKey = componentName || location || 'unknown';
 
       if (a2DedupeMapUI.has(dedupeKey)) {
@@ -3759,10 +3766,10 @@ serve(async (req) => {
         contextualHint: 'Add visible focus-visible indicators (ring, outline, border) for keyboard accessibility.',
         correctivePrompt: '',
         confidence: Math.round(overallConfidence * 100) / 100,
-        advisoryGuidance: 'Focus indicators were visually absent on focused elements. For deterministic verification, upload ZIP source code or provide a GitHub repository.',
+        advisoryGuidance: 'Visual inspection suggests potential focus visibility issues. Focus indicators require keyboard interaction and code inspection for confirmation.',
       };
 
-      console.log(`A2 aggregated (screenshot): ${a2Violations.length} findings → ${a2AffectedItemsUI.length} potential → 1 result`);
+      console.log(`A2 aggregated (screenshot): ${a2Violations.length} findings → ${a2AffectedItemsUI.length} potential (after ≥60% confidence gate) → 1 result`);
     } else if (a2HasNotEvaluated && includesA2) {
       // Tier 1: Not Evaluated — no focused state observable in screenshot
       aggregatedA2UI = {

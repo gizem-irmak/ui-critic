@@ -14,6 +14,14 @@ Rule A2 (Poor Focus Visibility) identifies accessibility failures where focus in
 - **Pass**: Strong replacement (focus:ring-*, focus:border-*, focus:shadow-*, focus:outline-*), focus-within wrapper indicators, or state-driven patterns (data-[selected], data-[highlighted], aria-selected, data-[state=active/open]).
 - **Suppressed**: Non-focusable wrappers (HoverCardContent, PopoverContent, etc.), non-interactive elements (focusable=no).
 
+## Screenshot Modality
+- **Classification**: Always Potential (never Confirmed) — focus indicators require DOM/code inspection.
+- **Detection**: LLM visual reasoning detecting absence of visible focus rings, missing outlines on interactive elements, lack of clear focus highlights.
+- **Confidence gating**: confidence ≥ 60% → report as Potential; confidence < 60% → suppress entirely.
+- **Confidence cap**: Screenshot A2 confidence is capped at 0.75.
+- **Advisory**: "Visual inspection suggests potential focus visibility issues. Focus indicators require keyboard interaction and code inspection for confirmation."
+- **Three-tier classification**: (1) Not Evaluated — no focused state observable; (2) Potential — focused element with no visible indicator; (3) Pass — visible focus indicator shown.
+
 ## Source Location
 - Each finding includes `startLine`, `endLine`, `filePath` for precise code attribution.
 - Findings are sorted by file path (alphabetical) then line number (ascending).
