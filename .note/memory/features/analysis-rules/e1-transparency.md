@@ -53,6 +53,17 @@ Files matching auth patterns (forgot-password, sign-in, etc.) are excluded unles
 - **0.70–0.80**: Delete intent inferred from handler name or label but request/gate linkage is weaker
 - **0.60–0.65**: Partial disclosure exists but confirmation is missing
 
+## Screenshot Modality
+- **Classification**: Always Potential (never Confirmed)
+- **Detection**: LLM-based visual reasoning assessing whether high-impact actions (delete, purchase, subscribe) are presented with sufficient disclosure of consequences, costs, or confirmation cues
+- **Deterministic checks**: Code-based multi-channel detection is disabled for screenshot inputs
+- **High-Impact Action Gate**: Detection runs only when destructive, financial, or data-sharing actions are visible
+- **Confidence threshold**: ≥60% → report Potential; <60% → suppress (aligned with global perceptual policy)
+- **Maximum confidence**: Capped at 0.85 (absence of code-level verification)
+- **Cross-rule suppression**: E2 may suppress E1 (S8) when choice architecture imbalance is the root cause
+- **Tone**: Neutral academic phrasing emphasizing potential transparency risks
+- **Advisory**: "Visual analysis flagged a potential transparency risk in high-impact actions; verify in context."
+
 ## Debug Logging
 The extraction function logs:
 - `[E1 DEBUG] files=N candidates: label=N handler=N network=N icon=N`

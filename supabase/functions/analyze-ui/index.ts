@@ -3952,7 +3952,7 @@ serve(async (req) => {
 
       if (e1FromLLM.length > 0) {
         const aggregatedOne = e1FromLLM.find((v: any) => v.isE1Aggregated && v.e1Elements?.length > 0);
-        const e1Elements = aggregatedOne
+        const e1ElementsRaw = aggregatedOne
           ? (aggregatedOne.e1Elements || []).map((el: any) => ({
               elementLabel: el.elementLabel || 'High-impact action',
               elementType: el.elementType || 'action',
@@ -3960,7 +3960,7 @@ serve(async (req) => {
               detection: el.detection || '',
               evidence: el.evidence || '',
               recommendedFix: el.recommendedFix || '',
-              confidence: Math.min(el.confidence || 0.65, 0.80),
+              confidence: Math.min(el.confidence || 0.65, 0.85),
               evaluationMethod: 'llm_perceptual' as const,
               deduplicationKey: el.deduplicationKey || `E1|${el.location || ''}|${el.elementLabel || ''}`,
             }))
@@ -3971,22 +3971,38 @@ serve(async (req) => {
               detection: v.diagnosis || '',
               evidence: v.evidence || '',
               recommendedFix: v.contextualHint || '',
-              confidence: Math.min(v.confidence || 0.65, 0.80),
+              confidence: Math.min(v.confidence || 0.65, 0.85),
               evaluationMethod: 'llm_perceptual' as const,
               deduplicationKey: `E1|${v.evidence || 'unknown'}`,
             }));
 
-        const overallConfidence = Math.min(Math.max(...e1Elements.map((e: any) => e.confidence)), 0.80);
-        aggregatedE1UIList.push({
-          ruleId: 'E1', ruleName: 'Insufficient transparency in high-impact actions', category: 'ethics',
-          status: 'potential', blocksConvergence: false,
-          inputType: 'screenshots', isE1Aggregated: true, e1Elements, evaluationMethod: 'llm_assisted',
-          diagnosis: `Transparency issues: ${e1Elements.length} potential risk(s) detected via visual analysis.`,
-          contextualHint: 'Ensure high-impact actions disclose consequences, costs, or data implications.',
-          advisoryGuidance: 'Add confirmation steps with clear consequence disclosure for irreversible or high-impact actions.',
-          confidence: Math.round(overallConfidence * 100) / 100,
+        // ========== E1 SCREENSHOT CONFIDENCE GATE ==========
+        // Aligned with global perceptual policy (≥60%), capped at 0.85
+        const e1Elements = e1ElementsRaw.filter((el: any) => {
+          if (el.confidence < 0.60) {
+            console.log(`E1: Suppressed (screenshot confidence ${Math.round(el.confidence * 100)}% < 60%): ${(el.elementLabel || '').substring(0, 80)}`);
+            return false;
+          }
+          return true;
         });
-        console.log(`E1 aggregated (UI): ${e1FromLLM.length} finding(s) → ${e1Elements.length} element(s)`);
+
+        if (e1Elements.length === 0) {
+          console.log('E1: All elements suppressed by screenshot confidence gate');
+        }
+
+        const overallConfidence = e1Elements.length > 0 ? Math.min(Math.max(...e1Elements.map((e: any) => e.confidence)), 0.85) : 0;
+        if (e1Elements.length > 0) {
+          aggregatedE1UIList.push({
+            ruleId: 'E1', ruleName: 'Insufficient transparency in high-impact actions', category: 'ethics',
+            status: 'potential', blocksConvergence: false,
+            inputType: 'screenshots', isE1Aggregated: true, e1Elements, evaluationMethod: 'llm_assisted',
+            diagnosis: `Transparency issues: ${e1Elements.length} potential risk(s) detected via visual analysis.`,
+            contextualHint: 'Ensure high-impact actions disclose consequences, costs, or data implications.',
+            advisoryGuidance: 'Visual analysis flagged a potential transparency risk in high-impact actions; verify in context.',
+            confidence: Math.round(overallConfidence * 100) / 100,
+          });
+        }
+        console.log(`E1 aggregated (UI): ${e1FromLLM.length} raw → ${e1Elements.length} after confidence gate`);
       }
     }
 
