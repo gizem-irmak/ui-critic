@@ -2291,6 +2291,11 @@ Trigger U1 when ALL are true:
 - Action hierarchy cannot be evaluated due to incomplete visibility
 - The issue relies on speculation ("if", "could", "might", "would")
 - Cannot visually determine styling for BOTH actions in the screenshot
+- **SAME-TASK SUPPRESSION:** Multiple buttons lead to the SAME user task or flow, even if they appear in different UI regions. Examples:
+  - "Compose" in header + "Send your first message" in empty state → SAME task → DO NOT trigger
+  - "Add item" in toolbar + "Create first item" in empty state → SAME task → DO NOT trigger
+  - "New project" in header + "Create your first project" in empty state → SAME task → DO NOT trigger
+  These are redundant entry points, NOT competing actions. Only trigger when buttons perform DIFFERENT tasks that create decision ambiguity (e.g., "Upgrade plan" vs "Start free trial").
 
 ---
 
@@ -3066,6 +3071,42 @@ serve(async (req) => {
         return false;
       }
       
+      // ========== SAME-TASK SUPPRESSION ==========
+      // Multiple buttons that lead to the same user task/flow are redundant entry points, not competing actions.
+      // e.g., "Compose" in header + "Send your first message" in empty state
+      const primaryAction = (v.primaryAction || '').toLowerCase();
+      const secondaryAction = (v.secondaryAction || '').toLowerCase();
+      const allActions = `${primaryAction} ${secondaryAction} ${combined}`;
+      
+      // Detect empty-state CTA patterns (redundant entry points)
+      const hasEmptyStateSignal = /empty\s*state|no\s+(?:items?|data|results?|messages?|projects?)|get\s+started|first\s+(?:item|message|project|entry)|send\s+your\s+first|create\s+your\s+first|add\s+your\s+first/.test(allActions);
+      const hasHeaderToolbarSignal = /header|toolbar|top\s*bar|nav(?:igation)?|sidebar/.test(allActions);
+      
+      // Detect same-task synonyms (compose/send, add/create, new/create)
+      const sameTaskPairs = [
+        [/\b(?:compose|write|draft)\b/, /\b(?:send|create|new)\b/],
+        [/\b(?:add|create|new)\b/, /\b(?:create|add|new)\b/],
+        [/\b(?:start|begin|get\s+started)\b/, /\b(?:create|new|add)\b/],
+        [/\b(?:upload|import)\b/, /\b(?:add|create)\b/],
+      ];
+      
+      const isSameTask = sameTaskPairs.some(([pat1, pat2]) => 
+        (pat1.test(primaryAction) && pat2.test(secondaryAction)) || 
+        (pat2.test(primaryAction) && pat1.test(secondaryAction))
+      );
+      
+      if ((hasEmptyStateSignal && hasHeaderToolbarSignal) || (isSameTask && hasEmptyStateSignal)) {
+        console.log(`U1: Filtering out same-task redundant entry points: ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
+      // Also suppress if different regions are explicitly mentioned
+      const hasDifferentRegions = /(?:header|toolbar|top).*(?:empty\s*state|main\s*content|body|center)|(?:empty\s*state|main\s*content|body).*(?:header|toolbar|top)/.test(allActions);
+      if (hasDifferentRegions && isSameTask) {
+        console.log(`U1: Filtering out same-task buttons in different regions: ${v.evidence?.substring(0, 100)}`);
+        return false;
+      }
+      
       // ========== SPECULATIVE LANGUAGE FILTER ==========
       // FILTER: Speculative language indicates incomplete evidence (applies to ALL cases)
       const hasSpeculativeLanguage = /\bif\b.*\b(also|uses?|were?|is)\b|\bcould\b|\bmight\b|\bwould\b|\bmay\b(?!\s+struggle)|\bpossibly\b|\bpotentially\b|\bassuming\b|\bif the\b/.test(combined);
@@ -3288,8 +3329,23 @@ serve(async (req) => {
       console.log(`U1: No valid violations found (${u1Violations.length} filtered out as speculative or lacking evidence)`);
     }
     
+    // ========== U1 SCREENSHOT CONFIDENCE GATE ==========
+    // For screenshot modality, only report U1 with confidence ≥ 70%
+    const confidenceGatedU1 = validatedU1Violations.filter((v: any) => {
+      const conf = v.confidence || 0.65;
+      if (conf < 0.70) {
+        console.log(`U1: Suppressed (screenshot confidence ${Math.round(conf * 100)}% < 70%): ${(v.evidence || '').substring(0, 100)}`);
+        return false;
+      }
+      return true;
+    });
+    
+    if (validatedU1Violations.length > 0 && confidenceGatedU1.length === 0) {
+      console.log(`U1: All ${validatedU1Violations.length} findings suppressed by confidence gate (<70%)`);
+    }
+    
     // Process non-A1/A2/U1 violations
-    let filteredOtherViolations = [...nonU1OtherViolations, ...validatedU1Violations]
+    let filteredOtherViolations = [...nonU1OtherViolations, ...confidenceGatedU1]
       .map((v: any) => {
         const rule = allRulesForViolations.find(r => r.id === v.ruleId);
         // HARD GUARDRAIL: U4, U6 are ALWAYS Potential (non-blocking), never Confirmed
