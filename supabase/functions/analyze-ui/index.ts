@@ -3330,18 +3330,18 @@ serve(async (req) => {
     }
     
     // ========== U1 SCREENSHOT CONFIDENCE GATE ==========
-    // For screenshot modality, only report U1 with confidence ≥ 70%
+    // For screenshot modality, only report U1 with confidence ≥ 60% (aligned with global perceptual policy)
     const confidenceGatedU1 = validatedU1Violations.filter((v: any) => {
       const conf = v.confidence || 0.65;
-      if (conf < 0.70) {
-        console.log(`U1: Suppressed (screenshot confidence ${Math.round(conf * 100)}% < 70%): ${(v.evidence || '').substring(0, 100)}`);
+      if (conf < 0.60) {
+        console.log(`U1: Suppressed (screenshot confidence ${Math.round(conf * 100)}% < 60%): ${(v.evidence || '').substring(0, 100)}`);
         return false;
       }
       return true;
     });
     
     if (validatedU1Violations.length > 0 && confidenceGatedU1.length === 0) {
-      console.log(`U1: All ${validatedU1Violations.length} findings suppressed by confidence gate (<70%)`);
+      console.log(`U1: All ${validatedU1Violations.length} findings suppressed by confidence gate (<60%)`);
     }
     
     // Process non-A1/A2/U1 violations
