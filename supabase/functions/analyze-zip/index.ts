@@ -14,6 +14,8 @@ import {
   hasHighReplacementRatio as pHasHighReplacementRatio,
   PER_FILE_SIZE_CAP,
   TOTAL_SIZE_CAP,
+  identifyPageFiles as pIdentifyPageFiles,
+  logA4ParityDiagnostics as pLogA4ParityDiagnostics,
   type ExcludedFile,
 } from '../_shared/projectSnapshot.ts';
 
@@ -8232,34 +8234,7 @@ interface A4Finding {
   endLine?: number | null;
 }
 
-// --- A4 Helpers: page-level detection ---
-
-/** Identify "page files" — files under common page roots or referenced as route elements */
-function identifyPageFiles(allFiles: Map<string, string>): Set<string> {
-  const pageFiles = new Set<string>();
-  const PAGE_PATH_RE = /(?:^|\/)(?:pages|routes|app|views)\/[^/]+\.(tsx|jsx|ts|js)$/i;
-  for (const filePath of allFiles.keys()) {
-    const norm = normalizePath(filePath);
-    if (PAGE_PATH_RE.test(norm)) pageFiles.add(norm);
-  }
-  // Also find files referenced as route elements in router config
-  for (const [, content] of allFiles) {
-    // React Router: element={<Component />} or element: <Component />
-    const routeElementRe = /element\s*[:=]\s*(?:\{?\s*)?<(\w+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = routeElementRe.exec(content)) !== null) {
-      const compName = m[1];
-      // Try to find a file that exports this component
-      for (const [fp, fc] of allFiles) {
-        const norm = normalizePath(fp);
-        if (pageFiles.has(norm)) continue;
-        const exportRe = new RegExp(`export\\s+(?:default\\s+)?(?:function|const)\\s+${compName}\\b`);
-        if (exportRe.test(fc)) pageFiles.add(norm);
-      }
-    }
-  }
-  return pageFiles;
-}
+// --- A4 Helpers: page-level detection (uses shared identifyPageFiles from _shared/projectSnapshot.ts) ---
 
 /** Resolve a single-hop import path to find the target file content */
 function resolveImportedComponent(
@@ -8330,11 +8305,8 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   const listIssues: A4Finding[] = [];
   const visualHeadingIssues: A4Finding[] = [];
 
-  // Identify page files for page-level h1 analysis
-  const pageFiles = identifyPageFiles(allFiles);
-
-  // Per-page h1 tracking (stores line numbers of each <h1> occurrence)
-  const pageH1Counts = new Map<string, number[]>();
+  // Identify page files for page-level h1 analysis (shared helper)
+  const pageFiles = pIdentifyPageFiles(allFiles);
 
   const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
   const POINTER_HANDLER_RE = /\b(onClick|onMouseDown|onPointerDown|onTouchStart)\s*=/;
@@ -8622,6 +8594,15 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   }
 
   findings.push(...headingIssues, ...visualHeadingIssues, ...clickableNonSemantics, ...landmarkIssues, ...listIssues);
+
+  // A4 parity diagnostics
+  const a4SubCheckCounts: Record<string, number> = {};
+  for (const f of findings) {
+    const key = `${f.subCheck}|${f.detection.split(':')[0]}`;
+    a4SubCheckCounts[key] = (a4SubCheckCounts[key] || 0) + 1;
+  }
+  pLogA4ParityDiagnostics('zip', pageFiles, a4SubCheckCounts);
+
   return findings;
 }
 
