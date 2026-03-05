@@ -24,4 +24,6 @@ Rule A1 (Insufficient Text Contrast) evaluates WCAG 1.4.3 with three sub-checks:
 
 **Advisory** (Potential card): "Theme-dependent or opacity-reduced colors cannot be verified statically. Provide a rendered screenshot or enable runtime contrast sampling to compute effective contrast."
 
+**Screenshot confidence suppression** — Perceptual A1 findings with confidence < 60% are suppressed entirely. Badge/pill/status-label elements (e.g., "Active", "Scheduled" with colored backgrounds) receive a -20% confidence penalty before threshold check. Confidence interpretation: 80–90% clear low-contrast, 70–79% strong suspicion, 60–69% plausible risk, <60% suppressed.
+
 Confirmed A1 violations are unchanged — require computed contrast ratio below threshold.
