@@ -4431,10 +4431,14 @@ function analyzeContrastInCode(files: Map<string, string>): ContrastViolation[] 
 
     const fgResolved = finding.fgResolved && isValidHexColor(finding.fgHex);
     const bgResolved = finding.bgResolved && isValidHexColor(finding.bgHex);
+    const fontResolved = finding.sizeStatus !== 'unknown';
     const canCompute = fgResolved && bgResolved && finding.ratio !== null;
 
-    const isConfirmed = canCompute && finding.ratio! < finding.threshold;
+    // A1 Confirmed requires ALL prerequisites: fg + bg + font size + ratio
+    const isConfirmed = canCompute && fontResolved && finding.ratio! < finding.threshold;
     const status: 'confirmed' | 'potential' = isConfirmed ? 'confirmed' : 'potential';
+
+    console.log(`[A1] prereq: fgResolved=${fgResolved} bgResolved=${bgResolved} fontResolved=${fontResolved} ratioComputed=${finding.ratio !== null} → ${status} (${finding.fgClass} in ${finding.filePath})`);
 
     // === GATE: skip noisy potential findings with no risk signal ===
     if (!isConfirmed && !canCompute) {
