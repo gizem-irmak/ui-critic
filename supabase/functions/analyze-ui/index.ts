@@ -4145,6 +4145,19 @@ serve(async (req) => {
         }
       }
 
+      // ========== U4 SCREENSHOT CONFIDENCE GATE ==========
+      // Aligned with global perceptual policy (≥60%), capped at 0.75
+      if (v.ruleId === 'U4') {
+        const conf = v.confidence || 0.65;
+        if (conf < 0.60) {
+          console.log(`U4: Suppressed (screenshot confidence ${Math.round(conf * 100)}% < 60%): ${(v.evidence || '').substring(0, 100)}`);
+          return false;
+        }
+        // Cap U4 screenshot confidence at 0.75
+        if (v.confidence > 0.75) v.confidence = 0.75;
+      }
+
+      // S-SS1: U3 suppresses U4 (truncation causes recall regression on review screens)
       if (v.ruleId === 'U4' && hasU3) {
         const u4Text = `${v.diagnosis || ''} ${v.evidence || ''} ${v.contextualHint || ''}`.toLowerCase();
         const isReviewContext = /review|confirm|summar|verif|check.*before|final.*step/.test(u4Text);
