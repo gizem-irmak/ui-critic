@@ -4145,7 +4145,16 @@ serve(async (req) => {
         }
       }
 
-      // ========== U4 SCREENSHOT CONFIDENCE GATE ==========
+      // ========== U6 SCREENSHOT CONFIDENCE GATE ==========
+      // Aligned with global perceptual policy (≥60%)
+      if (v.ruleId === 'U6') {
+        const conf = v.confidence || 0.65;
+        if (conf < 0.60) {
+          console.log(`U6: Suppressed (screenshot confidence ${Math.round(conf * 100)}% < 60%): ${(v.evidence || '').substring(0, 100)}`);
+          return false;
+        }
+      }
+
       // Aligned with global perceptual policy (≥60%), capped at 0.75
       if (v.ruleId === 'U4') {
         const conf = v.confidence || 0.65;
