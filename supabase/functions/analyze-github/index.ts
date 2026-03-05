@@ -1,9 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { ZipReader, BlobReader, TextWriter } from "https://deno.land/x/zipjs@v2.7.32/index.js";
 import {
   filterPath as pFilterPath,
   shouldIncludePath as pShouldIncludePath,
   normalizePath as pNormalizePath,
   normalizeContent as pNormalizeContent,
+  detectCommonRoot as pDetectCommonRoot,
   computeSnapshotHash as pComputeSnapshotHash,
   buildSnapshot as pBuildSnapshot,
   logParityDiagnostics as pLogParityDiagnostics,
@@ -47,64 +49,18 @@ const rules = {
 
 // NOTE: Legacy filter lists removed — all filtering now uses shared shouldIncludePath() from projectSnapshot.ts
 
-interface GitHubFile {
-  path: string;
-  type: 'blob' | 'tree';
-  url: string;
-  sha: string;
-  size?: number;
-}
-
-interface GitHubTreeResponse {
-  sha: string;
-  url: string;
-  tree: GitHubFile[];
-  truncated: boolean;
-}
-
-// Parse GitHub URL to extract owner and repo
-function parseGitHubUrl(url: string): { owner: string; repo: string; branch?: string } | null {
-  try {
-    // Handle various GitHub URL formats
-    const patterns = [
-      // https://github.com/owner/repo
-      /^https?:\/\/(?:www\.)?github\.com\/([^\/]+)\/([^\/\#\?]+)/,
-      // github.com/owner/repo
-      /^github\.com\/([^\/]+)\/([^\/\#\?]+)/,
-    ];
-
-    for (const pattern of patterns) {
-      const match = url.match(pattern);
-      if (match) {
-        const owner = match[1];
-        let repo = match[2];
-        // Remove .git suffix if present
-        repo = repo.replace(/\.git$/, '');
-        return { owner, repo };
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// Legacy isAnalyzableFile removed — all filtering uses pFilterPath from projectSnapshot.ts
-
-
-// Fetch repository tree from GitHub API
-async function fetchRepoTree(owner: string, repo: string): Promise<{ tree: GitHubFile[]; branch: string; commitSha: string; truncated: boolean }> {
-  // First, get the default branch
+// Fetch repo metadata (branch, visibility) without downloading tree
+async function fetchRepoInfo(owner: string, repo: string): Promise<{ branch: string; commitSha: string }> {
   const repoUrl = `https://api.github.com/repos/${owner}/${repo}`;
   console.log(`Fetching repo info: ${repoUrl}`);
-  
+
   const repoResponse = await fetch(repoUrl, {
     headers: {
       'Accept': 'application/vnd.github.v3+json',
       'User-Agent': 'UI-Critic-Analysis-Tool',
     },
   });
-  
+
   if (!repoResponse.ok) {
     const errorText = await repoResponse.text();
     if (repoResponse.status === 404) {
@@ -115,59 +71,144 @@ async function fetchRepoTree(owner: string, repo: string): Promise<{ tree: GitHu
     }
     throw new Error(`Failed to fetch repository: ${repoResponse.status} - ${errorText}`);
   }
-  
+
   const repoData = await repoResponse.json();
   const defaultBranch = repoData.default_branch || 'main';
-  const isPrivate = repoData.private;
-  
-  if (isPrivate) {
+
+  if (repoData.private) {
     throw new Error('This repository is private. Only public repositories can be analyzed.');
   }
-  
-  console.log(`Repository: ${owner}/${repo}, Default branch: ${defaultBranch}`);
-  
-  // Fetch the file tree recursively
-  const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${defaultBranch}?recursive=1`;
-  console.log(`Fetching tree: ${treeUrl}`);
-  
-  const treeResponse = await fetch(treeUrl, {
-    headers: {
-      'Accept': 'application/vnd.github.v3+json',
-      'User-Agent': 'UI-Critic-Analysis-Tool',
-    },
-  });
-  
-  if (!treeResponse.ok) {
-    const errorText = await treeResponse.text();
-    throw new Error(`Failed to fetch repository tree: ${treeResponse.status} - ${errorText}`);
+
+  // Get the latest commit SHA for the branch
+  let commitSha = '';
+  try {
+    const branchUrl = `https://api.github.com/repos/${owner}/${repo}/branches/${defaultBranch}`;
+    const branchResponse = await fetch(branchUrl, {
+      headers: {
+        'Accept': 'application/vnd.github.v3+json',
+        'User-Agent': 'UI-Critic-Analysis-Tool',
+      },
+    });
+    if (branchResponse.ok) {
+      const branchData = await branchResponse.json();
+      commitSha = branchData.commit?.sha || '';
+    }
+  } catch {
+    // Non-critical — commit SHA is informational
   }
-  
-  const treeData: GitHubTreeResponse = await treeResponse.json();
-  
-  if (treeData.truncated) {
-    console.warn('Repository tree was truncated - some files may be missing');
-  }
-  
-  return { tree: treeData.tree, branch: defaultBranch, commitSha: treeData.sha, truncated: treeData.truncated };
+
+  console.log(`Repository: ${owner}/${repo}, Default branch: ${defaultBranch}, Commit: ${commitSha.slice(0, 8)}`);
+  return { branch: defaultBranch, commitSha };
 }
 
-// Fetch file content from GitHub
-async function fetchFileContent(owner: string, repo: string, path: string): Promise<string> {
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-  
-  const response = await fetch(url, {
-    headers: {
-      'Accept': 'application/vnd.github.v3.raw',
-      'User-Agent': 'UI-Critic-Analysis-Tool',
-    },
+// Download and extract repository as ZIP archive (same pipeline as analyze-zip)
+async function downloadAndExtractRepoZip(
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<{ allFiles: Map<string, string>; files: Map<string, string>; excludedFiles: ExcludedFile[] }> {
+  const archiveUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/${branch}.zip`;
+  console.log(`Downloading repository archive: ${archiveUrl}`);
+
+  const response = await fetch(archiveUrl, {
+    headers: { 'User-Agent': 'UI-Critic-Analysis-Tool' },
+    redirect: 'follow',
   });
-  
+
   if (!response.ok) {
-    console.warn(`Failed to fetch file ${path}: ${response.status}`);
-    return '';
+    throw new Error(`Failed to download repository archive: ${response.status} ${response.statusText}`);
   }
-  
-  return await response.text();
+
+  const archiveBlob = await response.blob();
+  console.log(`Downloaded archive: ${archiveBlob.size} bytes`);
+
+  // Extract using the same ZipReader pipeline as analyze-zip
+  const zipReader = new ZipReader(new BlobReader(archiveBlob));
+  const entries = await zipReader.getEntries();
+
+  const files = new Map<string, string>(); // AI context (bounded)
+  const allFiles = new Map<string, string>(); // deterministic static checks (larger)
+  let totalSize = 0;
+  let totalStaticSize = 0;
+  const maxContentSize = 100000; // 100KB limit for AI context
+  const maxStaticContentSize = TOTAL_SIZE_CAP; // 750KB cap for deterministic analyzers
+
+  const excludedFiles: ExcludedFile[] = [];
+  for (const entry of entries) {
+    if (entry.directory) continue;
+
+    const filterResult = pFilterPath(entry.filename);
+    if (!filterResult.included) {
+      excludedFiles.push({ path: entry.filename, reason: filterResult.reason!, detail: filterResult.detail });
+      continue;
+    }
+
+    try {
+      const rawContent = await entry.getData!(new TextWriter());
+      if (!rawContent) continue;
+      const content = pNormalizeContent(rawContent);
+      const canonPath = pNormalizePath(entry.filename);
+
+      // Per-file size cap
+      if (content.length > PER_FILE_SIZE_CAP) {
+        excludedFiles.push({ path: entry.filename, reason: 'size_cap', detail: `${content.length} bytes > ${PER_FILE_SIZE_CAP}` });
+        continue;
+      }
+
+      // Check for high replacement ratio (binary/corrupted)
+      if (pHasHighReplacementRatio(content)) {
+        excludedFiles.push({ path: entry.filename, reason: 'decode_error', detail: 'high replacement char ratio' });
+        continue;
+      }
+
+      // Check for LFS pointers
+      if (pIsLfsPointer(content)) {
+        excludedFiles.push({ path: entry.filename, reason: 'git_lfs_pointer' });
+        continue;
+      }
+
+      // Always try to retain a broader set for static analysis first
+      if (totalStaticSize + content.length < maxStaticContentSize) {
+        allFiles.set(canonPath, content);
+        totalStaticSize += content.length;
+      } else {
+        excludedFiles.push({ path: entry.filename, reason: 'size_cap', detail: `total exceeded ${maxStaticContentSize}` });
+      }
+
+      // Keep a smaller subset for AI context
+      if (totalSize + content.length < maxContentSize) {
+        files.set(canonPath, content);
+        totalSize += content.length;
+      }
+    } catch (e) {
+      console.warn(`Failed to read ${entry.filename}:`, e);
+      excludedFiles.push({ path: entry.filename, reason: 'decode_error', detail: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  // Strip common root folder (GitHub archives wrap in repo-branch/ folder)
+  const allPaths = Array.from(allFiles.keys());
+  const commonRoot = pDetectCommonRoot(allPaths);
+  if (commonRoot) {
+    const remappedAll = new Map<string, string>();
+    const remappedSmall = new Map<string, string>();
+    for (const [k, v] of allFiles) {
+      remappedAll.set(k.startsWith(commonRoot) ? k.slice(commonRoot.length) : k, v);
+    }
+    for (const [k, v] of files) {
+      remappedSmall.set(k.startsWith(commonRoot) ? k.slice(commonRoot.length) : k, v);
+    }
+    allFiles.clear();
+    remappedAll.forEach((v, k) => allFiles.set(k, v));
+    files.clear();
+    remappedSmall.forEach((v, k) => files.set(k, v));
+    console.log(`Stripped common root folder: "${commonRoot}"`);
+  }
+
+  await zipReader.close();
+  console.log(`Extracted ${allFiles.size} files (${totalStaticSize} bytes static, ${totalSize} bytes AI context), excluded ${excludedFiles.length}`);
+
+  return { allFiles, files, excludedFiles };
 }
 
 // =====================
@@ -6426,37 +6467,13 @@ serve(async (req) => {
     const { owner, repo } = parsed;
     console.log(`Parsed GitHub URL - Owner: ${owner}, Repo: ${repo}`);
     
-    // Fetch repository tree
-    const treeResult = await fetchRepoTree(owner, repo);
-    const tree = treeResult.tree;
-    const commitSha = treeResult.commitSha;
-    const branch = treeResult.branch;
-    console.log(`Fetched ${tree.length} items from repository tree (branch: ${branch}, commit: ${commitSha})`);
+    // Fetch repo metadata (branch, commit SHA)
+    const { branch, commitSha } = await fetchRepoInfo(owner, repo);
     
-    // Filter for analyzable files (using shared parity filter)
-    // Filter for analyzable files (using shared parity filter with detailed reasons)
-    const excludedFiles: ExcludedFile[] = [];
-    const apiErrors: Array<{ path: string; error: string }> = [];
-    const analyzableFiles = tree.filter((file) => {
-      if (file.type !== 'blob') return false;
-      // Detect submodules (type='commit' is already filtered, but check sha-only blobs)
-      if (file.type === 'blob' && file.size === 0) return false;
-      
-      const filterResult = pFilterPath(file.path);
-      if (!filterResult.included) {
-        excludedFiles.push({ path: file.path, reason: filterResult.reason!, detail: filterResult.detail });
-        return false;
-      }
-      // Per-file size cap (use GitHub tree metadata when available)
-      if (file.size && file.size > PER_FILE_SIZE_CAP) {
-        excludedFiles.push({ path: file.path, reason: 'size_cap', detail: `${file.size} bytes > ${PER_FILE_SIZE_CAP}` });
-        return false;
-      }
-      return true;
-    });
-    console.log(`Found ${analyzableFiles.length} analyzable UI files (excluded ${excludedFiles.length})`);
+    // Download and extract repository as ZIP archive (identical pipeline to analyze-zip)
+    const { allFiles, files, excludedFiles } = await downloadAndExtractRepoZip(owner, repo, branch);
     
-    if (analyzableFiles.length === 0) {
+    if (allFiles.size === 0) {
       return new Response(
         JSON.stringify({
           success: true,
@@ -6468,76 +6485,13 @@ serve(async (req) => {
           },
           filesAnalyzed: 0,
           stackDetected: 'Unknown',
+          repoInfo: { owner, repo, branch, commitSha },
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
     
-    // Fetch ALL analyzable files (no arbitrary MAX_FILES cap — use size cap only)
     const MAX_TOTAL_SIZE = TOTAL_SIZE_CAP;
-    
-    console.log(`Fetching content for ${analyzableFiles.length} files...`);
-    
-    // Fetch file contents
-    const allFiles = new Map<string, string>();
-    let totalSize = 0;
-    
-    for (const file of analyzableFiles) {
-      if (totalSize >= MAX_TOTAL_SIZE) {
-        // Mark remaining as excluded due to total size cap
-        const remainingIdx = analyzableFiles.indexOf(file);
-        for (let i = remainingIdx; i < analyzableFiles.length; i++) {
-          excludedFiles.push({ path: analyzableFiles[i].path, reason: 'size_cap', detail: `total exceeded ${MAX_TOTAL_SIZE}` });
-        }
-        console.log(`Reached total size limit (${totalSize} bytes), stopping file fetch`);
-        break;
-      }
-      
-      try {
-        const rawContent = await fetchFileContent(owner, repo, file.path);
-        if (!rawContent) {
-          excludedFiles.push({ path: file.path, reason: 'api_error', detail: 'empty response' });
-          continue;
-        }
-
-        // Check for LFS pointers
-        if (pIsLfsPointer(rawContent)) {
-          excludedFiles.push({ path: file.path, reason: 'git_lfs_pointer' });
-          continue;
-        }
-
-        // Check for submodule pointers
-        if (pIsSubmodulePointer(rawContent)) {
-          excludedFiles.push({ path: file.path, reason: 'submodule' });
-          continue;
-        }
-
-        const content = pNormalizeContent(rawContent);
-
-        // Check for high replacement ratio (binary/corrupted)
-        if (pHasHighReplacementRatio(content)) {
-          excludedFiles.push({ path: file.path, reason: 'decode_error', detail: 'high replacement char ratio' });
-          continue;
-        }
-
-        // Per-file size cap on content
-        if (content.length > PER_FILE_SIZE_CAP) {
-          excludedFiles.push({ path: file.path, reason: 'size_cap', detail: `${content.length} bytes content > ${PER_FILE_SIZE_CAP}` });
-          continue;
-        }
-
-        const canonPath = pNormalizePath(file.path);
-        allFiles.set(canonPath, content);
-        totalSize += content.length;
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.warn(`Failed to fetch ${file.path}:`, err);
-        excludedFiles.push({ path: file.path, reason: 'api_error', detail: errMsg });
-        apiErrors.push({ path: file.path, error: errMsg });
-      }
-    }
-    
-    console.log(`Fetched ${allFiles.size} files, total size: ${totalSize} bytes`);
     
     // Detect stack
     const stack = detectStack(allFiles);
@@ -6702,7 +6656,7 @@ serve(async (req) => {
     }
 
     let codeContent = '';
-    for (const [filepath, content] of allFiles) {
+    for (const [filepath, content] of files) {
       if (codeContent.length + content.length > MAX_TOTAL_SIZE) break;
       codeContent += `\n--- FILE: ${filepath} ---\n${content}\n`;
     }
@@ -7574,7 +7528,7 @@ serve(async (req) => {
       findingsPerRule[rid] = (findingsPerRule[rid] || 0) + 1;
     }
     const ghSnapshot = pBuildSnapshot(allFiles, 'github', excludedFiles);
-    pLogParityDiagnostics(ghSnapshot, rulesExecuted, findingsPerRule, apiErrors);
+    pLogParityDiagnostics(ghSnapshot, rulesExecuted, findingsPerRule);
     
     return new Response(
       JSON.stringify({
