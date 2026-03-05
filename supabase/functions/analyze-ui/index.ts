@@ -4124,9 +4124,6 @@ serve(async (req) => {
           });
         }
         console.log(`E3 aggregated (UI): ${e3FromLLM.length} raw → ${e3Elements.length} after confidence gate`);
-        } else {
-          console.log('E3: All screenshot findings suppressed (below 0.65 confidence)');
-        }
       }
     }
 
