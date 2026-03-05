@@ -10614,6 +10614,13 @@ ${codeContent}${u4BundleText ? '\n\n' + u4BundleText : ''}${u6BundleText ? '\n\n
     let aggregatedA4: any = null;
     if (selectedRulesSet.has('A4')) {
       const a4Findings = detectA4SemanticStructure(allFiles);
+      // A4 debug: log each trigger with file+line and prereqs
+      for (const f of a4Findings) {
+        const hasH1 = f.subCheck === 'missing_h1' || f.detection?.includes('h1');
+        const hasLandmark = f.subCheck === 'missing_landmark' || f.detection?.includes('landmark');
+        const visualHeadingNoH1 = f.subCheck === 'visual_heading_no_semantic';
+        console.log(`[A4] trigger: file=${f.filePath} line=${f.startLine ?? '?'} subCheck=${f.subCheck} classification=${f.classification} prereqs: hasH1=${hasH1} hasLandmark=${hasLandmark} visualHeadingNoH1=${visualHeadingNoH1} evidence="${(f.evidence || '').slice(0, 80)}"`);
+      }
       if (a4Findings.length > 0) {
         const confirmedCount = a4Findings.filter(f => f.classification === 'confirmed').length;
         const potentialCount = a4Findings.filter(f => f.classification === 'potential').length;
