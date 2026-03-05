@@ -503,3 +503,109 @@ export function logParityDiagnostics(
   }
   console.log('=== END PARITY DIAGNOSTICS ===');
 }
+
+// =====================
+// Page File Detection (shared for A4 parity)
+// =====================
+
+const PAGE_PATH_RE = /(?:^|\/)(?:pages|routes|app|views)\/[^/]+\.(tsx|jsx|ts|js)$/i;
+const LAYOUT_FILE_RE = /(?:^|\/)[A-Za-z]*[Ll]ayout\.(tsx|jsx|ts|js)$/;
+
+/**
+ * Determines if a file is a "page file" for A4 page-level checks.
+ * 
+ * Deterministic rule set (identical for ZIP and GitHub):
+ * 1. true if path matches: src/pages/**, src/routes/**, app/**, pages/**, views/**
+ * 2. true if file exports a component referenced as a route element in a router config
+ * 3. false for layout files (*Layout.tsx, layout.tsx) UNLESS they are a route entry
+ */
+export function isPageFile(
+  path: string,
+  _content: string,
+  allFiles: Map<string, string>,
+  routeEntryComponents?: Set<string>,
+): boolean {
+  const norm = normalizePath(path);
+
+  // Layout exclusion: *Layout.tsx or layout.tsx are NOT pages unless route entry
+  if (LAYOUT_FILE_RE.test(norm)) {
+    // Check if this layout is explicitly used as a route element
+    if (routeEntryComponents) {
+      const fileName = norm.split('/').pop()?.replace(/\.(tsx|jsx|ts|js)$/i, '') || '';
+      const content = allFiles.get(norm) || _content;
+      const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+      const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+      const compName = exportedFn?.[1] || exportedConst?.[1] || fileName;
+      if (routeEntryComponents.has(compName)) return true;
+    }
+    return false;
+  }
+
+  // Path-based detection
+  if (PAGE_PATH_RE.test(norm)) return true;
+
+  // Route-entry detection
+  if (routeEntryComponents) {
+    const content = allFiles.get(norm) || _content;
+    const exportedFn = content.match(/export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/);
+    const exportedConst = content.match(/export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)/);
+    const compName = exportedFn?.[1] || exportedConst?.[1];
+    if (compName && routeEntryComponents.has(compName)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Extract route entry component names from all files (React Router config detection).
+ */
+export function extractRouteEntryComponents(allFiles: Map<string, string>): Set<string> {
+  const components = new Set<string>();
+  const routeElementRe = /element\s*[:=]\s*(?:\{?\s*)?<(\w+)/g;
+  for (const [, content] of allFiles) {
+    let m: RegExpExecArray | null;
+    while ((m = routeElementRe.exec(content)) !== null) {
+      components.add(m[1]);
+    }
+  }
+  return components;
+}
+
+/**
+ * Build the full page file list for A4 analysis.
+ * Both ZIP and GitHub MUST call this to get identical results.
+ */
+export function identifyPageFiles(allFiles: Map<string, string>): Set<string> {
+  const routeEntryComponents = extractRouteEntryComponents(allFiles);
+  const pageFiles = new Set<string>();
+
+  for (const [filePath, content] of allFiles) {
+    const norm = normalizePath(filePath);
+    if (isPageFile(norm, content, allFiles, routeEntryComponents)) {
+      pageFiles.add(norm);
+    }
+  }
+
+  return pageFiles;
+}
+
+/**
+ * Log A4 parity diagnostics.
+ */
+export function logA4ParityDiagnostics(
+  source: 'zip' | 'github',
+  pageFiles: Set<string>,
+  findingsPerSubCheck: Record<string, number>,
+): void {
+  console.log('=== A4 PARITY DIAGNOSTICS ===');
+  console.log(`Source: ${source}`);
+  console.log(`Page files (${pageFiles.size}):`);
+  const sorted = Array.from(pageFiles).sort();
+  for (const pf of sorted) {
+    console.log(`  PAGE: ${pf}`);
+  }
+  for (const [subCheck, count] of Object.entries(findingsPerSubCheck).sort()) {
+    console.log(`  ${subCheck}: ${count} finding(s)`);
+  }
+  console.log('=== END A4 PARITY DIAGNOSTICS ===');
+}

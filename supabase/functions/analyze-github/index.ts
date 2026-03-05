@@ -14,6 +14,8 @@ import {
   hasHighReplacementRatio as pHasHighReplacementRatio,
   PER_FILE_SIZE_CAP,
   TOTAL_SIZE_CAP,
+  identifyPageFiles as pIdentifyPageFiles,
+  logA4ParityDiagnostics as pLogA4ParityDiagnostics,
   type ExcludedFile,
 } from '../_shared/projectSnapshot.ts';
 
@@ -2536,34 +2538,12 @@ interface A4Finding {
   confidence: number;
   correctivePrompt?: string;
   deduplicationKey: string;
+  potentialSubtype?: 'borderline' | 'accuracy';
   startLine?: number | null;
   endLine?: number | null;
 }
 
-// --- A4 Helpers: page-level detection ---
-
-function identifyPageFiles(allFiles: Map<string, string>): Set<string> {
-  const pageFiles = new Set<string>();
-  const PAGE_PATH_RE = /(?:^|\/)(?:pages|routes|app|views)\/[^/]+\.(tsx|jsx|ts|js)$/i;
-  for (const filePath of allFiles.keys()) {
-    const norm = normalizePath(filePath);
-    if (PAGE_PATH_RE.test(norm)) pageFiles.add(norm);
-  }
-  for (const [, content] of allFiles) {
-    const routeElementRe = /element\s*[:=]\s*(?:\{?\s*)?<(\w+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = routeElementRe.exec(content)) !== null) {
-      const compName = m[1];
-      for (const [fp, fc] of allFiles) {
-        const norm = normalizePath(fp);
-        if (pageFiles.has(norm)) continue;
-        const exportRe = new RegExp(`export\\s+(?:default\\s+)?(?:function|const)\\s+${compName}\\b`);
-        if (exportRe.test(fc)) pageFiles.add(norm);
-      }
-    }
-  }
-  return pageFiles;
-}
+// --- A4 Helpers: page-level detection (uses shared identifyPageFiles from _shared/projectSnapshot.ts) ---
 
 function resolveImportedComponent(
   importSource: string,
@@ -2623,7 +2603,7 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   const listIssues: A4Finding[] = [];
   const visualHeadingIssues: A4Finding[] = [];
 
-  const pageFiles = identifyPageFiles(allFiles);
+  const pageFiles = pIdentifyPageFiles(allFiles);
   const pageH1Counts = new Map<string, number[]>();
 
   const NON_INTERACTIVE_TAGS = 'div|span|p|li|section|article|header|footer|main|aside|nav|figure|figcaption|dd|dt|dl';
@@ -2632,8 +2612,8 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   const INTERACTIVE_ROLES = /\brole\s*=\s*["'](button|link|menuitem|tab|option|checkbox|radio|switch|combobox|listbox|slider|treeitem|gridcell)["']/i;
   const KEY_HANDLER_RE = /\b(onKeyDown|onKeyUp|onKeyPress)\s*=/;
   const TABINDEX_GTE0_RE = /tabIndex\s*=\s*\{?\s*(?:0|[1-9])\s*\}?/i;
-  const LARGE_FONT_RE = /\b(?:text-(?:xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)|text-lg)\b/;
-  const BOLD_RE = /\b(?:font-bold|font-semibold|font-extrabold|font-black)\b/;
+  const LARGE_FONT_RE = /(?:^|\s)(?:(?:sm|md|lg|xl|2xl):)?(?:text-(?:lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)|text-\[\d+(?:px|rem|em)\])\b/;
+  const BOLD_RE = /(?:^|\s)(?:(?:sm|md|lg|xl|2xl):)?(?:font-bold|font-semibold|font-extrabold|font-black)\b/;
   const LIST_INTENT_RE = /^(?:\s*[•\-\*\d]+[\.\)]\s|\s*(?:item|card|entry|row|record)\b)/i;
 
   for (const [filePathRaw, content] of allFiles) {
@@ -2664,7 +2644,8 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       if (new RegExp(`<h${i}\\b`, 'i').test(content)) headingLevelsUsed.add(i);
     }
 
-    // A4.1: Visual heading heuristic
+    // A4.1: Visual heading heuristic — div/span/p with large font + bold but no heading role
+    const fileHasH1 = /<h1\b/gi.test(content);
     const visualHeadingTags = extractJsxOpeningTags(content, 'div|span|p');
     for (const { tag, attrs, index } of visualHeadingTags) {
       const classMatch = attrs.match(/className\s*=\s*(?:"([^"]+)"|'([^']+)'|\{[`"']([^`"']+)[`"']\})/);
@@ -2678,23 +2659,74 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
       if (text.length < 3 || text.length > 80) continue;
 
       const lineNumber = content.slice(0, index).split('\n').length;
-      const dedupeKey = `A4.1|visual-heading|${filePath}|${lineNumber}`;
-      if (seenKeys.has(dedupeKey)) continue;
-      seenKeys.add(dedupeKey);
 
-      visualHeadingIssues.push({
-        elementLabel: `Visual heading: "${text.substring(0, 40)}"`, elementType: tag, sourceLabel: text.substring(0, 40),
-        filePath, componentName,
-        subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
-        classification: 'confirmed',
-        detection: `visual_heading_missing_semantics: <${tag}> with ${cls.substring(0, 40)} but no <h1–h6> or role="heading"`,
-        evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
-        explanation: `<${tag}> element looks like a heading (large font + bold: "${text.substring(0, 40)}") but lacks semantic heading markup. Screen readers cannot identify this as a heading.`,
-        confidence: 0.92,
-        correctivePrompt: `Replace <${tag}> with an appropriate heading level (<h2>, <h3>, etc.) or add role="heading" aria-level="N".`,
-        deduplicationKey: dedupeKey,
-        startLine: lineNumber,
-      });
+      const returnMatch = content.match(/\breturn\s*\(/);
+      const jsxStartIdx = returnMatch ? (returnMatch.index! + returnMatch[0].length) : 0;
+      const isFirstHeadingInJsx = index >= jsxStartIdx && !visualHeadingIssues.some(
+        v => v.filePath === filePath && v.detection.includes('visual_heading_no_h1')
+      );
+      const isTopHeadingCandidate = isFirstHeadingInJsx && !fileHasH1;
+
+      if (isTopHeadingCandidate && isPage) {
+        // Page-level: visual heading near top without any <h1> → A4-H1-1 Potential
+        const dedupeKey = `A4.1|top-visual-heading|${filePath}|${lineNumber}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        visualHeadingIssues.push({
+          elementLabel: `Visual heading: "${text.substring(0, 40)}"`, elementType: tag, sourceLabel: text.substring(0, 40),
+          filePath, componentName,
+          subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+          classification: 'potential',
+          detection: `visual_heading_no_h1: Page has no <h1> but renders a visual heading (<${tag}> with large font + bold)`,
+          evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
+          explanation: `Page file "${componentName}" has no <h1> but this <${tag}> appears to serve as the page title. Screen readers cannot identify it as a heading.`,
+          confidence: 0.70,
+          correctivePrompt: `Replace <${tag}> with <h1> (or add role="heading" aria-level="1") since it appears to be the primary page heading.`,
+          deduplicationKey: dedupeKey,
+          potentialSubtype: 'borderline',
+          startLine: lineNumber,
+        });
+      } else if (isTopHeadingCandidate) {
+        // Non-page file top heading without h1 — lower confidence
+        const dedupeKey = `A4.1|top-visual-heading|${filePath}|${lineNumber}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        visualHeadingIssues.push({
+          elementLabel: `Visual heading: "${text.substring(0, 40)}"`, elementType: tag, sourceLabel: text.substring(0, 40),
+          filePath, componentName,
+          subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+          classification: 'potential',
+          detection: `visual_heading_no_h1: Visual heading rendered without semantic heading (<h1> or role="heading" aria-level)`,
+          evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
+          explanation: `<${tag}> appears to be a page title (large font + bold, near top of component, no <h1> in file) but uses no semantic heading.`,
+          confidence: 0.68,
+          correctivePrompt: `Replace <${tag}> with <h1> (or add role="heading" aria-level="1") since it appears to be the primary page heading.`,
+          deduplicationKey: dedupeKey,
+          potentialSubtype: 'borderline',
+          startLine: lineNumber,
+        });
+      } else {
+        // Any visual heading missing semantics → Confirmed
+        const dedupeKey = `A4.1|visual-heading|${filePath}|${lineNumber}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+
+        visualHeadingIssues.push({
+          elementLabel: `Visual heading: "${text.substring(0, 40)}"`, elementType: tag, sourceLabel: text.substring(0, 40),
+          filePath, componentName,
+          subCheck: 'A4.1', subCheckLabel: 'Heading semantics',
+          classification: 'confirmed',
+          detection: `visual_heading_missing_semantics: <${tag}> with ${cls.substring(0, 40)} but no <h1–h6> or role="heading"`,
+          evidence: `<${tag} className="${cls.substring(0, 60)}"> at ${filePath}:${lineNumber}`,
+          explanation: `<${tag}> element looks like a heading (large font + bold: "${text.substring(0, 40)}") but lacks semantic heading markup. Screen readers cannot identify this as a heading.`,
+          confidence: 0.92,
+          correctivePrompt: `Replace <${tag}> with an appropriate heading level (<h2>, <h3>, etc.) or add role="heading" aria-level="N".`,
+          deduplicationKey: dedupeKey,
+          startLine: lineNumber,
+        });
+      }
     }
 
     // A4.2: Interactive semantics
@@ -2855,6 +2887,15 @@ function detectA4SemanticStructure(allFiles: Map<string, string>): A4Finding[] {
   }
 
   findings.push(...headingIssues, ...visualHeadingIssues, ...clickableNonSemantics, ...landmarkIssues, ...listIssues);
+
+  // A4 parity diagnostics
+  const a4SubCheckCounts: Record<string, number> = {};
+  for (const f of findings) {
+    const key = `${f.subCheck}|${f.detection.split(':')[0]}`;
+    a4SubCheckCounts[key] = (a4SubCheckCounts[key] || 0) + 1;
+  }
+  pLogA4ParityDiagnostics('github', pageFiles, a4SubCheckCounts);
+
   return findings;
 }
 
