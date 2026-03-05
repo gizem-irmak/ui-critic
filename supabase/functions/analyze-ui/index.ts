@@ -2412,16 +2412,30 @@ Consider:
 
 **If NONE of these visual cues are present, do NOT report U3.**
 
-**RECOVERY MECHANISM CHECK (MANDATORY BEFORE REPORTING U3):**
-Before reporting any U3 finding, check for these recovery cues in the same content region:
-1. **Horizontal scrollbar** visible at the bottom of the table/container
-2. **Vertical scrollbar** visible on the right edge of the table/container
-3. **"Show more" / "Expand" / "View all"** control near the content
-4. **Tooltip** or hover indicator on truncated text
-5. **Wrapped text** that flows to additional lines
+**RECOVERY MECHANISM CHECK — MANDATORY, EXECUTE BEFORE EVERY U3 DECISION:**
+For EACH content region where truncation is suspected, FIRST scan the SAME container/table/card for:
+1. **Horizontal scrollbar** — a scrollbar track/thumb visible at the BOTTOM edge of the table or container
+2. **Vertical scrollbar** — a scrollbar track/thumb visible on the RIGHT edge of the table or container
+3. **"Show more" / "Expand" / "View all"** control near the truncated content
+4. **Tooltip** or hover affordance on truncated text (only if confidently visible)
+5. **Wrapped text** that flows to additional lines (not truncated)
 
-**If ANY recovery cue is present → do NOT report U3 for that region.**
-**If truncation cues are present but recovery is uncertain → report U3 as Potential with recoveryObserved: "Uncertain" and confidence 0.55–0.65.**
+**DECISION LOGIC (apply in this exact order):**
+- IF truncation cue detected AND scrollbar visible (horizontal OR vertical) in the same container → **DO NOT REPORT U3** (set recoveryObserved to "Scrollable region observed" internally, then OMIT from output)
+- IF truncation cue detected AND expand/show-more control visible → **DO NOT REPORT U3** (set recoveryObserved to "Expandable control observed" internally, then OMIT from output)
+- IF truncation cue detected AND tooltip affordance confidently visible → **DO NOT REPORT U3** (set recoveryObserved to "Tooltip likely" internally, then OMIT from output)
+- IF truncation cue detected AND recovery is ambiguous/uncertain → **REPORT U3 as Potential** with recoveryObserved: "Uncertain", confidence 0.55–0.65
+- IF truncation cue detected AND NO recovery mechanism visible → **REPORT U3 as Potential** with recoveryObserved: "None observed", confidence 0.60–0.75
+- IF no truncation cue → **DO NOT REPORT U3**
+
+**recoveryObserved MUST be exactly one of these values:**
+- "Scrollable region observed" (scrollbar visible — SUPPRESSES U3)
+- "Expandable control observed" (show more/expand — SUPPRESSES U3)
+- "Tooltip likely" (tooltip affordance visible — SUPPRESSES U3)
+- "None observed" (no recovery mechanism found)
+- "Uncertain" (cannot determine if recovery exists)
+
+**CRITICAL: A table/container with a visible scrollbar at the bottom or right edge means content IS accessible via scrolling. This is a recovery mechanism. Do NOT report U3.**
 
 **FORBIDDEN:** Do NOT use code-centric language: "static analysis", "truncate class", "expand: none", "CSS", "overflow-hidden".
 **Use visual-only language:** "visually clipped", "text appears cut off", "ellipsis observed", "content extends beyond container".
@@ -2429,7 +2443,7 @@ Before reporting any U3 finding, check for these recovery cues in the same conte
 **U3 is ALWAYS "status": "potential" — NEVER "confirmed" for screenshots.**
 **Confidence range:** 0.55–0.75 (cap at 0.75). If recovery is uncertain, cap at 0.65.
 
-**OUTPUT FORMAT for U3 screenshot findings:**
+**OUTPUT FORMAT for U3 screenshot findings (ONLY for findings that passed the recovery check above):**
 \`\`\`json
 {
   "ruleId": "U3",
@@ -2443,7 +2457,7 @@ Before reporting any U3 finding, check for these recovery cues in the same conte
       "location": "Screenshot #1",
       "detection": "Short visual-based statement of what is observed",
       "evidence": "What in the screenshot indicates clipping (e.g., ellipsis visible, text cut off at edge)",
-      "recoveryObserved": "None observed | Horizontal scroll observed | Vertical scroll observed | Expandable control observed | Uncertain",
+      "recoveryObserved": "None observed | Uncertain",
       "confidence": 0.65,
       "classification": "potential",
       "subCheck": "U3.D1",
@@ -2458,6 +2472,7 @@ Before reporting any U3 finding, check for these recovery cues in the same conte
 \`\`\`
 - If NO visual truncation cues found, do NOT include U3 in the violations array.
 - If a scrollbar (horizontal or vertical) is visible in the same container, do NOT include U3.
+- If an expand/show-more control is visible, do NOT include U3.
 
 ### U4 (Recognition-to-Recall Regression) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
 **CRITICAL ANTI-HALLUCINATION RULES:**
@@ -3481,19 +3496,20 @@ serve(async (req) => {
       }
       
       // ========== RECOVERY MECHANISM SUPPRESSION ==========
-      // Check for scrollbar or other recovery cues — suppress U3 if found
-      const allText = combined + ` ${(v.recoveryObserved || '')}`.toLowerCase();
+      // Check ALL text fields (evidence, diagnosis, recoveryObserved, u3Elements) for recovery cues
+      const allText = combined + ` ${(v.recoveryObserved || '')} ${(v.contextualHint || '')}`.toLowerCase();
       // Also check u3Elements for recovery signals
       const elementRecovery = (v.isU3Aggregated && Array.isArray(v.u3Elements))
-        ? v.u3Elements.map((el: any) => `${el.recoveryObserved || ''} ${(el.recoverySignals || []).join(' ')}`).join(' ').toLowerCase()
+        ? v.u3Elements.map((el: any) => `${el.recoveryObserved || ''} ${(el.recoverySignals || []).join(' ')} ${el.evidence || ''} ${el.detection || ''}`).join(' ').toLowerCase()
         : '';
       const recoveryText = allText + ' ' + elementRecovery;
       
-      const hasHScrollbar = /horizontal\s*scroll|scroll.?bar.*bottom|bottom.*scroll/i.test(recoveryText);
+      // Detect recovery mechanisms across all text
+      const hasHScrollbar = /horizontal\s*scroll|scroll.?bar.*bottom|bottom.*scroll|scrollable\s*region/i.test(recoveryText);
       const hasVScrollbar = /vertical\s*scroll|scroll.?bar.*right|right.*scroll/i.test(recoveryText);
-      const hasScrollbar = hasHScrollbar || hasVScrollbar || /scrollable|scroll\s*observed|scrollbar/i.test(recoveryText);
-      const hasExpandControl = /show\s*more|expand|view\s*all|view\s*more/i.test(recoveryText);
-      const hasTooltip = /tooltip\s*observed|tooltip\s*on\s*hover/i.test(recoveryText);
+      const hasScrollbar = hasHScrollbar || hasVScrollbar || /scrollable|scroll\s*observed|scrollbar\s*visible|scroll\s*track|scroll\s*thumb/i.test(recoveryText);
+      const hasExpandControl = /show\s*more|expand(able)?(\s*control)?|view\s*all|view\s*more/i.test(recoveryText);
+      const hasTooltip = /tooltip\s*(observed|likely|on\s*hover|visible)/i.test(recoveryText);
       
       if (hasScrollbar || hasExpandControl || hasTooltip) {
         const recoveryType = hasHScrollbar ? 'horizontal scrollbar' : hasVScrollbar ? 'vertical scrollbar' : hasScrollbar ? 'scrollbar' : hasExpandControl ? 'expand control' : 'tooltip';
@@ -3504,13 +3520,28 @@ serve(async (req) => {
       // Sanitize code-centric language from diagnosis
       let cleanDiagnosis = (v.diagnosis || '').replace(/static analysis\s*(flagged|identified|detected)?/gi, 'Visual inspection suggests');
       
+      // Normalize recoveryObserved to enum values
+      const normalizeRecovery = (raw: string | undefined): string => {
+        if (!raw) return 'None observed';
+        const lower = raw.toLowerCase();
+        if (/scroll/i.test(lower)) return 'Scrollable region observed';
+        if (/expand|show\s*more|view\s*(all|more)/i.test(lower)) return 'Expandable control observed';
+        if (/tooltip/i.test(lower)) return 'Tooltip likely';
+        if (/uncertain|ambiguous|unclear/i.test(lower)) return 'Uncertain';
+        if (/none/i.test(lower)) return 'None observed';
+        return raw;
+      };
+      
       // If the violation is already aggregated with u3Elements, sanitize each element
       if (v.isU3Aggregated && Array.isArray(v.u3Elements)) {
         v.u3Elements = v.u3Elements.filter((el: any) => {
-          // Suppress individual elements with recovery cues
-          const elRecovery = `${el.recoveryObserved || ''} ${(el.recoverySignals || []).join(' ')}`.toLowerCase();
-          if (/scroll|show\s*more|expand|tooltip\s*observed/i.test(elRecovery) && !/none|uncertain/i.test(elRecovery)) {
-            console.log(`U3 screenshot element suppressed — recovery: ${elRecovery.substring(0, 60)}`);
+          // Check element-level recovery from all fields
+          const elAllText = `${el.recoveryObserved || ''} ${(el.recoverySignals || []).join(' ')} ${el.evidence || ''} ${el.detection || ''}`.toLowerCase();
+          const elHasScroll = /scroll/i.test(elAllText) && !/none|uncertain/i.test(el.recoveryObserved || '');
+          const elHasExpand = /show\s*more|expand|view\s*(all|more)/i.test(elAllText) && !/none|uncertain/i.test(el.recoveryObserved || '');
+          const elHasTooltip = /tooltip\s*(observed|likely|visible)/i.test(elAllText);
+          if (elHasScroll || elHasExpand || elHasTooltip) {
+            console.log(`U3 screenshot element suppressed — recovery: ${elAllText.substring(0, 60)}`);
             return false;
           }
           return true;
@@ -3519,7 +3550,7 @@ serve(async (req) => {
         v.u3Elements = v.u3Elements.map((el: any) => ({
           ...el,
           classification: 'potential',
-          recoveryObserved: el.recoveryObserved || (el.recoverySignals && el.recoverySignals.length > 0 ? el.recoverySignals.join(', ') : 'None observed'),
+          recoveryObserved: normalizeRecovery(el.recoveryObserved || (el.recoverySignals && el.recoverySignals.length > 0 ? el.recoverySignals.join(', ') : undefined)),
           inputType: 'screenshots',
         }));
         
