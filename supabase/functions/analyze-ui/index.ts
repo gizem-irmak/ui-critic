@@ -4014,7 +4014,7 @@ serve(async (req) => {
 
       if (e2FromLLM.length > 0) {
         const aggregatedOne = e2FromLLM.find((v: any) => v.isE2Aggregated && v.e2Elements?.length > 0);
-        const e2Elements = aggregatedOne
+        const e2ElementsRaw = aggregatedOne
           ? (aggregatedOne.e2Elements || []).map((el: any) => ({
               elementLabel: el.elementLabel || 'Choice group',
               elementType: el.elementType || 'button-group',
@@ -4038,17 +4038,33 @@ serve(async (req) => {
               deduplicationKey: `E2|${v.evidence || 'unknown'}`,
             }));
 
-        const overallConfidence = Math.min(Math.max(...e2Elements.map((e: any) => e.confidence)), 0.75);
-        aggregatedE2UIList.push({
-          ruleId: 'E2', ruleName: 'Imbalanced choice architecture in high-impact decision', category: 'ethics',
-          status: 'potential', blocksConvergence: false,
-          inputType: 'screenshots', isE2Aggregated: true, e2Elements, evaluationMethod: 'llm_assisted',
-          diagnosis: `Choice architecture imbalance: ${e2Elements.length} potential risk(s) in high-impact decision context.`,
-          contextualHint: 'Present confirm/decline options with comparable visual weight and equal discoverability.',
-          advisoryGuidance: 'Present confirm/decline options with comparable visual weight and equal discoverability. Avoid preselected consent/paid options; ensure opt-out is as easy as opt-in.',
-          confidence: Math.round(overallConfidence * 100) / 100,
+        // ========== E2 SCREENSHOT CONFIDENCE GATE ==========
+        // Aligned with global perceptual policy (≥60%), capped at 0.75
+        const e2Elements = e2ElementsRaw.filter((el: any) => {
+          if (el.confidence < 0.60) {
+            console.log(`E2: Suppressed (screenshot confidence ${Math.round(el.confidence * 100)}% < 60%): ${(el.elementLabel || '').substring(0, 80)}`);
+            return false;
+          }
+          return true;
         });
-        console.log(`E2 aggregated (UI): ${e2FromLLM.length} finding(s) → ${e2Elements.length} element(s)`);
+
+        if (e2Elements.length === 0) {
+          console.log('E2: All elements suppressed by screenshot confidence gate');
+        }
+
+        if (e2Elements.length > 0) {
+          const overallConfidence = Math.min(Math.max(...e2Elements.map((e: any) => e.confidence)), 0.75);
+          aggregatedE2UIList.push({
+            ruleId: 'E2', ruleName: 'Imbalanced choice architecture in high-impact decision', category: 'ethics',
+            status: 'potential', blocksConvergence: false,
+            inputType: 'screenshots', isE2Aggregated: true, e2Elements, evaluationMethod: 'llm_assisted',
+            diagnosis: `Choice architecture imbalance: ${e2Elements.length} potential risk(s) in high-impact decision context.`,
+            contextualHint: 'Present confirm/decline options with comparable visual weight and equal discoverability.',
+            advisoryGuidance: 'Visual analysis flagged potential choice imbalance in a high-impact decision context; verify visual weight and discoverability of alternatives.',
+            confidence: Math.round(overallConfidence * 100) / 100,
+          });
+        }
+        console.log(`E2 aggregated (UI): ${e2FromLLM.length} raw → ${e2Elements.length} after confidence gate`);
       }
     }
 
