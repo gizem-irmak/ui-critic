@@ -2989,8 +2989,8 @@ serve(async (req) => {
         v.perceivedContrast = 'low';
         v.perceptualRationale = v.diagnosis || 'Perceptual assessment detected potential low contrast.';
         v.contextualHint = 'Screenshot-based contrast assessment is perceptual. Verify contrast using browser dev tools or a color picker. Target WCAG 2.1 SC 1.4.3: 4.5:1 for normal text, 3:1 for large text.';
-        // Clamp confidence to 55-80
-        v.confidence = Math.max(0.55, Math.min(0.80, v.confidence || 0.65));
+        // Clamp confidence to valid range (suppression happens in post-processing)
+        v.confidence = Math.max(0.40, Math.min(0.90, v.confidence || 0.65));
         a1Violations.push(v);
       } else if (screenshotSuppressedRuleIds.has(v.ruleId)) {
         console.log(`${v.ruleId}: Suppressed (requires DOM, not evaluable from screenshots): ${(v.evidence || '').substring(0, 80)}`);
@@ -3494,12 +3494,41 @@ serve(async (req) => {
     const perElementA1Violations: any[] = [];
     
     const a1DedupeSet = new Set<string>();
+    let a1SuppressedCount = 0;
     for (const v of a1Violations) {
       const dedupeKey = `${v.evidence || ''}|${v.elementDescription || ''}`.toLowerCase().replace(/\s+/g, '');
       if (a1DedupeSet.has(dedupeKey)) continue;
       a1DedupeSet.add(dedupeKey);
       
       const thresholdUsed = v.textSize === 'large' ? 3.0 : 4.5;
+      
+      // ========== CONFIDENCE-BASED SUPPRESSION (Screenshot A1) ==========
+      // Badge/pill label detection: status badges with colored backgrounds
+      // and white/light text are often well-designed — reduce confidence
+      let adjustedConfidence = v.confidence || 0.65;
+      const elementDesc = (v.elementDescription || v.elementRole || '').toLowerCase();
+      const evidenceText = (v.evidence || '').toLowerCase();
+      const diagnosisText = (v.diagnosis || '').toLowerCase();
+      const combinedA1 = `${elementDesc} ${evidenceText} ${diagnosisText}`;
+      
+      const isBadgeOrPill = /\b(badge|pill|tag|chip|label|status|indicator)\b/.test(combinedA1) &&
+        /\b(active|available|scheduled|pending|approved|completed|enabled|disabled|online|offline|open|closed|new|draft|published|verified|inactive|busy|away|expired|paused|archived|cancelled|confirmed|resolved)\b/i.test(combinedA1);
+      const isColoredBgWhiteText = /(?:colored|tinted|colored?\s+background).*(?:white|light)\s+text|(?:white|light)\s+text.*(?:colored|tinted)\s+(?:background|bg)|(?:green|blue|red|orange|yellow|purple|teal|cyan|indigo|emerald|amber|rose)\s+(?:background|bg|pill|badge)/.test(combinedA1);
+      
+      if (isBadgeOrPill || isColoredBgWhiteText) {
+        adjustedConfidence -= 0.20;
+        console.log(`A1 screenshot: Badge/pill penalty applied (-20%) → ${Math.round(adjustedConfidence * 100)}%: ${(v.evidence || '').substring(0, 80)}`);
+      }
+      
+      // Clamp to valid range
+      adjustedConfidence = Math.max(0, Math.min(0.90, adjustedConfidence));
+      
+      // Suppress below 60% threshold
+      if (adjustedConfidence < 0.60) {
+        a1SuppressedCount++;
+        console.log(`A1 screenshot: Suppressed (confidence ${Math.round(adjustedConfidence * 100)}% < 60%): ${(v.evidence || v.elementDescription || '').substring(0, 100)}`);
+        continue;
+      }
       
       perElementA1Violations.push({
         ruleId: 'A1',
@@ -3522,13 +3551,13 @@ serve(async (req) => {
         diagnosis: v.diagnosis || 'Perceptual assessment detected potential low contrast.',
         contextualHint: 'Screenshot-based contrast assessment is perceptual. Verify contrast using browser dev tools or a color picker. Target WCAG 2.1 SC 1.4.3: 4.5:1 for normal text, 3:1 for large text.',
         thresholdUsed,
-        // Confidence
-        confidence: Math.max(0.55, Math.min(0.80, v.confidence || 0.65)),
+        // Confidence (already validated ≥ 0.60)
+        confidence: Math.round(adjustedConfidence * 100) / 100,
         blocksConvergence: false,
       });
     }
     
-    console.log(`A1 per-element (perceptual): ${perElementA1Violations.length} findings`);
+    console.log(`A1 per-element (perceptual): ${perElementA1Violations.length} findings, ${a1SuppressedCount} suppressed (<60% confidence)`);
     // ========== A2 AGGREGATION LOGIC (Screenshot — Focus Visibility, three-tier) ==========
     // For screenshot input: A2 uses three-tier classification:
     //   1. not_evaluated (informational) — no focused state observable in screenshot
