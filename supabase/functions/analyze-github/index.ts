@@ -6839,90 +6839,106 @@ serve(async (req) => {
       };
     });
     
-    // ========== A1 AGGREGATION LOGIC (v22) ==========
-    // Aggregate per-element A1 contrast findings into at most 1 Potential card
-    // For GitHub: All findings are potential (no confirmed)
-    
-    const potentialA1Elements = contrastViolations;
-    
-    // Helper to build A1ElementSubItem from raw violation
-    const buildA1SubItem = (v: any): any => {
-      const dedupeKey = `${v.evidence || ''}-${v.foregroundHex || ''}`.toLowerCase().replace(/\s+/g, '');
-      
-      return {
-        elementLabel: v.elementDescription || v.elementIdentifier || 'Text element',
-        textSnippet: undefined,
-        location: v.evidence || v.elementIdentifier || 'Unknown location',
-        foregroundHex: v.foregroundHex,
-        foregroundConfidence: v.confidence,
-        backgroundStatus: v.backgroundStatus || 'unmeasurable',
-        backgroundHex: v.backgroundHex,
-        backgroundCandidates: undefined,
-        contrastRatio: v.contrastRatio,
-        contrastRange: undefined,
-        contrastNotMeasurable: v.backgroundStatus === 'unmeasurable',
-        thresholdUsed: v.thresholdUsed || 4.5,
-        explanation: v.diagnosis,
-        reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
-        nearThreshold: false,
-        deduplicationKey: dedupeKey,
-      };
-    };
-    
-    // Deduplicate elements by key
-    const deduplicateElements = (elements: any[]): any[] => {
-      const seen = new Map<string, any>();
-      for (const el of elements) {
-        const key = el.deduplicationKey;
-        if (seen.has(key)) {
-          const existing = seen.get(key);
-          if (el.reasonCodes) {
-            existing.reasonCodes = [...new Set([...(existing.reasonCodes || []), ...el.reasonCodes])];
-          }
-        } else {
-          seen.set(key, el);
-        }
-      }
-      return Array.from(seen.values());
-    };
-    
+    // ========== A1 AGGREGATION LOGIC (v23 — confirmed+potential split, parity with ZIP) ==========
     const aggregatedA1Violations: any[] = [];
-    
-    if (potentialA1Elements.length > 0) {
-      const elements = deduplicateElements(potentialA1Elements.map(buildA1SubItem));
-      const avgConfidence = potentialA1Elements.reduce((sum: number, v: any) => sum + (v.confidence || 0.55), 0) / potentialA1Elements.length;
-      
-      const allReasonCodes = new Set<string>(['STATIC_ANALYSIS']);
-      for (const el of elements) {
-        if (el.reasonCodes) {
-          for (const code of el.reasonCodes) {
-            allReasonCodes.add(code);
+    if (contrastViolations.length > 0) {
+      const confirmedFindings = contrastViolations.filter((v: any) => v.status === 'confirmed');
+      const potentialFindings = contrastViolations.filter((v: any) => v.status !== 'confirmed');
+
+      const mapToElement = (v: any) => {
+        const fgResolved = v.foreground?.resolved ?? !!v.foregroundHex;
+        const bgResolved = v.background?.resolved ?? (v.backgroundStatus === 'certain' && !!v.backgroundHex);
+        const hasInsufficientColorContext = !fgResolved || !bgResolved || v.backgroundStatus !== 'certain';
+
+        const ratioStr = v.contrastRatio != null ? `${v.contrastRatio.toFixed(1)}:1` : 'Not computed';
+        const threshStr = `${v.thresholdUsed || 4.5}:1`;
+        const sizeLabel = v.sizeStatus === 'large' ? 'large' : 'normal';
+        const fgHex = fgResolved ? (v.foregroundHex || v.foreground?.value || '???') : 'theme/variable/opacity-dependent';
+        const bgHex = bgResolved ? (v.backgroundHex || v.background?.value || 'theme/variable-dependent') : 'theme/variable-dependent';
+        const prompt = v.status === 'confirmed' && !hasInsufficientColorContext
+          ? `Issue reason: ${ratioStr} measured vs ${threshStr} required (WCAG AA, ${sizeLabel} text).\n\nRecommended fix: Increase text contrast for this element (currently ${fgHex} on ${bgHex}) by darkening the text color or adjusting the background to reach ≥${threshStr}; keep visual style consistent across similar elements.`
+          : undefined;
+
+        return {
+          elementLabel: v.variant
+            ? `${v.elementIdentifier || v.elementDescription || 'Unknown element'} [${v.variant}]`
+            : (v.elementIdentifier || v.elementDescription || 'Unknown element'),
+          textSnippet: v.evidence,
+          location: v.evidence || '',
+          foregroundHex: fgResolved ? (v.foregroundHex || v.foreground?.value || undefined) : undefined,
+          backgroundHex: bgResolved ? (v.backgroundHex || v.background?.value || undefined) : undefined,
+          foreground: v.foreground || { value: fgResolved ? (v.foregroundHex || null) : null, resolved: !!fgResolved },
+          background: v.background || { value: bgResolved ? (v.backgroundHex || null) : null, resolved: !!bgResolved, reason: !bgResolved ? 'theme/variable-dependent' : undefined },
+          backgroundStatus: (bgResolved ? 'certain' : (v.backgroundStatus || 'uncertain')) as 'certain' | 'uncertain' | 'unmeasurable',
+          contrastRatio: hasInsufficientColorContext ? undefined : v.contrastRatio,
+          contrastNotMeasurable: hasInsufficientColorContext || v.contrastRatio === undefined,
+          thresholdUsed: (v.thresholdUsed || 4.5) as 4.5 | 3.0,
+          explanation: v.diagnosis,
+          reasonCodes: v.reasonCodes || ['STATIC_ANALYSIS'],
+          jsxTag: v.affectedComponents?.[0]?.jsxTag,
+          textType: v.sizeStatus === 'large' ? 'large' : 'normal',
+          appliedThreshold: v.thresholdUsed || 4.5,
+          wcagCriterion: '1.4.3' as const,
+          deduplicationKey: `a1|${v.elementIdentifier}|${v.foregroundHex || v.evidence}|${v.variant || 'base'}|${v.startLine || ''}`,
+          correctivePrompt: prompt,
+          variant: v.variant || undefined,
+          lineNumber: v.lineNumber || undefined,
+          filePath: v.affectedComponents?.[0]?.filePath || v.filePath,
+          startLine: v.startLine ?? v.lineNumber ?? null,
+          endLine: v.endLine ?? v.lineNumber ?? null,
+          variantName: v.variantName || v.variant || undefined,
+          extractedClasses: v.extractedClasses || undefined,
+          resolutionStatus: { fg: fgResolved ? 'resolved' : 'unresolved', bg: bgResolved ? 'resolved' : 'unresolved' },
+          unresolvedReason: !bgResolved ? (v.background?.reason || 'theme/variable-dependent') : undefined,
+        };
+      };
+
+      if (confirmedFindings.length > 0) {
+        const a1Elements = confirmedFindings.map(mapToElement);
+        const avgConf = confirmedFindings.reduce((s: number, v: any) => s + (v.confidence ?? 0.7), 0) / confirmedFindings.length;
+        aggregatedA1Violations.push({
+          ruleId: 'A1', ruleName: 'Insufficient text contrast', category: 'accessibility',
+          status: 'confirmed', isA1Aggregated: true, a1Elements,
+          diagnosis: `${a1Elements.length} text element${a1Elements.length !== 1 ? 's' : ''} with confirmed contrast violations (WCAG 1.4.3).`,
+          correctivePrompt: a1Elements.map(e => e.explanation).join('\n'),
+          contextualHint: 'Both foreground and background resolved from Tailwind tokens.',
+          confidence: Math.round(avgConf * 100) / 100,
+          blocksConvergence: true, inputType: 'github', samplingMethod: 'inferred',
+          evaluationMethod: 'deterministic', evidenceLevel: 'structural_deterministic',
+        });
+      }
+
+      if (potentialFindings.length > 0) {
+        const rawElements = potentialFindings.map(mapToElement);
+        const dedupeMap = new Map<string, any>();
+        for (const el of rawElements) {
+          if (dedupeMap.has(el.deduplicationKey)) {
+            const existing = dedupeMap.get(el.deduplicationKey);
+            existing.occurrences = (existing.occurrences || 1) + 1;
+          } else {
+            dedupeMap.set(el.deduplicationKey, { ...el, occurrences: 1 });
           }
         }
+        const a1Elements = Array.from(dedupeMap.values());
+        const avgConf = potentialFindings.reduce((s: number, v: any) => s + (v.confidence ?? 0.55), 0) / potentialFindings.length;
+        aggregatedA1Violations.push({
+          ruleId: 'A1', ruleName: 'Insufficient text contrast', category: 'accessibility',
+          status: 'potential', isA1Aggregated: true, a1Elements,
+          diagnosis: `${a1Elements.length} text element${a1Elements.length !== 1 ? 's' : ''} with potential contrast issues (WCAG 1.4.3) — theme/variable/opacity-dependent colors require runtime verification.`,
+          correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools after rendering.',
+          contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools after rendering.',
+          confidence: Math.round(avgConf * 100) / 100,
+          reasonCodes: ['STATIC_ANALYSIS', 'THEME_DEPENDENT'], potentialRiskReason: 'THEME_DEPENDENT',
+          advisoryGuidance: 'Theme-dependent or opacity-reduced colors cannot be verified statically.',
+          blocksConvergence: false, inputType: 'github', samplingMethod: 'inferred',
+          evaluationMethod: 'deterministic', evidenceLevel: 'structural_estimated',
+        });
+        console.log(`A1 potential dedup (GitHub): ${rawElements.length} raw → ${a1Elements.length} unique elements`);
       }
-      
-      aggregatedA1Violations.push({
-        ruleId: 'A1',
-        ruleName: 'Insufficient text contrast',
-        category: 'accessibility',
-        status: 'potential',
-        isA1Aggregated: true,
-        a1Elements: elements,
-        diagnosis: `${elements.length} text element${elements.length !== 1 ? 's' : ''} with potential contrast issues detected via static code analysis. Background colors cannot be determined without runtime rendering.`,
-        correctivePrompt: 'Verify text contrast meets WCAG AA requirements (4.5:1 for normal text, 3:1 for large text) using browser DevTools after rendering.',
-        contextualHint: 'Verify contrast with browser DevTools or accessibility testing tools after rendering.',
-        confidence: Math.round(avgConfidence * 100) / 100,
-        reasonCodes: Array.from(allReasonCodes),
-        potentialRiskReason: Array.from(allReasonCodes).join(', '),
-        advisoryGuidance: 'Upload screenshots of the rendered UI for higher-confidence verification.',
-        blocksConvergence: false,
-        inputType: 'github',
-        samplingMethod: 'inferred',
-        evaluationMethod: 'deterministic',
-        typeBadge: 'Heuristic (requires runtime verification)',
-      });
-      
-      console.log(`A1 aggregated (GitHub): ${potentialA1Elements.length} potential elements → 1 Potential card (${elements.length} unique)`);
+
+      const confirmed = confirmedFindings.length;
+      const potential = potentialFindings.length;
+      console.log(`A1 aggregated (GitHub): ${confirmed} confirmed, ${potential} potential → ${aggregatedA1Violations.length} card(s)`);
     }
     
     // ========== A2 Focus Visibility — Fully Deterministic ==========
@@ -7042,6 +7058,13 @@ serve(async (req) => {
     let aggregatedA4GitHub: any = null;
     if (selectedRulesSet.has('A4')) {
       const a4Findings = detectA4SemanticStructure(allFiles);
+      // A4 debug: log each trigger with file+line and prereqs
+      for (const f of a4Findings) {
+        const hasH1 = f.subCheck === 'missing_h1' || f.detection?.includes('h1');
+        const hasLandmark = f.subCheck === 'missing_landmark' || f.detection?.includes('landmark');
+        const visualHeadingNoH1 = f.subCheck === 'visual_heading_no_semantic';
+        console.log(`[A4] trigger: file=${f.filePath} line=${f.startLine ?? '?'} subCheck=${f.subCheck} classification=${f.classification} prereqs: hasH1=${hasH1} hasLandmark=${hasLandmark} visualHeadingNoH1=${visualHeadingNoH1} evidence="${(f.evidence || '').slice(0, 80)}"`);
+      }
       if (a4Findings.length > 0) {
         const confirmedCount = a4Findings.filter(f => f.classification === 'confirmed').length;
         const potentialCount = a4Findings.filter(f => f.classification === 'potential').length;
@@ -7068,7 +7091,7 @@ serve(async (req) => {
           confidence: Math.round(overallConfidence * 100) / 100,
           ...(hasConfirmed ? {} : { advisoryGuidance: 'Semantic structure may be incomplete.' }),
         };
-        console.log(`A4 aggregated (GitHub): ${a4Findings.length} findings`);
+        console.log(`A4 aggregated (GitHub): ${a4Findings.length} findings (${confirmedCount} confirmed, ${potentialCount} potential)`);
       }
     }
 
@@ -7560,7 +7583,7 @@ serve(async (req) => {
         passNotes: analysisResult.passNotes || {},
         filesAnalyzed: allFiles.size,
         stackDetected: stack,
-        repoInfo: { owner, repo },
+        repoInfo: { owner, repo, branch, commitSha },
         snapshotHash: ghSnapshot.hash,
         snapshotFileCount: ghSnapshot.metadata.totalFiles,
         snapshotTotalBytes: ghSnapshot.metadata.totalSizeBytes,
