@@ -4125,6 +4125,16 @@ serve(async (req) => {
 
     const screenshotSuppressed: string[] = [];
     const finalViolations = enhancedViolations.filter((v: any) => {
+      // ========== U2 SCREENSHOT CONFIDENCE GATE ==========
+      // Aligned with global perceptual policy (≥60%)
+      if (v.ruleId === 'U2') {
+        const conf = v.confidence || 0.65;
+        if (conf < 0.60) {
+          console.log(`U2: Suppressed (screenshot confidence ${Math.round(conf * 100)}% < 60%): ${(v.evidence || '').substring(0, 100)}`);
+          return false;
+        }
+      }
+
       // S-SS1: U3 suppresses U4 (truncation causes recall regression on review screens)
       if (v.ruleId === 'U4' && hasU3) {
         const u4Text = `${v.diagnosis || ''} ${v.evidence || ''} ${v.contextualHint || ''}`.toLowerCase();
