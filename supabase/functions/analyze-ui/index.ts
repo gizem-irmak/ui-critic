@@ -4076,9 +4076,8 @@ serve(async (req) => {
 
       if (e3FromLLM.length > 0) {
         const aggregatedOne = e3FromLLM.find((v: any) => v.isE3Aggregated && v.e3Elements?.length > 0);
-        const e3Elements = aggregatedOne
-          ? (aggregatedOne.e3Elements || [])
-              .map((el: any) => ({
+        const e3ElementsRaw = aggregatedOne
+          ? (aggregatedOne.e3Elements || []).map((el: any) => ({
                 elementLabel: el.elementLabel || 'High-impact action without exit',
                 elementType: el.elementType || 'unknown',
                 location: el.location || 'Screenshot',
@@ -4086,37 +4085,45 @@ serve(async (req) => {
                 detection: el.detection || '',
                 evidence: el.evidence || '',
                 recommendedFix: el.recommendedFix || '',
-                confidence: Math.min(el.confidence || 0.60, 0.80),
+                confidence: Math.min(el.confidence || 0.60, 0.85),
                 evaluationMethod: 'llm_perceptual' as const,
                 deduplicationKey: el.deduplicationKey || `E3|${el.location || ''}|${el.elementLabel || ''}`,
               }))
-              .filter((el: any) => el.confidence >= 0.65)
-          : e3FromLLM
-              .map((v: any) => ({
+          : e3FromLLM.map((v: any) => ({
                 elementLabel: v.evidence?.split('.')[0] || 'High-impact action without exit',
                 elementType: 'unknown',
                 location: 'Screenshot',
                 detection: v.diagnosis || '',
                 evidence: v.evidence || '',
                 recommendedFix: v.contextualHint || '',
-                confidence: Math.min(v.confidence || 0.60, 0.80),
+                confidence: Math.min(v.confidence || 0.60, 0.85),
                 evaluationMethod: 'llm_perceptual' as const,
                 deduplicationKey: `E3|${v.evidence || 'unknown'}`,
-              }))
-              .filter((el: any) => el.confidence >= 0.65);
+              }));
+
+        // ========== E3 SCREENSHOT CONFIDENCE GATE ==========
+        // Aligned with global perceptual policy (≥60%), capped at 0.85
+        const e3Elements = e3ElementsRaw.filter((el: any) => {
+          if (el.confidence < 0.60) {
+            console.log(`E3: Suppressed (screenshot confidence ${Math.round(el.confidence * 100)}% < 60%): ${(el.elementLabel || '').substring(0, 80)}`);
+            return false;
+          }
+          return true;
+        });
 
         if (e3Elements.length > 0) {
-          const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.80);
+          const overallConfidence = Math.min(Math.max(...e3Elements.map((e: any) => e.confidence)), 0.85);
           aggregatedE3UIList.push({
             ruleId: 'E3', ruleName: 'Obscured or restricted user control', category: 'ethics',
             status: 'potential', blocksConvergence: false,
             inputType: 'screenshots', isE3Aggregated: true, e3Elements, evaluationMethod: 'llm_assisted',
             diagnosis: `Structural exit absence: ${e3Elements.length} high-impact action(s) without visible cancel/close/exit mechanism.`,
             contextualHint: 'Verify that high-impact actions provide clear exit controls.',
-            advisoryGuidance: 'Analysis flagged potential restriction of user control; verify structural exit mechanisms for high-impact actions.',
+            advisoryGuidance: 'Visual analysis flagged potential restriction of user control; verify structural exit mechanisms for high-impact actions.',
             confidence: Math.round(overallConfidence * 100) / 100,
           });
-          console.log(`E3 aggregated (UI): ${e3FromLLM.length} finding(s) → ${e3Elements.length} element(s)`);
+        }
+        console.log(`E3 aggregated (UI): ${e3FromLLM.length} raw → ${e3Elements.length} after confidence gate`);
         } else {
           console.log('E3: All screenshot findings suppressed (below 0.65 confidence)');
         }
