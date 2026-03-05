@@ -1,6 +1,15 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { decode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import { ZipReader, BlobReader, TextWriter } from "https://deno.land/x/zipjs@v2.7.32/index.js";
+import {
+  shouldIncludePath as pShouldIncludePath,
+  normalizePath as pNormalizePath,
+  normalizeContent as pNormalizeContent,
+  detectCommonRoot as pDetectCommonRoot,
+  computeSnapshotHash as pComputeSnapshotHash,
+  buildSnapshot as pBuildSnapshot,
+  logParityDiagnostics as pLogParityDiagnostics,
+} from '../_shared/projectSnapshot.ts';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9778,28 +9787,55 @@ serve(async (req) => {
     const maxContentSize = 100000; // 100KB limit for AI context
     const maxStaticContentSize = 750000; // 750KB cap for deterministic analyzers (import graph, style lookup)
 
+    const excludedPaths: string[] = [];
     for (const entry of entries) {
-      if (entry.directory || !isAnalyzableFile(entry.filename)) continue;
+      if (entry.directory) continue;
+      if (!pShouldIncludePath(entry.filename)) {
+        excludedPaths.push(entry.filename);
+        continue;
+      }
       
       try {
-        const content = await entry.getData!(new TextWriter());
-        if (!content) continue;
+        const rawContent = await entry.getData!(new TextWriter());
+        if (!rawContent) continue;
+        const content = pNormalizeContent(rawContent);
+        const canonPath = pNormalizePath(entry.filename);
 
         // Always try to retain a broader set for static analysis first
         if (totalStaticSize + content.length < maxStaticContentSize) {
-          allFiles.set(normalizePath(entry.filename), content);
+          allFiles.set(canonPath, content);
           totalStaticSize += content.length;
         }
 
         // Keep a smaller subset for AI context
         if (totalSize + content.length < maxContentSize) {
-          files.set(entry.filename, content);
+          files.set(canonPath, content);
           totalSize += content.length;
         }
       } catch (e) {
         console.warn(`Failed to read ${entry.filename}:`, e);
       }
     }
+
+    // Strip common root folder (ZIP exports often wrap in a single project folder)
+    const allPaths = Array.from(allFiles.keys());
+    const commonRoot = pDetectCommonRoot(allPaths);
+    if (commonRoot) {
+      const remappedAll = new Map<string, string>();
+      const remappedSmall = new Map<string, string>();
+      for (const [k, v] of allFiles) {
+        remappedAll.set(k.startsWith(commonRoot) ? k.slice(commonRoot.length) : k, v);
+      }
+      for (const [k, v] of files) {
+        remappedSmall.set(k.startsWith(commonRoot) ? k.slice(commonRoot.length) : k, v);
+      }
+      allFiles.clear();
+      remappedAll.forEach((v, k) => allFiles.set(k, v));
+      files.clear();
+      remappedSmall.forEach((v, k) => files.set(k, v));
+      console.log(`Stripped common root folder: "${commonRoot}"`);
+    }
+    console.log(`Excluded ${excludedPaths.length} paths during ZIP ingestion`);
 
     await zipReader.close();
 
@@ -11410,6 +11446,16 @@ ${JSON.stringify(validationPayload, null, 2)}`;
     // ========== CROSS-RULE SUPPRESSION (S1–S10 + fallback priority) ==========
     const { kept: allViolations, suppressedElements } = applyCrossRuleSuppression(issuesOnly);
     console.log(`Code analysis complete: ${allViolationsPreSuppression.length} pre-suppression → ${allViolations.length} violations (${suppressedElements.length} element(s) suppressed)`);
+
+    // === PARITY DIAGNOSTICS ===
+    const rulesExecuted = Array.from(selectedRulesSet);
+    const findingsPerRule: Record<string, number> = {};
+    for (const v of allViolations) {
+      const rid = (v as any).ruleId || 'unknown';
+      findingsPerRule[rid] = (findingsPerRule[rid] || 0) + 1;
+    }
+    const zipSnapshot = pBuildSnapshot(allFiles, 'zip', excludedPaths);
+    pLogParityDiagnostics(zipSnapshot, rulesExecuted, findingsPerRule);
 
     return new Response(
       JSON.stringify({

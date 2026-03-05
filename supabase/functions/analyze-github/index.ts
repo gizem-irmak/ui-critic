@@ -1,4 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import {
+  shouldIncludePath as pShouldIncludePath,
+  normalizePath as pNormalizePath,
+  normalizeContent as pNormalizeContent,
+  computeSnapshotHash as pComputeSnapshotHash,
+  buildSnapshot as pBuildSnapshot,
+  logParityDiagnostics as pLogParityDiagnostics,
+} from '../_shared/projectSnapshot.ts';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -5734,11 +5742,17 @@ serve(async (req) => {
     const tree = await fetchRepoTree(owner, repo);
     console.log(`Fetched ${tree.length} items from repository tree`);
     
-    // Filter for analyzable files
-    const analyzableFiles = tree.filter(
-      (file) => file.type === 'blob' && isAnalyzableFile(file.path)
-    );
-    console.log(`Found ${analyzableFiles.length} analyzable UI files`);
+    // Filter for analyzable files (using shared parity filter)
+    const excludedPaths: string[] = [];
+    const analyzableFiles = tree.filter((file) => {
+      if (file.type !== 'blob') return false;
+      if (!pShouldIncludePath(file.path)) {
+        excludedPaths.push(file.path);
+        return false;
+      }
+      return true;
+    });
+    console.log(`Found ${analyzableFiles.length} analyzable UI files (excluded ${excludedPaths.length})`);
     
     if (analyzableFiles.length === 0) {
       return new Response(
@@ -5759,12 +5773,12 @@ serve(async (req) => {
     
     // Limit files to analyze (to stay within API limits and token limits)
     const MAX_FILES = 50;
-    const MAX_TOTAL_SIZE = 500000; // 500KB limit for AI context
+    const MAX_TOTAL_SIZE = 750000; // 750KB — aligned with ZIP for parity
     
     const filesToFetch = analyzableFiles.slice(0, MAX_FILES);
     console.log(`Fetching content for ${filesToFetch.length} files...`);
     
-    // Fetch file contents in parallel (with rate limiting)
+    // Fetch file contents (with rate limiting)
     const allFiles = new Map<string, string>();
     let totalSize = 0;
     
@@ -5775,9 +5789,11 @@ serve(async (req) => {
       }
       
       try {
-        const content = await fetchFileContent(owner, repo, file.path);
-        if (content) {
-          allFiles.set(file.path, content);
+        const rawContent = await fetchFileContent(owner, repo, file.path);
+        if (rawContent) {
+          const content = pNormalizeContent(rawContent);
+          const canonPath = pNormalizePath(file.path);
+          allFiles.set(canonPath, content);
           totalSize += content.length;
         }
       } catch (err) {
@@ -6781,6 +6797,16 @@ serve(async (req) => {
     });
     
     console.log(`GitHub analysis complete: ${allViolationsPreSuppression.length} pre-suppression → ${deduplicatedViolations.length} violations (${suppressedElements.length} element(s) suppressed)`);
+
+    // === PARITY DIAGNOSTICS ===
+    const rulesExecuted = Array.from(selectedRulesSet);
+    const findingsPerRule: Record<string, number> = {};
+    for (const v of deduplicatedViolations) {
+      const rid = (v as any).ruleId || 'unknown';
+      findingsPerRule[rid] = (findingsPerRule[rid] || 0) + 1;
+    }
+    const ghSnapshot = pBuildSnapshot(allFiles, 'github', excludedPaths);
+    pLogParityDiagnostics(ghSnapshot, rulesExecuted, findingsPerRule);
     
     return new Response(
       JSON.stringify({
