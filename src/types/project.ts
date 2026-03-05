@@ -59,6 +59,26 @@ export interface Analysis {
     usability?: string;
     ethics?: string;
   };
+  // Parity enforcement
+  snapshotHash?: string;
+  snapshotFileCount?: number;
+  snapshotTotalBytes?: number;
+  parityMismatch?: ParityMismatchInfo;
+}
+
+export interface ParityMismatchInfo {
+  type: 'parity_mismatch';
+  title: string;
+  severity: 'not_evaluated';
+  zipHash: string;
+  gitHash: string;
+  zipFileCount: number;
+  gitFileCount: number;
+  zipTotalBytes: number;
+  gitTotalBytes: number;
+  missingInGithub: string[];
+  missingInZip: string[];
+  contentDifferent: string[];
 }
 
 export interface Violation {

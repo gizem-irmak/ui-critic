@@ -26,6 +26,26 @@ export interface AnalysisResponse {
     owner: string;
     repo: string;
   };
+  // Parity enforcement fields
+  snapshotHash?: string;
+  snapshotFileCount?: number;
+  snapshotTotalBytes?: number;
+  parityMismatch?: ParityMismatchResult;
+}
+
+export interface ParityMismatchResult {
+  type: 'parity_mismatch';
+  title: string;
+  severity: 'not_evaluated';
+  zipHash: string;
+  gitHash: string;
+  zipFileCount: number;
+  gitFileCount: number;
+  zipTotalBytes: number;
+  gitTotalBytes: number;
+  missingInGithub: string[];
+  missingInZip: string[];
+  contentDifferent: string[];
 }
 
 export async function runUIAnalysis(request: AnalysisRequest): Promise<AnalysisResponse> {
