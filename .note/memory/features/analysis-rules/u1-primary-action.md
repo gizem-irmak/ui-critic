@@ -5,4 +5,4 @@ Rule U1 (Unclear Primary Action) identifies task-oriented primary action ambigui
 
 **Same-task suppression**: Multiple buttons leading to the same user task (e.g., "Compose" in header + "Send your first message" in empty state) are treated as redundant entry points and suppressed. Only truly competing actions (different tasks) trigger U1.
 
-**Screenshot confidence gate**: Screenshot U1 findings require confidence ≥ 70% to be reported. Below that threshold, findings are suppressed as speculative.
+**Screenshot confidence gate**: Screenshot U1 findings require confidence ≥ 60% to be reported (aligned with global perceptual confidence policy used by A1, A2, etc.). Below that threshold, findings are suppressed as speculative.
