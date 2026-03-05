@@ -2498,12 +2498,30 @@ For EACH content region where truncation is suspected, FIRST scan the SAME conta
 - Each U5 finding must reference specific visible UI elements as evidence.
 
 ### U6 (Weak Grouping / Layout Coherence) — CONSTRAINTS FOR SCREENSHOT ANALYSIS:
-- Assess grouping/layout coherence based on what is visually observable:
-  - Section separation: Are related elements visually grouped?
-  - Spacing consistency: Is spacing between elements consistent and hierarchical?
-  - Alignment: Are elements aligned properly?
-  - Visual hierarchy: Is the content hierarchy clear?
-  - Clutter: Are there areas with too many elements without visual separation?
+**SCOPE: U6 evaluates visual grouping and spatial organization of UI elements, NOT content overflow or text truncation (those belong to U3).**
+
+**TRUE U6 TRIGGERS (report only when these are present):**
+- Elements that should be grouped together appear scattered without visual containers, borders, or proximity
+- Inconsistent alignment between related elements (e.g., form labels misaligned with inputs)
+- Irregular spacing between items that should have uniform spacing
+- Missing section boundaries where content topics change
+- Floating elements that break the visual hierarchy
+- Overlapping elements that obscure content
+
+**U6 MUST NOT TRIGGER when:**
+- The layout is a **structured data table** with consistent columns, aligned headers, and uniform row heights — even if the table uses horizontal scrolling. Horizontal scrolling in tables is an intentional layout pattern, not a grouping failure.
+- The issue is **text truncation or content overflow** — that belongs to U3, not U6. Do not duplicate U3 detection.
+- The layout uses a **standard grid/card pattern** with consistent sizing and spacing.
+- The page is a **well-structured admin panel** with sidebar navigation, header, and content area.
+
+**DATA TABLE SUPPRESSION RULE:**
+If the screenshot shows a data table with ALL of these properties:
+1. Consistent column headers aligned with cell content
+2. Uniform row heights across data rows
+3. Visible grid lines, borders, or alternating row backgrounds
+4. Horizontal or vertical scrollbar for overflow content
+→ **DO NOT report U6.** The table layout is functioning correctly.
+
 - U6 is ALWAYS "status": "potential" — NEVER "confirmed".
 - Confidence range: 0.60–0.80 (cap at 0.80).
 - Do NOT use page/component/test names as evidence.
@@ -3583,6 +3601,60 @@ serve(async (req) => {
     }
     
     filteredOtherViolations = [...nonU3Violations, ...validU3Screenshots];
+
+    // ========== U6 SCREENSHOT POST-PROCESSING ==========
+    // Suppress U6 findings about data tables with scrolling or truncation (belongs to U3)
+    const u6ScreenshotViolations = filteredOtherViolations.filter((v: any) => v.ruleId === 'U6');
+    const nonU6Violations = filteredOtherViolations.filter((v: any) => v.ruleId !== 'U6');
+    
+    const validU6Screenshots: any[] = [];
+    for (const v of u6ScreenshotViolations) {
+      const combined = `${v.evidence || ''} ${v.diagnosis || ''} ${v.contextualHint || ''}`.toLowerCase();
+      const elemTexts = (v.isU6Aggregated && Array.isArray(v.u6Elements))
+        ? v.u6Elements.map((el: any) => `${el.evidence || ''} ${el.detection || ''}`).join(' ').toLowerCase()
+        : '';
+      const allText = combined + ' ' + elemTexts;
+      
+      // Suppress if finding is about a structured data table with scrolling
+      const isTableContext = /\btable\b|data.?table|admin.?table|data.?grid|\bcolumn\b.*\brow\b|\brow\b.*\bcolumn\b/i.test(allText);
+      const hasScrollMention = /scroll|overflow|horizontal/i.test(allText);
+      const hasAlignedStructure = /align|column.*header|header.*column|consistent.*row|uniform|grid.?line|border.*row/i.test(allText);
+      
+      if (isTableContext && (hasScrollMention || hasAlignedStructure)) {
+        console.log(`U6 screenshot: Suppressed — structured data table: ${(v.evidence || '').substring(0, 80)}`);
+        continue;
+      }
+      
+      // Suppress if finding is actually about truncation/overflow (belongs to U3)
+      const isTruncationIssue = /truncat|ellipsis|text.?cut.?off|clip|overflow.*content|content.*overflow|text.*overflow/i.test(allText);
+      if (isTruncationIssue && !/(overlap|scatter|misalign|irregular.?spacing|missing.?section|float|break.*hierarchy)/i.test(allText)) {
+        console.log(`U6 screenshot: Suppressed — truncation belongs to U3: ${(v.evidence || '').substring(0, 80)}`);
+        continue;
+      }
+      
+      // Filter individual u6Elements if aggregated
+      if (v.isU6Aggregated && Array.isArray(v.u6Elements)) {
+        v.u6Elements = v.u6Elements.filter((el: any) => {
+          const elText = `${el.evidence || ''} ${el.detection || ''}`.toLowerCase();
+          const elIsTable = /\btable\b|data.?table|column.*row|row.*column/i.test(elText);
+          const elIsScroll = /scroll|overflow/i.test(elText);
+          const elIsTruncation = /truncat|ellipsis|text.?cut|clip/i.test(elText);
+          if ((elIsTable && elIsScroll) || (elIsTruncation && !/(overlap|scatter|misalign)/i.test(elText))) {
+            console.log(`U6 element suppressed — table/truncation: ${elText.substring(0, 60)}`);
+            return false;
+          }
+          return true;
+        });
+        if (v.u6Elements.length === 0) {
+          console.log(`U6 screenshot: All elements suppressed — skipping card`);
+          continue;
+        }
+      }
+      
+      validU6Screenshots.push(v);
+    }
+    
+    filteredOtherViolations = [...nonU6Violations, ...validU6Screenshots];
 
     // ========== A1 AGGREGATION LOGIC (Screenshot Analysis - PER-ELEMENT DETERMINISTIC) ==========
     // For screenshots: A1 evaluates EACH text element INDIVIDUALLY:
