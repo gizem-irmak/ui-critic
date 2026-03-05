@@ -1,11 +1,18 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
+  filterPath as pFilterPath,
   shouldIncludePath as pShouldIncludePath,
   normalizePath as pNormalizePath,
   normalizeContent as pNormalizeContent,
   computeSnapshotHash as pComputeSnapshotHash,
   buildSnapshot as pBuildSnapshot,
   logParityDiagnostics as pLogParityDiagnostics,
+  isLfsPointer as pIsLfsPointer,
+  isSubmodulePointer as pIsSubmodulePointer,
+  hasHighReplacementRatio as pHasHighReplacementRatio,
+  PER_FILE_SIZE_CAP,
+  TOTAL_SIZE_CAP,
+  type ExcludedFile,
 } from '../_shared/projectSnapshot.ts';
 
 const corsHeaders = {
@@ -38,29 +45,7 @@ const rules = {
   ],
 };
 
-// File extensions to analyze (UI-related only)
-const ANALYZABLE_EXTENSIONS = [
-  '.html', '.htm', '.jsx', '.tsx', '.js', '.ts',
-  '.css', '.scss', '.sass', '.less',
-  '.vue', '.svelte', '.astro'
-];
-
-// Directories to skip (backend, configs, tests, assets)
-const SKIP_DIRECTORIES = new Set([
-  'node_modules', '.git', 'dist', 'build', '.next', '.nuxt',
-  'test', 'tests', '__tests__', '__mocks__', 'spec',
-  'server', 'api', 'backend', 'functions', 'supabase',
-  'public', 'static', 'assets', 'images', 'fonts', 'icons',
-  '.github', '.vscode', '.idea', 'coverage',
-]);
-
-// Files to skip
-const SKIP_FILES = new Set([
-  'package.json', 'package-lock.json', 'tsconfig.json', 'vite.config.ts',
-  'next.config.js', 'next.config.mjs', 'tailwind.config.js', 'tailwind.config.ts',
-  'postcss.config.js', 'eslint.config.js', '.eslintrc.js', '.eslintrc.json',
-  'jest.config.js', 'vitest.config.ts', 'playwright.config.ts',
-]);
+// NOTE: Legacy filter lists removed — all filtering now uses shared shouldIncludePath() from projectSnapshot.ts
 
 interface GitHubFile {
   path: string;
@@ -104,23 +89,8 @@ function parseGitHubUrl(url: string): { owner: string; repo: string; branch?: st
   }
 }
 
-// Check if file should be analyzed
-function isAnalyzableFile(filepath: string): boolean {
-  const filename = filepath.split('/').pop() || '';
-  
-  // Skip if in skip files list
-  if (SKIP_FILES.has(filename)) return false;
-  
-  // Check if any path segment is in skip directories
-  const segments = filepath.toLowerCase().split('/');
-  for (const segment of segments) {
-    if (SKIP_DIRECTORIES.has(segment)) return false;
-  }
-  
-  // Check file extension
-  const ext = '.' + filename.split('.').pop()?.toLowerCase();
-  return ANALYZABLE_EXTENSIONS.includes(ext);
-}
+// Legacy isAnalyzableFile removed — all filtering uses pFilterPath from projectSnapshot.ts
+
 
 // Fetch repository tree from GitHub API
 async function fetchRepoTree(owner: string, repo: string): Promise<GitHubFile[]> {
@@ -5743,16 +5713,27 @@ serve(async (req) => {
     console.log(`Fetched ${tree.length} items from repository tree`);
     
     // Filter for analyzable files (using shared parity filter)
-    const excludedPaths: string[] = [];
+    // Filter for analyzable files (using shared parity filter with detailed reasons)
+    const excludedFiles: ExcludedFile[] = [];
+    const apiErrors: Array<{ path: string; error: string }> = [];
     const analyzableFiles = tree.filter((file) => {
       if (file.type !== 'blob') return false;
-      if (!pShouldIncludePath(file.path)) {
-        excludedPaths.push(file.path);
+      // Detect submodules (type='commit' is already filtered, but check sha-only blobs)
+      if (file.type === 'blob' && file.size === 0) return false;
+      
+      const filterResult = pFilterPath(file.path);
+      if (!filterResult.included) {
+        excludedFiles.push({ path: file.path, reason: filterResult.reason!, detail: filterResult.detail });
+        return false;
+      }
+      // Per-file size cap (use GitHub tree metadata when available)
+      if (file.size && file.size > PER_FILE_SIZE_CAP) {
+        excludedFiles.push({ path: file.path, reason: 'size_cap', detail: `${file.size} bytes > ${PER_FILE_SIZE_CAP}` });
         return false;
       }
       return true;
     });
-    console.log(`Found ${analyzableFiles.length} analyzable UI files (excluded ${excludedPaths.length})`);
+    console.log(`Found ${analyzableFiles.length} analyzable UI files (excluded ${excludedFiles.length})`);
     
     if (analyzableFiles.length === 0) {
       return new Response(
@@ -5771,33 +5752,67 @@ serve(async (req) => {
       );
     }
     
-    // Limit files to analyze (to stay within API limits and token limits)
-    const MAX_FILES = 50;
-    const MAX_TOTAL_SIZE = 750000; // 750KB — aligned with ZIP for parity
+    // Fetch ALL analyzable files (no arbitrary MAX_FILES cap — use size cap only)
+    const MAX_TOTAL_SIZE = TOTAL_SIZE_CAP;
     
-    const filesToFetch = analyzableFiles.slice(0, MAX_FILES);
-    console.log(`Fetching content for ${filesToFetch.length} files...`);
+    console.log(`Fetching content for ${analyzableFiles.length} files...`);
     
-    // Fetch file contents (with rate limiting)
+    // Fetch file contents
     const allFiles = new Map<string, string>();
     let totalSize = 0;
     
-    for (const file of filesToFetch) {
+    for (const file of analyzableFiles) {
       if (totalSize >= MAX_TOTAL_SIZE) {
-        console.log(`Reached size limit (${totalSize} bytes), stopping file fetch`);
+        // Mark remaining as excluded due to total size cap
+        const remainingIdx = analyzableFiles.indexOf(file);
+        for (let i = remainingIdx; i < analyzableFiles.length; i++) {
+          excludedFiles.push({ path: analyzableFiles[i].path, reason: 'size_cap', detail: `total exceeded ${MAX_TOTAL_SIZE}` });
+        }
+        console.log(`Reached total size limit (${totalSize} bytes), stopping file fetch`);
         break;
       }
       
       try {
         const rawContent = await fetchFileContent(owner, repo, file.path);
-        if (rawContent) {
-          const content = pNormalizeContent(rawContent);
-          const canonPath = pNormalizePath(file.path);
-          allFiles.set(canonPath, content);
-          totalSize += content.length;
+        if (!rawContent) {
+          excludedFiles.push({ path: file.path, reason: 'api_error', detail: 'empty response' });
+          continue;
         }
+
+        // Check for LFS pointers
+        if (pIsLfsPointer(rawContent)) {
+          excludedFiles.push({ path: file.path, reason: 'git_lfs_pointer' });
+          continue;
+        }
+
+        // Check for submodule pointers
+        if (pIsSubmodulePointer(rawContent)) {
+          excludedFiles.push({ path: file.path, reason: 'submodule' });
+          continue;
+        }
+
+        const content = pNormalizeContent(rawContent);
+
+        // Check for high replacement ratio (binary/corrupted)
+        if (pHasHighReplacementRatio(content)) {
+          excludedFiles.push({ path: file.path, reason: 'decode_error', detail: 'high replacement char ratio' });
+          continue;
+        }
+
+        // Per-file size cap on content
+        if (content.length > PER_FILE_SIZE_CAP) {
+          excludedFiles.push({ path: file.path, reason: 'size_cap', detail: `${content.length} bytes content > ${PER_FILE_SIZE_CAP}` });
+          continue;
+        }
+
+        const canonPath = pNormalizePath(file.path);
+        allFiles.set(canonPath, content);
+        totalSize += content.length;
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         console.warn(`Failed to fetch ${file.path}:`, err);
+        excludedFiles.push({ path: file.path, reason: 'api_error', detail: errMsg });
+        apiErrors.push({ path: file.path, error: errMsg });
       }
     }
     
@@ -6805,8 +6820,8 @@ serve(async (req) => {
       const rid = (v as any).ruleId || 'unknown';
       findingsPerRule[rid] = (findingsPerRule[rid] || 0) + 1;
     }
-    const ghSnapshot = pBuildSnapshot(allFiles, 'github', excludedPaths);
-    pLogParityDiagnostics(ghSnapshot, rulesExecuted, findingsPerRule);
+    const ghSnapshot = pBuildSnapshot(allFiles, 'github', excludedFiles);
+    pLogParityDiagnostics(ghSnapshot, rulesExecuted, findingsPerRule, apiErrors);
     
     return new Response(
       JSON.stringify({
@@ -6816,6 +6831,9 @@ serve(async (req) => {
         filesAnalyzed: allFiles.size,
         stackDetected: stack,
         repoInfo: { owner, repo },
+        snapshotHash: ghSnapshot.hash,
+        snapshotFileCount: ghSnapshot.metadata.totalFiles,
+        snapshotTotalBytes: ghSnapshot.metadata.totalSizeBytes,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

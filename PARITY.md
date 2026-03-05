@@ -7,24 +7,79 @@ ingestion pipeline defined in `supabase/functions/_shared/projectSnapshot.ts`.
 This ensures that the same codebase, whether uploaded as a ZIP archive or
 analyzed via a public GitHub URL, produces identical rule results.
 
+## Strict Parity Enforcement
+
+### Snapshot Integrity Contract
+
+After ingestion, both modalities compute a `NormalizedProjectSnapshot` containing:
+- `hash` — djb2 over sorted `relativePath:contentHash` pairs
+- `fileCount` — number of included files
+- `totalSizeBytes` — sum of all content lengths
+- `excludedFiles[]` — every excluded file with a typed `ExclusionReason`
+
+The snapshot hash and metadata are returned in the analysis response for client-side comparison.
+
+### Parity Mode
+
+When the same project+iteration has analyses from both ZIP and GitHub:
+- The client compares `snapshotHash` values
+- If they differ, a **Parity Mismatch** result is generated with detailed diff
+- Rules are NOT run when parity mismatch is detected — prevents false divergence
+
+### Parity Mismatch Result
+
+When mismatch occurs, a non-violation result is returned:
+
+| Field | Description |
+|-------|-------------|
+| `title` | "Input Parity Mismatch (ZIP vs GitHub)" |
+| `severity` | "not_evaluated" (Input Limitation) |
+| `zipHash` / `gitHash` | Snapshot hashes for comparison |
+| `missingInGithub` | Paths present in ZIP but not GitHub (up to 30) |
+| `missingInZip` | Paths present in GitHub but not ZIP (up to 30) |
+| `contentDifferent` | Paths with same name but different content hash (up to 30) |
+
 ## Shared Pipeline
 
 ```
 ZIP bytes ─┐
-            ├─► shouldIncludePath() ─► normalizePath() ─► normalizeContent()
-GitHub API ─┘        (shared)              (shared)            (shared)
-                                                                  │
-                                                    allFiles: Map<string, string>
-                                                                  │
-                                              ┌───────────────────┘
-                                              ▼
-                                     Rule Engine (per-file)
-                                              │
-                                              ▼
-                                     Parity Diagnostics
+            ├─► filterPath() ─► normalizePath() ─► normalizeContent()
+GitHub API ─┘    (shared)          (shared)            (shared)
+                                                         │
+                                           ┌─────────────┘
+                                           ▼
+                                  Content Validation:
+                                  - LFS pointer? → exclude (git_lfs_pointer)
+                                  - Submodule? → exclude (submodule)
+                                  - High replacement ratio? → exclude (decode_error)
+                                  - Per-file size > 500KB? → exclude (size_cap)
+                                           │
+                                           ▼
+                                  allFiles: Map<string, string>
+                                           │
+                                           ▼
+                                  Rule Engine (per-file)
+                                           │
+                                           ▼
+                                  Parity Diagnostics
 ```
 
-### Shared Filtering (`shouldIncludePath`)
+### Exclusion Reasons
+
+| Reason | Description |
+|--------|-------------|
+| `denied_directory` | Path contains a denied directory (node_modules, dist, etc.) |
+| `denied_extension` | File extension not in allow list |
+| `denied_file_pattern` | File matches denied pattern (*.min.js, lockfiles) |
+| `denied_path_pattern` | Path matches denied pattern (supabase/.temp/) |
+| `size_cap` | File or total exceeds size limit |
+| `binary` | Binary file detected |
+| `decode_error` | High UTF-8 replacement character ratio |
+| `submodule` | Git submodule pointer detected |
+| `git_lfs_pointer` | Git LFS pointer file detected |
+| `api_error` | GitHub API failed to fetch file |
+
+### Shared Filtering (`filterPath`)
 
 | Category            | Values                                                               |
 |---------------------|----------------------------------------------------------------------|
@@ -32,6 +87,13 @@ GitHub API ─┘        (shared)              (shared)            (shared)
 | **Denied directories** | `node_modules .next .nuxt dist build out coverage .git .vercel .turbo .cache` |
 | **Denied paths**       | `supabase/.temp/`                                                   |
 | **Denied file patterns** | `*.min.js *.min.css package-lock.json yarn.lock bun.lockb pnpm-lock.yaml` |
+
+### Size Caps
+
+| Cap | Value | Applies To |
+|-----|-------|-----------|
+| Per-file | 500KB | Both ZIP and GitHub |
+| Total | 750KB | Both ZIP and GitHub |
 
 ### Path Normalization (`normalizePath`)
 
@@ -45,6 +107,13 @@ GitHub API ─┘        (shared)              (shared)            (shared)
 - Line endings → `\n` (strip `\r\n` and `\r`)
 - Preserve original line numbers and whitespace
 
+### Content Validation
+
+Both pipelines apply identical validation:
+1. **LFS pointer detection**: Files starting with `version https://git-lfs.github.com/spec` → excluded
+2. **Submodule detection**: Files matching `Subproject commit [hex40]` → excluded
+3. **UTF-8 replacement ratio**: Files with >5% replacement characters → excluded as `decode_error`
+
 ## How to Verify Parity
 
 ### 1. Run both analyses on the same codebase
@@ -52,37 +121,34 @@ GitHub API ─┘        (shared)              (shared)            (shared)
 Export a project as a ZIP and also push it to a public GitHub repository.
 Run analysis on both inputs with the same selected rules.
 
-### 2. Compare parity diagnostics
+### 2. Compare snapshot metadata
 
-Both analyses log structured diagnostics prefixed with `=== PARITY DIAGNOSTICS ===`.
-Check the Edge Function logs for:
+Both responses include `snapshotHash`, `snapshotFileCount`, and `snapshotTotalBytes`.
 
 | Field                | Expected                                           |
 |----------------------|----------------------------------------------------|
-| `Total file count`   | Equal (± config files only present in one source)  |
-| `Snapshot hash`      | Identical if file sets match                       |
-| `Excluded paths`     | Same directories/patterns excluded                 |
-| `Rules: N findings`  | Identical per rule                                 |
+| `snapshotHash`       | Identical if file sets match                       |
+| `snapshotFileCount`  | Equal (± only config files)                        |
+| `snapshotTotalBytes` | Equal (± encoding differences)                     |
 
-### 3. Debug mismatches
+### 3. Check parity diagnostics in edge function logs
+
+Both analyses log structured diagnostics prefixed with `=== PARITY DIAGNOSTICS ===`.
+
+Enhanced diagnostics now include:
+- **Exclusion reason counts**: How many files excluded per reason
+- **Denied directory hit counts**: Which directories caused the most exclusions
+- **Denied extension hit counts**: Which extensions were rejected
+- **API errors**: GitHub-specific fetch failures with path context
+
+### 4. Debug mismatches
 
 If results differ, the diagnostics will show:
 
-- **Missing/extra files**: Compare `Total file count` and `Excluded paths`
-- **Filtering divergence**: Check if a file is allowed by one source but excluded by another
-- **Path mismatch**: Verify paths are canonicalized (no leading root folder in ZIP)
-- **Content divergence**: Verify line endings are normalized (no `\r\n` vs `\n` drift)
-- **Size limits**: ZIP allows 750KB for deterministic analysis; GitHub allows 750KB.
-  If a project exceeds this, files may be truncated differently.
-
-### Known Limitations
-
-| Limitation               | Impact                                              |
-|--------------------------|-----------------------------------------------------|
-| GitHub `MAX_FILES = 50`  | Large repos may not fetch all files                 |
-| GitHub API rate limits   | May fail for rapid successive analyses              |
-| ZIP root folder strip    | Heuristic; single-file ZIPs skip root detection     |
-| AI context subset        | ZIP keeps a smaller 100KB subset for LLM context    |
+- **Missing/extra files**: Compare file counts and excluded file lists
+- **Filtering divergence**: Check exclusion reasons differ between sources
+- **Content divergence**: Same path, different contentHash → encoding issue
+- **Size cap differences**: Check if per-file or total caps hit differently
 
 ## Snapshot Hash
 

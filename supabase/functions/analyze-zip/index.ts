@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { decode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
 import { ZipReader, BlobReader, TextWriter } from "https://deno.land/x/zipjs@v2.7.32/index.js";
 import {
+  filterPath as pFilterPath,
   shouldIncludePath as pShouldIncludePath,
   normalizePath as pNormalizePath,
   normalizeContent as pNormalizeContent,
@@ -9,6 +10,11 @@ import {
   computeSnapshotHash as pComputeSnapshotHash,
   buildSnapshot as pBuildSnapshot,
   logParityDiagnostics as pLogParityDiagnostics,
+  isLfsPointer as pIsLfsPointer,
+  hasHighReplacementRatio as pHasHighReplacementRatio,
+  PER_FILE_SIZE_CAP,
+  TOTAL_SIZE_CAP,
+  type ExcludedFile,
 } from '../_shared/projectSnapshot.ts';
 
 const corsHeaders = {
@@ -9787,11 +9793,13 @@ serve(async (req) => {
     const maxContentSize = 100000; // 100KB limit for AI context
     const maxStaticContentSize = 750000; // 750KB cap for deterministic analyzers (import graph, style lookup)
 
-    const excludedPaths: string[] = [];
+    const excludedFiles: ExcludedFile[] = [];
     for (const entry of entries) {
       if (entry.directory) continue;
-      if (!pShouldIncludePath(entry.filename)) {
-        excludedPaths.push(entry.filename);
+      
+      const filterResult = pFilterPath(entry.filename);
+      if (!filterResult.included) {
+        excludedFiles.push({ path: entry.filename, reason: filterResult.reason!, detail: filterResult.detail });
         continue;
       }
       
@@ -9801,10 +9809,30 @@ serve(async (req) => {
         const content = pNormalizeContent(rawContent);
         const canonPath = pNormalizePath(entry.filename);
 
+        // Per-file size cap
+        if (content.length > PER_FILE_SIZE_CAP) {
+          excludedFiles.push({ path: entry.filename, reason: 'size_cap', detail: `${content.length} bytes > ${PER_FILE_SIZE_CAP}` });
+          continue;
+        }
+
+        // Check for high replacement ratio (binary/corrupted)
+        if (pHasHighReplacementRatio(content)) {
+          excludedFiles.push({ path: entry.filename, reason: 'decode_error', detail: 'high replacement char ratio' });
+          continue;
+        }
+
+        // Check for LFS pointers (can appear in ZIP if repo was cloned with LFS)
+        if (pIsLfsPointer(content)) {
+          excludedFiles.push({ path: entry.filename, reason: 'git_lfs_pointer' });
+          continue;
+        }
+
         // Always try to retain a broader set for static analysis first
         if (totalStaticSize + content.length < maxStaticContentSize) {
           allFiles.set(canonPath, content);
           totalStaticSize += content.length;
+        } else {
+          excludedFiles.push({ path: entry.filename, reason: 'size_cap', detail: `total exceeded ${maxStaticContentSize}` });
         }
 
         // Keep a smaller subset for AI context
@@ -9814,6 +9842,7 @@ serve(async (req) => {
         }
       } catch (e) {
         console.warn(`Failed to read ${entry.filename}:`, e);
+        excludedFiles.push({ path: entry.filename, reason: 'decode_error', detail: e instanceof Error ? e.message : String(e) });
       }
     }
 
@@ -9835,7 +9864,7 @@ serve(async (req) => {
       remappedSmall.forEach((v, k) => files.set(k, v));
       console.log(`Stripped common root folder: "${commonRoot}"`);
     }
-    console.log(`Excluded ${excludedPaths.length} paths during ZIP ingestion`);
+    console.log(`Excluded ${excludedFiles.length} files during ZIP ingestion`);
 
     await zipReader.close();
 
@@ -11454,7 +11483,7 @@ ${JSON.stringify(validationPayload, null, 2)}`;
       const rid = (v as any).ruleId || 'unknown';
       findingsPerRule[rid] = (findingsPerRule[rid] || 0) + 1;
     }
-    const zipSnapshot = pBuildSnapshot(allFiles, 'zip', excludedPaths);
+    const zipSnapshot = pBuildSnapshot(allFiles, 'zip', excludedFiles);
     pLogParityDiagnostics(zipSnapshot, rulesExecuted, findingsPerRule);
 
     return new Response(
@@ -11464,6 +11493,9 @@ ${JSON.stringify(validationPayload, null, 2)}`;
         passNotes: analysisResult.passNotes || {},
         filesAnalyzed: files.size > 0 ? files.size : allFiles.size,
         stackDetected: stack,
+        snapshotHash: zipSnapshot.hash,
+        snapshotFileCount: zipSnapshot.metadata.totalFiles,
+        snapshotTotalBytes: zipSnapshot.metadata.totalSizeBytes,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
