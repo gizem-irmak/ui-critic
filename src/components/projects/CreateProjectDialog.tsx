@@ -81,6 +81,7 @@ export function CreateProjectDialog() {
                   <SelectItem value="bolt">Bolt</SelectItem>
                   <SelectItem value="replit">Replit</SelectItem>
                   <SelectItem value="lovable">Lovable</SelectItem>
+                  <SelectItem value="human">Human Developed</SelectItem>
                 </SelectContent>
               </Select>
             </div>
