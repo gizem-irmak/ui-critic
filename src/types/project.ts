@@ -1,4 +1,4 @@
-export type ToolType = 'bolt' | 'replit' | 'lovable';
+export type ToolType = 'bolt' | 'replit' | 'lovable' | 'human';
 
 export type InputType = 'screenshots' | 'zip' | 'github';
 
