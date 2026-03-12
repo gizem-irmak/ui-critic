@@ -19,6 +19,10 @@ const toolConfig: Record<ToolType, { label: string; className: string }> = {
     label: 'Lovable', 
     className: 'bg-pink-500/10 text-pink-700 border-pink-500/20' 
   },
+  human: { 
+    label: 'Human Developed', 
+    className: 'bg-emerald-500/10 text-emerald-700 border-emerald-500/20' 
+  },
 };
 
 export function ToolBadge({ tool, className }: ToolBadgeProps) {
